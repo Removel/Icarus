@@ -1,0 +1,27 @@
+{
+  "openai_base_url": "https://api.example-openai.com/v1",
+  "anthropic_base_url": "https://api.example-anthropic.com/v1",
+  "model_settings": {
+    "think": {
+      "model_name": "example",
+      "max_tokens": 1024,
+      "min_tokens": 8,
+      "temperature": 0.7,
+      "default_think_level": "high"
+    },
+    "execute": {
+      "model_name": "example",
+      "max_tokens": 1024,
+      "min_tokens": 8,
+      "temperature": 0.7,
+      "default_think_level": "high"
+    },
+    "emotion": {
+      "model_name": "example",
+      "max_tokens": 1024,
+      "min_tokens": 8,
+      "temperature": 0.7,
+      "default_think_level": "high"
+    }
+  }
+}
