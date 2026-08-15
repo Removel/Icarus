@@ -8,6 +8,7 @@ from apps.agent.src.model_config.config_model import ConfigModel
 
 load_dotenv()
 
+
 def get_config() -> ConfigModel:
     settings_path = Path(__file__).parent.parent.parent / "settings.json"
     with open(settings_path, "r", encoding="utf-8") as f:
