@@ -4,7 +4,7 @@
 
 本文描述 Agent 编排层中已经明确、可以先行开发的基础能力，不尝试一次性完成整个核心编排设计。
 
-未来完整编排层将围绕黑板架构组织上下文，并形成“过程执行”与“过程中响应”两条编排线。黑板、EventBus、长期上下文、Agent 业务角色、多 Agent 调度以及两条编排线之间的协作仍需继续设计，不属于本期实现范围。
+未来完整编排层将由 BlackboardPlugin 汇聚上下文，AgentPlugin 发布原始执行流，再由 Style、Skill、Memory、TTS、Emotion、L2D 等领域插件分别消费和处理。长期上下文、Agent 业务角色和多 Agent 调度仍需继续设计。
 
 本期只实现以下四类已经确定的能力：
 
@@ -17,7 +17,7 @@
 
 ```mermaid
 flowchart TB
-    A["未来核心编排层<br/>黑板 / EventBus / 上下文管理<br/>Agent 业务角色 / 双线编排 / 调度控制"]
+    A["未来核心编排层<br/>Blackboard / EventBus / Plugin Runtime<br/>Agent 业务角色 / 领域插件 / 调度控制"]
     B["AgentFactory<br/>按 model_role 获取 Agent"]
     C["ReActAgent<br/>无状态 ReAct 执行引擎"]
     D["Model Provider<br/>BaseLLM"]
@@ -54,7 +54,7 @@ flowchart TB
 
 - 黑板及长期上下文存储；
 - EventBus 及插件通信；
-- “过程执行”与“过程中响应”的双线调度；
+- Agent 执行流与领域插件处理；
 - Agent 业务角色的定义和管理；
 - 多 Agent 调度和任务传递；
 - 超时、预算、取消、最大步骤和死循环控制；
@@ -467,8 +467,8 @@ apps/agent/src/
 - EventBus；
 - 长期上下文与 Session；
 - Agent 业务角色；
-- “过程执行”与“过程中响应”双线编排；
-- perception 自动触发策略；
+- Style、Skill、Memory、TTS、Emotion、L2D 等领域插件；
+- perception 模型在具体插件中的按需使用策略；
 - 多 Agent 调度；
 - 超时、取消、预算和循环控制；
 - Hook 安全干预能力；

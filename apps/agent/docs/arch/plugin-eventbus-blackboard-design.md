@@ -42,9 +42,13 @@ Agent Orchestration Layer
 - Runtime Hook 观测；
 - AgentPlugin；
 - AgentContextReadyEvent；
+- BlackboardPlugin；
+- Blackboard Context 状态；
+- ContextBlock 与 ContextContributionEvent；
+- BlackboardContextConverter；
 - 真实模型 Plugin 链路验证。
 
-BlackboardPlugin、SkillPlugin、KnowledgePlugin 和 MemoryPlugin 仍属于后续阶段。
+SkillPlugin、KnowledgePlugin、MemoryPlugin、StylePlugin 和其他领域 Plugin 仍属于后续阶段。
 
 ## 设计目标
 
@@ -332,6 +336,21 @@ async def consume(
 
 Blackboard 是普通 Plugin，其职责是维护当前上下文状态，并为 Agent 整理可直接执行的输入。
 
+当前初版由 BlackboardPlugin 构造时维护固定 Context 来源集合，例如：
+
+```python
+BlackboardPlugin(
+    plugin_id="blackboard",
+    required_context_sources={
+        "memory",
+        "skill",
+        "knowledge",
+    },
+)
+```
+
+后续可以替换为动态来源策略，不改变 EventBus 和 AgentPlugin 接口。
+
 ### 消费来源
 
 BlackboardPlugin 可以订阅：
@@ -361,20 +380,36 @@ BlackboardPlugin 负责维护：
 
 BlackboardPlugin 整合上下文后，生产 AgentPlugin 可以消费的上下文 Event。
 
-概念示例：
+当前上下文 Event 使用固定核心字段和可扩展 ContextBlock：
 
 ```python
 @dataclass(frozen=True)
-class AgentContextReadyEvent(Event):
+class ContextBlock:
+    source_plugin_id: str
+    context_type: str
+    content: str
+    metadata: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class BlackboardContextReadyEvent(Event):
+    model_role: LLMRole
     system_prompt: str
     history_messages: list[Message]
-    input_prompt: str
+    prompt: str
     input_images: list[ImagePart]
     tools: list[str] | None
-    plugin_context: dict[str, Any]
+    context_blocks: list[ContextBlock]
+    context_errors: dict[str, str]
 ```
 
-具体 Context Event 字段在 Blackboard 阶段继续设计，本例只表达职责边界。
+每个固定来源必须返回 ContextContributionEvent：
+
+- `completed + context_blocks`：有内容；
+- `completed + []`：没有内容但已经完成；
+- `failed + error`：加载失败但已经完成。
+
+BlackboardPlugin 等待 UserInput 和全部固定来源返回后，只发布一次 BlackboardContextReadyEvent。
 
 ### 上下文汇聚
 
@@ -385,12 +420,17 @@ class AgentContextReadyEvent(Event):
 - AgentPlugin 不直接消费它们的零散结果；
 - BlackboardPlugin 聚合后再发布给 AgentPlugin；
 - AgentPlugin 正常任务的输入只来自 BlackboardPlugin。
+- ContextBlock 声明来源必须与真实发布方一致；
+- Agent Stream Event 使用原始任务 correlation_id 回写 Blackboard；
+- AgentCompletedEvent 和 AgentErrorEvent 用于更新 Blackboard 任务状态。
 
 等待超时、必选/可选上下文、失败降级和进度事件不是当前主要范围，留到 Blackboard 阶段确定。
 
 ## AgentPlugin
 
 AgentPlugin 是当前 ReActAgent 在插件系统中的适配层。
+
+AgentPlugin 内部持有 BlackboardContextConverter 组件对象。Converter 不是 Plugin，不注册到 Registry，也不直接使用 EventBus。
 
 ### 消费
 
@@ -411,11 +451,13 @@ AgentPlugin 不直接订阅：
 AgentPlugin：
 
 1. 消费 BlackboardPlugin 生产的 Agent Context Event；
-2. 获取对应模型角色的 ReActAgent；
-3. 调用 `stream` 或 `astream`；
-4. 消费 Agent Stream Event；
-5. 将 Event 发布到 EventBus；
-6. 只等待 EventBus 接受，不等待其他 Plugin 消费。
+2. 使用 BlackboardContextConverter 拍平动态 ContextBlock；
+3. 动态 Context 追加到当前 User Prompt，不修改稳定 System Prompt；
+4. 获取对应模型角色的 ReActAgent；
+5. 调用 `stream` 或 `astream`；
+6. 消费 Agent Stream Event；
+7. 将原始执行流 Event 发布到 EventBus；
+8. 只等待 EventBus 接受，不等待其他 Plugin 消费。
 
 ### 生产
 
@@ -428,6 +470,45 @@ AgentPlugin 可以生产：
 - AgentErrorEvent。
 
 未来如需额外 Agent 业务 Event，应由 AgentPlugin 或核心编排层生成，不污染 ReActAgent 能力内核。
+
+AgentPlugin 不内置固定 Responder，也不在内部处理角色风格、TTS、情绪或动作参数。
+
+## 原始执行流与领域 Plugin
+
+AgentPlugin 发布的是原始执行流：
+
+```text
+AgentTextDeltaEvent
+AgentToolStartedEvent
+AgentToolCompletedEvent
+AgentCompletedEvent
+AgentErrorEvent
+```
+
+过程中需要的更新由各领域 Plugin 自行消费和判断：
+
+```text
+AgentPlugin
+├── StylePlugin
+├── SkillPlugin
+├── MemoryPlugin
+└── 其他领域 Plugin
+```
+
+### StylePlugin
+
+StylePlugin 订阅 AgentPlugin，将原始文本流转换为角色风格化文本流：
+
+```text
+AgentTextDeltaEvent
+→ StylePlugin
+→ StyledTextDeltaEvent
+→ WebUI / TUI / TTS / Emotion / L2D
+```
+
+StylePlugin 只生产风格化文本，不统一生成 TTS、情绪、动作或 VAC 参数。具体参数转换由对应领域 Plugin 自行完成。
+
+角色风格由 CharacterPlugin 提供，只包含语言风格、语气、情绪倾向、声线和动作偏好，不包含执行策略。角色风格不注入 Executor，也不修改稳定 System Prompt。
 
 ## Context Plugin
 
@@ -459,23 +540,24 @@ Skill、Knowledge、Memory 都是普通 Plugin。
 
 ### WebUI / TUI Plugin
 
-- 订阅 AgentPlugin；
-- 消费 AgentTextDeltaEvent；
-- 展示 ToolStarted、ToolCompleted、Completed 和 Error；
+- 默认订阅 StylePlugin；
+- 消费风格化文本 Event；
+- 如需展示工具状态，可额外订阅 AgentPlugin；
 - 可以生产用户交互或控制 Event。
 
 ### TTS Plugin
 
-- 订阅 AgentPlugin；
-- 只处理 AgentTextDeltaEvent；
+- 默认订阅 StylePlugin；
+- 消费风格化文本 Event；
 - 自行缓冲和分段；
-- 忽略不需要的 Tool Event；
+- 可以直接合成，也可以在插件内部先做额外处理；
 - 可以生产 TTS 状态或完成 Event。
 
 ### L2D / Emotion Plugin
 
-- 订阅 AgentPlugin 或其他控制 Plugin；
-- 根据收到的 Event 生成动作和情绪控制；
+- 订阅 StylePlugin 或其他相关来源 Plugin；
+- 根据风格化文本自行调用规则、分类器或轻量模型；
+- 将文本转换为动作、情绪或 VAC 等领域参数；
 - 可以再次发布状态 Event；
 - 不阻塞 AgentPlugin。
 
@@ -548,6 +630,11 @@ Blackboard Event
 - 生产者不等待目标 Plugin 消费完成；
 - AgentPlugin 正常任务只消费 BlackboardPlugin；
 - BlackboardPlugin 聚合 Skill、Knowledge、Memory 等上下文后再提供给 AgentPlugin；
+- AgentPlugin 内部只使用 Converter 进行参数转换，不存在固定 Responder；
+- AgentPlugin 发布原始执行流；
+- StylePlugin 独立负责角色风格化；
+- TTS、Emotion、L2D 等插件自行完成领域参数转换；
+- SkillPlugin 和 MemoryPlugin 可以直接订阅 AgentPlugin，自行判断更新；
 - ReActAgent 不依赖 Plugin 和 EventBus；
 - Hook 用于持久化、观测和监督，不替代 EventBus。
 
