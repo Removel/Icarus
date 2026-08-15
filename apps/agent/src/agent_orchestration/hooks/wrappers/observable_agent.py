@@ -1,7 +1,14 @@
 """BaseAgent 的透明观测包装器。"""
 
+from collections.abc import AsyncIterator, Iterator
+
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
-from apps.agent.src.agent_orchestration.capability.types import AgentResponse
+from apps.agent.src.agent_orchestration.capability.types import (
+    AgentCompletedEvent,
+    AgentErrorEvent,
+    AgentResponse,
+)
+from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.hooks.hook_context import hook_context
 from apps.agent.src.agent_orchestration.hooks.hook_dispatcher import (
     HookDispatcher,
@@ -109,6 +116,116 @@ class ObservableAgent(BaseAgent):
             )
             return response
 
+    def stream(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None = None,
+        tools: list[str] | None = None,
+    ) -> Iterator[Event]:
+        with hook_context({"model_role": self.model_role}):
+            self._dispatcher.trigger(
+                "agent.stream",
+                "before",
+                self._input_data(
+                    system_prompt,
+                    history_messages,
+                    input_prompt,
+                    input_images,
+                    tools,
+                ),
+            )
+            error_event_seen = False
+            try:
+                for event in self._agent.stream(
+                    system_prompt,
+                    history_messages,
+                    input_prompt,
+                    input_images,
+                    tools,
+                ):
+                    if isinstance(event, AgentCompletedEvent):
+                        self._dispatcher.trigger(
+                            "agent.stream",
+                            "after",
+                            {"response": event.response},
+                        )
+                    elif isinstance(event, AgentErrorEvent):
+                        error_event_seen = True
+                        self._dispatcher.trigger(
+                            "agent.stream",
+                            "error",
+                            {
+                                "error_type": event.error_type,
+                                "error_message": event.error_message,
+                            },
+                        )
+                    yield event
+            except BaseException as error:
+                if not error_event_seen:
+                    self._dispatcher.trigger(
+                        "agent.stream",
+                        "error",
+                        self._base_error_data(error),
+                    )
+                raise
+
+    async def astream(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None = None,
+        tools: list[str] | None = None,
+    ) -> AsyncIterator[Event]:
+        with hook_context({"model_role": self.model_role}):
+            await self._dispatcher.atrigger(
+                "agent.stream",
+                "before",
+                self._input_data(
+                    system_prompt,
+                    history_messages,
+                    input_prompt,
+                    input_images,
+                    tools,
+                ),
+            )
+            error_event_seen = False
+            try:
+                async for event in self._agent.astream(
+                    system_prompt,
+                    history_messages,
+                    input_prompt,
+                    input_images,
+                    tools,
+                ):
+                    if isinstance(event, AgentCompletedEvent):
+                        await self._dispatcher.atrigger(
+                            "agent.stream",
+                            "after",
+                            {"response": event.response},
+                        )
+                    elif isinstance(event, AgentErrorEvent):
+                        error_event_seen = True
+                        await self._dispatcher.atrigger(
+                            "agent.stream",
+                            "error",
+                            {
+                                "error_type": event.error_type,
+                                "error_message": event.error_message,
+                            },
+                        )
+                    yield event
+            except BaseException as error:
+                if not error_event_seen:
+                    await self._dispatcher.atrigger(
+                        "agent.stream",
+                        "error",
+                        self._base_error_data(error),
+                    )
+                raise
+
     @staticmethod
     def _input_data(
         system_prompt: str,
@@ -127,6 +244,13 @@ class ObservableAgent(BaseAgent):
 
     @staticmethod
     def _error_data(error: Exception) -> dict[str, str]:
+        return {
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+        }
+
+    @staticmethod
+    def _base_error_data(error: BaseException) -> dict[str, str]:
         return {
             "error_type": type(error).__name__,
             "error_message": str(error),

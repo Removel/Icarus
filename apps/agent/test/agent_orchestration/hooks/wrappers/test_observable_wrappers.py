@@ -1,6 +1,10 @@
 import asyncio
 
 from apps.agent.src.agent_orchestration.capability import AgentResponse, BaseAgent
+from apps.agent.src.agent_orchestration.capability.types import (
+    AgentCompletedEvent,
+    AgentTextDeltaEvent,
+)
 from apps.agent.src.agent_orchestration.hooks import (
     BaseHook,
     HookDispatcher,
@@ -21,6 +25,7 @@ from apps.agent.src.agent_orchestration.tools import (
 from apps.agent.src.model_provider.base_llm import BaseLLM
 from apps.agent.src.model_provider.types import (
     LLMResponse,
+    LLMStreamChunk,
     Message,
     TextPart,
     ToolCall,
@@ -44,11 +49,20 @@ class StubLLM(BaseLLM):
         return self.invoke(messages, tools)
 
     def stream(self, messages, tools=None):
-        return iter(())
+        return iter(
+            [
+                LLMStreamChunk(text_delta="he"),
+                LLMStreamChunk(reasoning_delta="think"),
+                LLMStreamChunk(
+                    text_delta="llo",
+                    finish_reason="stop",
+                ),
+            ]
+        )
 
     async def astream(self, messages, tools=None):
-        if False:
-            yield
+        for chunk in self.stream(messages, tools):
+            yield chunk
 
     def close(self):
         pass
@@ -95,6 +109,46 @@ class StubAgent(BaseAgent):
             input_prompt,
             input_images,
             tools,
+        )
+
+    def stream(
+        self,
+        system_prompt,
+        history_messages,
+        input_prompt,
+        input_images=None,
+        tools=None,
+    ):
+        yield AgentTextDeltaEvent(step=1, text="done")
+        yield AgentCompletedEvent(
+            step=1,
+            response=self.invoke(
+                system_prompt,
+                history_messages,
+                input_prompt,
+                input_images,
+                tools,
+            ),
+        )
+
+    async def astream(
+        self,
+        system_prompt,
+        history_messages,
+        input_prompt,
+        input_images=None,
+        tools=None,
+    ):
+        yield AgentTextDeltaEvent(step=1, text="done")
+        yield AgentCompletedEvent(
+            step=1,
+            response=await self.ainvoke(
+                system_prompt,
+                history_messages,
+                input_prompt,
+                input_images,
+                tools,
+            ),
         )
 
 
@@ -219,3 +273,41 @@ def test_observable_tool_executor_同步并发保持hook_context():
     assert len(tool_events) == 4
     assert len({event.run_id for event in tool_events}) == 1
     assert tool_events[0].run_id is not None
+
+
+def test_observable_llm_stream_只记录聚合生命周期():
+    recorder, llm, _, _ = make_observed_components()
+
+    chunks = list(llm.stream([Message("user", [TextPart("hello")])]))
+
+    assert "".join(chunk.text_delta for chunk in chunks) == "hello"
+    stream_events = [event for event in recorder.events if event.name == "llm.stream"]
+    assert [event.phase for event in stream_events] == ["before", "after"]
+    assert (
+        stream_events[0].data["llm_call_id"]
+        == stream_events[1].data["llm_call_id"]
+    )
+    assert stream_events[1].data["stream_result"] == {
+        "text": "hello",
+        "reasoning": "think",
+        "tool_calls": [],
+        "usage": None,
+        "finish_reason": "stop",
+    }
+
+
+def test_observable_agent_stream_保持事件并记录生命周期():
+    recorder, _, _, agent = make_observed_components()
+
+    events = list(agent.stream("system", [], "hello"))
+
+    assert [type(event) for event in events] == [
+        AgentTextDeltaEvent,
+        AgentCompletedEvent,
+    ]
+    stream_events = [
+        event for event in recorder.events if event.name == "agent.stream"
+    ]
+    assert [event.phase for event in stream_events] == ["before", "after"]
+    assert len({event.run_id for event in stream_events}) == 1
+    assert stream_events[0].run_id is not None
