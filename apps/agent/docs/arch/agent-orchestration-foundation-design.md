@@ -152,7 +152,8 @@ ReActAgent 是通用、无状态的单 Agent 执行引擎。
 - `invoke`：同步执行并返回最终完整响应；
 - `ainvoke`：异步执行并返回最终完整响应。
 
-`stream` 和 `astream` 在本期其他能力完成并验证后作为第二阶段实现。
+`stream` 和 `astream` 已作为第二阶段实现并完成真实模型验证。详细设计见
+`apps/agent/docs/arch/agent-stream-event-design.md`。
 
 ### ReAct 数据流
 
@@ -450,12 +451,15 @@ apps/agent/src/
 
 ### 第二阶段
 
-第一阶段全部完成并验证后，再实现：
+当前分支已经完成：
 
 - `stream`；
 - `astream`；
 - Agent 级流式事件；
 - 多轮 LLM Stream 与工具执行过程的串联。
+
+第二阶段的具体事件协议、工具分批规则、Hook 边界和未来插件系统边界以
+`apps/agent/docs/arch/agent-stream-event-design.md` 为准。
 
 ### 未来核心编排
 
