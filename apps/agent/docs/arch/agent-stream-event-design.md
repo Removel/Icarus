@@ -393,7 +393,7 @@ GUI 后台任务消费 `astream()`，再通过 GUI 框架的 Signal 或消息队
 
 ### TTS
 
-TTS 消费 `AgentTextDeltaEvent`：
+未接 StylePlugin 的基础场景可以直接消费 `AgentTextDeltaEvent`。完整用户响应链默认由 TTS 消费 StylePlugin 产生的风格化文本 Event：
 
 ```text
 接收文字增量
@@ -403,7 +403,7 @@ TTS 消费 `AgentTextDeltaEvent`：
 → 继续收集后续增量
 ```
 
-切分策略不进入 Agent。
+切分策略不进入 Agent。TTS、Emotion、L2D 和 VAC 参数也不由 Agent 或 StylePlugin 统一生成，而由各领域 Plugin 自行转换。
 
 ## 与未来插件系统的边界
 

@@ -16,12 +16,14 @@
 
 - 阶段一 Plugin Runtime 核心：已完成；
 - 阶段二 AgentPlugin：已完成；
-- 阶段三 BlackboardPlugin：等待 Context 聚合协议 Gate；
+- 阶段三 BlackboardPlugin：已完成固定来源初版；
 - Plugin Runtime 测试：`16 passed`；
 - Plugin Runtime + AgentPlugin 测试：`18 passed`；
 - 全量测试：`67 passed`；
 - 真实模型插件链路：已验证 Blackboard 测试 Producer → AgentPlugin → ReActAgent Stream → WebUI 测试 Plugin，输出 `PLUGIN_RUNTIME_OK`。
 - Plugin 消费入口：已支持 `consume(source_plugin_id, event)`，目标 Plugin 可以同时依据来源和 Event 子类处理信息。
+- Blackboard 全链路：已验证 UserInput + Memory + Skill + Knowledge → Blackboard → Converter → AgentPlugin → 真实模型 → Sink，输出 `BLACKBOARD_OK`。
+- 全量测试：`73 passed`。
 
 ## 层级与目录
 
@@ -575,6 +577,8 @@ class AgentContextReadyEvent(Event):
 
 如果 Blackboard 需要额外插件上下文，应在 system prompt 或 Message 中完成整合，不把任意 `dict` 直接泄漏给 ReActAgent。
 
+当前实现已调整为固定核心字段 + ContextBlock，并由 BlackboardContextConverter 稳定序列化到当前 User Prompt。动态 Context 不修改 System Prompt。
+
 ### 任务九：定义 AgentPlugin Event
 
 **新增文件**
@@ -646,22 +650,16 @@ class AgentContextReadyEvent(Event):
 
 ## 阶段三：BlackboardPlugin
 
-### 前置 Gate
+### 已确认初版策略
 
-在实现 Blackboard 前，需要单独确认：
-
-- Context 来源插件清单；
-- 本次任务需要等待哪些来源；
-- 必选与可选 Context；
-- 空结果语义；
-- 失败降级；
-- 等待超时；
-- 多任务并发时的 task_id/correlation_id；
-- History 的所有权；
-- Agent 结果如何回写 Blackboard；
-- Context Ready Event 的最终字段。
-
-这些问题未确认前，不直接实现通用 Blackboard 聚合器。
+- Blackboard 构造时维护固定 required sources；
+- UserInput 和全部固定来源都到达后发布一次 Context Ready；
+- `completed + []` 表示空结果但已完成；
+- `failed + error` 表示失败但已完成；
+- correlation_id 隔离多任务；
+- History 由 UserInput/上层提供并由 Blackboard 快照携带；
+- AgentCompletedEvent/AgentErrorEvent 回写任务状态；
+- 超时和动态 required sources 留到后续版本。
 
 ### 任务十二：定义 Context Event 契约
 
@@ -689,6 +687,8 @@ class AgentContextReadyEvent(Event):
 - 记录空结果、失败和完成状态；
 - 生成不可变 Context Snapshot；
 - 完成任务后清理或归档状态。
+
+当前初版支持显式 `remove_task()`，自动归档策略留后续版本。
 
 ### 任务十四：实现 BlackboardPlugin
 
@@ -718,6 +718,18 @@ class AgentContextReadyEvent(Event):
 - AgentPlugin 消费并执行；
 - Agent 结果回到 Blackboard；
 - 多任务 correlation_id 互不污染。
+
+当前实现已完成固定来源聚合、空结果、失败来源、Agent 结果回写和真实模型链路验证。
+
+## 后续阶段：StylePlugin 与领域插件
+
+- AgentPlugin 不增加固定 Responder；
+- AgentPlugin 只发布原始执行流；
+- StylePlugin 消费原始文本并生产风格化文本流；
+- CharacterPlugin 提供角色表现上下文；
+- TTS、Emotion、L2D、VAC 等插件消费风格化文本并自行转换领域参数；
+- SkillPlugin、MemoryPlugin 可直接订阅 AgentPlugin，根据执行流自行判断更新；
+- `perception` 模型由具体插件按需使用，不固定绑定一条响应线。
 
 ## 分层测试命令
 
