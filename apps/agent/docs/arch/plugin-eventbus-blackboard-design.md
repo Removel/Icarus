@@ -8,6 +8,44 @@
 
 本文记录已经确认的架构边界，不提前确定尚未讨论完整的队列容量、失败重试、事件持久化、插件恢复和分布式运行策略。
 
+该架构属于 **Agent 编排层的 Runtime Infrastructure 子层**：
+
+```text
+Agent Orchestration Layer
+├── Capability
+│   ├── ReActAgent
+│   ├── Agent Stream
+│   └── Tool Executor
+├── Runtime Infrastructure
+│   ├── Event
+│   ├── Plugin
+│   ├── Plugin Registry
+│   ├── Plugin Runtime
+│   └── EventBus
+└── Orchestration Plugins
+    ├── AgentPlugin
+    ├── BlackboardPlugin
+    ├── SkillPlugin
+    ├── KnowledgePlugin
+    └── MemoryPlugin
+```
+
+其中 `plugin_runtime/` 提供通用运行基础设施，`plugins/` 承载运行于该基础设施上的具体编排插件。
+
+当前分支已经完成：
+
+- Plugin 通信类型与 BasePlugin；
+- PluginRegistry；
+- 每 Plugin 一个统一消费通道的 PluginRuntime；
+- 只按来源路由的 EventBus；
+- PluginManager 与 Shutdown Drain；
+- Runtime Hook 观测；
+- AgentPlugin；
+- AgentContextReadyEvent；
+- 真实模型 Plugin 链路验证。
+
+BlackboardPlugin、SkillPlugin、KnowledgePlugin 和 MemoryPlugin 仍属于后续阶段。
+
 ## 设计目标
 
 插件系统需要解决：
@@ -88,7 +126,11 @@ Agent 和 Blackboard 不具有特殊通信权限，它们只是职责不同的 P
 class Plugin:
     plugin_id: str
 
-    async def consume(self, event: Event) -> None:
+    async def consume(
+        self,
+        source_plugin_id: str,
+        event: Event,
+    ) -> None:
         ...
 
     async def start(self) -> None:
@@ -106,7 +148,7 @@ Event 发布不要求每个 Plugin 自己实现路由。Plugin 通过 EventBus �
 
 ```text
 Producer A ─┐
-Producer B ─┼→ Plugin 的统一输入通道 → consume(event)
+Producer B ─┼→ Plugin 的统一输入通道 → consume(source_plugin_id, event)
 Producer C ─┘
 ```
 
@@ -120,6 +162,7 @@ Producer C → 另一个队列 / 另一个 Handler
 
 Plugin 自行根据 Event 子类判断：
 
+- Event 来自哪个 Plugin；
 - 是否认识；
 - 是否处理；
 - 是否忽略；
@@ -233,7 +276,7 @@ EventBus：
 
 1. 获取发布方 `source_plugin_id`；
 2. 从 Registry 查询订阅该来源的目标 Plugin；
-3. 将 Event 投递到每个目标 Plugin 的统一消费入口；
+3. 将 `source_plugin_id` 和 Event 投递到每个目标 Plugin 的统一消费入口；
 4. 不理解 Event 类型；
 5. 不等待目标 Plugin 业务处理完成。
 
@@ -264,13 +307,23 @@ AgentPlugin 发布 AgentTextDeltaEvent
 
 ### 每个 Plugin 的统一输入通道
 
-每个 Plugin 应有自己的统一消费通道，用于接收所有已订阅来源的 Event。
+每个 Plugin 应有自己的统一消费通道，用于接收所有已订阅来源的 Event。消费入口直接获得来源 Plugin ID 和 Event：
+
+```python
+async def consume(
+    self,
+    source_plugin_id: str,
+    event: Event,
+) -> None:
+    ...
+```
 
 已确认：
 
 - 不为不同来源分别创建独立消费入口；
 - 不让所有 Plugin 共享同一个消费队列；
 - 不由 EventBus 替 Plugin 判断 Event 类型；
+- Plugin 可以根据 `source_plugin_id` 区分相同类型 Event 的不同来源；
 - Plugin 按自己的消费顺序处理 Event。
 
 消费通道的具体实现形式，例如每 Plugin 一个 asyncio.Queue、Actor Mailbox 或其他模型，在实现前继续确认。
@@ -489,6 +542,7 @@ Blackboard Event
 - Event 类型由目标 Plugin 自行处理或忽略；
 - 每个 Plugin 只有一个统一消费入口；
 - 每个 Plugin 的消费入口接收所有已订阅来源 Event；
+- 每个 Plugin 的消费入口同时获得来源 Plugin ID 和 Event；
 - EventBus 只是异步通道；
 - 生产者只等待 EventBus 接受 Event；
 - 生产者不等待目标 Plugin 消费完成；
