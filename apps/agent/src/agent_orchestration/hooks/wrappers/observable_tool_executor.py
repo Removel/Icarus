@@ -1,8 +1,5 @@
 """ToolExecutor 的透明观测包装器。"""
 
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.hooks.hook_dispatcher import (
@@ -10,7 +7,6 @@ from apps.agent.src.agent_orchestration.hooks.hook_dispatcher import (
 )
 from apps.agent.src.agent_orchestration.tools.tool_executor import (
     BaseToolExecutor,
-    ToolResultPair,
 )
 from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolCall, ToolDefinition
@@ -32,6 +28,9 @@ class ObservableToolExecutor(BaseToolExecutor):
         names: list[str] | None = None,
     ) -> list[ToolDefinition]:
         return self._executor.definitions(names)
+
+    def can_run_parallel(self, tool_call: ToolCall) -> bool:
+        return self._executor.can_run_parallel(tool_call)
 
     def execute(self, tool_call: ToolCall) -> ToolExecutionResult:
         tool_execution_id = uuid4().hex
@@ -92,26 +91,6 @@ class ObservableToolExecutor(BaseToolExecutor):
             },
         )
         return result
-
-    def execute_many(self, tool_calls: list[ToolCall]) -> list[ToolResultPair]:
-        if not tool_calls:
-            return []
-        with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
-            futures = [
-                executor.submit(copy_context().run, self.execute, tool_call)
-                for tool_call in tool_calls
-            ]
-            results = [future.result() for future in futures]
-        return list(zip(tool_calls, results, strict=True))
-
-    async def aexecute_many(
-        self,
-        tool_calls: list[ToolCall],
-    ) -> list[ToolResultPair]:
-        results = await asyncio.gather(
-            *(self.aexecute(tool_call) for tool_call in tool_calls),
-        )
-        return list(zip(tool_calls, results, strict=True))
 
     @staticmethod
     def _error_data(

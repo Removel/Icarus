@@ -30,6 +30,11 @@ class BashTool(BaseTool):
                         "exclusiveMinimum": 0,
                         "description": "可选超时秒数",
                     },
+                    "parallel": {
+                        "type": "boolean",
+                        "description": "确认命令与相邻调用无资源冲突时设为 true",
+                        "default": False,
+                    },
                 },
                 "required": ["command"],
                 "additionalProperties": False,
@@ -40,6 +45,7 @@ class BashTool(BaseTool):
         command = arguments.get("command")
         workdir = arguments.get("workdir")
         timeout = arguments.get("timeout")
+        parallel = arguments.get("parallel", False)
         if not isinstance(command, str) or not command:
             raise ValueError("command must be a non-empty string")
         if workdir is not None and not isinstance(workdir, str):
@@ -50,6 +56,8 @@ class BashTool(BaseTool):
             or timeout <= 0
         ):
             raise ValueError("timeout must be a positive number")
+        if not isinstance(parallel, bool):
+            raise ValueError("parallel must be a boolean")
 
         try:
             completed = subprocess.run(
@@ -73,3 +81,6 @@ class BashTool(BaseTool):
             output=output,
             error=None if completed.returncode == 0 else completed.stderr,
         )
+
+    def can_run_parallel(self, arguments: dict[str, Any]) -> bool:
+        return arguments.get("parallel", False) is True

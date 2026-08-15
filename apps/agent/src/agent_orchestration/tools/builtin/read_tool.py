@@ -38,6 +38,9 @@ class ReadTool(BaseTool):
             output={"path": str(path), "content": content},
         )
 
+    def can_run_parallel(self, arguments: dict[str, Any]) -> bool:
+        return True
+
     @staticmethod
     def _required_string(arguments: dict[str, Any], name: str) -> str:
         value = arguments.get(name)

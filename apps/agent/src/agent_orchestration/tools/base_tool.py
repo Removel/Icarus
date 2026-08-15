@@ -22,3 +22,6 @@ class BaseTool(ABC):
 
     async def ainvoke(self, arguments: dict[str, Any]) -> ToolExecutionResult:
         return await asyncio.to_thread(self.invoke, arguments)
+
+    def can_run_parallel(self, arguments: dict[str, Any]) -> bool:
+        return False

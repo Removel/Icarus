@@ -16,6 +16,15 @@ def test_builtin_tools_默认工具定义完整():
         "insert",
         "bash",
     ]
+    assert ReadTool().can_run_parallel({"path": "a.txt"}) is True
+    assert WriteTool().can_run_parallel({"path": "a.txt", "content": ""}) is False
+    assert InsertTool().can_run_parallel(
+        {"path": "a.txt", "line": 1, "content": ""}
+    ) is False
+    assert BashTool().can_run_parallel({"command": "git status"}) is False
+    assert BashTool().can_run_parallel(
+        {"command": "git status", "parallel": True}
+    ) is True
 
 
 def test_read_write_insert_完成文件读写与插入(tmp_path):
