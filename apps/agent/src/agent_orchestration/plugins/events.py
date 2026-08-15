@@ -1,6 +1,8 @@
 """具体编排 Plugin 使用的 Event。"""
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any, Literal
 
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.model_config import LLMRole
@@ -8,12 +10,49 @@ from apps.agent.src.model_provider.types import ImagePart, Message
 
 
 @dataclass(frozen=True, kw_only=True)
-class AgentContextReadyEvent(Event):
-    """Blackboard 向 AgentPlugin 提供的一次完整 Agent 输入。"""
+class ContextBlock:
+    source_plugin_id: str
+    context_type: str
+    content: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "metadata",
+            MappingProxyType(dict(self.metadata)),
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class UserInputEvent(Event):
+    model_role: LLMRole
+    system_prompt: str
+    history_messages: list[Message] = field(default_factory=list)
+    prompt: str
+    input_images: list[ImagePart] = field(default_factory=list)
+    tools: list[str] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ContextContributionEvent(Event):
+    status: Literal["completed", "failed"]
+    context_blocks: list[ContextBlock] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class BlackboardContextReadyEvent(Event):
+    """Blackboard 聚合完成后发布的不可变上下文快照。"""
 
     model_role: LLMRole
     system_prompt: str
     history_messages: list[Message] = field(default_factory=list)
-    input_prompt: str
+    prompt: str
     input_images: list[ImagePart] = field(default_factory=list)
     tools: list[str] | None = None
+    context_blocks: list[ContextBlock] = field(default_factory=list)
+    context_errors: dict[str, str] = field(default_factory=dict)
+
+
+AgentContextReadyEvent = BlackboardContextReadyEvent

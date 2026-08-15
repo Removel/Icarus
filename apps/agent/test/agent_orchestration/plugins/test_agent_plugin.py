@@ -11,11 +11,15 @@ from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin, Plugin
 from apps.agent.src.agent_orchestration.plugins import (
     AgentContextReadyEvent,
     AgentPlugin,
+    ContextBlock,
 )
 from apps.agent.src.model_provider.types import Message, TextPart
 
 
 class StubAgent(BaseAgent):
+    def __init__(self) -> None:
+        self.calls = []
+
     @property
     def model_role(self):
         return "thinking"
@@ -37,6 +41,15 @@ class StubAgent(BaseAgent):
         input_images=None,
         tools=None,
     ):
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "history_messages": history_messages,
+                "input_prompt": input_prompt,
+                "input_images": input_images,
+                "tools": tools,
+            }
+        )
         yield AgentTextDeltaEvent(step=1, text="hello")
         yield AgentCompletedEvent(
             step=1,
@@ -89,8 +102,15 @@ def test_agent_plugin_只消费context并原样发布stream_event():
                 correlation_id="task-1",
                 model_role="thinking",
                 system_prompt="system",
-                input_prompt="hello",
+                prompt="hello",
                 tools=[],
+                context_blocks=[
+                    ContextBlock(
+                        source_plugin_id="memory",
+                        context_type="memory",
+                        content="remember this",
+                    )
+                ],
             )
         )
         await manager.stop(timeout=1)
@@ -100,10 +120,17 @@ def test_agent_plugin_只消费context并原样发布stream_event():
 
     assert factory.roles == ["thinking"]
     assert sources == ["agent", "agent"]
+    assert factory.agent.calls[0]["system_prompt"] == "system"
+    assert "<plugin_context>" in factory.agent.calls[0]["input_prompt"]
+    assert "remember this" in factory.agent.calls[0]["input_prompt"]
+    assert "<user_request>\nhello\n</user_request>" in factory.agent.calls[0][
+        "input_prompt"
+    ]
     assert [type(event) for event in events] == [
         AgentTextDeltaEvent,
         AgentCompletedEvent,
     ]
+    assert {event.correlation_id for event in events} == {"task-1"}
     assert events[0].text == "hello"
     assert events[1].response.message.content == [TextPart("hello")]
 
@@ -114,13 +141,13 @@ def test_agent_context_event_保持扁平agent参数():
         model_role="perception",
         system_prompt="system",
         history_messages=[Message("user", [TextPart("history")])],
-        input_prompt="input",
+        prompt="input",
         tools=["read"],
     )
 
     assert event.model_role == "perception"
     assert event.system_prompt == "system"
     assert event.history_messages[0].role == "user"
-    assert event.input_prompt == "input"
+    assert event.prompt == "input"
     assert event.input_images == []
     assert event.tools == ["read"]
