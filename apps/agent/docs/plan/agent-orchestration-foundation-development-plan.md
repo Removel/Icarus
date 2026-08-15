@@ -17,8 +17,9 @@
 ## 当前状态
 
 - 第一阶段：已完成；
-- 全量测试：`42 passed`；
-- 第二阶段：未开始。
+- 第二阶段 Stream：已完成；
+- 全量测试：`49 passed`；
+- Plugin/EventBus/Blackboard：未开始。
 
 ## 实施原则
 
@@ -322,6 +323,13 @@ apps/agent/.venv/bin/pytest apps/agent/test -q
 ## 第二阶段：Agent 流式能力
 
 第二阶段必须在第一阶段完成后开始。
+
+第二阶段已完成独立设计和细化计划：
+
+- `apps/agent/docs/arch/agent-stream-event-design.md`
+- `apps/agent/docs/plan/agent-stream-event-development-plan.md`
+
+以下内容保留为阶段摘要，具体实现顺序和验收标准以上述独立文档为准。
 
 ### 任务九：定义 Agent 流式事件
 
