@@ -41,6 +41,9 @@ class SlowTool(BaseTool):
         time.sleep(arguments["delay"])
         return ToolExecutionResult(success=True, output=arguments["value"])
 
+    def can_run_parallel(self, arguments: dict[str, Any]) -> bool:
+        return arguments.get("parallel", True)
+
 
 class InvalidResultTool(BaseTool):
     @property
@@ -101,8 +104,16 @@ def test_tool_executor_同步批量并发且保持原始顺序():
     registry.register(SlowTool())
     executor = ToolExecutor(registry)
     calls = [
-        ToolCall("call-1", "slow", {"delay": 0.08, "value": 1}),
-        ToolCall("call-2", "slow", {"delay": 0.08, "value": 2}),
+        ToolCall(
+            "call-1",
+            "slow",
+            {"delay": 0.08, "value": 1, "parallel": True},
+        ),
+        ToolCall(
+            "call-2",
+            "slow",
+            {"delay": 0.08, "value": 2, "parallel": True},
+        ),
     ]
 
     started_at = time.monotonic()
@@ -119,8 +130,16 @@ def test_tool_executor_异步批量并发且保持原始顺序():
     registry.register(SlowTool())
     executor = ToolExecutor(registry)
     calls = [
-        ToolCall("call-1", "slow", {"delay": 0.08, "value": 1}),
-        ToolCall("call-2", "slow", {"delay": 0.08, "value": 2}),
+        ToolCall(
+            "call-1",
+            "slow",
+            {"delay": 0.08, "value": 1, "parallel": True},
+        ),
+        ToolCall(
+            "call-2",
+            "slow",
+            {"delay": 0.08, "value": 2, "parallel": True},
+        ),
     ]
 
     async def run():
@@ -133,3 +152,28 @@ def test_tool_executor_异步批量并发且保持原始顺序():
     assert elapsed < 0.14
     assert [tool_call.id for tool_call, _ in results] == ["call-1", "call-2"]
     assert [result.output for _, result in results] == [1, 2]
+
+
+def test_tool_executor_按照连续可并行调用分批():
+    registry = ToolRegistry()
+    registry.register(SlowTool())
+    registry.register(EchoTool())
+    executor = ToolExecutor(registry)
+    calls = [
+        ToolCall("call-1", "echo", {"value": 1}),
+        ToolCall("call-2", "echo", {"value": 2}),
+        ToolCall("call-3", "slow", {"value": 3, "parallel": True}),
+        ToolCall("call-4", "slow", {"value": 4, "parallel": True}),
+        ToolCall("call-5", "echo", {"value": 5}),
+        ToolCall("call-6", "slow", {"value": 6, "parallel": True}),
+    ]
+
+    batches = executor.build_batches(calls)
+
+    assert [[tool_call.id for tool_call in batch] for batch in batches] == [
+        ["call-1"],
+        ["call-2"],
+        ["call-3", "call-4"],
+        ["call-5"],
+        ["call-6"],
+    ]
