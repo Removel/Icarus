@@ -1,8 +1,10 @@
 """Agent 能力抽象。"""
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Iterator
 
 from apps.agent.src.agent_orchestration.capability.types import AgentResponse
+from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.model_config import LLMRole
 from apps.agent.src.model_provider.types import ImagePart, Message
 
@@ -35,4 +37,26 @@ class BaseAgent(ABC):
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
     ) -> AgentResponse:
+        ...
+
+    @abstractmethod
+    def stream(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None = None,
+        tools: list[str] | None = None,
+    ) -> Iterator[Event]:
+        ...
+
+    @abstractmethod
+    async def astream(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None = None,
+        tools: list[str] | None = None,
+    ) -> AsyncIterator[Event]:
         ...

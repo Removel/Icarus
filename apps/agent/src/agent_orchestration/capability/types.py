@@ -2,9 +2,12 @@
 
 from dataclasses import dataclass, field
 
+from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 from apps.agent.src.model_provider.types import (
     FinishReason,
     Message,
+    ToolCall,
     Usage,
 )
 
@@ -19,3 +22,35 @@ class AgentResponse:
     finish_reason: FinishReason | None = None
     steps: int = 0
     messages: list[Message] = field(default_factory=list)
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentTextDeltaEvent(Event):
+    step: int
+    text: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentToolStartedEvent(Event):
+    step: int
+    tool_call: ToolCall
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentToolCompletedEvent(Event):
+    step: int
+    tool_call: ToolCall
+    result: ToolExecutionResult
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentCompletedEvent(Event):
+    step: int
+    response: AgentResponse
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentErrorEvent(Event):
+    step: int
+    error_type: str
+    error_message: str
