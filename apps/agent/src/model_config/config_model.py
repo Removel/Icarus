@@ -20,12 +20,11 @@ class LLMConfig(pydantic.BaseModel):
 
 class ModelSettings(pydantic.BaseModel):
     thinking: LLMConfig
-    execution: LLMConfig
     perception: LLMConfig
 
 
 LLMProtocol = Literal["openai", "anthropic"]
-LLMRole = Literal["thinking", "execution", "perception"]
+LLMRole = Literal["thinking", "perception"]
 
 
 class ConfigModel(pydantic.BaseModel):
