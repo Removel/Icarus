@@ -18,7 +18,7 @@ def test_get_config_读取模型配置并使用环境变量密钥(
                 "temperature": 0.2,
                 "default_think_level": "medium",
             }
-            for role in ("thinking", "execution", "perception")
+            for role in ("thinking", "perception")
         },
         "use_protocol": "anthropic",
     }
