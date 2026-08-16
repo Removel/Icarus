@@ -8,13 +8,18 @@ from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
 from apps.agent.src.model_config import LLMRole
 from apps.agent.src.agent_orchestration.plugins.blackboard.state import (
+    BlackboardContextState,
     BlackboardTaskState,
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     BlackboardContextReadyEvent,
     ContextContributionEvent,
 )
-from apps.agent.src.agent_orchestration.plugins.user_input.events import UserInputEvent
+from apps.agent.src.agent_orchestration.plugins.user_input.events import (
+    InputFinishedEvent,
+    UserInputEvent,
+)
+from apps.agent.src.model_provider.types import Message, TextPart
 
 
 class BlackboardPlugin(BasePlugin):
@@ -28,6 +33,7 @@ class BlackboardPlugin(BasePlugin):
         model_role: LLMRole = "thinking",
         system_prompt: str = "",
         tools: list[str] | None = None,
+        initial_messages: list[Message] | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.required_context_sources = frozenset(required_context_sources)
@@ -35,6 +41,9 @@ class BlackboardPlugin(BasePlugin):
         self.model_role = model_role
         self.system_prompt = system_prompt
         self.tools = None if tools is None else list(tools)
+        self.context = BlackboardContextState(
+            messages=list(initial_messages or []),
+        )
         self._tasks: dict[str, BlackboardTaskState] = {}
 
     async def consume(
@@ -43,6 +52,26 @@ class BlackboardPlugin(BasePlugin):
         event: Event,
     ) -> None:
         correlation_id = self._require_correlation_id(event)
+        if isinstance(event, InputFinishedEvent):
+            state = self._tasks.get(correlation_id)
+            if state is None:
+                return
+            state.input_finished = True
+            self._remove_task_if_finished(state)
+            return
+
+        if source_plugin_id == self.agent_plugin_id:
+            state = self._tasks.get(correlation_id)
+            if state is None:
+                return
+            if isinstance(event, AgentCompletedEvent):
+                self._commit_completed_task(state, event)
+                state.agent_finished = True
+            elif isinstance(event, AgentErrorEvent):
+                state.agent_finished = True
+            self._remove_task_if_finished(state)
+            return
+
         state = self._tasks.setdefault(
             correlation_id,
             BlackboardTaskState(correlation_id=correlation_id),
@@ -74,16 +103,6 @@ class BlackboardPlugin(BasePlugin):
             await self._publish_if_ready(state)
             return
 
-        if source_plugin_id != self.agent_plugin_id:
-            return
-        if isinstance(event, AgentCompletedEvent):
-            state.agent_status = "completed"
-            state.agent_response = event.response
-            state.agent_error = None
-        elif isinstance(event, AgentErrorEvent):
-            state.agent_status = "failed"
-            state.agent_error = event.error_message
-
     def get_task_state(self, correlation_id: str) -> BlackboardTaskState:
         try:
             return self._tasks[correlation_id]
@@ -99,6 +118,9 @@ class BlackboardPlugin(BasePlugin):
             raise KeyError(
                 f"Blackboard task is not found: {correlation_id}"
             ) from error
+
+    def get_messages(self) -> list[Message]:
+        return list(self.context.messages)
 
     async def _publish_if_ready(self, state: BlackboardTaskState) -> None:
         if state.context_published or not state.is_context_ready(
@@ -124,7 +146,7 @@ class BlackboardPlugin(BasePlugin):
             correlation_id=state.correlation_id,
             model_role=self.model_role,
             system_prompt=self.system_prompt,
-            history_messages=user_input.history_messages,
+            history_messages=self.get_messages(),
             prompt=user_input.prompt,
             input_images=user_input.input_images,
             tools=self.tools,
@@ -132,8 +154,30 @@ class BlackboardPlugin(BasePlugin):
             context_errors=context_errors,
         )
         state.context_published = True
-        state.agent_status = "running"
         await self.publish(context_event)
+
+    def _commit_completed_task(
+        self,
+        state: BlackboardTaskState,
+        event: AgentCompletedEvent,
+    ) -> None:
+        if state.context_committed or state.user_input is None:
+            return
+        user_content = [
+            TextPart(state.user_input.prompt),
+            *state.user_input.input_images,
+        ]
+        self.context.messages.extend(
+            [
+                Message("user", user_content),
+                event.response.message,
+            ]
+        )
+        state.context_committed = True
+
+    def _remove_task_if_finished(self, state: BlackboardTaskState) -> None:
+        if state.agent_finished and state.input_finished:
+            self._tasks.pop(state.correlation_id, None)
 
     @staticmethod
     def _require_correlation_id(event: Event) -> str:

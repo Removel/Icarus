@@ -1,13 +1,17 @@
 """BlackboardPlugin 的任务上下文状态。"""
 
 from dataclasses import dataclass, field
-from typing import Literal
 
-from apps.agent.src.agent_orchestration.capability import AgentResponse
 from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     ContextContributionEvent,
 )
 from apps.agent.src.agent_orchestration.plugins.user_input.events import UserInputEvent
+from apps.agent.src.model_provider.types import Message
+
+
+@dataclass
+class BlackboardContextState:
+    messages: list[Message] = field(default_factory=list)
 
 
 @dataclass
@@ -18,14 +22,9 @@ class BlackboardTaskState:
         default_factory=dict
     )
     context_published: bool = False
-    agent_status: Literal[
-        "waiting_context",
-        "running",
-        "completed",
-        "failed",
-    ] = "waiting_context"
-    agent_response: AgentResponse | None = None
-    agent_error: str | None = None
+    context_committed: bool = False
+    agent_finished: bool = False
+    input_finished: bool = False
 
     def is_context_ready(self, required_sources: frozenset[str]) -> bool:
         return (

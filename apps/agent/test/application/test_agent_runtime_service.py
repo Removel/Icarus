@@ -42,7 +42,11 @@ def make_config(data_dir) -> ConfigModel:
 
 
 class AgentStub:
+    def __init__(self) -> None:
+        self.calls = []
+
     async def astream(self, **kwargs):
+        self.calls.append(kwargs)
         prompt = kwargs["input_prompt"]
         message = Message("assistant", [TextPart(f"answer:{prompt}")])
         yield AgentTextDeltaEvent(step=1, text=f"answer:{prompt}")
@@ -80,9 +84,10 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
             session_id="session-1",
             config=make_config(tmp_path / "data"),
         )
-        service.agent_factory.get_agent = lambda model_role: AgentStub()
+        agent = AgentStub()
+        service.agent_factory.get_agent = lambda model_role: agent
         await service.start()
-        accepted = await service.submit("hello", [])
+        accepted = await service.submit("hello")
         events = await collect_task_events(service, accepted.task_id)
         running_session_id = service.session_id
         await service.stop(timeout=1)
@@ -125,7 +130,7 @@ def test_runtime_service_未启动时拒绝提交和读取事件(tmp_path):
             config=make_config(tmp_path / "data"),
         )
         with pytest.raises(RuntimeError, match="not running"):
-            await service.submit("hello", [])
+            await service.submit("hello")
         with pytest.raises(RuntimeError, match="not running"):
             await service.next_event()
 
@@ -168,3 +173,42 @@ def test_runtime_service_llm关闭失败时仍清理session和持久化(tmp_path
     assert service.is_running is False
     assert service.session_id is None
     assert service.persistence.is_running is False
+
+
+def test_runtime_service_由blackboard维护跨轮history并支持初始化消息(tmp_path):
+    async def run():
+        restored = [
+            Message("user", [TextPart("restored-user")]),
+            Message("assistant", [TextPart("restored-assistant")]),
+        ]
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+            initial_messages=restored,
+        )
+        agent = AgentStub()
+        service.agent_factory.get_agent = lambda model_role: agent
+        await service.start()
+
+        first = await service.submit("first")
+        await collect_task_events(service, first.task_id)
+        second = await service.submit("second")
+        await collect_task_events(service, second.task_id)
+        await service.stop(timeout=1)
+        return agent.calls
+
+    calls = asyncio.run(run())
+
+    assert calls[0]["history_messages"] == [
+        Message("user", [TextPart("restored-user")]),
+        Message("assistant", [TextPart("restored-assistant")]),
+    ]
+    assert calls[1]["history_messages"] == [
+        Message("user", [TextPart("restored-user")]),
+        Message("assistant", [TextPart("restored-assistant")]),
+        Message("user", [TextPart("first")]),
+        Message(
+            "assistant",
+            [TextPart("answer:<user_request>\nfirst\n</user_request>")],
+        ),
+    ]

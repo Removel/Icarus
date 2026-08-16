@@ -5,13 +5,8 @@ import asyncio
 import sys
 from typing import Callable, TextIO
 
-from apps.agent.src.agent_orchestration.capability import (
-    AgentCompletedEvent,
-    AgentErrorEvent,
-)
 from apps.agent.src.agent_orchestration.plugins import InputFinishedEvent
 from apps.agent.src.application import AgentRuntimeService
-from apps.agent.src.model_provider.types import Message, TextPart
 from apps.tui.renderer import ReplRenderer
 
 
@@ -25,7 +20,6 @@ async def run_repl(
     output: TextIO = sys.stdout,
 ) -> int:
     renderer = ReplRenderer(output)
-    history: list[Message] = []
     await service.start()
     try:
         while True:
@@ -43,33 +37,16 @@ async def run_repl(
             if prompt.lower() in {"exit", "quit"}:
                 break
 
-            accepted = await service.submit(
-                prompt=prompt,
-                history_messages=list(history),
-            )
-            final_message: Message | None = None
-            task_failed = False
+            accepted = await service.submit(prompt=prompt)
             while True:
                 _, event = await service.next_event()
                 if event.correlation_id != accepted.task_id:
                     continue
                 renderer.render(event)
-                if isinstance(event, AgentCompletedEvent):
-                    final_message = event.response.message
-                elif isinstance(event, AgentErrorEvent):
-                    task_failed = True
-                elif isinstance(event, InputFinishedEvent):
-                    task_failed = task_failed or event.status == "failed"
+                if isinstance(event, InputFinishedEvent):
                     break
 
             renderer.finish_turn()
-            if not task_failed and final_message is not None:
-                history.extend(
-                    [
-                        Message("user", [TextPart(prompt)]),
-                        final_message,
-                    ]
-                )
     finally:
         await service.stop()
     return 0

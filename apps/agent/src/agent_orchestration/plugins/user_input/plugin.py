@@ -17,7 +17,7 @@ from apps.agent.src.agent_orchestration.plugins.user_input.events import (
     UserInputEvent,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence import PersistenceSession
-from apps.agent.src.model_provider.types import ImagePart, Message
+from apps.agent.src.model_provider.types import ImagePart
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,6 @@ class InputAccepted:
 class PendingInput:
     task_id: str
     prompt: str
-    history_messages: list[Message] = field(default_factory=list)
     input_images: list[ImagePart] = field(default_factory=list)
 
 
@@ -65,7 +64,6 @@ class UserInputPlugin(BasePlugin):
     async def submit(
         self,
         prompt: str,
-        history_messages: list[Message],
         input_images: list[ImagePart] | None = None,
     ) -> InputAccepted:
         if self._worker is None or self._worker.done():
@@ -77,7 +75,6 @@ class UserInputPlugin(BasePlugin):
             pending = PendingInput(
                 task_id=task_id,
                 prompt=prompt,
-                history_messages=list(history_messages),
                 input_images=list(input_images or []),
             )
             await self._queue.put(pending)
@@ -141,7 +138,6 @@ class UserInputPlugin(BasePlugin):
                         UserInputEvent(
                             correlation_id=pending.task_id,
                             prompt=pending.prompt,
-                            history_messages=pending.history_messages,
                             input_images=pending.input_images,
                         )
                     )

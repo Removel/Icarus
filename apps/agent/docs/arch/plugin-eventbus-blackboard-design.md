@@ -381,17 +381,26 @@ BlackboardPlugin 可以订阅：
 
 ### 内部维护
 
-BlackboardPlugin 负责维护：
+BlackboardPlugin 的状态分为两部分。
+
+当前 Agent 实例的跨轮上下文状态：
+
+- History；
+- 已成功完成的 User Message；
+- Agent 最终 Assistant Message；
+- 初始化 Agent Runtime 时恢复的历史消息。
+
+每轮任务的临时组装状态：
 
 - 当前用户输入；
-- 当前任务与执行状态；
-- History；
-- Skill 上下文；
-- Knowledge 上下文；
-- Memory 上下文；
-- 其他 Plugin 暴露的状态；
-- Agent 已产生的执行结果；
-- 后续 Agent 调用需要的上下文快照。
+- 当前任务需要等待的 Context 来源；
+- Skill、Knowledge、Memory 等 Plugin 的本轮 ContextContribution；
+- 是否已经发布本轮 Agent Context；
+- Agent 和 UserInput 两个终态事件是否均已到达。
+
+BlackboardPlugin 收到 AgentCompletedEvent 后，将本轮 User Message 和最终
+Assistant Message 写入跨轮上下文。收到 AgentErrorEvent 时不写入失败任务。
+Agent 与 UserInput 的终态事件都到达后，删除该轮临时组装状态。
 
 ### 生产
 
@@ -439,7 +448,10 @@ BlackboardPlugin 等待 UserInput 和全部固定来源返回后，只发布一�
 - AgentPlugin 正常任务的输入只来自 BlackboardPlugin。
 - ContextBlock 声明来源必须与真实发布方一致；
 - Agent Stream Event 使用原始任务 correlation_id 回写 Blackboard；
-- AgentCompletedEvent 和 AgentErrorEvent 用于更新 Blackboard 任务状态。
+- AgentCompletedEvent 用于更新 Blackboard 的跨轮消息上下文；
+- AgentErrorEvent 用于结束失败任务，但失败任务不写入跨轮消息上下文；
+- InputFinishedEvent 与 Agent 终态事件共同触发本轮临时状态清理；
+- 不依赖 AgentCompletedEvent 与 InputFinishedEvent 的异步消费顺序。
 
 等待超时、必选/可选上下文、失败降级和进度事件不是当前主要范围，留到 Blackboard 阶段确定。
 
@@ -501,7 +513,6 @@ UserInputPlugin 是单个 Agent Runtime 实例的统一输入入口，与 HTTP�
 ```python
 await user_input.submit(
     prompt=...,
-    history_messages=...,
     input_images=...,
 )
 ```
@@ -528,6 +539,10 @@ InputQueuedEvent
 ```
 
 初版同一时间只执行一个用户任务。队列位置只在入队时发布，不为剩余任务反复更新位置。
+
+UserInputPlugin 不维护也不接收 History。当前 Agent 实例的跨轮 History 由
+BlackboardPlugin 维护；恢复已有业务会话时，在 Agent Runtime 初始化阶段一次性
+注入历史消息。
 
 当前不实现取消、删除排队任务、优先级、暂停和调整顺序。
 
