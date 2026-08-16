@@ -5,6 +5,7 @@ from apps.agent.src.agent_orchestration.hooks import (
     HookDispatcher,
     HookEvent,
     HookRegistry,
+    get_hook_context,
     hook_context,
 )
 
@@ -83,3 +84,32 @@ def test_hook_event_将数据转换为不可变快照():
     source["items"].append(2)
 
     assert event.data["items"] == [1]
+
+
+def test_hook_context_嵌套合并并可生成新run():
+    with hook_context(
+        {
+            "workspace_key": "workspace",
+            "session_id": "session-1",
+        },
+        run_id=None,
+    ) as session_context:
+        with hook_context(
+            {
+                "correlation_id": "task-1",
+                "model_role": "thinking",
+            },
+            new_run=True,
+        ) as run_context:
+            assert run_context.data == {
+                "workspace_key": "workspace",
+                "session_id": "session-1",
+                "correlation_id": "task-1",
+                "model_role": "thinking",
+            }
+            assert run_context.run_id
+            assert run_context.run_id != session_context.run_id
+
+        restored = get_hook_context()
+        assert restored is session_context
+        assert restored.run_id is None

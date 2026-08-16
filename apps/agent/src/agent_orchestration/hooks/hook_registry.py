@@ -35,3 +35,12 @@ class HookRegistry:
             *self._hooks.get(hook_name, []),
             *self._hooks.get("*", []),
         ]
+
+    def unregister(self, hook_name: str, hook: BaseHook) -> bool:
+        hooks = self._hooks.get(hook_name)
+        if hooks is None or hook not in hooks:
+            return False
+        hooks.remove(hook)
+        if not hooks:
+            del self._hooks[hook_name]
+        return True

@@ -1,4 +1,5 @@
 import enum
+from pathlib import Path
 from typing import Literal
 
 import pydantic
@@ -32,5 +33,6 @@ class ConfigModel(pydantic.BaseModel):
     anthropic_base_url: str
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    icarus_data_dir: Path | None = None
     model_settings: ModelSettings
     use_protocol: LLMProtocol = "openai"

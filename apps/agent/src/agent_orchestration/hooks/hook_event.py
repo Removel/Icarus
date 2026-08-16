@@ -1,6 +1,6 @@
 """Hook 事件与观测快照。"""
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime
 import enum
 from pathlib import Path
@@ -45,7 +45,10 @@ def snapshot(value: Any) -> Any:
     """将运行对象转换为便于持久化的观测快照。"""
 
     if is_dataclass(value) and not isinstance(value, type):
-        return snapshot(asdict(value))
+        return {
+            field.name: snapshot(getattr(value, field.name))
+            for field in fields(value)
+        }
     if isinstance(value, enum.Enum):
         return value.value
     if isinstance(value, Mapping):

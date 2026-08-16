@@ -40,7 +40,7 @@ class ObservableAgent(BaseAgent):
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
     ) -> AgentResponse:
-        with hook_context({"model_role": self.model_role}):
+        with hook_context({"model_role": self.model_role}, new_run=True):
             self._dispatcher.trigger(
                 "agent.invoke",
                 "before",
@@ -82,7 +82,7 @@ class ObservableAgent(BaseAgent):
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
     ) -> AgentResponse:
-        with hook_context({"model_role": self.model_role}):
+        with hook_context({"model_role": self.model_role}, new_run=True):
             await self._dispatcher.atrigger(
                 "agent.invoke",
                 "before",
@@ -124,7 +124,7 @@ class ObservableAgent(BaseAgent):
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
     ) -> Iterator[Event]:
-        with hook_context({"model_role": self.model_role}):
+        with hook_context({"model_role": self.model_role}, new_run=True):
             self._dispatcher.trigger(
                 "agent.stream",
                 "before",
@@ -179,7 +179,7 @@ class ObservableAgent(BaseAgent):
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
     ) -> AsyncIterator[Event]:
-        with hook_context({"model_role": self.model_role}):
+        with hook_context({"model_role": self.model_role}, new_run=True):
             await self._dispatcher.atrigger(
                 "agent.stream",
                 "before",

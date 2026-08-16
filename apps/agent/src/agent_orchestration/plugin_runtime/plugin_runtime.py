@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime
 import logging
 
+from apps.agent.src.agent_orchestration.hooks.hook_context import hook_context
 from apps.agent.src.agent_orchestration.plugin_runtime.base_plugin import BasePlugin
 from apps.agent.src.agent_orchestration.plugin_runtime.plugin_registry import (
     PluginRegistry,
@@ -128,7 +129,11 @@ class PluginRuntime:
         while True:
             published_event = await self._inbox.get()
             try:
-                await self._consume(published_event)
+                with hook_context(
+                    published_event.hook_context,
+                    run_id=published_event.hook_run_id,
+                ):
+                    await self._consume(published_event)
             except Exception as error:
                 self._failed_count += 1
                 self._last_error = str(error)
