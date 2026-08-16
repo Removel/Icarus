@@ -28,6 +28,7 @@ Read the relevant design before changing architecture or data flow. When impleme
 - Blackboard is a Plugin, not the EventBus.
 - AgentPlugin publishes the raw execution stream. Styling, TTS, emotion, action, Skill, Memory, and similar processing belong to independent plugins.
 - Do not implement nested child plugins. Helpers inside a Plugin are ordinary component objects and do not register with PluginRegistry.
+- Concrete plugins use one directory per plugin, with tests mirroring that directory.
 - Dynamic Plugin context belongs in the current User Prompt; do not modify the stable System Prompt.
 - Prefer simple, explicit, flat parameters and reuse existing public types instead of creating duplicate models.
 - Keep sync and async interfaces behaviorally consistent.
