@@ -22,7 +22,7 @@ apps/agent/.venv/bin/python -m apps.tui.main
 apps/agent/.venv/bin/python -m apps.tui.main --session-id demo-session
 ```
 
-输入 `exit`、`quit` 或发送 EOF 退出。当前版本串行执行任务，保留进程内多轮对话历史，并展示文本增量、工具名称、参数和执行状态。
+输入 `exit`、`quit` 或发送 EOF 退出。当前版本串行执行任务，并展示文本增量、工具名称、参数和执行状态。多轮对话上下文由 Agent Core 的 Blackboard 维护。
 
 ## 测试
 

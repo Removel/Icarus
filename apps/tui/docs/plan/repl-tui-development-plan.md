@@ -100,7 +100,6 @@ Terminal Input
 - 读取 `input("Icarus> ")`；
 - `exit/quit` 退出；
 - EOF 退出；
-- 维护内存 History；
 - 提交后消费当前 task Event；
 - 等待 InputFinishedEvent 后进入下一轮。
 
@@ -108,7 +107,7 @@ Terminal Input
 
 - 输入/退出；
 - 空输入忽略；
-- 多轮 History；
+- 多轮输入不由 TUI 传递 History；
 - task_id 过滤；
 - Service 错误显示；
 - 不依赖第三方 TUI 包。
@@ -143,22 +142,21 @@ InputFinishedEvent       → 当前任务结束
 - 大 ToolResult 不被打印；
 - 终端输出格式稳定。
 
-## 任务五：History 投影
+## 任务五：History 边界
 
 **开发内容**
 
-- 提交时添加 User Message；
-- AgentCompletedEvent 时添加最终 Assistant Message；
-- Tool 和内部 Event 不进入 History；
-- AgentError 时不添加 Assistant Message；
-- 仅保存在当前进程内存；
-- 不读取本地 trace.jsonl。
+- TUI 不维护或拼接 History；
+- TUI 每轮只提交当前 Prompt；
+- BlackboardPlugin 维护当前 Agent 实例的跨轮消息；
+- 恢复业务历史时，通过 AgentRuntimeService 初始化参数一次性注入；
+- 不读取本地 trace.jsonl 恢复 History。
 
 **验证**
 
-- 第二轮提交携带第一轮 History；
-- History role 顺序正确；
-- 失败任务不污染 History。
+- 第二轮调用不传 History；
+- AgentRuntimeService 的第二轮 Agent 调用自动携带第一轮消息；
+- 失败任务不进入 Blackboard History。
 
 ## 任务六：生命周期与错误处理
 
@@ -184,7 +182,7 @@ InputFinishedEvent       → 当前任务结束
 Icarus> 只回复 TUI_OK
 ```
 
-验证流式输出和 History。
+验证流式输出。
 
 ### 工具调用
 
@@ -201,7 +199,7 @@ Icarus> 读取项目中的 agent-test.txt
 
 ### 多轮对话
 
-连续两轮，验证第二轮携带 History。
+连续两轮，验证 Blackboard 自动为第二轮提供第一轮 History。
 
 ### 退出
 
@@ -249,7 +247,7 @@ git diff --check
 - REPL 可以完成真实文本对话；
 - REPL 可以展示工具状态；
 - 输入与输出流式链路完整；
-- History 在进程内生效；
+- Blackboard History 在当前 Agent Runtime 内生效；
 - Trace 正常落盘；
 - 退出无后台任务泄漏；
 - 不引入第三方 TUI 框架；
