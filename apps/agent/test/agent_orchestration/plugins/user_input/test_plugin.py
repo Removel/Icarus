@@ -62,8 +62,8 @@ def test_user_input_plugin_fifo并返回queue_position():
         manager.subscribe("user-input", "agent")
         await manager.start()
 
-        first = await user_input.submit("first", [])
-        second = await user_input.submit("second", [])
+        first = await user_input.submit("first")
+        second = await user_input.submit("second")
         await wait_until(
             lambda: any(
                 isinstance(event, UserInputEvent)
@@ -154,8 +154,8 @@ def test_user_input_plugin_完成或失败后开始下一条():
         manager.subscribe("backend", "user-input")
         manager.subscribe("user-input", "agent")
         await manager.start()
-        first = await user_input.submit("first", [])
-        second = await user_input.submit("second", [])
+        first = await user_input.submit("first")
+        second = await user_input.submit("second")
         await wait_until(
             lambda: any(
                 isinstance(event, UserInputEvent)
@@ -219,6 +219,6 @@ def test_user_input_plugin_未启动时拒绝submit():
     async def run():
         plugin = UserInputPlugin("user-input", SessionStub())
         with pytest.raises(RuntimeError, match="not running"):
-            await plugin.submit("hello", [])
+            await plugin.submit("hello")
 
     asyncio.run(run())

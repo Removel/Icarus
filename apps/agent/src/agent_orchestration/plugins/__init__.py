@@ -8,6 +8,7 @@ from apps.agent.src.agent_orchestration.plugins.agent import (
 from apps.agent.src.agent_orchestration.plugins.blackboard import (
     AgentContextReadyEvent,
     BlackboardContextReadyEvent,
+    BlackboardContextState,
     BlackboardPlugin,
     ContextBlock,
     ContextContributionEvent,
@@ -27,6 +28,7 @@ __all__ = [
     "AgentPlugin",
     "BlackboardContextConverter",
     "BlackboardContextReadyEvent",
+    "BlackboardContextState",
     "BlackboardPlugin",
     "ContextBlock",
     "ContextContributionEvent",
