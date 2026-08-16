@@ -1,27 +1,31 @@
 import enum
+from pathlib import Path
+from typing import Literal
 
 import pydantic
 
 
-class ThinkLevel(str, enum.Enum):
-    XHIGH = "extra_high"
+class ThinkMode(str, enum.Enum):
+    MAX = "max"
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
 
 
-class ModelConfig(pydantic.BaseModel):
+class LLMConfig(pydantic.BaseModel):
     model_name: str
     max_tokens: int
-    min_tokens: int
     temperature: float
-    default_think_level: ThinkLevel
+    default_think_level: ThinkMode
 
 
-class ModelSetting(pydantic.BaseModel):
-    think: ModelConfig
-    execute: ModelConfig
-    emotion: ModelConfig
+class ModelSettings(pydantic.BaseModel):
+    thinking: LLMConfig
+    perception: LLMConfig
+
+
+LLMProtocol = Literal["openai", "anthropic"]
+LLMRole = Literal["thinking", "perception"]
 
 
 class ConfigModel(pydantic.BaseModel):
@@ -29,4 +33,6 @@ class ConfigModel(pydantic.BaseModel):
     anthropic_base_url: str
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    model_settings: ModelSetting
+    icarus_data_dir: Path | None = None
+    model_settings: ModelSettings
+    use_protocol: LLMProtocol = "openai"
