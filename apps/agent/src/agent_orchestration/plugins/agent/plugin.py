@@ -10,7 +10,7 @@ from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
 from apps.agent.src.agent_orchestration.plugins.agent.context_converter import (
     BlackboardContextConverter,
 )
-from apps.agent.src.agent_orchestration.plugins.contracts.events import (
+from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     BlackboardContextReadyEvent,
 )
 

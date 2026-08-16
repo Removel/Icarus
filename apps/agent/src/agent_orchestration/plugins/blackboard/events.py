@@ -1,4 +1,4 @@
-"""具体编排 Plugin 使用的 Event。"""
+"""BlackboardPlugin 上下文协议。"""
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -22,16 +22,6 @@ class ContextBlock:
             "metadata",
             MappingProxyType(dict(self.metadata)),
         )
-
-
-@dataclass(frozen=True, kw_only=True)
-class UserInputEvent(Event):
-    model_role: LLMRole
-    system_prompt: str
-    history_messages: list[Message] = field(default_factory=list)
-    prompt: str
-    input_images: list[ImagePart] = field(default_factory=list)
-    tools: list[str] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

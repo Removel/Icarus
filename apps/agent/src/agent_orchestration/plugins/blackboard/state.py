@@ -4,10 +4,10 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from apps.agent.src.agent_orchestration.capability import AgentResponse
-from apps.agent.src.agent_orchestration.plugins.contracts.events import (
+from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     ContextContributionEvent,
-    UserInputEvent,
 )
+from apps.agent.src.agent_orchestration.plugins.user_input.events import UserInputEvent
 
 
 @dataclass

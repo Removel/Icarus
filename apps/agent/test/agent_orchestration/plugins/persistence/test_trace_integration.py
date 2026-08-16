@@ -78,6 +78,9 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
         blackboard = BlackboardPlugin(
             "blackboard",
             required_context_sources=set(),
+            model_role="thinking",
+            system_prompt="system",
+            tools=[],
         )
         agent = AgentPlugin("agent", factory)
         sink = SinkPlugin("sink")
@@ -95,10 +98,7 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
             await user_input.publish(
                 UserInputEvent(
                     correlation_id="task-1",
-                    model_role="thinking",
-                    system_prompt="system",
                     prompt="hello",
-                    tools=[],
                 )
             )
             await manager.stop(timeout=2)

@@ -6,14 +6,19 @@ from apps.agent.src.agent_orchestration.plugins.agent import (
     BlackboardContextConverter,
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard import (
-    BlackboardPlugin,
-)
-from apps.agent.src.agent_orchestration.plugins.contracts import (
     AgentContextReadyEvent,
     BlackboardContextReadyEvent,
+    BlackboardPlugin,
     ContextBlock,
     ContextContributionEvent,
+)
+from apps.agent.src.agent_orchestration.plugins.user_input import (
+    InputAccepted,
+    InputFinishedEvent,
+    InputQueuedEvent,
+    InputStartedEvent,
     UserInputEvent,
+    UserInputPlugin,
 )
 
 __all__ = [
@@ -25,5 +30,10 @@ __all__ = [
     "BlackboardPlugin",
     "ContextBlock",
     "ContextContributionEvent",
+    "InputFinishedEvent",
+    "InputAccepted",
+    "InputQueuedEvent",
+    "InputStartedEvent",
     "UserInputEvent",
+    "UserInputPlugin",
 ]

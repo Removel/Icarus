@@ -41,6 +41,8 @@ def test_blackboard_plugin_等待固定来源并只发布一次context():
         blackboard = BlackboardPlugin(
             "blackboard",
             required_context_sources={"memory", "skill"},
+            model_role="thinking",
+            system_prompt="stable-system",
         )
         agent = SinkPlugin("agent")
         for plugin in (user_input, memory, skill, blackboard, agent):
@@ -54,8 +56,6 @@ def test_blackboard_plugin_等待固定来源并只发布一次context():
         await user_input.publish(
             UserInputEvent(
                 correlation_id="task-1",
-                model_role="thinking",
-                system_prompt="stable-system",
                 prompt="hello",
             )
         )
@@ -102,6 +102,8 @@ def test_blackboard_plugin_失败来源计为完成并记录错误():
         blackboard = BlackboardPlugin(
             "blackboard",
             required_context_sources={"memory"},
+            model_role="thinking",
+            system_prompt="stable-system",
         )
         agent = SinkPlugin("agent")
         for plugin in (user_input, memory, blackboard, agent):
@@ -121,8 +123,6 @@ def test_blackboard_plugin_失败来源计为完成并记录错误():
         await user_input.publish(
             UserInputEvent(
                 correlation_id="task-1",
-                model_role="thinking",
-                system_prompt="stable-system",
                 prompt="hello",
             )
         )
@@ -142,6 +142,8 @@ def test_blackboard_plugin_消费agent结果更新任务状态():
             "blackboard",
             required_context_sources=set(),
             agent_plugin_id="agent",
+            model_role="thinking",
+            system_prompt="system",
         )
         published = []
 
@@ -153,8 +155,6 @@ def test_blackboard_plugin_消费agent结果更新任务状态():
             "user-input",
             UserInputEvent(
                 correlation_id="task-1",
-                model_role="thinking",
-                system_prompt="system",
                 prompt="hello",
             ),
         )

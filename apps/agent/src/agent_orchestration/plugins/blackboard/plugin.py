@@ -6,14 +6,15 @@ from apps.agent.src.agent_orchestration.capability import (
 )
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
+from apps.agent.src.model_config import LLMRole
 from apps.agent.src.agent_orchestration.plugins.blackboard.state import (
     BlackboardTaskState,
 )
-from apps.agent.src.agent_orchestration.plugins.contracts.events import (
+from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     BlackboardContextReadyEvent,
     ContextContributionEvent,
-    UserInputEvent,
 )
+from apps.agent.src.agent_orchestration.plugins.user_input.events import UserInputEvent
 
 
 class BlackboardPlugin(BasePlugin):
@@ -24,10 +25,16 @@ class BlackboardPlugin(BasePlugin):
         plugin_id: str,
         required_context_sources: set[str] | frozenset[str],
         agent_plugin_id: str = "agent",
+        model_role: LLMRole = "thinking",
+        system_prompt: str = "",
+        tools: list[str] | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.required_context_sources = frozenset(required_context_sources)
         self.agent_plugin_id = agent_plugin_id
+        self.model_role = model_role
+        self.system_prompt = system_prompt
+        self.tools = None if tools is None else list(tools)
         self._tasks: dict[str, BlackboardTaskState] = {}
 
     async def consume(
@@ -115,12 +122,12 @@ class BlackboardPlugin(BasePlugin):
         }
         context_event = BlackboardContextReadyEvent(
             correlation_id=state.correlation_id,
-            model_role=user_input.model_role,
-            system_prompt=user_input.system_prompt,
+            model_role=self.model_role,
+            system_prompt=self.system_prompt,
             history_messages=user_input.history_messages,
             prompt=user_input.prompt,
             input_images=user_input.input_images,
-            tools=user_input.tools,
+            tools=self.tools,
             context_blocks=context_blocks,
             context_errors=context_errors,
         )
