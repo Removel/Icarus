@@ -7,10 +7,10 @@ import logging
 from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
-from apps.agent.src.agent_orchestration.plugins.blackboard_context_converter import (
+from apps.agent.src.agent_orchestration.plugins.agent.context_converter import (
     BlackboardContextConverter,
 )
-from apps.agent.src.agent_orchestration.plugins.events import (
+from apps.agent.src.agent_orchestration.plugins.contracts.events import (
     BlackboardContextReadyEvent,
 )
 

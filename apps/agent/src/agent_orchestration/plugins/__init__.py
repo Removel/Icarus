@@ -1,14 +1,14 @@
 """运行在 Plugin Runtime 上的具体编排插件。"""
 
-from apps.agent.src.agent_orchestration.plugins.blackboard_context_converter import (
+from apps.agent.src.agent_orchestration.plugins.agent import (
     AgentInvocation,
+    AgentPlugin,
     BlackboardContextConverter,
 )
-from apps.agent.src.agent_orchestration.plugins.blackboard_plugin import (
+from apps.agent.src.agent_orchestration.plugins.blackboard import (
     BlackboardPlugin,
 )
-from apps.agent.src.agent_orchestration.plugins.agent_plugin import AgentPlugin
-from apps.agent.src.agent_orchestration.plugins.events import (
+from apps.agent.src.agent_orchestration.plugins.contracts import (
     AgentContextReadyEvent,
     BlackboardContextReadyEvent,
     ContextBlock,
