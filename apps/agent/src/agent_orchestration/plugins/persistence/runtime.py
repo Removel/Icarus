@@ -112,6 +112,23 @@ class PersistenceRuntime:
         self._started = False
 
     @contextmanager
+    def open_session(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> Iterator["PersistenceSession"]:
+        identity = SessionIdentity.create(
+            workspace_path=self.workspace_identity.workspace_path,
+            session_id=session_id,
+        )
+        self.metadata_store.initialize(identity)
+        session = PersistenceSession(self, identity)
+        try:
+            yield session
+        finally:
+            self.metadata_store.update_session_status(identity, "closed")
+
+    @contextmanager
     def session_scope(
         self,
         *,
@@ -137,3 +154,28 @@ class PersistenceRuntime:
                 yield identity
             finally:
                 self.metadata_store.update_session_status(identity, "closed")
+
+
+class PersistenceSession:
+    def __init__(
+        self,
+        runtime: PersistenceRuntime,
+        identity: SessionIdentity,
+    ) -> None:
+        self.runtime = runtime
+        self.identity = identity
+
+    @contextmanager
+    def task_scope(self, correlation_id: str) -> Iterator[SessionIdentity]:
+        task_identity = self.identity.with_correlation_id(correlation_id)
+        self.runtime.metadata_store.initialize(task_identity)
+        with hook_context(
+            {
+                "workspace_path": str(task_identity.workspace_path),
+                "workspace_key": task_identity.workspace_key,
+                "session_id": task_identity.session_id,
+                "correlation_id": correlation_id,
+            },
+            run_id=None,
+        ):
+            yield task_identity

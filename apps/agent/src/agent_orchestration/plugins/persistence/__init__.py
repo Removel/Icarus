@@ -12,6 +12,7 @@ from apps.agent.src.agent_orchestration.plugins.persistence.path_resolver import
 from apps.agent.src.agent_orchestration.plugins.persistence.redactor import Redactor
 from apps.agent.src.agent_orchestration.plugins.persistence.runtime import (
     PersistenceRuntime,
+    PersistenceSession,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence.session_identity import (
     SessionIdentity,
@@ -33,6 +34,7 @@ __all__ = [
     "FileTraceWriter",
     "MetadataStore",
     "PersistenceRuntime",
+    "PersistenceSession",
     "Redactor",
     "SessionIdentity",
     "TraceRecord",
