@@ -41,6 +41,9 @@ Tests stay inside the corresponding application and mirror the source layer:
 ```text
 apps/agent/src/agent_orchestration/plugins/
 apps/agent/test/agent_orchestration/plugins/
+
+apps/tui/
+apps/tui/test/
 ```
 
 Use pytest functional tests and native `assert`.
