@@ -666,8 +666,10 @@ class AgentContextReadyEvent(Event):
 - `completed + []` 表示空结果但已完成；
 - `failed + error` 表示失败但已完成；
 - correlation_id 隔离多任务；
-- History 由 UserInput/上层提供并由 Blackboard 快照携带；
-- AgentCompletedEvent/AgentErrorEvent 回写任务状态；
+- History 由 Blackboard 作为当前 Agent 实例上下文维护；
+- AgentCompletedEvent 将成功的 User/Assistant Message 写入 Blackboard；
+- AgentErrorEvent 不写入失败任务；
+- InputFinishedEvent 与 Agent 终态事件均到达后清理单轮任务状态；
 - 超时和动态 required sources 留到后续版本。
 
 ### 任务十二：定义 Context Event 契约
@@ -691,13 +693,12 @@ class AgentContextReadyEvent(Event):
 
 **开发内容**
 
-- 按任务维护上下文；
+- 维护当前 Agent 实例的跨轮消息上下文；
+- 按任务维护临时上下文组装状态；
 - 记录已到达来源；
 - 记录空结果、失败和完成状态；
 - 生成不可变 Context Snapshot；
-- 完成任务后清理或归档状态。
-
-当前初版支持显式 `remove_task()`，自动归档策略留后续版本。
+- 完成任务后清理单轮状态。
 
 ### 任务十四：实现 BlackboardPlugin
 
@@ -712,7 +713,8 @@ class AgentContextReadyEvent(Event):
 - 聚合本次任务上下文；
 - 满足就绪条件后生产一次 AgentContextReadyEvent；
 - 消费 AgentCompletedEvent 和 AgentErrorEvent；
-- 更新当前任务状态；
+- 更新跨轮消息上下文；
+- 与 InputFinishedEvent 共同清理单轮状态；
 - 不直接调用 ReActAgent。
 
 ### 任务十五：Blackboard 集成验证
@@ -750,7 +752,8 @@ class AgentContextReadyEvent(Event):
 - 后端负责管理多个 Agent Runtime；
 - UserInputPlugin 不接收或分发 session_id；
 - UserInputPlugin 只负责启动当前实例的一轮 Agent 对话；
-- UserInputEvent 只包含 Prompt、History 和图片；
+- UserInputEvent 只包含 Prompt 和图片；
+- History 由 BlackboardPlugin 维护，不随每轮 UserInput 重复传入；
 - model_role、system_prompt 和 tools 由 BlackboardPlugin 固定配置；
 - 输入 FIFO 串行；
 - submit 入队即返回；
