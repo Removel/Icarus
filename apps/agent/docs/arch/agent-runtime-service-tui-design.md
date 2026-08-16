@@ -88,7 +88,6 @@ class AgentRuntimeService:
     async def submit(
         self,
         prompt: str,
-        history_messages: list[Message],
         input_images: list[ImagePart] | None = None,
     ) -> InputAccepted:
         ...
@@ -188,7 +187,8 @@ workspaces/<workspace_key>/sessions/<session_id>/
 └── assets/
 ```
 
-TUI 不读取 Trace 恢复 History。
+TUI 不读取 Trace 恢复 History。需要恢复业务历史时，由上层在创建
+`AgentRuntimeService` 时通过 `initial_messages` 一次性注入 Blackboard。
 
 ## REPL 交互
 
@@ -199,7 +199,6 @@ Icarus> 用户输入
 → 提交 UserInputPlugin
 → 流式展示 Agent 事件
 → 等待 InputFinishedEvent
-→ 更新内存 History
 → 再显示 Icarus>
 ```
 
@@ -278,18 +277,14 @@ print(event.text, end="", flush=True)
 
 ## History
 
-REPL 只在内存中维护当前进程的业务 History：
+TUI 不维护业务 History，也不在每轮提交时传递历史消息。
 
-```text
-User Message
-Assistant Final Message
-```
+当前 Agent 实例的跨轮 User/Assistant Message 由 BlackboardPlugin 维护。
+AgentCompletedEvent 更新 Blackboard，下一轮上下文快照自动携带已有消息。
+ToolCall、ToolResult、Reasoning 和 Plugin Event 仍不进入跨轮业务 History。
 
-当前原始 Agent 输出尚未经过 StylePlugin，因此 MVP 将 `AgentCompletedEvent.response.message` 作为助手消息加入 History。
-
-这只用于验证当前 Agent 功能，不改变“正式业务历史由后端数据库保存”的长期边界。
-
-ToolCall、ToolResult、Reasoning 和 Plugin Event 不进入业务 History。
+正式业务历史继续由后端数据库保存。恢复会话时，上层从后端数据库读取业务消息，
+并在 Agent Runtime 初始化时一次性注入 Blackboard；本地 Trace 不用于恢复 History。
 
 ## 错误处理
 
