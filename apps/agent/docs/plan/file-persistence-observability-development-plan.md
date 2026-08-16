@@ -17,9 +17,10 @@
 
 - 第一阶段文件持久化与监测：已完成；
 - Plugin 独立目录迁移：已完成；
+- UserInputPlugin 使用长期 Session + 每轮 Task Scope：已完成；
 - 持久化专项测试：`12 passed`；
 - 插件分组测试：`21 passed`；
-- 全量测试：`87 passed`；
+- 全量测试：`90 passed`；
 - 真实模型落盘验证：`60` 条 Trace，覆盖 Agent、LLM、EventBus 和 Plugin；
 - Writer Failure：`0`；
 - SQLite、业务消息库和本地对话恢复：未实现，符合范围。

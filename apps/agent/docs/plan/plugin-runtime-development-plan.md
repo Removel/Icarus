@@ -24,6 +24,9 @@
 - Plugin 消费入口：已支持 `consume(source_plugin_id, event)`，目标 Plugin 可以同时依据来源和 Event 子类处理信息。
 - Blackboard 全链路：已验证 UserInput + Memory + Skill + Knowledge → Blackboard → Converter → AgentPlugin → 真实模型 → Sink，输出 `BLACKBOARD_OK`。
 - 全量测试：`73 passed`。
+- UserInputPlugin FIFO：已完成首版设计与实现；
+- UserInputPlugin 真实 FIFO 验证：两条输入分别以 queue_position `0/1` 入队，并依次输出 `QUEUE_ONE_OK`、`QUEUE_TWO_OK`；
+- 全量测试：`90 passed`；
 
 Agent 本地技术轨迹和运行日志的后续实现计划见：
 
@@ -736,6 +739,52 @@ class AgentContextReadyEvent(Event):
 - TTS、Emotion、L2D、VAC 等插件消费风格化文本并自行转换领域参数；
 - SkillPlugin、MemoryPlugin 可直接订阅 AgentPlugin，根据执行流自行判断更新；
 - `perception` 模型由具体插件按需使用，不固定绑定一条响应线。
+
+## UserInputPlugin 阶段
+
+### 已确认边界
+
+- 一个 Agent Runtime 对应一个固定 Session；
+- 一个 Runtime 只有一个 UserInputPlugin；
+- UserInputPlugin 与 Transport 无关；
+- 后端负责管理多个 Agent Runtime；
+- UserInputPlugin 不接收或分发 session_id；
+- UserInputPlugin 只负责启动当前实例的一轮 Agent 对话；
+- UserInputEvent 只包含 Prompt、History 和图片；
+- model_role、system_prompt 和 tools 由 BlackboardPlugin 固定配置；
+- 输入 FIFO 串行；
+- submit 入队即返回；
+- AgentCompleted/AgentError 后释放下一条；
+- 队列状态由 Event 提供给后端适配插件；
+- 初版不实现取消、删除、优先级、暂停和重排。
+
+### Event 归属
+
+```text
+plugins/user_input/events.py
+├── UserInputEvent
+├── InputQueuedEvent
+├── InputStartedEvent
+└── InputFinishedEvent
+
+plugins/blackboard/events.py
+├── ContextBlock
+├── ContextContributionEvent
+└── BlackboardContextReadyEvent
+```
+
+每个 Plugin 拥有自己定义和生产的 Event。中央 contracts 目录不再承载所有 Event。
+
+### 验收
+
+- 第一条输入 queue_position=0；
+- 后续位置按当前活跃与排队任务数量返回；
+- 同时只发布一条 UserInputEvent；
+- Completed 后自动开始下一条；
+- Error 后也自动开始下一条；
+- InputQueued/Started/Finished 可被后端适配插件消费；
+- Persistence Task Scope 使用 task_id；
+- 全量测试不回归。
 
 ## 分层测试命令
 

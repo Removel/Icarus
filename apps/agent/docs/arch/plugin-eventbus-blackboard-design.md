@@ -195,6 +195,15 @@ class PublishedEvent:
 
 `PublishedEvent` 属于未来插件通信层，不属于当前 ReActAgent Stream Event 本身。
 
+具体 Plugin 生产的 Event 由该 Plugin 目录维护：
+
+```text
+plugins/user_input/events.py
+plugins/blackboard/events.py
+```
+
+ReActAgent Stream Event 仍属于 `capability/`，避免能力层反向依赖具体 Plugin。
+
 ## Plugin Registry
 
 Plugin Registry 负责维护插件身份和来源订阅关系。
@@ -349,6 +358,14 @@ BlackboardPlugin(
 )
 ```
 
+BlackboardPlugin 同时持有当前 Agent 实例的稳定执行配置：
+
+- `model_role`
+- `system_prompt`
+- `tools`
+
+这些字段不从 UserInputPlugin 或外部输入获取。
+
 后续可以替换为动态来源策略，不改变 EventBus 和 AgentPlugin 接口。
 
 ### 消费来源
@@ -472,6 +489,49 @@ AgentPlugin 可以生产：
 未来如需额外 Agent 业务 Event，应由 AgentPlugin 或核心编排层生成，不污染 ReActAgent 能力内核。
 
 AgentPlugin 不内置固定 Responder，也不在内部处理角色风格、TTS、情绪或动作参数。
+
+## UserInputPlugin
+
+UserInputPlugin 是单个 Agent Runtime 实例的统一输入入口，与 HTTP、SSE、WebSocket 或其他 Transport 无关。
+
+一个 Agent Runtime 只拥有一个 UserInputPlugin。多会话和多 Agent 实例由后端或部署层管理，不由 UserInputPlugin 分发。
+
+公开入口：
+
+```python
+await user_input.submit(
+    prompt=...,
+    history_messages=...,
+    input_images=...,
+)
+```
+
+`submit()`：
+
+- 为本轮输入生成 `task_id`；
+- 将输入加入 FIFO 队列；
+- 发布 InputQueuedEvent；
+- 立即返回 `task_id` 和 `queue_position`；
+- 不等待 Agent 完成。
+
+队列 Worker：
+
+```text
+InputQueuedEvent
+→ InputStartedEvent
+→ UserInputEvent
+→ BlackboardPlugin
+→ AgentPlugin
+→ AgentCompletedEvent / AgentErrorEvent
+→ InputFinishedEvent
+→ 处理下一条输入
+```
+
+初版同一时间只执行一个用户任务。队列位置只在入队时发布，不为剩余任务反复更新位置。
+
+当前不实现取消、删除排队任务、优先级、暂停和调整顺序。
+
+当前分支已经完成 UserInputPlugin FIFO、队列状态 Event 和真实模型双输入串行验证。
 
 ## 原始执行流与领域 Plugin
 

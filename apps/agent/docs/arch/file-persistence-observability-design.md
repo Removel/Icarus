@@ -88,6 +88,8 @@ Session 是一组技术执行轨迹的归档身份。
 - 只有未来 InputPlugin 显式指定已有 Session 时才选择旧 Session；
 - Agent 本地文件不用于恢复 History。
 
+当前 UserInputPlugin 绑定一个长期 PersistenceSession；每次输入只创建新的 Task Scope 和 correlation_id。
+
 ### Task 与 Run
 
 ```text
