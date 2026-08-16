@@ -25,6 +25,12 @@
 - Blackboard 全链路：已验证 UserInput + Memory + Skill + Knowledge → Blackboard → Converter → AgentPlugin → 真实模型 → Sink，输出 `BLACKBOARD_OK`。
 - 全量测试：`73 passed`。
 
+Agent 本地技术轨迹和运行日志的后续实现计划见：
+
+- `apps/agent/docs/plan/file-persistence-observability-development-plan.md`
+
+该计划的第一阶段文件持久化与监测能力已经完成。
+
 ## 层级与目录
 
 该架构属于：

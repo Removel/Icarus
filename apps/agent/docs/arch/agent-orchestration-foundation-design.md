@@ -268,6 +268,10 @@ Hook 框架需要同时支持两类未来需求：
 
 本期只实现容易扩展的接口框架，不绑定具体数据库、消息队列或持久化产品。
 
+文件持久化与监测层的独立设计见：
+
+- `apps/agent/docs/arch/file-persistence-observability-design.md`
+
 ### 组件
 
 | 组件 | 职责 |
