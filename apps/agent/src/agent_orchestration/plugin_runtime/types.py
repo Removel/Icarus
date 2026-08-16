@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 import enum
-from typing import TypeAlias
+from types import MappingProxyType
+from typing import Any, Mapping, TypeAlias
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.events import Event
@@ -25,6 +26,15 @@ class PluginStatus(str, enum.Enum):
 class PublishedEvent:
     source_plugin_id: PluginId
     event: Event
+    hook_run_id: str | None = None
+    hook_context: Mapping[str, Any] = MappingProxyType({})
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "hook_context",
+            MappingProxyType(dict(self.hook_context)),
+        )
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.hooks.hook_context import get_hook_context
 from apps.agent.src.agent_orchestration.plugin_runtime.plugin_registry import (
     PluginRegistry,
 )
@@ -62,7 +63,15 @@ class EventBus:
             raise KeyError(f"Source plugin is not registered: {source_plugin_id}")
         if self.registry.get_status(source_plugin_id) != PluginStatus.RUNNING:
             raise RuntimeError(f"Source plugin is not running: {source_plugin_id}")
-        await self._ingress.put(PublishedEvent(source_plugin_id, event))
+        hook_context = get_hook_context()
+        await self._ingress.put(
+            PublishedEvent(
+                source_plugin_id=source_plugin_id,
+                event=event,
+                hook_run_id=hook_context.run_id if hook_context else None,
+                hook_context=hook_context.data if hook_context else {},
+            )
+        )
         self._accepted_count += 1
 
     async def drain(self) -> None:
