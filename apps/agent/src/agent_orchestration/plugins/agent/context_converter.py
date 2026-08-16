@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import json
 
-from apps.agent.src.agent_orchestration.plugins.contracts.events import (
+from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     BlackboardContextReadyEvent,
     ContextBlock,
 )
