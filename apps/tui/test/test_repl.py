@@ -26,13 +26,12 @@ class ServiceStub:
     async def start(self) -> None:
         self.started = True
 
-    async def submit(self, prompt, history_messages, input_images=None):
+    async def submit(self, prompt, input_images=None):
         task_id = f"task-{len(self.submissions) + 1}"
         self.submissions.append(
             {
                 "task_id": task_id,
                 "prompt": prompt,
-                "history_messages": list(history_messages),
                 "input_images": input_images,
             }
         )
@@ -91,7 +90,7 @@ def input_reader(values: list[object]):
     return read
 
 
-def test_run_repl_串行执行多轮并将成功历史传入下一轮():
+def test_run_repl_串行执行多轮且不在ui维护history():
     unrelated = AgentTextDeltaEvent(
         correlation_id="other-task",
         step=1,
@@ -118,16 +117,12 @@ def test_run_repl_串行执行多轮并将成功历史传入下一轮():
     assert service.started is True
     assert service.stopped is True
     assert [item["prompt"] for item in service.submissions] == ["first", "second"]
-    assert service.submissions[0]["history_messages"] == []
-    second_history = service.submissions[1]["history_messages"]
-    assert [message.role for message in second_history] == ["user", "assistant"]
-    assert second_history[0].content == [TextPart("first")]
-    assert second_history[1].content == [TextPart("first-answer")]
+    assert [item["input_images"] for item in service.submissions] == [None, None]
     assert output.getvalue() == "first-answer\nsecond-answer\n"
     assert "不应展示" not in output.getvalue()
 
 
-def test_run_repl_失败任务不污染下一轮历史():
+def test_run_repl_失败任务后继续下一轮():
     service = ServiceStub(
         [
             (
@@ -160,7 +155,7 @@ def test_run_repl_失败任务不污染下一轮历史():
         )
     )
 
-    assert service.submissions[1]["history_messages"] == []
+    assert [item["prompt"] for item in service.submissions] == ["first", "second"]
     assert output.getvalue() == (
         "[error] RuntimeError: failed\n"
         "[task] failed\n"
