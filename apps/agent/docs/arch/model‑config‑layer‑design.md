@@ -34,5 +34,3 @@ flowchart TD
 1. 业务层只能依赖**模型接入层**，不能直接调用配置加载器；
 2. 敏感密钥统一放置在`.env`，禁止写入`settings.json`并提交仓库；
 3. 所有外部来源配置必须经过Pydantic模型校验，不允许裸字典直接对外使用。
-
-文件存放路径：`docs/arch/model‑config‑layer‑design.md`

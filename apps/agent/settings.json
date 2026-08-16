@@ -1,27 +1,19 @@
 {
-  "openai_base_url": "https://api.example-openai.com/v1",
-  "anthropic_base_url": "https://api.example-anthropic.com/v1",
+  "openai_base_url": "https://api.deepseek.com",
+  "anthropic_base_url": "https://api.deepseek.com/anthropic",
   "model_settings": {
-    "think": {
-      "model_name": "example",
-      "max_tokens": 1024,
-      "min_tokens": 8,
-      "temperature": 0.7,
+    "thinking": {
+      "model_name": "deepseek-v4-pro",
+      "max_tokens": 4096,
+      "temperature": 0.9,
       "default_think_level": "high"
-    },
-    "execute": {
-      "model_name": "example",
-      "max_tokens": 1024,
-      "min_tokens": 8,
-      "temperature": 0.7,
-      "default_think_level": "high"
-    },
-    "emotion": {
-      "model_name": "example",
-      "max_tokens": 1024,
-      "min_tokens": 8,
-      "temperature": 0.7,
+    },  
+    "perception": {
+      "model_name": "deepseek-v4-flash",
+      "max_tokens": 4096,
+      "temperature": 0.6,
       "default_think_level": "high"
     }
-  }
+  },
+  "use_protocol": "openai"
 }
