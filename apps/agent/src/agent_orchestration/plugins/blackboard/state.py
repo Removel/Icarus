@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from apps.agent.src.agent_orchestration.capability import AgentResponse
-from apps.agent.src.agent_orchestration.plugins.events import (
+from apps.agent.src.agent_orchestration.plugins.contracts.events import (
     ContextContributionEvent,
     UserInputEvent,
 )

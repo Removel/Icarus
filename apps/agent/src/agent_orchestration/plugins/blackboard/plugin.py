@@ -6,10 +6,10 @@ from apps.agent.src.agent_orchestration.capability import (
 )
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
-from apps.agent.src.agent_orchestration.plugins.blackboard_state import (
+from apps.agent.src.agent_orchestration.plugins.blackboard.state import (
     BlackboardTaskState,
 )
-from apps.agent.src.agent_orchestration.plugins.events import (
+from apps.agent.src.agent_orchestration.plugins.contracts.events import (
     BlackboardContextReadyEvent,
     ContextContributionEvent,
     UserInputEvent,
