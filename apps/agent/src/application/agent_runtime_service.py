@@ -36,6 +36,7 @@ class AgentRuntimeService:
             "并在完成后给出清晰的结果。"
         ),
         tools: list[str] | None = None,
+        initial_messages: list[Message] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.workspace_path = Path(workspace_path).expanduser().resolve()
@@ -43,6 +44,7 @@ class AgentRuntimeService:
         self.config = config or get_config()
         self.system_prompt = system_prompt
         self.tools = tools
+        self.initial_messages = list(initial_messages or [])
         self.logger = logger or logging.getLogger("icarus.agent.runtime")
 
         self.hook_registry = HookRegistry()
@@ -93,6 +95,7 @@ class AgentRuntimeService:
                 model_role="thinking",
                 system_prompt=self.system_prompt,
                 tools=self.tools,
+                initial_messages=self.initial_messages,
             )
             agent = AgentPlugin("agent", self.agent_factory)
             for plugin in (
@@ -120,14 +123,12 @@ class AgentRuntimeService:
     async def submit(
         self,
         prompt: str,
-        history_messages: list[Message],
         input_images: list[ImagePart] | None = None,
     ) -> InputAccepted:
         if not self._started or self._user_input is None:
             raise RuntimeError("AgentRuntimeService is not running")
         return await self._user_input.submit(
             prompt=prompt,
-            history_messages=history_messages,
             input_images=input_images,
         )
 

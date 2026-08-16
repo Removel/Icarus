@@ -4,12 +4,11 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from apps.agent.src.agent_orchestration.events import Event
-from apps.agent.src.model_provider.types import ImagePart, Message
+from apps.agent.src.model_provider.types import ImagePart
 
 
 @dataclass(frozen=True, kw_only=True)
 class UserInputEvent(Event):
-    history_messages: list[Message] = field(default_factory=list)
     prompt: str
     input_images: list[ImagePart] = field(default_factory=list)
 
