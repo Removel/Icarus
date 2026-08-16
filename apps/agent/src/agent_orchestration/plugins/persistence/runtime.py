@@ -166,6 +166,19 @@ class PersistenceSession:
         self.identity = identity
 
     @contextmanager
+    def context_scope(self) -> Iterator[SessionIdentity]:
+        with hook_context(
+            {
+                "workspace_path": str(self.identity.workspace_path),
+                "workspace_key": self.identity.workspace_key,
+                "session_id": self.identity.session_id,
+                "correlation_id": self.identity.correlation_id,
+            },
+            run_id=None,
+        ):
+            yield self.identity
+
+    @contextmanager
     def task_scope(self, correlation_id: str) -> Iterator[SessionIdentity]:
         task_identity = self.identity.with_correlation_id(correlation_id)
         self.runtime.metadata_store.initialize(task_identity)
