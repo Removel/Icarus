@@ -1,7 +1,10 @@
 import json
 
+import pydantic
+import pytest
+
 from apps.agent.src.model_config import config_loader
-from apps.agent.src.model_config import get_config
+from apps.agent.src.model_config import ConfigModel, get_config
 
 
 def test_get_config_读取模型配置并使用环境变量密钥(
@@ -11,6 +14,13 @@ def test_get_config_读取模型配置并使用环境变量密钥(
     settings = {
         "openai_base_url": "https://openai.example.com/v1",
         "anthropic_base_url": "https://anthropic.example.com",
+        "embedding": {
+            "provider": "fastembed",
+            "model_name": (
+                "sentence-transformers/"
+                "paraphrase-multilingual-MiniLM-L12-v2"
+            ),
+        },
         "model_settings": {
             role: {
                 "model_name": f"{role}-model",
@@ -37,5 +47,27 @@ def test_get_config_读取模型配置并使用环境变量密钥(
     assert config.openai_api_key == "openai-key"
     assert config.anthropic_api_key == "anthropic-key"
     assert config.use_protocol == "anthropic"
+    assert config.embedding.provider == "fastembed"
+    assert config.embedding.model_name == (
+        "sentence-transformers/"
+        "paraphrase-multilingual-MiniLM-L12-v2"
+    )
     assert config.model_settings.thinking.model_name == "thinking-model"
     assert config.model_settings.perception.max_tokens == 4096
+
+
+def test_config_model_embedding为必填配置():
+    with pytest.raises(pydantic.ValidationError, match="embedding"):
+        ConfigModel(
+            openai_base_url="https://openai.example.com/v1",
+            anthropic_base_url="https://anthropic.example.com",
+            model_settings={
+                role: {
+                    "model_name": f"{role}-model",
+                    "max_tokens": 4096,
+                    "temperature": 0.2,
+                    "default_think_level": "medium",
+                }
+                for role in ("thinking", "perception")
+            },
+        )

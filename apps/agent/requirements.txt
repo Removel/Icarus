@@ -2,4 +2,7 @@ anthropic
 openai
 pydantic
 dotenv
+fastembed
+numpy
+PyYAML
 pytest
