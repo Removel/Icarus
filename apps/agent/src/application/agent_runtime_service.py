@@ -1,5 +1,6 @@
 """单个 Agent Runtime 的应用服务入口。"""
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -11,14 +12,23 @@ from apps.agent.src.agent_orchestration.plugins import (
     AgentPlugin,
     BlackboardPlugin,
     InputAccepted,
+    SkillPlugin,
     UserInputPlugin,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence import (
     PersistenceRuntime,
     PersistenceSession,
 )
+from apps.agent.src.agent_orchestration.plugins.skill import (
+    SessionSkillState,
+    SkillRanker,
+    SkillScanner,
+    SkillUsageStore,
+)
 from apps.agent.src.application.output_bridge import OutputBridgePlugin
 from apps.agent.src.model_config import ConfigModel, get_config
+from apps.agent.src.model_provider.base_embedding import BaseEmbedding
+from apps.agent.src.model_provider.embedding_factory import EmbeddingFactory
 from apps.agent.src.model_provider.types import ImagePart, Message
 
 
@@ -37,6 +47,7 @@ class AgentRuntimeService:
         ),
         tools: list[str] | None = None,
         initial_messages: list[Message] | None = None,
+        embedding: BaseEmbedding | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.workspace_path = Path(workspace_path).expanduser().resolve()
@@ -45,6 +56,7 @@ class AgentRuntimeService:
         self.system_prompt = system_prompt
         self.tools = tools
         self.initial_messages = list(initial_messages or [])
+        self.embedding = embedding
         self.logger = logger or logging.getLogger("icarus.agent.runtime")
 
         self.hook_registry = HookRegistry()
@@ -65,6 +77,7 @@ class AgentRuntimeService:
         self._session_context = None
         self._session: PersistenceSession | None = None
         self._user_input: UserInputPlugin | None = None
+        self._skill_plugin: SkillPlugin | None = None
         self._started = False
         self._closed = False
 
@@ -89,9 +102,31 @@ class AgentRuntimeService:
             self._session = self._session_context.__enter__()
 
             user_input = UserInputPlugin("user-input", self._session)
+            resolver = self.persistence.resolver
+            embedding = self.embedding or EmbeddingFactory(
+                self.config,
+                resolver.fastembed_cache_dir,
+            ).create_embedding()
+            usage_store = await self._create_skill_usage_store()
+            skill = SkillPlugin(
+                "skill",
+                workspace_key=self._session.identity.workspace_key,
+                user_input_plugin_id="user-input",
+                scanner=SkillScanner(
+                    resolver.global_skills_dir,
+                    resolver.workspace_skills_dir(self._session.identity),
+                    logger=self.logger,
+                ),
+                usage_store=usage_store,
+                embedding=embedding,
+                ranker=SkillRanker(),
+                session_state=SessionSkillState(),
+                logger=self.logger,
+            )
+            self._skill_plugin = skill
             blackboard = BlackboardPlugin(
                 "blackboard",
-                required_context_sources=set(),
+                required_context_sources={"skill"},
                 model_role="thinking",
                 system_prompt=self.system_prompt,
                 tools=self.tools,
@@ -100,13 +135,16 @@ class AgentRuntimeService:
             agent = AgentPlugin("agent", self.agent_factory)
             for plugin in (
                 user_input,
+                skill,
                 blackboard,
                 agent,
                 self.output_bridge,
             ):
                 self.plugin_manager.register(plugin)
 
+            self.plugin_manager.subscribe("skill", "user-input")
             self.plugin_manager.subscribe("blackboard", "user-input")
+            self.plugin_manager.subscribe("blackboard", "skill")
             self.plugin_manager.subscribe("output-bridge", "user-input")
             self.plugin_manager.subscribe("agent", "blackboard")
             self.plugin_manager.subscribe("user-input", "agent")
@@ -172,6 +210,7 @@ class AgentRuntimeService:
                         exc_info=(type(error), error, error.__traceback__),
                     )
             self._user_input = None
+            self._skill_plugin = None
             self._started = False
             self._closed = True
         if stop_error is not None:
@@ -187,6 +226,11 @@ class AgentRuntimeService:
                         await self.plugin_manager.stop(timeout=5)
             except Exception:
                 self.logger.exception("PluginManager cleanup failed")
+        if self._skill_plugin is not None:
+            try:
+                await self._skill_plugin.stop()
+            except Exception:
+                self.logger.exception("SkillPlugin cleanup failed")
         try:
             await self.agent_factory.aclose()
         except Exception:
@@ -194,6 +238,7 @@ class AgentRuntimeService:
         self._close_session()
         self.persistence.stop(drain=False, logger=self.logger)
         self._user_input = None
+        self._skill_plugin = None
         self._started = False
         self._closed = True
 
@@ -202,3 +247,16 @@ class AgentRuntimeService:
             self._session_context.__exit__(None, None, None)
             self._session_context = None
         self._session = None
+
+    async def _create_skill_usage_store(self) -> SkillUsageStore | None:
+        try:
+            return await asyncio.to_thread(
+                SkillUsageStore,
+                self.persistence.resolver.skill_state_database,
+            )
+        except Exception:
+            self.logger.exception(
+                "Skill usage store initialization failed; "
+                "continuing without persisted usage state"
+            )
+            return None

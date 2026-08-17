@@ -13,6 +13,9 @@ from apps.agent.src.agent_orchestration.plugins.blackboard import (
     ContextBlock,
     ContextContributionEvent,
 )
+from apps.agent.src.agent_orchestration.plugins.skill import (
+    SkillPlugin,
+)
 from apps.agent.src.agent_orchestration.plugins.user_input import (
     InputAccepted,
     InputFinishedEvent,
@@ -36,6 +39,7 @@ __all__ = [
     "InputAccepted",
     "InputQueuedEvent",
     "InputStartedEvent",
+    "SkillPlugin",
     "UserInputEvent",
     "UserInputPlugin",
 ]

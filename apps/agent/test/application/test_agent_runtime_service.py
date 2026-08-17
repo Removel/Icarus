@@ -16,6 +16,7 @@ from apps.agent.src.agent_orchestration.plugins import (
 from apps.agent.src.application.agent_runtime_service import AgentRuntimeService
 from apps.agent.src.model_config import (
     ConfigModel,
+    EmbeddingSettings,
     LLMConfig,
     ModelSettings,
     ThinkMode,
@@ -34,6 +35,13 @@ def make_config(data_dir) -> ConfigModel:
         openai_base_url="https://openai.example.com/v1",
         anthropic_base_url="https://anthropic.example.com",
         icarus_data_dir=data_dir,
+        embedding=EmbeddingSettings(
+            provider="fastembed",
+            model_name=(
+                "sentence-transformers/"
+                "paraphrase-multilingual-MiniLM-L12-v2"
+            ),
+        ),
         model_settings=ModelSettings(
             thinking=model,
             perception=model,
@@ -58,6 +66,24 @@ class AgentStub:
                 steps=1,
             ),
         )
+
+
+class EmbeddingStub:
+    def __init__(self) -> None:
+        self.query_calls = []
+        self.document_calls = []
+        self.closed = False
+
+    async def embed_query(self, text):
+        self.query_calls.append(text)
+        return [1.0, 0.0]
+
+    async def embed_documents(self, texts):
+        self.document_calls.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    async def aclose(self):
+        self.closed = True
 
 
 async def collect_task_events(
@@ -206,9 +232,56 @@ def test_runtime_service_由blackboard维护跨轮history并支持初始化消�
     assert calls[1]["history_messages"] == [
         Message("user", [TextPart("restored-user")]),
         Message("assistant", [TextPart("restored-assistant")]),
-        Message("user", [TextPart("first")]),
+        Message(
+            "user",
+            [TextPart("<user_request>\nfirst\n</user_request>")],
+        ),
         Message(
             "assistant",
             [TextPart("answer:<user_request>\nfirst\n</user_request>")],
         ),
     ]
+
+
+def test_runtime_service_检索skill并注入blackboard_prompt(tmp_path):
+    async def run():
+        data_dir = tmp_path / "data"
+        skill_dir = data_dir / "skills" / "skill-product"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: skill-product\n"
+            "description: Create reusable skills from completed work.\n"
+            "---\n"
+            "# Skill Product\n",
+            encoding="utf-8",
+        )
+        embedding = EmbeddingStub()
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(data_dir),
+            embedding=embedding,
+        )
+        agent = AgentStub()
+        service.agent_factory.get_agent = lambda model_role: agent
+        await service.start()
+        accepted = await service.submit("create a reusable skill")
+        await collect_task_events(service, accepted.task_id)
+        skill_plugin = service.plugin_manager.registry.get("skill")
+        blackboard = service.plugin_manager.registry.get("blackboard")
+        await service.stop(timeout=1)
+        return agent.calls, embedding, skill_plugin, blackboard
+
+    calls, embedding, skill_plugin, blackboard = asyncio.run(run())
+
+    assert embedding.query_calls == ["create a reusable skill"]
+    assert embedding.document_calls == [
+        ["Create reusable skills from completed work."]
+    ]
+    assert skill_plugin.session_state.selected_skills[0].name == "skill-product"
+    assert blackboard.required_context_sources == frozenset({"skill"})
+    assert "<plugin_context>" in calls[0]["input_prompt"]
+    assert "skill-product" in calls[0]["input_prompt"]
+    assert "<user_request>\ncreate a reusable skill\n</user_request>" in (
+        calls[0]["input_prompt"]
+    )
