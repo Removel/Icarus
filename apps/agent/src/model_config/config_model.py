@@ -24,6 +24,11 @@ class ModelSettings(pydantic.BaseModel):
     perception: LLMConfig
 
 
+class EmbeddingSettings(pydantic.BaseModel):
+    provider: Literal["fastembed"]
+    model_name: str
+
+
 LLMProtocol = Literal["openai", "anthropic"]
 LLMRole = Literal["thinking", "perception"]
 
@@ -34,5 +39,6 @@ class ConfigModel(pydantic.BaseModel):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     icarus_data_dir: Path | None = None
+    embedding: EmbeddingSettings
     model_settings: ModelSettings
     use_protocol: LLMProtocol = "openai"

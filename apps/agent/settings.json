@@ -1,6 +1,10 @@
 {
   "openai_base_url": "https://api.deepseek.com",
   "anthropic_base_url": "https://api.deepseek.com/anthropic",
+  "embedding": {
+    "provider": "fastembed",
+    "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  },
   "model_settings": {
     "thinking": {
       "model_name": "deepseek-v4-pro",
