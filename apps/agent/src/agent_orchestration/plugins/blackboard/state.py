@@ -21,6 +21,7 @@ class BlackboardTaskState:
     contributions: dict[str, ContextContributionEvent] = field(
         default_factory=dict
     )
+    input_prompt: str | None = None
     context_published: bool = False
     context_committed: bool = False
     agent_finished: bool = False

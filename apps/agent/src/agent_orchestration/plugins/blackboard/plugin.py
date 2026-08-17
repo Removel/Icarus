@@ -15,6 +15,9 @@ from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     BlackboardContextReadyEvent,
     ContextContributionEvent,
 )
+from apps.agent.src.agent_orchestration.plugins.blackboard.prompt_composer import (
+    BlackboardPromptComposer,
+)
 from apps.agent.src.agent_orchestration.plugins.user_input.events import (
     InputFinishedEvent,
     UserInputEvent,
@@ -34,6 +37,7 @@ class BlackboardPlugin(BasePlugin):
         system_prompt: str = "",
         tools: list[str] | None = None,
         initial_messages: list[Message] | None = None,
+        prompt_composer: BlackboardPromptComposer | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.required_context_sources = frozenset(required_context_sources)
@@ -41,6 +45,7 @@ class BlackboardPlugin(BasePlugin):
         self.model_role = model_role
         self.system_prompt = system_prompt
         self.tools = None if tools is None else list(tools)
+        self.prompt_composer = prompt_composer or BlackboardPromptComposer()
         self.context = BlackboardContextState(
             messages=list(initial_messages or []),
         )
@@ -142,12 +147,19 @@ class BlackboardPlugin(BasePlugin):
             for source_plugin_id, contribution in state.contributions.items()
             if contribution.status == "failed"
         }
+        input_prompt = self.prompt_composer.compose(
+            prompt=user_input.prompt,
+            context_blocks=context_blocks,
+            context_errors=context_errors,
+        )
+        state.input_prompt = input_prompt
         context_event = BlackboardContextReadyEvent(
             correlation_id=state.correlation_id,
             model_role=self.model_role,
             system_prompt=self.system_prompt,
             history_messages=self.get_messages(),
             prompt=user_input.prompt,
+            input_prompt=input_prompt,
             input_images=user_input.input_images,
             tools=self.tools,
             context_blocks=context_blocks,
@@ -161,10 +173,14 @@ class BlackboardPlugin(BasePlugin):
         state: BlackboardTaskState,
         event: AgentCompletedEvent,
     ) -> None:
-        if state.context_committed or state.user_input is None:
+        if (
+            state.context_committed
+            or state.user_input is None
+            or state.input_prompt is None
+        ):
             return
         user_content = [
-            TextPart(state.user_input.prompt),
+            TextPart(state.input_prompt),
             *state.user_input.input_images,
         ]
         self.context.messages.extend(

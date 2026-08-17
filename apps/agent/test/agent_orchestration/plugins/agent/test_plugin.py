@@ -103,6 +103,10 @@ def test_agent_plugin_只消费context并原样发布stream_event():
                 model_role="thinking",
                 system_prompt="system",
                 prompt="hello",
+                input_prompt=(
+                    "<plugin_context>\ncomposed context\n</plugin_context>"
+                    "\n\n<user_request>\nhello\n</user_request>"
+                ),
                 tools=[],
                 context_blocks=[
                     ContextBlock(
@@ -122,7 +126,8 @@ def test_agent_plugin_只消费context并原样发布stream_event():
     assert sources == ["agent", "agent"]
     assert factory.agent.calls[0]["system_prompt"] == "system"
     assert "<plugin_context>" in factory.agent.calls[0]["input_prompt"]
-    assert "remember this" in factory.agent.calls[0]["input_prompt"]
+    assert "composed context" in factory.agent.calls[0]["input_prompt"]
+    assert "remember this" not in factory.agent.calls[0]["input_prompt"]
     assert "<user_request>\nhello\n</user_request>" in factory.agent.calls[0][
         "input_prompt"
     ]
@@ -142,6 +147,7 @@ def test_agent_context_event_保持扁平agent参数():
         system_prompt="system",
         history_messages=[Message("user", [TextPart("history")])],
         prompt="input",
+        input_prompt="composed-input",
         tools=["read"],
     )
 
@@ -149,5 +155,6 @@ def test_agent_context_event_保持扁平agent参数():
     assert event.system_prompt == "system"
     assert event.history_messages[0].role == "user"
     assert event.prompt == "input"
+    assert event.input_prompt == "composed-input"
     assert event.input_images == []
     assert event.tools == ["read"]

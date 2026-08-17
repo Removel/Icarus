@@ -22,6 +22,18 @@ class DataPathResolver:
     def workspaces_dir(self) -> Path:
         return self.data_dir / "workspaces"
 
+    @property
+    def global_skills_dir(self) -> Path:
+        return self.data_dir / "skills"
+
+    @property
+    def skill_state_database(self) -> Path:
+        return self.global_skills_dir / "skill-state.sqlite3"
+
+    @property
+    def fastembed_cache_dir(self) -> Path:
+        return self.data_dir / "models" / "fastembed"
+
     def workspace_dir(self, identity: SessionIdentity) -> Path:
         self._validate_id(identity.workspace_key, "workspace_key")
         return self.workspaces_dir / identity.workspace_key
@@ -31,6 +43,9 @@ class DataPathResolver:
 
     def workspace_log(self, identity: SessionIdentity) -> Path:
         return self.workspace_dir(identity) / "runtime.log"
+
+    def workspace_skills_dir(self, identity: SessionIdentity) -> Path:
+        return self.workspace_dir(identity) / "skills"
 
     def sessions_dir(self, identity: SessionIdentity) -> Path:
         return self.workspace_dir(identity) / "sessions"
