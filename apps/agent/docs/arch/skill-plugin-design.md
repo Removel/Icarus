@@ -501,11 +501,15 @@ AgentCompletedEvent AND tool_call_count > 10
 `AgentCompletedEvent.response.messages` 已包含该次 Agent 调用的完整消息序列。
 SkillPlugin 从最后一条 User Message 之后恢复当前轮 ReAct 轨迹：
 
-1. 按 Assistant Message 顺序生成 Step 编号；
-2. 读取 Assistant Message 中的完整 `tool_calls`；
-3. 通过后续 Tool Message 的 `tool_call_id`，关联最早尚未完成的同 ID ToolCall；
-4. 从 Tool Message 解析统一的 `ToolExecutionResult`；
-5. 成功和失败的工具都计数。
+1. 先只统计 Assistant Message 中的完整 `tool_calls`；不超过 10 次时直接结束，不解析
+   可能很大的工具结果；
+2. 超过门槛后在工作线程中按 Assistant Message 顺序生成 Step 编号；
+3. 读取 Assistant Message 中的完整 `tool_calls`；
+4. 通过后续 Tool Message 的 `tool_call_id`，关联最早尚未完成的同 ID ToolCall；
+5. 从 Tool Message 解析统一的 `ToolExecutionResult`，成功和失败的工具都计数。
+
+完整 messages 的防御性复制同样在工作线程中执行，避免大工具输出阻塞 Plugin Runtime
+事件循环。
 
 如果 ToolCall 与 Tool Result 不能形成完整轨迹，自动维护 fail closed：记录聚合错误并
 跳过本轮维护，不影响主 Agent 已完成的响应。`finish_reason` 不是 `stop` 时同样不触发
