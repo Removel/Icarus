@@ -67,13 +67,31 @@ class AgentFactory:
         return observable_agent
 
     def close(self) -> None:
-        for llm in self._llms.values():
-            llm.close()
-        self._agents.clear()
-        self._llms.clear()
+        first_error: BaseException | None = None
+        try:
+            for llm in tuple(self._llms.values()):
+                try:
+                    llm.close()
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+        finally:
+            self._agents.clear()
+            self._llms.clear()
+        if first_error is not None:
+            raise first_error
 
     async def aclose(self) -> None:
-        for llm in self._llms.values():
-            await llm.aclose()
-        self._agents.clear()
-        self._llms.clear()
+        first_error: BaseException | None = None
+        try:
+            for llm in tuple(self._llms.values()):
+                try:
+                    await llm.aclose()
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+        finally:
+            self._agents.clear()
+            self._llms.clear()
+        if first_error is not None:
+            raise first_error

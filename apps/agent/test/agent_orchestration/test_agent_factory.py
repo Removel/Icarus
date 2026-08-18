@@ -140,3 +140,60 @@ def test_agent_factory_close_释放已创建llm():
     assert all(llm.closed for llm in llm_factory.created.values())
     assert factory._agents == {}
     assert factory._llms == {}
+
+
+def test_agent_factory_close一个llm失败仍关闭其余并清空缓存():
+    factory, llm_factory, _ = make_factory()
+    factory.get_agent("thinking")
+    factory.get_agent("perception")
+    thinking = llm_factory.created["thinking"]
+    perception = llm_factory.created["perception"]
+
+    def fail_close():
+        thinking.closed = True
+        raise RuntimeError("thinking close failed")
+
+    thinking.close = fail_close
+
+    try:
+        factory.close()
+    except RuntimeError as error:
+        assert str(error) == "thinking close failed"
+    else:
+        raise AssertionError("close error should be preserved")
+
+    assert thinking.closed is True
+    assert perception.closed is True
+    assert factory._agents == {}
+    assert factory._llms == {}
+
+
+def test_agent_factory_aclose一个llm失败仍关闭其余并清空缓存():
+    import asyncio
+
+    async def run():
+        factory, llm_factory, _ = make_factory()
+        factory.get_agent("thinking")
+        factory.get_agent("perception")
+        thinking = llm_factory.created["thinking"]
+        perception = llm_factory.created["perception"]
+
+        async def fail_close():
+            thinking.closed = True
+            raise RuntimeError("thinking close failed")
+
+        thinking.aclose = fail_close
+        try:
+            await factory.aclose()
+        except RuntimeError as error:
+            assert str(error) == "thinking close failed"
+        else:
+            raise AssertionError("close error should be preserved")
+        return factory, thinking, perception
+
+    factory, thinking, perception = asyncio.run(run())
+
+    assert thinking.closed is True
+    assert perception.closed is True
+    assert factory._agents == {}
+    assert factory._llms == {}
