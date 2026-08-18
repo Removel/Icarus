@@ -13,6 +13,9 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputStartedEvent,
     UserInputEvent,
 )
+from apps.agent.src.agent_orchestration.plugins.skill import (
+    WorkspaceMaintenanceCoordinator,
+)
 from apps.agent.src.application.agent_runtime_service import AgentRuntimeService
 from apps.agent.src.model_config import (
     ConfigModel,
@@ -86,6 +89,21 @@ class EmbeddingStub:
         self.closed = True
 
 
+class MaintenanceFactoryStub:
+    def __init__(self) -> None:
+        self.roles = []
+        self.closed = False
+
+    def get_agent(self, role):
+        self.roles.append(role)
+        raise AssertionError(
+            "maintenance Agent must stay lazy below the tool threshold"
+        )
+
+    async def aclose(self):
+        self.closed = True
+
+
 async def collect_task_events(
     service: AgentRuntimeService,
     task_id: str,
@@ -105,10 +123,14 @@ async def collect_task_events(
 
 def test_runtime_service_组装固定session并转发完整任务事件(tmp_path):
     async def run():
+        maintenance_factory = MaintenanceFactoryStub()
+        coordinator = WorkspaceMaintenanceCoordinator()
         service = AgentRuntimeService(
             workspace_path=tmp_path,
             session_id="session-1",
             config=make_config(tmp_path / "data"),
+            maintenance_agent_factory=maintenance_factory,
+            maintenance_coordinator=coordinator,
         )
         agent = AgentStub()
         service.agent_factory.get_agent = lambda model_role: agent
@@ -123,9 +145,21 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
             events,
             running_session_id,
             service.persistence.trace_hook.skipped_count,
+            maintenance_factory,
+            coordinator,
+            service.plugin_manager.registry.get_subscriber_ids("agent"),
         )
 
-    service, accepted, events, running_session_id, skipped_count = asyncio.run(run())
+    (
+        service,
+        accepted,
+        events,
+        running_session_id,
+        skipped_count,
+        maintenance_factory,
+        coordinator,
+        agent_subscribers,
+    ) = asyncio.run(run())
 
     assert accepted.queue_position == 0
     assert running_session_id == "session-1"
@@ -147,6 +181,10 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
     assert service.is_running is False
     assert service.session_id is None
     assert skipped_count == 0
+    assert maintenance_factory.roles == []
+    assert maintenance_factory.closed is True
+    assert coordinator.active_workspace_keys == frozenset()
+    assert "skill" in agent_subscribers
 
 
 def test_runtime_service_未启动时拒绝提交和读取事件(tmp_path):
@@ -176,6 +214,131 @@ def test_runtime_service_停止后再次启动给出明确生命周期错误(tmp
             await service.start()
 
     asyncio.run(run())
+
+
+def test_runtime_service_start被取消时完成全部资源清理(tmp_path):
+    async def run():
+        maintenance_factory = MaintenanceFactoryStub()
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+            maintenance_agent_factory=maintenance_factory,
+            maintenance_coordinator=WorkspaceMaintenanceCoordinator(),
+        )
+        start_entered = asyncio.Event()
+
+        async def block_start():
+            start_entered.set()
+            await asyncio.Event().wait()
+
+        service.plugin_manager.start = block_start
+        task = asyncio.create_task(service.start())
+        await start_entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return service, maintenance_factory
+
+    service, maintenance_factory = asyncio.run(run())
+
+    assert service.is_running is False
+    assert service.session_id is None
+    assert service.persistence.is_running is False
+    assert maintenance_factory.closed is True
+
+
+def test_runtime_service_usage_store初始化线程中取消仍关闭临时资源(
+    tmp_path,
+    monkeypatch,
+):
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+    stores = []
+
+    class StoreStub:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def blocking_store(path):
+        started.set()
+        release.wait()
+        store = StoreStub()
+        stores.append(store)
+        return store
+
+    monkeypatch.setattr(
+        "apps.agent.src.application.agent_runtime_service.SkillUsageStore",
+        blocking_store,
+    )
+
+    async def run():
+        embedding = EmbeddingStub()
+        maintenance_factory = MaintenanceFactoryStub()
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+            embedding=embedding,
+            maintenance_agent_factory=maintenance_factory,
+            maintenance_coordinator=WorkspaceMaintenanceCoordinator(),
+        )
+        task = asyncio.create_task(service.start())
+        assert await asyncio.to_thread(started.wait, 1) is True
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return service, embedding, maintenance_factory
+
+    service, embedding, maintenance_factory = asyncio.run(run())
+
+    assert stores and stores[0].closed is True
+    assert embedding.closed is True
+    assert maintenance_factory.closed is True
+    assert service.persistence.is_running is False
+    assert service.session_id is None
+
+
+def test_runtime_service_stop被取消时等待plugin清理后再报告取消(tmp_path):
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+            maintenance_agent_factory=MaintenanceFactoryStub(),
+            maintenance_coordinator=WorkspaceMaintenanceCoordinator(),
+        )
+        await service.start()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original_stop = service.plugin_manager.stop
+
+        async def blocking_stop(timeout=None):
+            entered.set()
+            await release.wait()
+            await original_stop(timeout=timeout)
+
+        service.plugin_manager.stop = blocking_stop
+        stop_task = asyncio.create_task(service.stop(timeout=1))
+        await entered.wait()
+        stop_task.cancel()
+        await asyncio.sleep(0)
+        assert service.is_running is True
+        assert service.persistence.is_running is True
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await stop_task
+        return service
+
+    service = asyncio.run(run())
+
+    assert service.is_running is False
+    assert service.persistence.is_running is False
+    assert service.session_id is None
 
 
 def test_runtime_service_llm关闭失败时仍清理session和持久化(tmp_path):

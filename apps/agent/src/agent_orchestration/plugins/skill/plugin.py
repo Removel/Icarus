@@ -1,19 +1,45 @@
 """Plugin adapter for per-turn Skill retrieval and context publication."""
 
 import asyncio
+from copy import deepcopy
+from datetime import UTC, datetime
 import json
 import logging
 
+from apps.agent.src.agent_orchestration.capability import (
+    AgentCompletedEvent,
+    AgentErrorEvent,
+    AgentToolCompletedEvent,
+    AgentToolStartedEvent,
+)
 from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.hooks import HookDispatcher
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
 from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     ContextBlock,
     ContextContributionEvent,
 )
+from apps.agent.src.agent_orchestration.plugins.skill.coordinator import (
+    WorkspaceMaintenanceCoordinator,
+)
+from apps.agent.src.agent_orchestration.plugins.skill.maintainer import (
+    SkillMaintainer,
+)
 from apps.agent.src.agent_orchestration.plugins.skill.ranker import SkillRanker
+from apps.agent.src.agent_orchestration.plugins.skill.ranker import (
+    lifecycle_for_usage,
+)
+from apps.agent.src.agent_orchestration.plugins.skill.repository import (
+    RepositoryBatchResult,
+    SkillRepository,
+)
 from apps.agent.src.agent_orchestration.plugins.skill.scanner import SkillScanner
 from apps.agent.src.agent_orchestration.plugins.skill.session_state import (
     SessionSkillState,
+)
+from apps.agent.src.agent_orchestration.plugins.skill.turn_state import (
+    SkillTurnState,
+    TurnRecord,
 )
 from apps.agent.src.agent_orchestration.plugins.skill.usage_store import (
     SkillUsageStore,
@@ -43,6 +69,13 @@ class SkillPlugin(BasePlugin):
         embedding: BaseEmbedding,
         ranker: SkillRanker,
         session_state: SessionSkillState,
+        agent_plugin_id: str = "agent",
+        maintainer: SkillMaintainer | None = None,
+        repository: SkillRepository | None = None,
+        coordinator: WorkspaceMaintenanceCoordinator | None = None,
+        turn_state: SkillTurnState | None = None,
+        hook_dispatcher: HookDispatcher | None = None,
+        maintenance_tool_threshold: int = 10,
         retrieval_timeout_seconds: float = 30.0,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -51,25 +84,59 @@ class SkillPlugin(BasePlugin):
             raise ValueError("workspace_key cannot be empty")
         if not user_input_plugin_id.strip():
             raise ValueError("user_input_plugin_id cannot be empty")
+        if not agent_plugin_id.strip():
+            raise ValueError("agent_plugin_id cannot be empty")
+        if maintenance_tool_threshold < 0:
+            raise ValueError("maintenance_tool_threshold cannot be negative")
         if retrieval_timeout_seconds <= 0:
             raise ValueError("retrieval_timeout_seconds must be positive")
+        maintenance_dependencies = (maintainer, repository, coordinator)
+        if any(item is not None for item in maintenance_dependencies) and not all(
+            item is not None for item in maintenance_dependencies
+        ):
+            raise ValueError(
+                "maintainer, repository, and coordinator must be provided together"
+            )
         self.workspace_key = workspace_key
         self.user_input_plugin_id = user_input_plugin_id
+        self.agent_plugin_id = agent_plugin_id
         self.scanner = scanner
         self.usage_store = usage_store
         self.embedding = embedding
         self.ranker = ranker
         self.session_state = session_state
+        self.maintainer = maintainer
+        self.repository = repository
+        self.coordinator = coordinator
+        self.turn_state = turn_state or SkillTurnState()
+        self.hook_dispatcher = hook_dispatcher
+        self.maintenance_tool_threshold = maintenance_tool_threshold
         self.retrieval_timeout_seconds = retrieval_timeout_seconds
         self.logger = logger or logging.getLogger(__name__)
         self._disabled_reason: str | None = None
+        self._maintenance_tasks: set[asyncio.Task[None]] = set()
+        self._repository_tasks: set[asyncio.Task[RepositoryBatchResult]] = set()
+        self._maintenance_repository_tasks: dict[
+            asyncio.Task[None],
+            asyncio.Task[RepositoryBatchResult],
+        ] = {}
+        self._repository_maintenance_tasks: dict[
+            asyncio.Task[RepositoryBatchResult],
+            asyncio.Task[None],
+        ] = {}
+        self._maintenance_claim_token: str | None = None
 
     async def consume(self, source_plugin_id: str, event: Event) -> None:
-        if (
-            source_plugin_id != self.user_input_plugin_id
-            or not isinstance(event, UserInputEvent)
+        if source_plugin_id == self.user_input_plugin_id and isinstance(
+            event, UserInputEvent
         ):
+            self.turn_state.start(event)
+            await self._consume_user_input(event)
             return
+        if source_plugin_id == self.agent_plugin_id:
+            await self._consume_agent_event(event)
+
+    async def _consume_user_input(self, event: UserInputEvent) -> None:
         if self._disabled_reason is not None:
             await self._publish_failure(event, self._disabled_reason)
             return
@@ -100,7 +167,27 @@ class SkillPlugin(BasePlugin):
                 str(error) or type(error).__name__,
             )
 
+    async def drain(self) -> None:
+        if self._maintenance_tasks:
+            await asyncio.gather(
+                *tuple(self._maintenance_tasks),
+                return_exceptions=True,
+            )
+
     async def stop(self) -> None:
+        for task in tuple(self._maintenance_tasks):
+            task.cancel()
+        if self._maintenance_tasks:
+            await asyncio.gather(
+                *tuple(self._maintenance_tasks),
+                return_exceptions=True,
+            )
+        self._maintenance_tasks.clear()
+        if self._repository_tasks:
+            await asyncio.gather(
+                *tuple(self._repository_tasks),
+                return_exceptions=True,
+            )
         try:
             await self.embedding.aclose()
         finally:
@@ -112,6 +199,7 @@ class SkillPlugin(BasePlugin):
     async def _retrieve_and_publish(self, event: UserInputEvent) -> None:
         skills = await asyncio.to_thread(self.scanner.scan)
         if not skills:
+            self.turn_state.set_matched_skills(event.correlation_id, ())
             update = self.session_state.update([])
             if update.skills:
                 await self._publish_update(event, update)
@@ -148,6 +236,7 @@ class SkillPlugin(BasePlugin):
             usages,
         )
         selected = [item.skill for item in ranked]
+        self.turn_state.set_matched_skills(event.correlation_id, selected)
         if self.usage_store is not None:
             try:
                 await asyncio.to_thread(
@@ -168,6 +257,323 @@ class SkillPlugin(BasePlugin):
         ]
         update = self.session_state.update([*reconciled, *selected])
         await self._publish_update(event, update)
+
+    async def _consume_agent_event(self, event: Event) -> None:
+        if isinstance(event, AgentToolStartedEvent):
+            self.turn_state.record_tool_started(event)
+            return
+        if isinstance(event, AgentToolCompletedEvent):
+            self.turn_state.record_tool_completed(event)
+            return
+        if isinstance(event, AgentErrorEvent):
+            self.turn_state.discard(event.correlation_id)
+            return
+        if not isinstance(event, AgentCompletedEvent):
+            return
+
+        turn = self.turn_state.pop(event.correlation_id)
+        if turn is None or not self._maintenance_enabled:
+            return
+        if event.response.finish_reason != "stop":
+            return
+        if turn.tool_call_count <= self.maintenance_tool_threshold:
+            return
+        coordinator = self.coordinator
+        claim_token = (
+            coordinator.claim(self.workspace_key)
+            if coordinator is not None
+            else None
+        )
+        if coordinator is None or claim_token is None:
+            self.logger.info(
+                "Skipping Skill maintenance because Workspace is busy: %s",
+                self.workspace_key,
+            )
+            return
+        self._maintenance_claim_token = claim_token
+
+        try:
+            messages = deepcopy(event.response.messages)
+            session_skills = self.session_state.selected_skills
+            parent_run_id = self._current_run_id()
+            task = asyncio.create_task(
+                self._run_maintenance(
+                    turn,
+                    messages,
+                    session_skills,
+                    parent_run_id,
+                ),
+                name=(
+                    f"skill-maintenance:{self.workspace_key}:"
+                    f"{event.correlation_id}"
+                ),
+            )
+        except BaseException:
+            coordinator.release(self.workspace_key, claim_token)
+            self._maintenance_claim_token = None
+            raise
+        self._maintenance_tasks.add(task)
+        task.add_done_callback(self._maintenance_task_completed)
+
+    @property
+    def _maintenance_enabled(self) -> bool:
+        return (
+            self.maintainer is not None
+            and self.repository is not None
+            and self.coordinator is not None
+        )
+
+    async def _run_maintenance(
+        self,
+        turn: TurnRecord,
+        messages,
+        session_skills,
+        parent_run_id: str | None,
+    ) -> None:
+        from apps.agent.src.agent_orchestration.hooks import hook_context
+
+        with hook_context(
+            {
+                "plugin_id": self.plugin_id,
+                "workspace_key": self.workspace_key,
+                "correlation_id": turn.correlation_id,
+                "parent_run_id": parent_run_id,
+                "maintenance": True,
+            },
+            new_run=True,
+        ):
+            try:
+                await self._trigger_maintenance_hook(
+                    "before",
+                    {
+                        "correlation_id": turn.correlation_id,
+                        "tool_call_count": turn.tool_call_count,
+                        "parent_run_id": parent_run_id,
+                    },
+                )
+                snapshots = await self._build_maintenance_snapshots()
+                maintainer = self.maintainer
+                repository = self.repository
+                assert maintainer is not None
+                assert repository is not None
+                plan = await maintainer.plan(
+                    messages=messages,
+                    tool_trace=turn.tool_calls,
+                    matched_skills=turn.matched_skills,
+                    session_skills=session_skills,
+                    skill_snapshots=snapshots,
+                )
+                result = await self._apply_repository_plan(
+                    repository,
+                    plan.operations,
+                    snapshots,
+                )
+                await self._reconcile_maintenance_result(result)
+                await self._trigger_maintenance_hook(
+                    "after",
+                    {
+                        "correlation_id": turn.correlation_id,
+                        "operations": [
+                            {
+                                "action": item.action,
+                                "target_name": item.target_name,
+                                "status": item.status,
+                                "target_written": item.target_written,
+                                "file_deleted": item.file_deleted,
+                                "deleted_sources": item.deleted_sources,
+                                "cleanup_errors": item.cleanup_errors,
+                            }
+                            for item in result.results
+                        ],
+                    },
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self.logger.exception(
+                    "Skill maintenance failed: correlation_id=%s",
+                    turn.correlation_id,
+                )
+                await self._trigger_maintenance_hook(
+                    "error",
+                    {
+                        "correlation_id": turn.correlation_id,
+                        "error_type": type(error).__name__,
+                        "error_message": str(error),
+                    },
+                )
+
+    async def _apply_repository_plan(
+        self,
+        repository: SkillRepository,
+        operations,
+        snapshots,
+    ) -> RepositoryBatchResult:
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                repository.apply,
+                operations,
+                snapshots,
+            ),
+            name=f"skill-repository:{self.workspace_key}",
+        )
+        maintenance_task = asyncio.current_task()
+        if maintenance_task is None:
+            task.cancel()
+            raise RuntimeError("repository apply requires a maintenance task")
+        self._repository_tasks.add(task)
+        self._maintenance_repository_tasks[maintenance_task] = task
+        self._repository_maintenance_tasks[task] = maintenance_task
+        task.add_done_callback(self._repository_task_completed)
+        return await asyncio.shield(task)
+
+    async def _build_maintenance_snapshots(self):
+        repository = self.repository
+        assert repository is not None
+        skills = await asyncio.to_thread(self.scanner.scan)
+        usages = {}
+        if self.usage_store is not None:
+            try:
+                usages = await asyncio.to_thread(
+                    self.usage_store.ensure_discovered,
+                    self.workspace_key,
+                    skills,
+                )
+            except Exception:
+                self.logger.exception(
+                    "Skill usage snapshot failed; using active lifecycle defaults"
+                )
+        now = datetime.now(UTC)
+        lifecycle = {
+            skill.skill_key: lifecycle_for_usage(
+                usages.get(skill.skill_key),
+                now,
+            )[0]
+            for skill in skills
+        }
+        return await asyncio.to_thread(
+            repository.snapshot,
+            lifecycle_by_skill_key=lifecycle,
+            usage_by_skill_key=usages,
+        )
+
+    async def _reconcile_maintenance_result(
+        self,
+        result: RepositoryBatchResult,
+    ) -> None:
+        usage_store = self.usage_store
+        if usage_store is None:
+            return
+        written_names = {
+            item.target_name
+            for item in result.results
+            if item.target_written
+        }
+        deleted_names = {
+            source
+            for item in result.results
+            for source in item.deleted_sources
+        }
+        if written_names:
+            current = await asyncio.to_thread(self.scanner.scan)
+            written = [
+                skill
+                for skill in current
+                if skill.normalized_name in written_names
+            ]
+            if written:
+                try:
+                    await asyncio.to_thread(
+                        usage_store.activate_after_maintenance,
+                        self.workspace_key,
+                        written,
+                    )
+                except Exception:
+                    self.logger.exception(
+                        "Failed to activate maintained Skill usage state"
+                    )
+        removed_keys = [
+            f"workspace:{name}"
+            for name in deleted_names - written_names
+        ]
+        if removed_keys:
+            try:
+                await asyncio.to_thread(
+                    usage_store.remove,
+                    self.workspace_key,
+                    removed_keys,
+                )
+            except Exception:
+                self.logger.exception(
+                    "Failed to remove deleted Skill usage state"
+                )
+
+    async def _trigger_maintenance_hook(
+        self,
+        phase: str,
+        data: dict,
+    ) -> None:
+        if self.hook_dispatcher is not None:
+            await self.hook_dispatcher.atrigger(
+                "skill.maintenance",
+                phase,
+                data,
+            )
+
+    def _maintenance_task_completed(
+        self,
+        task: asyncio.Task[None],
+    ) -> None:
+        self._maintenance_tasks.discard(task)
+        repository_task = self._maintenance_repository_tasks.pop(task, None)
+        if repository_task is None:
+            self._release_maintenance_claim()
+            return
+        if repository_task.done():
+            self._release_maintenance_claim()
+            self._repository_maintenance_tasks.pop(repository_task, None)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self.logger.error(
+                "Unexpected Skill maintenance task failure",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    def _repository_task_completed(
+        self,
+        task: asyncio.Task[RepositoryBatchResult],
+    ) -> None:
+        self._repository_tasks.discard(task)
+        maintenance_task = self._repository_maintenance_tasks.pop(task, None)
+        if maintenance_task is None:
+            self._release_maintenance_claim()
+            return
+        if maintenance_task.done():
+            self._release_maintenance_claim()
+            self._maintenance_repository_tasks.pop(maintenance_task, None)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self.logger.error(
+                "Unexpected Skill repository task failure",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    def _release_maintenance_claim(self) -> None:
+        token = self._maintenance_claim_token
+        self._maintenance_claim_token = None
+        if self.coordinator is not None and token is not None:
+            self.coordinator.release(self.workspace_key, token)
+
+    @staticmethod
+    def _current_run_id() -> str | None:
+        from apps.agent.src.agent_orchestration.hooks import get_hook_context
+
+        context = get_hook_context()
+        return context.run_id if context is not None else None
 
     async def _publish_update(self, event, update) -> None:
         if update.mode == "full":

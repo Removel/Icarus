@@ -66,3 +66,36 @@ def test_usage_store关闭幂等且收紧文件权限(tmp_path):
 
     assert database.stat().st_mode & 0o777 == 0o600
     assert database.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_usage_store删除skill状态避免重建继承旧生命周期(tmp_path):
+    definition = skill(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    with SkillUsageStore(tmp_path / "skill-state.sqlite3") as store:
+        store.mark_used("workspace-a", [definition], now=now)
+
+        removed = store.remove(
+            "workspace-a",
+            [definition.skill_key],
+        )
+
+        assert removed == 1
+        assert store.get_many("workspace-a", [definition.skill_key]) == {}
+        assert store.remove("workspace-a", []) == 0
+
+
+def test_usage_store维护后激活但不增加真实使用次数(tmp_path):
+    definition = skill(tmp_path)
+    first = datetime(2026, 1, 1, tzinfo=UTC)
+    maintained = first + timedelta(days=10)
+    with SkillUsageStore(tmp_path / "skill-state.sqlite3") as store:
+        store.mark_used("workspace-a", [definition], now=first)
+
+        usage = store.activate_after_maintenance(
+            "workspace-a",
+            [definition],
+            now=maintained,
+        )[definition.skill_key]
+
+    assert usage.use_count == 1
+    assert usage.last_used_at == maintained

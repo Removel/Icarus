@@ -137,6 +137,52 @@ class SkillUsageStore:
             ).fetchall()
         return {row["skill_key"]: _row_to_usage(row) for row in rows}
 
+    def remove(
+        self,
+        workspace_key: str,
+        skill_keys: Iterable[str],
+    ) -> int:
+        keys = list(dict.fromkeys(skill_keys))
+        if not keys:
+            return 0
+        placeholders = ",".join("?" for _ in keys)
+        with self._lock:
+            with self._connection:
+                cursor = self._connection.execute(
+                    f"""
+                    DELETE FROM skill_usage
+                    WHERE workspace_key = ? AND skill_key IN ({placeholders})
+                    """,
+                    [workspace_key, *keys],
+                )
+            return cursor.rowcount
+
+    def activate_after_maintenance(
+        self,
+        workspace_key: str,
+        skills: Iterable[SkillDefinition],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, SkillUsage]:
+        timestamp = _as_utc(now or datetime.now(UTC)).isoformat()
+        skill_keys = [skill.skill_key for skill in skills]
+        with self._lock:
+            with self._connection:
+                self._connection.executemany(
+                    """
+                    INSERT INTO skill_usage (
+                        workspace_key, skill_key, discovered_at, last_used_at, use_count
+                    ) VALUES (?, ?, ?, ?, 0)
+                    ON CONFLICT(workspace_key, skill_key) DO UPDATE SET
+                        last_used_at = excluded.last_used_at
+                    """,
+                    (
+                        (workspace_key, skill_key, timestamp, timestamp)
+                        for skill_key in skill_keys
+                    ),
+                )
+            return self.get_many(workspace_key, skill_keys)
+
 
 def _row_to_usage(row: sqlite3.Row) -> SkillUsage:
     last_used_at = row["last_used_at"]
