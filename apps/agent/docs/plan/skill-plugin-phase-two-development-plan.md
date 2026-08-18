@@ -1,5 +1,10 @@
 # SkillPlugin Phase Two Development Plan｜轮后自动维护开发计划
 
+> 状态说明：本文记录第二阶段最初的实施路径。工具轨迹来源现已修正为仅从
+> `AgentCompletedEvent.response.messages` 恢复；SkillPlugin 不再消费
+> `AgentToolStartedEvent`、`AgentToolCompletedEvent` 或 `AgentErrorEvent`。权威行为以
+> `apps/agent/docs/arch/skill-plugin-design.md` 为准，后续修正计划单独维护。
+
 ## 目标
 
 实现 `skill-plugin-design.md` 的第二阶段：在一轮主 Agent 对话成功结束后，根据本轮工具调用数量决定是否启动后台 Skill 维护 Agent，并以结构化计划安全地创建、更新、合并或删除 Workspace Skill。
