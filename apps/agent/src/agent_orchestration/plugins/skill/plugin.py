@@ -2,15 +2,14 @@
 
 import asyncio
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 import logging
+import time
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
-    AgentErrorEvent,
-    AgentToolCompletedEvent,
-    AgentToolStartedEvent,
 )
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher
@@ -39,12 +38,16 @@ from apps.agent.src.agent_orchestration.plugins.skill.session_state import (
 )
 from apps.agent.src.agent_orchestration.plugins.skill.turn_state import (
     SkillTurnState,
+    ToolTrajectoryError,
     TurnRecord,
+    tool_call_count_from_messages,
+    tool_traces_from_messages,
 )
 from apps.agent.src.agent_orchestration.plugins.skill.usage_store import (
     SkillUsageStore,
 )
 from apps.agent.src.agent_orchestration.plugins.user_input.events import (
+    InputFinishedEvent,
     UserInputEvent,
 )
 from apps.agent.src.model_provider.base_embedding import BaseEmbedding
@@ -53,6 +56,15 @@ from apps.agent.src.model_provider.base_embedding import BaseEmbedding
 _UNCHANGED_CONTEXT = (
     "The available skill context is unchanged from the previous full injection."
 )
+
+
+@dataclass(frozen=True)
+class _RetrievalOutcome:
+    candidate_count: int
+    qualified_count: int
+    ranked: tuple
+    mode: str
+    cumulative_skill_count: int
 
 
 class SkillPlugin(BasePlugin):
@@ -126,6 +138,16 @@ class SkillPlugin(BasePlugin):
         ] = {}
         self._maintenance_claim_token: str | None = None
 
+    def accepts_event(self, source_plugin_id: str, event: Event) -> bool:
+        if source_plugin_id == self.user_input_plugin_id:
+            return isinstance(event, UserInputEvent) or (
+                isinstance(event, InputFinishedEvent)
+                and event.status == "failed"
+            )
+        if source_plugin_id == self.agent_plugin_id:
+            return isinstance(event, AgentCompletedEvent)
+        return False
+
     async def consume(self, source_plugin_id: str, event: Event) -> None:
         if source_plugin_id == self.user_input_plugin_id and isinstance(
             event, UserInputEvent
@@ -133,15 +155,33 @@ class SkillPlugin(BasePlugin):
             self.turn_state.start(event)
             await self._consume_user_input(event)
             return
-        if source_plugin_id == self.agent_plugin_id:
+        if source_plugin_id == self.user_input_plugin_id and isinstance(
+            event, InputFinishedEvent
+        ):
+            if event.status == "failed":
+                self.turn_state.discard(event.correlation_id)
+            return
+        if source_plugin_id == self.agent_plugin_id and isinstance(
+            event, AgentCompletedEvent
+        ):
             await self._consume_agent_event(event)
 
     async def _consume_user_input(self, event: UserInputEvent) -> None:
+        started_at = time.monotonic()
         if self._disabled_reason is not None:
             await self._publish_failure(event, self._disabled_reason)
+            await self._trigger_retrieval_hook(
+                "error",
+                self._retrieval_error_data(
+                    event,
+                    "SkillRetrievalDisabled",
+                    self._disabled_reason,
+                    started_at,
+                ),
+            )
             return
         try:
-            await asyncio.wait_for(
+            outcome = await asyncio.wait_for(
                 self._retrieve_and_publish(event),
                 timeout=self.retrieval_timeout_seconds,
             )
@@ -157,6 +197,15 @@ class SkillPlugin(BasePlugin):
                 event.correlation_id,
             )
             await self._publish_failure(event, self._disabled_reason)
+            await self._trigger_retrieval_hook(
+                "error",
+                self._retrieval_error_data(
+                    event,
+                    "TimeoutError",
+                    self._disabled_reason,
+                    started_at,
+                ),
+            )
         except Exception as error:
             self.logger.exception(
                 "Skill retrieval failed: correlation_id=%s",
@@ -165,6 +214,42 @@ class SkillPlugin(BasePlugin):
             await self._publish_failure(
                 event,
                 str(error) or type(error).__name__,
+            )
+            await self._trigger_retrieval_hook(
+                "error",
+                self._retrieval_error_data(
+                    event,
+                    type(error).__name__,
+                    "Skill retrieval failed",
+                    started_at,
+                ),
+            )
+        else:
+            await self._trigger_retrieval_hook(
+                "after",
+                {
+                    "correlation_id": event.correlation_id,
+                    "candidate_count": outcome.candidate_count,
+                    "qualified_count": outcome.qualified_count,
+                    "minimum_content_score": (
+                        self.ranker.minimum_content_score
+                    ),
+                    "selected": [
+                        {
+                            "name": item.skill.name,
+                            "scope": item.skill.scope,
+                            "content_score": item.content_score,
+                            "lifecycle_status": item.lifecycle_status,
+                            "final_score": item.final_score,
+                        }
+                        for item in outcome.ranked
+                    ],
+                    "mode": outcome.mode,
+                    "cumulative_skill_count": (
+                        outcome.cumulative_skill_count
+                    ),
+                    "duration_ms": self._elapsed_ms(started_at),
+                },
             )
 
     async def drain(self) -> None:
@@ -196,24 +281,13 @@ class SkillPlugin(BasePlugin):
             if usage_store is not None:
                 await asyncio.to_thread(usage_store.close)
 
-    async def _retrieve_and_publish(self, event: UserInputEvent) -> None:
+    async def _retrieve_and_publish(
+        self,
+        event: UserInputEvent,
+    ) -> _RetrievalOutcome:
         skills = await asyncio.to_thread(self.scanner.scan)
-        if not skills:
-            self.turn_state.set_matched_skills(event.correlation_id, ())
-            update = self.session_state.update([])
-            if update.skills:
-                await self._publish_update(event, update)
-                return
-            await self.publish(
-                ContextContributionEvent(
-                    correlation_id=event.correlation_id,
-                    status="completed",
-                )
-            )
-            return
-
         usages = {}
-        if self.usage_store is not None:
+        if skills and self.usage_store is not None:
             try:
                 usages = await asyncio.to_thread(
                     self.usage_store.ensure_discovered,
@@ -224,20 +298,23 @@ class SkillPlugin(BasePlugin):
                 self.logger.exception(
                     "Skill usage discovery failed; continuing without usage state"
                 )
-        query_vector = await self.embedding.embed_query(event.prompt)
-        document_vectors = await self.embedding.embed_documents(
-            [skill.description for skill in skills]
-        )
-        ranked = await asyncio.to_thread(
-            self.ranker.rank,
-            skills,
-            query_vector,
-            document_vectors,
-            usages,
-        )
+        ranked = []
+        qualified_count = 0
+        if skills:
+            query_vector = await self.embedding.embed_query(event.prompt)
+            document_vectors = await self.embedding.embed_documents(
+                [skill.description for skill in skills]
+            )
+            ranked, qualified_count = await asyncio.to_thread(
+                self.ranker.rank_with_summary,
+                skills,
+                query_vector,
+                document_vectors,
+                usages,
+            )
         selected = [item.skill for item in ranked]
         self.turn_state.set_matched_skills(event.correlation_id, selected)
-        if self.usage_store is not None:
+        if selected and self.usage_store is not None:
             try:
                 await asyncio.to_thread(
                     self.usage_store.mark_used,
@@ -256,27 +333,65 @@ class SkillPlugin(BasePlugin):
             for existing in self.session_state.selected_skills
         ]
         update = self.session_state.update([*reconciled, *selected])
-        await self._publish_update(event, update)
+        if update.skills:
+            await self._publish_update(event, update)
+            mode = update.mode
+        else:
+            await self.publish(
+                ContextContributionEvent(
+                    correlation_id=event.correlation_id,
+                    status="completed",
+                )
+            )
+            mode = "empty"
+        return _RetrievalOutcome(
+            candidate_count=len(skills),
+            qualified_count=qualified_count,
+            ranked=tuple(ranked),
+            mode=mode,
+            cumulative_skill_count=len(self.session_state.selected_skills),
+        )
 
-    async def _consume_agent_event(self, event: Event) -> None:
-        if isinstance(event, AgentToolStartedEvent):
-            self.turn_state.record_tool_started(event)
-            return
-        if isinstance(event, AgentToolCompletedEvent):
-            self.turn_state.record_tool_completed(event)
-            return
-        if isinstance(event, AgentErrorEvent):
+    async def _consume_agent_event(self, event: AgentCompletedEvent) -> None:
+        if event.response.finish_reason != "stop":
             self.turn_state.discard(event.correlation_id)
             return
-        if not isinstance(event, AgentCompletedEvent):
+        if not self._maintenance_enabled:
+            self.turn_state.discard(event.correlation_id)
             return
-
-        turn = self.turn_state.pop(event.correlation_id)
-        if turn is None or not self._maintenance_enabled:
+        try:
+            tool_call_count = tool_call_count_from_messages(
+                event.response.messages
+            )
+            if tool_call_count <= self.maintenance_tool_threshold:
+                self.turn_state.discard(event.correlation_id)
+                return
+            tool_traces = await asyncio.to_thread(
+                tool_traces_from_messages,
+                event.response.messages,
+            )
+            turn = self.turn_state.pop_with_tool_traces(
+                event.correlation_id,
+                tool_traces,
+            )
+        except ToolTrajectoryError as error:
+            self.turn_state.discard(event.correlation_id)
+            self.logger.error(
+                "Skill maintenance trajectory is invalid: correlation_id=%s: %s",
+                event.correlation_id,
+                error,
+            )
+            await self._trigger_maintenance_hook(
+                "error",
+                {
+                    "correlation_id": event.correlation_id,
+                    "stage": "trajectory",
+                    "error_type": type(error).__name__,
+                    "error_message": str(error),
+                },
+            )
             return
-        if event.response.finish_reason != "stop":
-            return
-        if turn.tool_call_count <= self.maintenance_tool_threshold:
+        if turn is None:
             return
         coordinator = self.coordinator
         claim_token = (
@@ -293,7 +408,10 @@ class SkillPlugin(BasePlugin):
         self._maintenance_claim_token = claim_token
 
         try:
-            messages = deepcopy(event.response.messages)
+            messages = await asyncio.to_thread(
+                deepcopy,
+                event.response.messages,
+            )
             session_skills = self.session_state.selected_skills
             parent_run_id = self._current_run_id()
             task = asyncio.create_task(
@@ -519,6 +637,36 @@ class SkillPlugin(BasePlugin):
                 phase,
                 data,
             )
+
+    async def _trigger_retrieval_hook(
+        self,
+        phase: str,
+        data: dict,
+    ) -> None:
+        if self.hook_dispatcher is not None:
+            await self.hook_dispatcher.atrigger(
+                "skill.retrieval",
+                phase,
+                data,
+            )
+
+    @staticmethod
+    def _elapsed_ms(started_at: float) -> int:
+        return max(0, round((time.monotonic() - started_at) * 1000))
+
+    def _retrieval_error_data(
+        self,
+        event: UserInputEvent,
+        error_type: str,
+        error_message: str,
+        started_at: float,
+    ) -> dict:
+        return {
+            "correlation_id": event.correlation_id,
+            "error_type": error_type,
+            "error_message": error_message,
+            "duration_ms": self._elapsed_ms(started_at),
+        }
 
     def _maintenance_task_completed(
         self,

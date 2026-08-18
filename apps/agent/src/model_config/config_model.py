@@ -29,6 +29,10 @@ class EmbeddingSettings(pydantic.BaseModel):
     model_name: str
 
 
+class SkillSettings(pydantic.BaseModel):
+    minimum_content_score: float = pydantic.Field(default=0.8, ge=0, le=1)
+
+
 LLMProtocol = Literal["openai", "anthropic"]
 LLMRole = Literal["thinking", "perception"]
 
@@ -40,5 +44,6 @@ class ConfigModel(pydantic.BaseModel):
     anthropic_api_key: str = ""
     icarus_data_dir: Path | None = None
     embedding: EmbeddingSettings
+    skill: SkillSettings = pydantic.Field(default_factory=SkillSettings)
     model_settings: ModelSettings
     use_protocol: LLMProtocol = "openai"

@@ -28,6 +28,7 @@ class SkillRanker:
         content_weight: float = 0.8,
         lifecycle_weight: float = 0.2,
         limit: int = 3,
+        minimum_content_score: float = 0.8,
     ) -> None:
         if content_weight < 0 or lifecycle_weight < 0:
             raise ValueError("Ranking weights cannot be negative")
@@ -35,9 +36,12 @@ class SkillRanker:
             raise ValueError("Ranking weights must sum to 1")
         if limit < 1:
             raise ValueError("Ranking limit must be positive")
+        if not 0 <= minimum_content_score <= 1:
+            raise ValueError("Minimum content score must be between 0 and 1")
         self.content_weight = content_weight
         self.lifecycle_weight = lifecycle_weight
         self.limit = limit
+        self.minimum_content_score = minimum_content_score
 
     def rank(
         self,
@@ -48,6 +52,24 @@ class SkillRanker:
         *,
         now: datetime | None = None,
     ) -> list[RankedSkill]:
+        ranked, _ = self.rank_with_summary(
+            skills,
+            query_vector,
+            document_vectors,
+            usages,
+            now=now,
+        )
+        return ranked
+
+    def rank_with_summary(
+        self,
+        skills: Sequence[SkillDefinition],
+        query_vector: Sequence[float],
+        document_vectors: Sequence[Sequence[float]],
+        usages: Mapping[str, SkillUsage],
+        *,
+        now: datetime | None = None,
+    ) -> tuple[list[RankedSkill], int]:
         if len(skills) != len(document_vectors):
             raise ValueError("Each Skill requires one document vector")
         ranking_time = _require_aware(now or datetime.now(UTC))
@@ -57,6 +79,8 @@ class SkillRanker:
                 query_vector,
                 document_vector,
             )
+            if content_score < self.minimum_content_score:
+                continue
             usage = usages.get(skill.skill_key)
             status, lifecycle_score = lifecycle_for_usage(usage, ranking_time)
             final_score = (
@@ -79,7 +103,7 @@ class SkillRanker:
                 str(item.skill.path),
             )
         )
-        return ranked[: self.limit]
+        return ranked[: self.limit], len(ranked)
 
 
 def normalized_cosine_similarity(

@@ -53,7 +53,7 @@ def test_ranker按80_20得分取top3并稳定排序(tmp_path):
     skills = [make_skill(tmp_path, name) for name in ["d", "b", "a", "c"]]
     usages = {skill.skill_key: usage(skill, 0) for skill in skills}
 
-    ranked = SkillRanker().rank(
+    ranked = SkillRanker(minimum_content_score=0).rank(
         skills,
         query_vector=[1.0, 0.0],
         document_vectors=[
@@ -96,3 +96,40 @@ def test_normalized_cosine_similarity归一化到零一():
     assert normalized_cosine_similarity([1, 0], [0, 1]) == pytest.approx(0.5)
     assert normalized_cosine_similarity([1, 0], [-1, 0]) == pytest.approx(0)
     assert normalized_cosine_similarity([0, 0], [1, 0]) == pytest.approx(0)
+
+
+def test_ranker先按内容门槛过滤再应用生命周期权重(tmp_path):
+    irrelevant_active = make_skill(tmp_path, "irrelevant-active")
+    relevant_archived = make_skill(tmp_path, "relevant-archived")
+
+    ranked = SkillRanker(minimum_content_score=0.8).rank(
+        [irrelevant_active, relevant_archived],
+        query_vector=[1.0, 0.0],
+        document_vectors=[
+            [0.0, 1.0],
+            [1.0, 0.0],
+        ],
+        usages={
+            irrelevant_active.skill_key: usage(irrelevant_active, 0),
+            relevant_archived.skill_key: usage(relevant_archived, 30),
+        },
+        now=NOW,
+    )
+
+    assert [item.skill.name for item in ranked] == ["relevant-archived"]
+    assert ranked[0].content_score == pytest.approx(1)
+    assert ranked[0].lifecycle_status == "archived"
+
+
+def test_ranker允许没有任何候选通过门槛(tmp_path):
+    skill = make_skill(tmp_path, "unrelated")
+
+    ranked = SkillRanker(minimum_content_score=0.8).rank(
+        [skill],
+        query_vector=[1.0, 0.0],
+        document_vectors=[[0.0, 1.0]],
+        usages={},
+        now=NOW,
+    )
+
+    assert ranked == []
