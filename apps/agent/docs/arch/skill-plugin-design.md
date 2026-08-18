@@ -74,6 +74,14 @@ flowchart LR
 
 BlackboardPlugin 订阅 `SkillPlugin`，把 Skill 上下文与用户输入及其他 Context Plugin 的结果一起组合。AgentPlugin 只消费 Blackboard 发布的完整调用快照。
 
+## Plugin 事件流
+
+当前运行时已注册 Plugin、来源订阅关系、对话主链路、轮后自动维护链路和状态所有权统一维护在：
+
+- `plugin-event-flow-current-state.md`
+
+本文只描述 SkillPlugin 自身设计，不重复维护全局 Plugin 总图。
+
 ## 目录与作用域
 
 Skill 文件统一位于 `ICARUS_DATA_DIR`：
@@ -468,6 +476,7 @@ SkillPlugin 校验计划后通过内部 CRUD 执行。内部 CRUD 不注册为 T
 - 全局 Skill 只允许读取和作为参考，不允许自动更新、合并后删除或清理；
 - Workspace Skill 可以自动创建、更新、合并和删除；
 - 进入 `deletion_candidate` 的 Workspace Skill 可以由维护 Agent 判断后直接删除，无需用户确认；
+- merge 始终可以写入新的 Workspace 目标，但只清理 `deletion_candidate` 的 Workspace 来源；其他 Workspace 来源和所有全局来源保留；
 - `active / normal / archived / deletion_candidate` 都是时间派生状态，不是 CRUD 动作，也不要求移动文件；
 - 更新、生成或合并后的目标 Skill 更新使用时间并回到 `active`。
 
@@ -498,11 +507,12 @@ SkillPlugin 校验计划后通过内部 CRUD 执行。内部 CRUD 不注册为 T
 - 已有维护任务运行时，新的自动触发直接跳过，不排队；
 - LLM 分析期间不持有文件写锁；
 - 执行计划前重新扫描 Skill，并比较分析前后的内容 Hash；
-- 目标已变化的操作跳过并记录冲突；
+- 当前进程内的 Repository writer 共享 Workspace 写锁，并在锁内执行最终 Hash 校验与 mutation；
+- 被同进程 Repository writer 修改过的目标跳过并记录冲突；
 - 文件更新使用同目录临时文件加原子替换；
 - 单项失败不回滚此前成功项，也不影响主 Agent。
 
-跨进程 Skill 文件写协调不属于前两个阶段；只有出现明确的多进程部署需求后再增加文件锁或外部协调机制。
+跨进程 Skill 文件写协调不属于前两个阶段；外部进程、编辑器或不使用 Repository 的 writer 在最终校验后的并发修改不具备原子 CAS 保证。明确多进程部署后再增加 lock-file 或外部协调机制。
 
 ## 故障降级
 
