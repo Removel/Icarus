@@ -3,6 +3,10 @@ import json
 import logging
 
 from apps.agent.src.agent_orchestration import AgentFactory
+from apps.agent.src.agent_orchestration.capability import (
+    AgentCompletedEvent,
+    AgentTextDeltaEvent,
+)
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher, HookRegistry
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin, PluginManager
@@ -126,4 +130,23 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
     assert {record["correlation_id"] for record in records} == {"task-1"}
     assert all("workspace_key" not in record for record in records)
     assert all("session_id" not in record for record in records)
-    assert events
+    assert [type(event) for event in events] == [
+        AgentTextDeltaEvent,
+        AgentTextDeltaEvent,
+        AgentCompletedEvent,
+    ]
+    event_flow_records = [
+        record
+        for record in records
+        if record["name"] in {
+            "event.publish",
+            "event.route",
+            "plugin.consume",
+        }
+    ]
+    assert all(
+        '"text":"trace"' not in json.dumps(record, separators=(",", ":"))
+        and '"text":"-ok"'
+        not in json.dumps(record, separators=(",", ":"))
+        for record in event_flow_records
+    )
