@@ -51,8 +51,11 @@ from apps.agent.src.agent_orchestration.plugins.skill.usage_store import (
 )
 from apps.agent.src.agent_orchestration.plugins.skill.turn_state import (
     SkillTurnState,
+    ToolTrajectoryError,
     ToolCallTrace,
     TurnRecord,
+    tool_call_count_from_messages,
+    tool_traces_from_messages,
 )
 
 __all__ = [
@@ -82,8 +85,11 @@ __all__ = [
     "SkillUsage",
     "SkillUsageStore",
     "SkillTurnState",
+    "ToolTrajectoryError",
     "ToolCallTrace",
     "TurnRecord",
+    "tool_call_count_from_messages",
+    "tool_traces_from_messages",
     "WorkspaceMaintenanceCoordinator",
     "lifecycle_for_usage",
     "normalize_skill_name",

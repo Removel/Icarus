@@ -6,5 +6,6 @@ from apps.agent.src.model_config.config_model import (
     LLMProtocol,
     LLMRole,
     ModelSettings,
+    SkillSettings,
     ThinkMode,
 )

@@ -1,6 +1,19 @@
 import asyncio
 import json
 
+from apps.agent.src.agent_orchestration.capability import (
+    AgentCompletedEvent,
+    AgentErrorEvent,
+    AgentResponse,
+    AgentTextDeltaEvent,
+    AgentToolCompletedEvent,
+    AgentToolStartedEvent,
+)
+from apps.agent.src.agent_orchestration.hooks import (
+    BaseHook,
+    HookDispatcher,
+    HookRegistry,
+)
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.plugins.skill.models import (
     RankedSkill,
@@ -11,8 +24,11 @@ from apps.agent.src.agent_orchestration.plugins.skill.session_state import (
     SessionSkillState,
 )
 from apps.agent.src.agent_orchestration.plugins.user_input.events import (
+    InputFinishedEvent,
     UserInputEvent,
 )
+from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
+from apps.agent.src.model_provider.types import Message, TextPart, ToolCall
 
 
 class ScannerStub:
@@ -64,10 +80,11 @@ class EmbeddingStub:
 class RankerStub:
     def __init__(self):
         self.calls = []
+        self.minimum_content_score = 0.8
 
-    def rank(self, skills, query_vector, document_vectors, usages):
+    def rank_with_summary(self, skills, query_vector, document_vectors, usages):
         self.calls.append((skills, query_vector, document_vectors, usages))
-        return [
+        ranked = [
             RankedSkill(
                 skill=skill,
                 content_score=1.0,
@@ -77,6 +94,15 @@ class RankerStub:
             )
             for skill in skills[:3]
         ]
+        return ranked, len(ranked)
+
+
+class RecordingHook(BaseHook):
+    def __init__(self):
+        self.events = []
+
+    def handle(self, event):
+        self.events.append(event)
 
 
 def make_skill(tmp_path, name):
@@ -124,6 +150,78 @@ def test_skill_plugin只处理指定来源的UserInputEvent(tmp_path):
     dependencies, published = asyncio.run(run())
     assert dependencies["scanner"].calls == 0
     assert published == []
+
+
+def test_skill_plugin只接受完整agent事件和失败input终态(tmp_path):
+    plugin, _, _ = make_plugin(tmp_path, [])
+    call = ToolCall(id="call-1", name="read", arguments={})
+    completed = AgentCompletedEvent(
+        step=1,
+        response=AgentResponse(
+            message=Message("assistant", [TextPart("done")]),
+            finish_reason="stop",
+            messages=[
+                Message("user", [TextPart("hello")]),
+                Message("assistant", [TextPart("done")]),
+            ],
+        ),
+    )
+
+    assert plugin.accepts_event("agent", completed) is True
+    assert (
+        plugin.accepts_event(
+            "agent", AgentTextDeltaEvent(step=1, text="delta")
+        )
+        is False
+    )
+    assert (
+        plugin.accepts_event(
+            "agent", AgentToolStartedEvent(step=1, tool_call=call)
+        )
+        is False
+    )
+    assert (
+        plugin.accepts_event(
+            "agent",
+            AgentToolCompletedEvent(
+                step=1,
+                tool_call=call,
+                result=ToolExecutionResult(success=True),
+            ),
+        )
+        is False
+    )
+    assert (
+        plugin.accepts_event(
+            "agent",
+            AgentErrorEvent(
+                step=1,
+                error_type="RuntimeError",
+                error_message="failed",
+            ),
+        )
+        is False
+    )
+    assert (
+        plugin.accepts_event(
+            "user-input",
+            InputFinishedEvent(
+                task_id="task",
+                status="failed",
+            ),
+        )
+        is True
+    )
+    assert (
+        plugin.accepts_event(
+            "user-input",
+            InputFinishedEvent(
+                task_id="task",
+                status="completed",
+            ),
+        )
+        is False
+    )
 
 
 def test_skill_plugin空扫描直接发布completed且不调用embedding(tmp_path):
@@ -240,6 +338,68 @@ def test_skill_plugin无新增发布unchanged但仍记录top3使用(tmp_path):
     )
 
 
+def test_skill_plugin空召回不注入且不更新使用状态(tmp_path):
+    class EmptyRanker(RankerStub):
+        def rank_with_summary(
+            self, skills, query_vector, document_vectors, usages
+        ):
+            return [], 0
+
+    async def run():
+        plugin, dependencies, published = make_plugin(
+            tmp_path,
+            [make_skill(tmp_path, "one")],
+            ranker=EmptyRanker(),
+        )
+        await plugin.consume(
+            "user-input",
+            UserInputEvent(correlation_id="task-empty", prompt="hello"),
+        )
+        return plugin, dependencies, published
+
+    plugin, dependencies, published = asyncio.run(run())
+
+    assert dependencies["usage_store"].mark_calls == []
+    assert plugin.session_state.selected_skills == ()
+    assert published[0].status == "completed"
+    assert published[0].context_blocks == []
+
+
+def test_skill_plugin聚合检索hook不记录prompt向量或skill正文(tmp_path):
+    registry = HookRegistry()
+    hook = RecordingHook()
+    registry.register("skill.retrieval", hook)
+
+    async def run():
+        plugin, _, _ = make_plugin(
+            tmp_path,
+            [make_skill(tmp_path, "one")],
+            hook_dispatcher=HookDispatcher(registry),
+        )
+        await plugin.consume(
+            "user-input",
+            UserInputEvent(
+                correlation_id="task-hook",
+                prompt="SECRET PROMPT MUST NOT APPEAR",
+            ),
+        )
+
+    asyncio.run(run())
+
+    assert len(hook.events) == 1
+    event = hook.events[0]
+    assert event.name == "skill.retrieval"
+    assert event.phase == "after"
+    assert event.data["candidate_count"] == 1
+    assert event.data["qualified_count"] == 1
+    assert event.data["minimum_content_score"] == 0.8
+    assert event.data["mode"] == "full"
+    assert event.data["selected"][0]["name"] == "one"
+    serialized = json.dumps(dict(event.data))
+    assert "SECRET PROMPT MUST NOT APPEAR" not in serialized
+    assert "description one" not in serialized
+
+
 def test_skill_plugin同名workspace覆盖即使未进本轮top3也替换累计定义(
     tmp_path,
 ):
@@ -255,8 +415,11 @@ def test_skill_plugin同名workspace覆盖即使未进本轮top3也替换累计�
     class SequencedRanker:
         def __init__(self):
             self.calls = 0
+            self.minimum_content_score = 0.8
 
-        def rank(self, skills, query_vector, document_vectors, usages):
+        def rank_with_summary(
+            self, skills, query_vector, document_vectors, usages
+        ):
             self.calls += 1
             selected = global_skill if self.calls == 1 else other
             return [
@@ -267,7 +430,7 @@ def test_skill_plugin同名workspace覆盖即使未进本轮top3也替换累计�
                     lifecycle_score=1.0,
                     final_score=1.0,
                 )
-            ]
+            ], 1
 
     async def run():
         scanner = ScannerStub([global_skill])
@@ -317,6 +480,39 @@ def test_skill_plugin异常发布failed防止blackboard卡住(tmp_path):
     assert published[0].status == "failed"
     assert published[0].error == "scan failed"
     assert published[0].context_blocks == []
+
+
+def test_skill_plugin聚合错误hook不透传可能包含prompt的底层异常(tmp_path):
+    class LeakyScanner:
+        def scan(self):
+            raise RuntimeError("provider failed for SECRET USER PROMPT")
+
+    registry = HookRegistry()
+    hook = RecordingHook()
+    registry.register("skill.retrieval", hook)
+
+    async def run():
+        plugin, _, _ = make_plugin(
+            tmp_path,
+            [],
+            scanner=LeakyScanner(),
+            hook_dispatcher=HookDispatcher(registry),
+        )
+        await plugin.consume(
+            "user-input",
+            UserInputEvent(
+                correlation_id="task-error-hook",
+                prompt="SECRET USER PROMPT",
+            ),
+        )
+
+    asyncio.run(run())
+
+    assert len(hook.events) == 1
+    assert hook.events[0].phase == "error"
+    assert hook.events[0].data["error_type"] == "RuntimeError"
+    assert hook.events[0].data["error_message"] == "Skill retrieval failed"
+    assert "SECRET USER PROMPT" not in json.dumps(dict(hook.events[0].data))
 
 
 def test_skill_plugin检索超时后熔断并持续发布failed(tmp_path):

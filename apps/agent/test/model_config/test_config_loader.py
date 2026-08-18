@@ -52,6 +52,7 @@ def test_get_config_读取模型配置并使用环境变量密钥(
         "sentence-transformers/"
         "paraphrase-multilingual-MiniLM-L12-v2"
     )
+    assert config.skill.minimum_content_score == 0.8
     assert config.model_settings.thinking.model_name == "thinking-model"
     assert config.model_settings.perception.max_tokens == 4096
 
@@ -61,6 +62,29 @@ def test_config_model_embedding为必填配置():
         ConfigModel(
             openai_base_url="https://openai.example.com/v1",
             anthropic_base_url="https://anthropic.example.com",
+            model_settings={
+                role: {
+                    "model_name": f"{role}-model",
+                    "max_tokens": 4096,
+                    "temperature": 0.2,
+                    "default_think_level": "medium",
+                }
+                for role in ("thinking", "perception")
+            },
+        )
+
+
+@pytest.mark.parametrize("score", [-0.01, 1.01])
+def test_config_model拒绝越界skill匹配门槛(score):
+    with pytest.raises(pydantic.ValidationError, match="minimum_content_score"):
+        ConfigModel(
+            openai_base_url="https://openai.example.com/v1",
+            anthropic_base_url="https://anthropic.example.com",
+            embedding={
+                "provider": "fastembed",
+                "model_name": "model",
+            },
+            skill={"minimum_content_score": score},
             model_settings={
                 role: {
                     "model_name": f"{role}-model",

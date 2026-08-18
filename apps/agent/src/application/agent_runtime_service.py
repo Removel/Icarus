@@ -147,7 +147,11 @@ class AgentRuntimeService:
                 ),
                 usage_store=usage_store,
                 embedding=embedding,
-                ranker=SkillRanker(),
+                ranker=SkillRanker(
+                    minimum_content_score=(
+                        self.config.skill.minimum_content_score
+                    )
+                ),
                 session_state=SessionSkillState(),
                 maintainer=SkillMaintainer(
                     lambda: self.maintenance_agent_factory.get_agent("thinking"),

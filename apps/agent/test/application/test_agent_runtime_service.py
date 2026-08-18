@@ -67,6 +67,10 @@ class AgentStub:
                 message=message,
                 finish_reason="stop",
                 steps=1,
+                messages=[
+                    Message("user", [TextPart(prompt)]),
+                    message,
+                ],
             ),
         )
 
@@ -148,6 +152,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
             maintenance_factory,
             coordinator,
             service.plugin_manager.registry.get_subscriber_ids("agent"),
+            service.plugin_manager.get_runtime_snapshot("skill"),
         )
 
     (
@@ -159,6 +164,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
         maintenance_factory,
         coordinator,
         agent_subscribers,
+        skill_runtime,
     ) = asyncio.run(run())
 
     assert accepted.queue_position == 0
@@ -185,6 +191,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
     assert maintenance_factory.closed is True
     assert coordinator.active_workspace_keys == frozenset()
     assert "skill" in agent_subscribers
+    assert skill_runtime.processed_count == 2
 
 
 def test_runtime_service_未启动时拒绝提交和读取事件(tmp_path):

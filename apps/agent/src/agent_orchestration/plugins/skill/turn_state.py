@@ -1,18 +1,15 @@
 """Per-turn Skill matches and ordered Agent tool execution traces."""
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime
 import enum
+import json
 import math
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from apps.agent.src.agent_orchestration.capability import (
-    AgentToolCompletedEvent,
-    AgentToolStartedEvent,
-)
 from apps.agent.src.agent_orchestration.plugins.skill.models import (
     SkillDefinition,
 )
@@ -20,12 +17,21 @@ from apps.agent.src.agent_orchestration.plugins.user_input.events import (
     UserInputEvent,
 )
 from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
-from apps.agent.src.model_provider.types import ImagePart, ToolCall
+from apps.agent.src.model_provider.types import (
+    ImagePart,
+    Message,
+    TextPart,
+    ToolCall,
+)
+
+
+class ToolTrajectoryError(ValueError):
+    """Raised when a completed Agent response has an invalid tool trajectory."""
 
 
 @dataclass(frozen=True)
 class ToolCallTrace:
-    """One tool call, positioned by its started-event arrival order."""
+    """One tool call in completed Agent message order."""
 
     step: int
     tool_call: ToolCall
@@ -48,14 +54,13 @@ class ToolCallTrace:
 
 @dataclass(frozen=True)
 class TurnRecord:
-    """Deeply immutable snapshot of one completed or failed Agent turn."""
+    """Deeply immutable snapshot of one completed Agent turn."""
 
     correlation_id: str
     prompt: str
     input_images: tuple[ImagePart, ...]
     matched_skills: tuple[SkillDefinition, ...]
     tool_calls: tuple[ToolCallTrace, ...]
-    results_by_call_id: Mapping[str, ToolExecutionResult]
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -72,28 +77,12 @@ class TurnRecord:
             tuple(_snapshot_skill(skill) for skill in self.matched_skills),
         )
         object.__setattr__(self, "tool_calls", tuple(self.tool_calls))
-        object.__setattr__(
-            self,
-            "results_by_call_id",
-            MappingProxyType(
-                {
-                    str(call_id): _snapshot_result(result)
-                    for call_id, result in self.results_by_call_id.items()
-                }
-            ),
-        )
-
-    @property
-    def started_event_count(self) -> int:
-        """Return every accepted started event, including duplicate IDs."""
-
-        return len(self.tool_calls)
 
     @property
     def tool_call_count(self) -> int:
         """Alias used by the maintenance trigger threshold."""
 
-        return self.started_event_count
+        return len(self.tool_calls)
 
 
 @dataclass
@@ -110,34 +99,6 @@ class _MutableTurnRecord:
     prompt: str
     input_images: tuple[ImagePart, ...]
     matched_skills: tuple[SkillDefinition, ...] = ()
-    tool_calls: list[_MutableToolCallTrace] = field(default_factory=list)
-
-    def snapshot(self) -> TurnRecord:
-        traces = tuple(
-            ToolCallTrace(
-                sequence_index=trace.sequence_index,
-                step=trace.step,
-                tool_call=trace.tool_call,
-                result=trace.result,
-            )
-            for trace in self.tool_calls
-        )
-        # Compatibility lookup for callers that only know the call ID. When an
-        # invalid producer reuses an ID, the most recently completed trace wins;
-        # the full ordered results remain available on ``tool_calls``.
-        latest_results = {
-            trace.tool_call.id: trace.result
-            for trace in traces
-            if trace.result is not None
-        }
-        return TurnRecord(
-            correlation_id=self.correlation_id,
-            prompt=self.prompt,
-            input_images=self.input_images,
-            matched_skills=self.matched_skills,
-            tool_calls=traces,
-            results_by_call_id=latest_results,
-        )
 
 
 class SkillTurnState:
@@ -181,49 +142,40 @@ class SkillTurnState:
         turn.matched_skills = tuple(_snapshot_skill(skill) for skill in skills)
         return True
 
-    def record_tool_started(self, event: AgentToolStartedEvent) -> bool:
-        """Append every started event in arrival order, including duplicate IDs."""
+    def pop_completed(
+        self,
+        correlation_id: str | None,
+        messages: Sequence[Message],
+    ) -> TurnRecord | None:
+        """Pop a turn and rebuild its complete tool trajectory from messages."""
 
-        turn = self._get(event.correlation_id)
-        if turn is None:
-            return False
-        turn.tool_calls.append(
-            _MutableToolCallTrace(
-                sequence_index=len(turn.tool_calls),
-                step=event.step,
-                tool_call=_snapshot_tool_call(event.tool_call),
-            )
+        return self.pop_with_tool_traces(
+            correlation_id,
+            tool_traces_from_messages(messages),
         )
-        return True
 
-    def record_tool_completed(self, event: AgentToolCompletedEvent) -> bool:
-        """Fill the earliest unfinished trace with the same call ID.
-
-        Duplicate call IDs are deterministic: each completed event advances to
-        the next unfinished trace in started-event order. Extra or unknown
-        completed events are ignored.
-        """
-
-        turn = self._get(event.correlation_id)
-        if turn is None:
-            return False
-        call_id = event.tool_call.id
-        for trace in turn.tool_calls:
-            if trace.tool_call.id == call_id and trace.result is None:
-                trace.result = _snapshot_result(event.result)
-                return True
-        return False
-
-    def pop(self, correlation_id: str | None) -> TurnRecord | None:
-        """Remove an active turn and return one immutable snapshot."""
+    def pop_with_tool_traces(
+        self,
+        correlation_id: str | None,
+        tool_calls: Sequence[ToolCallTrace],
+    ) -> TurnRecord | None:
+        """Pop a turn using an already validated immutable trajectory."""
 
         turn = self._pop_mutable(correlation_id)
-        return turn.snapshot() if turn is not None else None
+        if turn is None:
+            return None
+        return TurnRecord(
+            correlation_id=turn.correlation_id,
+            prompt=turn.prompt,
+            input_images=turn.input_images,
+            matched_skills=turn.matched_skills,
+            tool_calls=tuple(tool_calls),
+        )
 
-    def discard(self, correlation_id: str | None) -> TurnRecord | None:
-        """Remove a failed turn, returning its final snapshot when present."""
+    def discard(self, correlation_id: str | None) -> bool:
+        """Remove a failed or non-maintained turn when present."""
 
-        return self.pop(correlation_id)
+        return self._pop_mutable(correlation_id) is not None
 
     def _get(
         self,
@@ -244,6 +196,115 @@ class SkillTurnState:
 
 def _has_correlation_id(correlation_id: str | None) -> bool:
     return bool(correlation_id and correlation_id.strip())
+
+
+def tool_traces_from_messages(
+    messages: Sequence[Message],
+) -> tuple[ToolCallTrace, ...]:
+    """Build ordered current-turn traces from a completed Agent message list."""
+
+    current_turn = _current_turn_messages(messages)
+
+    mutable: list[_MutableToolCallTrace] = []
+    step = 0
+    for message in current_turn:
+        if message.role == "assistant":
+            step += 1
+            for tool_call in message.tool_calls:
+                mutable.append(
+                    _MutableToolCallTrace(
+                        sequence_index=len(mutable),
+                        step=step,
+                        tool_call=_snapshot_tool_call(tool_call),
+                    )
+                )
+            continue
+        if message.role != "tool":
+            continue
+        call_id = message.tool_call_id
+        if not call_id:
+            raise ToolTrajectoryError("tool result message is missing tool_call_id")
+        target = next(
+            (
+                trace
+                for trace in mutable
+                if trace.tool_call.id == call_id and trace.result is None
+            ),
+            None,
+        )
+        if target is None:
+            raise ToolTrajectoryError(
+                f"tool result has no unfinished ToolCall: {call_id}"
+            )
+        target.result = _parse_tool_result_message(message)
+
+    unfinished = [
+        trace.tool_call.id for trace in mutable if trace.result is None
+    ]
+    if unfinished:
+        raise ToolTrajectoryError(
+            "ToolCall results are incomplete: " + ", ".join(unfinished)
+        )
+    return tuple(
+        ToolCallTrace(
+            sequence_index=trace.sequence_index,
+            step=trace.step,
+            tool_call=trace.tool_call,
+            result=trace.result,
+        )
+        for trace in mutable
+    )
+
+
+def tool_call_count_from_messages(messages: Sequence[Message]) -> int:
+    """Count current-turn ToolCalls without parsing potentially large results."""
+
+    return sum(
+        len(message.tool_calls)
+        for message in _current_turn_messages(messages)
+        if message.role == "assistant"
+    )
+
+
+def _current_turn_messages(messages: Sequence[Message]) -> Sequence[Message]:
+    user_indexes = [
+        index for index, message in enumerate(messages) if message.role == "user"
+    ]
+    if not user_indexes:
+        raise ToolTrajectoryError("completed Agent messages contain no user message")
+    return messages[user_indexes[-1] + 1 :]
+
+
+def _parse_tool_result_message(message: Message) -> ToolExecutionResult:
+    if not message.content or not all(
+        isinstance(part, TextPart) for part in message.content
+    ):
+        raise ToolTrajectoryError(
+            f"tool result is not complete text: {message.tool_call_id}"
+        )
+    raw = "".join(part.text for part in message.content)
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ToolTrajectoryError(
+            f"tool result is not valid JSON: {message.tool_call_id}"
+        ) from error
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("success"), bool
+    ):
+        raise ToolTrajectoryError(
+            f"tool result does not match ToolExecutionResult: {message.tool_call_id}"
+        )
+    error_message = payload.get("error")
+    if error_message is not None and not isinstance(error_message, str):
+        raise ToolTrajectoryError(
+            f"tool result error must be text: {message.tool_call_id}"
+        )
+    return ToolExecutionResult(
+        success=payload["success"],
+        output=payload.get("output"),
+        error=error_message,
+    )
 
 
 def _snapshot_skill(skill: SkillDefinition) -> SkillDefinition:

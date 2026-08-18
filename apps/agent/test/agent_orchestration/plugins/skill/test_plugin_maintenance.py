@@ -1,12 +1,10 @@
 import asyncio
 from dataclasses import dataclass
+import json
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentResponse,
-    AgentToolCompletedEvent,
-    AgentToolStartedEvent,
 )
 from apps.agent.src.agent_orchestration.plugins.skill.coordinator import (
     WorkspaceMaintenanceCoordinator,
@@ -22,6 +20,7 @@ from apps.agent.src.agent_orchestration.plugins.skill.turn_state import (
     SkillTurnState,
 )
 from apps.agent.src.agent_orchestration.plugins.user_input.events import (
+    InputFinishedEvent,
     UserInputEvent,
 )
 from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
@@ -73,8 +72,10 @@ class EmbeddingStub:
 
 
 class RankerStub:
-    def rank(self, skills, query_vector, document_vectors, usages):
-        return []
+    minimum_content_score = 0.8
+
+    def rank_with_summary(self, skills, query_vector, document_vectors, usages):
+        return [], 0
 
 
 class MaintainerStub:
@@ -163,35 +164,38 @@ def make_plugin(tmp_path, *, maintainer=None, repository=None, coordinator=None)
     return plugin, scanner, usage, published
 
 
-def tool_events(correlation_id, count):
+def tool_messages(count):
+    messages = [Message("user", [TextPart("full turn")])]
     for index in range(count):
         call = ToolCall(
             id=f"call-{index}",
             name="read",
             arguments={"index": index},
         )
-        started = AgentToolStartedEvent(
-            correlation_id=correlation_id,
-            step=index + 1,
-            tool_call=call,
+        messages.append(
+            Message(
+                "assistant",
+                [],
+                tool_calls=[call],
+            )
         )
-        completed = AgentToolCompletedEvent(
-            correlation_id=correlation_id,
-            step=index + 1,
-            tool_call=call,
-            result=ToolExecutionResult(
-                success=index % 2 == 0,
-                error=("failed" if index % 2 else None),
-            ),
+        result = ToolExecutionResult(
+            success=index % 2 == 0,
+            error=("failed" if index % 2 else None),
         )
-        yield started, completed
+        messages.append(
+            Message(
+                "tool",
+                [TextPart(json.dumps(result.as_dict()))],
+                tool_call_id=call.id,
+            )
+        )
+    messages.append(Message("assistant", [TextPart("done")]))
+    return messages
 
 
-def completed_event(correlation_id, *, finish_reason="stop"):
-    messages = [
-        Message("user", [TextPart("full turn")]),
-        Message("assistant", [TextPart("done")]),
-    ]
+def completed_event(correlation_id, *, finish_reason="stop", tool_count=0):
+    messages = tool_messages(tool_count)
     return AgentCompletedEvent(
         correlation_id=correlation_id,
         step=12,
@@ -209,10 +213,10 @@ async def feed_turn(plugin, correlation_id, tool_count):
         "user-input",
         UserInputEvent(correlation_id=correlation_id, prompt="work"),
     )
-    for started, completed in tool_events(correlation_id, tool_count):
-        await plugin.consume("agent", started)
-        await plugin.consume("agent", completed)
-    await plugin.consume("agent", completed_event(correlation_id))
+    await plugin.consume(
+        "agent",
+        completed_event(correlation_id, tool_count=tool_count),
+    )
 
 
 def test_plugin十次不触发十一次触发且失败工具也计数(tmp_path):
@@ -257,19 +261,17 @@ def test_plugin失败对话不触发且清理轮状态(tmp_path):
             "user-input",
             UserInputEvent(correlation_id="failed", prompt="work"),
         )
-        for started, completed in tool_events("failed", 11):
-            await plugin.consume("agent", started)
-            await plugin.consume("agent", completed)
         await plugin.consume(
-            "agent",
-            AgentErrorEvent(
+            "user-input",
+            InputFinishedEvent(
                 correlation_id="failed",
-                step=11,
-                error_type="RuntimeError",
-                error_message="failed",
+                task_id="failed",
+                status="failed",
             ),
         )
-        await plugin.consume("agent", completed_event("failed"))
+        await plugin.consume(
+            "agent", completed_event("failed", tool_count=11)
+        )
         await plugin.drain()
         return maintainer
 
@@ -289,12 +291,13 @@ def test_plugin非stop终止原因不触发维护(tmp_path):
             "user-input",
             UserInputEvent(correlation_id="truncated", prompt="work"),
         )
-        for started, completed in tool_events("truncated", 11):
-            await plugin.consume("agent", started)
-            await plugin.consume("agent", completed)
         await plugin.consume(
             "agent",
-            completed_event("truncated", finish_reason="length"),
+            completed_event(
+                "truncated",
+                finish_reason="length",
+                tool_count=11,
+            ),
         )
         await plugin.drain()
         return maintainer
