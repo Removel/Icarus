@@ -47,6 +47,7 @@ flowchart LR
     S["SkillPlugin"]
     B["BlackboardPlugin"]
     A["AgentPlugin"]
+    O["OutputBridge / TUI"]
     R["ReActAgent"]
     DB["SkillUsageStore\nSQLite"]
     FS["Global / Workspace Skills"]
@@ -62,15 +63,22 @@ flowchart LR
     B -- "BlackboardContextReadyEvent" --> A
     A --> R
     R -- "原始执行流" --> A
-    A -- "Agent Stream Event" --> S
+    A -- "文本与工具增量" --> O
+    A -- "AgentCompletedEvent" --> S
+    U -- "失败的 InputFinishedEvent" --> S
     S -. "轮后触发" .-> M
     M -. "内部 CRUD" .-> FS
 ```
 
 `SkillPlugin` 同时订阅：
 
-- `UserInputPlugin`：每轮收到一次 `UserInputEvent`，执行 Skill 检索；
-- `AgentPlugin`：第二阶段收集本轮工具事件，并在终态判断是否启动自动维护。
+- `UserInputPlugin`：收到 `UserInputEvent` 时执行 Skill 检索；收到失败的
+  `InputFinishedEvent` 时清理该轮临时状态；
+- `AgentPlugin`：只接收 `AgentCompletedEvent`，从完整响应中恢复本轮工具轨迹，
+  并在终态判断是否启动自动维护。
+
+AgentPlugin 发布的文本增量、工具开始和工具完成事件继续由 OutputBridge 交给 TUI，
+但不进入 SkillPlugin 的 Runtime inbox。
 
 BlackboardPlugin 订阅 `SkillPlugin`，把 Skill 上下文与用户输入及其他 Context Plugin 的结果一起组合。AgentPlugin 只消费 Blackboard 发布的完整调用快照。
 
@@ -221,6 +229,19 @@ class EmbeddingSettings(BaseModel):
     model_name: str
 ```
 
+Skill 检索参数独立配置：
+
+```json
+{
+  "skill": {
+    "minimum_content_score": 0.8
+  }
+}
+```
+
+`minimum_content_score` 限制在 `[0, 1]`，默认值为 `0.80`。它属于 Skill
+检索配置，不属于 Embedding Provider 配置；旧配置未提供 `skill` 段时使用默认值。
+
 主模型继续由 `use_protocol`、`model_settings` 和对应 Chat Provider 配置决定。Embedding 不复用 `openai_base_url`、`OPENAI_API_KEY` 或主模型名称，也不根据主模型当前选择 OpenAI-compatible 或 Anthropic 协议而变化。
 
 FastEmbed 模型缓存目录由路径解析组件固定为：
@@ -252,13 +273,27 @@ final_score = normalized_content_score * 0.8 + lifecycle_score * 0.2
 | `archived` | 30～59 天 | 0.33 |
 | `deletion_candidate` | 60 天及以上 | 0.00 |
 
-内容相似度归一化到 `[0, 1]`，再按最终分数降序选择 Top 3。第一阶段不设置最低相似度阈值；候选少于三个时返回全部候选。相同分数使用规范化 Skill 名称和路径稳定排序，保证结果可复现。
+内容相似度归一化到 `[0, 1]`。候选必须先满足：
+
+```text
+normalized_content_score >= minimum_content_score
+```
+
+合格候选再按最终分数降序选择 Top 3；候选少于三个时返回全部合格候选。门槛只
+作用于纯内容相似度，生命周期权重只能调整相关 Skill 之间的顺序，不能把经常使用但
+语义无关的 Skill 重新带回结果。相同分数使用规范化 Skill 名称和路径稳定排序，保证
+结果可复现。
+
+默认多语言模型对当前 `skill-plugin-phase-one` 描述的本地校准结果为：普通问候
+`0.533`、TUI 多行输入设计 `0.751`、总结 SkillPlugin 第一阶段 `0.895`、验证 Skill
+动态检索链路 `0.813`、天气问题 `0.471`、创建可复用 Skill `0.835`。因此默认
+`0.80` 会过滤普通问候和无关开发请求，同时保留明确的 Skill 需求。
 
 新发现且从未使用的 Skill 使用 `discovered_at` 计算状态。排名使用本轮检索开始前的状态；Top 3 确定后再更新使用记录。
 
 ### 使用定义
 
-只要 Skill 进入本轮检索 Top 3，就视为本轮可能被使用：
+只要 Skill 通过最低内容门槛并进入本轮检索 Top 3，就视为本轮可能被使用：
 
 - 更新 `last_used_at`；
 - `use_count + 1`；
@@ -266,6 +301,7 @@ final_score = normalized_content_score * 0.8 + lifecycle_score * 0.2
 
 以下情况本身不算新的使用：
 
+- Skill 内容分低于最低门槛；
 - Skill 只因为会话列表不主动移除而继续存在；
 - 七轮倒计时到期，仅重新发送累计列表；
 - Blackboard 从历史中携带此前注入的 Skill 信息。
@@ -344,7 +380,13 @@ Skill 列表只增加，不因某轮未命中而主动删除。每轮 Top 3 与�
 
 因此一次完整发送后的第 1～6 个无新增轮次发送 `unchanged`，第 7 个无新增轮次重新完整发送。Runtime 重建后直接从空状态重新开始。
 
-如果当前没有任何可用 Skill，SkillPlugin 发布 `completed + []`，以满足 Blackboard 的固定上下文来源协议。
+如果扫描结果为空，或者所有候选内容分都低于最低门槛：
+
+- 会话尚未注入过 Skill 时，SkillPlugin 发布 `completed + []`，满足 Blackboard 的固定
+  上下文来源协议，但不向 User Prompt 注入空列表或 `unchanged` 文案；
+- 会话已经注入过 Skill 时，本轮空召回不主动删除旧 Skill，继续推进现有
+  `unchanged` 与七轮刷新机制；
+- 空召回不调用 `mark_used`，不更新 `last_used_at` 和 `use_count`。
 
 ## Skill Context 协议
 
@@ -424,15 +466,27 @@ SkillPlugin 不实现关键词分支，不强制注入管理 Skill，也不让�
 
 本节属于第二阶段。
 
-### 检查时机
+### 事件消费边界
 
 SkillPlugin 订阅 AgentPlugin，按 `correlation_id` 维护本轮临时状态。
 
-- 收到 `AgentToolStartedEvent`：工具调用计数加一；
-- 成功和失败的工具调用都计数，因为失败结果只在后续 Completed Event 中体现；
-- 收到文字、工具完成等中间事件：可以收集轨迹，但不启动总结；
-- 收到 `AgentErrorEvent`：清理临时状态，不启动维护；
-- 收到 `AgentCompletedEvent`：在整轮对话结束点判断一次。
+Plugin Runtime 在事件进入 inbox 前调用消费者的通用 `accepts_event(source, event)`；
+默认 Plugin 接收来源订阅送达的全部事件。SkillPlugin 声明：
+
+- 从 `user-input` 接收 `UserInputEvent` 和状态为 `failed` 的 `InputFinishedEvent`；
+- 从 `agent` 只接收 `AgentCompletedEvent`；
+- 拒绝其他来源和其他事件。
+
+被拒绝的事件不进入 SkillPlugin inbox，不计入 Runtime 已接收或已处理数量，也不触发
+`plugin.consume` Hook。EventBus 仍然只按来源 Plugin 找订阅者，不导入或识别领域事件
+类型。
+
+### 检查时机
+
+- 收到 `UserInputEvent`：创建本轮临时状态并记录用户输入、图片和匹配 Skill；
+- 收到 `AgentCompletedEvent`：在整轮对话结束点，从完整响应恢复工具轨迹并判断一次；
+- 收到 `InputFinishedEvent(status="failed")`：清理失败轮次的临时状态；
+- 文字、工具开始、工具完成和 Agent Error 流事件不进入 SkillPlugin。
 
 唯一自动触发条件是：
 
@@ -441,6 +495,21 @@ AgentCompletedEvent AND tool_call_count > 10
 ```
 
 即至少发生 11 次工具调用。Agent step 数不参与触发。
+
+### 完整工具轨迹
+
+`AgentCompletedEvent.response.messages` 已包含该次 Agent 调用的完整消息序列。
+SkillPlugin 从最后一条 User Message 之后恢复当前轮 ReAct 轨迹：
+
+1. 按 Assistant Message 顺序生成 Step 编号；
+2. 读取 Assistant Message 中的完整 `tool_calls`；
+3. 通过后续 Tool Message 的 `tool_call_id`，关联最早尚未完成的同 ID ToolCall；
+4. 从 Tool Message 解析统一的 `ToolExecutionResult`；
+5. 成功和失败的工具都计数。
+
+如果 ToolCall 与 Tool Result 不能形成完整轨迹，自动维护 fail closed：记录聚合错误并
+跳过本轮维护，不影响主 Agent 已完成的响应。`finish_reason` 不是 `stop` 时同样不触发
+维护。
 
 ### 维护 Agent 输入
 
@@ -453,7 +522,7 @@ AgentCompletedEvent AND tool_call_count > 10
 - 各 Skill 的 Workspace 生命周期状态；
 - 自动创建、更新、合并、删除和 `no_op` 规则。
 
-`AgentCompletedEvent.response.messages` 已包含传给主 Agent 的历史、本轮完整 User Prompt、Assistant 中间消息、工具调用和工具结果，可作为完整多轮上下文和本轮轨迹的主要来源。
+`AgentCompletedEvent.response.messages` 已包含传给主 Agent 的历史、本轮完整 User Prompt、Assistant 中间消息、工具调用和工具结果，是完整多轮上下文和本轮轨迹的唯一 Agent 事件来源。
 
 维护 Agent 必须先判断主 Agent 是否已经根据用户请求完成 Skill 创建、更新或安装。它结合完整工具轨迹和轮后 Skill 目录重新扫描确认实际结果；已经完成的操作不能重复执行，没有额外维护价值时输出 `no_op`。
 
@@ -481,6 +550,58 @@ SkillPlugin 校验计划后通过内部 CRUD 执行。内部 CRUD 不注册为 T
 - 更新、生成或合并后的目标 Skill 更新使用时间并回到 `active`。
 
 轮后自动维护属于后台操作，不向用户展示。失败只写入现有 Session 日志和 Trace，不改变已经成功的主对话结果。
+
+## 日志与 Trace
+
+日志以完整业务边界为单位，不记录逐 Token 或逐事件流细节。Event 基类提供通用的
+`trace_event_flow` 策略，默认开启；以下增量事件关闭 EventBus 和 Plugin Runtime 级
+Trace：
+
+- `AgentTextDeltaEvent`；
+- `AgentToolStartedEvent`；
+- `AgentToolCompletedEvent`。
+
+Observable EventBus 和 Observable Plugin Runtime 只读取通用策略，不判断领域事件类型。
+关闭 Trace 不改变事件发布、路由或消费，因此 OutputBridge 与 TUI 仍能收到完整的文本
+和工具状态流。
+
+保留的完整记录包括：
+
+- `agent.stream` 的开始、完整结束或错误；
+- `llm.stream` 的开始、聚合结果或错误；
+- Tool Executor 的单次完整工具执行结果；
+- `AgentCompletedEvent`、`AgentErrorEvent`、User Input、Blackboard Context 和 Plugin
+  生命周期等非增量事件的 EventBus / Runtime Trace；
+- 每轮一次的 `skill.retrieval` 聚合记录；
+- 实际启动自动维护时的 `skill.maintenance` 开始、结果或错误。
+
+`skill.retrieval` 成功记录包含：
+
+- `correlation_id`；
+- 扫描候选数量、通过门槛数量和 `minimum_content_score`；
+- 最多三个命中项的 `name`、`scope`、`content_score`、`lifecycle_status` 和
+  `final_score`；
+- 本轮注入模式：`full`、`unchanged` 或 `empty`；
+- 当前累计 Skill 数量；
+- 检索耗时。
+
+空召回是正常结果，写一条 `selected=[]`、`mode=empty` 的聚合记录，不写错误。检索
+失败或超时只写一条聚合错误，包含 `correlation_id`、错误类型、错误信息和耗时。
+
+`skill.maintenance` 记录沿用完整轮次边界：开始时记录 `correlation_id`、工具调用数量和
+父 Run；结束时记录结构化操作的 action、target、status 和清理结果；失败时记录错误类型
+与错误信息。不记录维护 Agent 的流式输出。
+
+Skill 日志和 Trace 不新增以下内容：
+
+- 原始用户 Prompt 或完整会话正文；
+- Embedding 向量；
+- `SKILL.md` 正文；
+- 工具输出正文；
+- API Key、Token 或其他凭据。
+
+现有完整 Agent/LLM 观测数据仍经过统一 Redactor；Skill 聚合记录只保存诊断检索与维护
+决策所需的最小字段。
 
 ## 多 AgentRuntime 与并发
 
@@ -522,6 +643,7 @@ SkillPlugin 校验计划后通过内部 CRUD 执行。内部 CRUD 不注册为 T
 | Skill 目录不存在 | 视为空目录，主 Agent 继续 |
 | SQLite 初始化或写入失败 | 记录错误；本轮可使用中性生命周期分继续检索 |
 | Embedding 失败 | 发布失败贡献；Blackboard 继续组装主 Agent 上下文 |
+| 所有 Skill 内容分低于门槛 | 正常空召回；不注入、不更新使用状态 |
 | Skill 检索超过 30 秒 | 发布失败贡献并在当前 Runtime 熔断后续检索，避免重复遗留模型任务 |
 | ContextContribution 发布失败 | 交给现有 Plugin Runtime 记录，不侵入 EventBus |
 | 维护 Agent 失败 | 记录日志和 Trace，不影响已完成对话 |
@@ -542,6 +664,7 @@ Skill 是增强上下文，不应因为检索或后台维护失败使主 Agent �
 - 单表 `SkillUsageStore`；
 - 供应商无关 Embedding 接口和 FastEmbed 实现；
 - 80/20 排名、Top 3 和稳定排序；
+- `0.80` 最低内容匹配门槛和空召回；
 - 会话累计列表、`full / unchanged` 和七轮刷新；
 - `ContextContributionEvent` 发布；
 - AgentRuntimeService 注册与订阅 SkillPlugin；
@@ -550,7 +673,7 @@ Skill 是增强上下文，不应因为检索或后台维护失败使主 Agent �
 
 验收标准：
 
-- 不同用户输入能选出预期 Top 3；
+- 明确相关的用户输入能选出预期 Top 3，无关输入可以不召回任何 Skill；
 - Workspace Skill 可以覆盖同名全局 Skill；
 - 新 Skill 出现时完整注入且不移除旧 Skill；
 - 连续六轮无新增发送 `unchanged`，第七轮重新完整注入；
@@ -562,7 +685,7 @@ Skill 是增强上下文，不应因为检索或后台维护失败使主 Agent �
 
 实现：
 
-- 按任务累计工具调用事件；
+- 从 `AgentCompletedEvent.response.messages` 恢复本轮完整工具轨迹；
 - 仅在成功终态且工具调用数大于十时触发；
 - 内部维护 Agent 及其规则 Prompt；
 - 完整多轮上下文和本轮工具轨迹输入；
@@ -590,22 +713,31 @@ Skill 是增强上下文，不应因为检索或后台维护失败使主 Agent �
 
 - Scanner：合法、非法、缺字段、同名覆盖、稳定顺序；
 - Usage Store：首次发现、重复命中、Workspace 隔离、生命周期边界；
-- Ranker：80/20 计算、Top 3、少于三个候选、稳定 tie-break；
+- Ranker：最低内容门槛、80/20 计算、Top 3、少于三个候选、稳定 tie-break；
 - Session State：新增、无变化、七轮刷新、Runtime 新实例重置；
-- SkillPlugin：来源过滤、correlation_id 透传、成功与失败贡献；
+- SkillPlugin：Runtime 入队前的来源与完整事件过滤、空召回、correlation_id 透传、
+  成功与失败贡献；
 - Blackboard：等待 Skill、完整 Prompt 发布、成功历史提交、失败不提交；
 - 应用集成：UserInput → Skill → Blackboard → Agent；
 - 降级：Embedding、SQLite 和单个 Skill 解析失败。
 
 第二阶段重点测试：
 
-- 工具调用计数和终态触发；
+- 从完整 `AgentCompletedEvent` 恢复工具调用计数、结果和终态触发；
 - 多轮上下文传递；
 - `no_op` 与重复操作识别；
 - CRUD 权限和全局只读；
 - 同 Workspace 任务去重；
 - Hash 冲突和原子替换；
 - 自动维护异常隔离。
+
+观测重点测试：
+
+- 文本与工具增量仍到达 OutputBridge / TUI；
+- 增量事件不产生 `event.publish`、`event.route` 和 `plugin.consume` Trace；
+- SkillPlugin 不接收增量事件；
+- `AgentCompletedEvent`、Agent/LLM 聚合终态、完整工具执行和 Skill 聚合摘要仍被记录；
+- Skill 聚合记录不包含原始 Prompt、Embedding、Skill 正文和工具输出正文。
 
 验证顺序：
 
