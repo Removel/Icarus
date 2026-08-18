@@ -40,7 +40,7 @@ async def consume(
 | Plugin ID | 实现 | 当前状态 | 主要职责 |
 |---|---|---|---|
 | `user-input` | `UserInputPlugin` | 已实现、已接入 | FIFO 接收用户输入，发布队列/开始/输入/结束 Event |
-| `skill` | `SkillPlugin` | 第一、二阶段已实现并接入 | 对话前动态检索和注入 Skill；对话后收集工具轨迹并尝试后台维护 Skill |
+| `skill` | `SkillPlugin` | 第一、二阶段已实现并接入 | 对话前动态检索和注入 Skill；对话后从完整 Agent 终态恢复工具轨迹并尝试后台维护 Skill |
 | `blackboard` | `BlackboardPlugin` | 已实现、已接入 | 汇聚必需 Context，维护跨轮历史，发布主 Agent 完整调用快照 |
 | `agent` | `AgentPlugin` | 已实现、已接入 | 适配无状态 ReActAgent，并发布原始 Agent Stream / Terminal Event |
 | `output-bridge` | `OutputBridgePlugin` | 已实现、应用内部接入 | 将 UserInput 和 Agent Event 转交 `AgentRuntimeService.next_event()`，供 TUI/Transport 消费 |
@@ -57,7 +57,7 @@ async def consume(
 | `SkillRepository` | SkillPlugin 内部文件边界 | 校验并执行 Workspace Skill CRUD，全局 Skill 只读 |
 | `SkillUsageStore` | SkillPlugin 内部状态存储 | 按 Workspace 保存发现、使用和维护激活时间 |
 | `WorkspaceMaintenanceCoordinator` | 进程级内部组件 | 使用所有权 Token 保证同进程同 Workspace 同时最多一个维护任务 |
-| `SkillTurnState` | SkillPlugin 会话内状态 | 按 correlation_id 保存当前轮命中 Skill 和工具轨迹 |
+| `SkillTurnState` | SkillPlugin 会话内状态 | 按 correlation_id 保存当前轮输入和命中 Skill；终态时从完整 Agent messages 恢复工具轨迹 |
 
 这些组件是普通对象，不注册为子 Plugin，也不通过 EventBus 互相通信。
 
@@ -109,7 +109,7 @@ flowchart LR
 
     A -- "AgentCompleted / AgentError" --> U
     A -- "AgentCompleted / AgentError" --> B
-    A -- "Tool / Terminal Event" --> S
+    A -- "AgentCompletedEvent" --> S
     A -- "Agent Stream / Terminal Event" --> O
 
     O -. "next_event" .-> Service
@@ -131,7 +131,7 @@ flowchart LR
 
 | 来源 Plugin | 订阅 Plugin | 订阅者实际处理的主要 Event |
 |---|---|---|
-| `user-input` | `skill` | `UserInputEvent`：启动本轮 Skill 检索并建立轮状态 |
+| `user-input` | `skill` | `UserInputEvent`：启动本轮 Skill 检索并建立轮状态；失败的 `InputFinishedEvent`：清理轮状态 |
 | `user-input` | `blackboard` | `UserInputEvent`、`InputFinishedEvent`：保存本轮输入和终态 |
 | `user-input` | `output-bridge` | 用户输入队列及任务状态 Event，转交 TUI / 上层应用 |
 | `skill` | `blackboard` | `ContextContributionEvent`：本轮 Skill 上下文或降级错误 |
@@ -139,9 +139,11 @@ flowchart LR
 | `agent` | `user-input` | `AgentCompletedEvent`、`AgentErrorEvent`：结束当前 FIFO 任务 |
 | `agent` | `blackboard` | `AgentCompletedEvent`、`AgentErrorEvent`：成功提交历史或结束失败任务 |
 | `agent` | `output-bridge` | 原始 Agent Stream Event，转交 TUI / 上层应用 |
-| `agent` | `skill` | `AgentToolStartedEvent`、`AgentToolCompletedEvent`、`AgentCompletedEvent`、`AgentErrorEvent`：收集轮轨迹并判断轮后维护 |
+| `agent` | `skill` | 只接收 `AgentCompletedEvent`：从完整 messages 恢复轮轨迹并判断轮后维护 |
 
-同一个来源可能发布其他 Event，例如 `AgentTextDeltaEvent`。EventBus 仍会将它投递给该来源的全部订阅者；不关心此类型的 Plugin 在 `consume()` 内直接忽略。
+同一个来源可能发布其他 Event，例如 `AgentTextDeltaEvent`。EventBus 仍只按来源找到
+订阅者；每个 Plugin Runtime 在入队前调用订阅者的 `accepts_event`。SkillPlugin 拒绝文本
+和工具增量，因此这些事件不进入其 inbox，也不触发其 `plugin.consume` Hook。
 
 当前代码中的订阅关系：
 
@@ -180,7 +182,7 @@ sequenceDiagram
     U->>Bus: UserInputEvent
     par 路由到 SkillPlugin
         Bus-->>S: UserInputEvent
-        S->>S: 扫描 Skill / FastEmbed / Top 3 / 更新 SessionSkillState
+        S->>S: 扫描 Skill / FastEmbed / 0.80 门槛 / Top 3 / 更新 SessionSkillState
         S->>Bus: ContextContributionEvent(full / unchanged / failed)
         Bus-->>B: source=skill
     and 路由到 BlackboardPlugin
@@ -199,7 +201,7 @@ sequenceDiagram
         R-->>A: AgentTextDeltaEvent / AgentToolStartedEvent / AgentToolCompletedEvent
         A->>Bus: 发布原始 Agent Stream Event
         Bus-->>O: 展示文本和工具状态
-        Bus-->>S: 收集 Tool Started / Completed
+        Note over Bus,S: SkillPlugin 入队前拒绝文本与工具增量
     end
 
     R-->>A: AgentCompletedEvent / AgentErrorEvent
@@ -211,11 +213,14 @@ sequenceDiagram
     and 输出给用户
         Bus-->>O: AgentCompletedEvent / AgentErrorEvent
     and 判断轮后维护
-        Bus-->>S: AgentCompletedEvent / AgentErrorEvent
+        Bus-->>S: AgentCompletedEvent
     end
 
     U->>Bus: InputFinishedEvent
     Bus-->>B: 标记 input_finished，满足双终态后清理轮状态
+    opt status=failed
+        Bus-->>S: 清理失败轮状态
+    end
     Bus-->>O: 结束当前 TUI 轮次
 ```
 
@@ -227,6 +232,7 @@ Blackboard 是主会话跨轮状态的权威所有者。SkillPlugin 不直接读
 sequenceDiagram
     autonumber
     participant A as AgentPlugin
+    participant U as UserInputPlugin
     participant Bus as EventBus
     participant S as SkillPlugin
     participant C as WorkspaceMaintenanceCoordinator
@@ -235,26 +241,23 @@ sequenceDiagram
     participant Repo as SkillRepository
     participant DB as SkillUsageStore
 
-    A->>Bus: AgentToolStartedEvent
-    Bus-->>S: source=agent
-    S->>S: SkillTurnState 追加 Started 并计数
+    Note over A,S: 文本、工具开始、工具完成和 AgentError 不进入 SkillPlugin
 
-    A->>Bus: AgentToolCompletedEvent
-    Bus-->>S: source=agent
-    S->>S: 按 call_id 回填 ToolExecutionResult
-
-    alt AgentErrorEvent 或 finish_reason != stop
-        A->>Bus: AgentErrorEvent / 非正常 AgentCompletedEvent
+    alt 失败 InputFinishedEvent
+        Bus-->>S: source=user-input
+        S->>S: 清理 TurnRecord，不触发维护
+    else finish_reason != stop
+        A->>Bus: 非正常 AgentCompletedEvent
         Bus-->>S: source=agent
         S->>S: 清理 TurnRecord，不触发维护
     else AgentCompletedEvent 且 tool_call_count <= 10
         A->>Bus: AgentCompletedEvent
         Bus-->>S: source=agent
-        S->>S: 弹出 TurnRecord，不触发维护
+        S->>S: 只统计 response.messages 中的 ToolCall；清理 TurnRecord
     else AgentCompletedEvent 且 tool_call_count > 10
         A->>Bus: AgentCompletedEvent
         Bus-->>S: source=agent
-        S->>S: deepcopy(response.messages) 并拍摄 Session Skill 快照
+        S->>S: 工作线程恢复完整轨迹并复制 messages；拍摄 Session Skill 快照
         S->>C: claim(workspace_key)
         alt Workspace 已有维护任务
             C-->>S: None
@@ -283,6 +286,10 @@ sequenceDiagram
 
 `SkillMaintainer`、Maintenance Agent、`SkillRepository`、`SkillUsageStore` 和 Coordinator 都是 SkillPlugin 内部或应用组装组件，不注册为子 Plugin，也不通过 EventBus 互相通信。后台维护只通过 Hook 记录 `skill.maintenance` 的 before / after / error，不发布新的用户可见业务 Event。
 
+Agent 文本、工具开始和工具完成增量继续交给 OutputBridge / TUI，但关闭 EventBus 和
+Plugin Runtime 级 Trace。每轮 Skill 检索只记录一条 `skill.retrieval` 聚合结果；完整
+Agent、LLM 和 Tool Executor 边界记录保持不变。
+
 ## Event 与状态所有权
 
 ```mermaid
@@ -303,7 +310,7 @@ flowchart TB
     subgraph State["状态所有者：当前是什么"]
         BB["Blackboard Context\n跨轮 User / Assistant 历史"]
         SS["SessionSkillState\n累计注入 Skill + 七轮计数"]
-        TS["SkillTurnState\n当前轮工具轨迹"]
+        TS["SkillTurnState\n当前轮输入与命中 Skill"]
         US["SkillUsageStore\nWorkspace 使用时间与次数"]
         FS["SkillRepository / SKILL.md\nSkill 定义事实来源"]
     end
@@ -316,7 +323,7 @@ flowchart TB
     BCE --> AP
     AP --> ASE
     ASE --> BP
-    ASE --> SP
+    ASE -- "仅 AgentCompletedEvent" --> SP
 
     BP -. "维护" .-> BB
     SP -. "维护" .-> SS
@@ -332,7 +339,7 @@ flowchart TB
 | 跨轮 User / Assistant 历史 | BlackboardPlugin | 当前 Agent Runtime / Session |
 | 本轮 UserInput 和 Context 汇聚状态 | BlackboardPlugin | correlation_id 双终态结束后清理 |
 | 当前会话累计 Skill 与七轮刷新计数 | SessionSkillState | 当前 Agent Runtime |
-| 当前轮工具轨迹 | SkillTurnState | Agent 终态到达后 pop/discard |
+| 当前轮输入与命中 Skill；由完整 messages 恢复出的工具轨迹 | SkillTurnState | Agent 终态到达后 pop/discard |
 | Skill 使用时间与次数 | SkillUsageStore | Icarus 级 SQLite，按 Workspace 隔离 |
 | Skill 定义正文 | `SKILL.md` / SkillRepository | 全局或 Workspace 文件 |
 | 自动维护 Workspace claim | WorkspaceMaintenanceCoordinator | 后台维护与 Repository Task 均结束后释放 |
