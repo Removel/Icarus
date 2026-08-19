@@ -1,0 +1,210 @@
+$icarus-background: #101317;
+$icarus-surface: #171b21;
+$icarus-panel: #1d232b;
+$icarus-border: #3a4552;
+$icarus-muted: #8a95a3;
+$icarus-text: #e7ebef;
+$icarus-accent: #6fd3d5;
+$icarus-blue: #77a8ff;
+$icarus-green: #79d694;
+$icarus-red: #ff7f87;
+$icarus-yellow: #e6c66a;
+
+Screen {
+    background: $icarus-background;
+    color: $icarus-text;
+    layout: vertical;
+}
+
+#app-title {
+    dock: top;
+    height: 1;
+    padding: 0 2;
+    color: $icarus-accent;
+    text-style: bold;
+    background: $icarus-surface;
+}
+
+#workspace-label {
+    dock: top;
+    height: 1;
+    padding: 0 2;
+    color: $icarus-muted;
+    background: $icarus-surface;
+    text-overflow: ellipsis;
+}
+
+#conversation {
+    height: 1fr;
+    padding: 1 2;
+    scrollbar-size-vertical: 1;
+}
+
+.message {
+    width: 100%;
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+.welcome-message {
+    border: round $icarus-border;
+    padding: 1 2;
+    background: $icarus-surface;
+}
+
+.welcome-title {
+    color: $icarus-accent;
+    text-style: bold;
+}
+
+.welcome-workspace, .welcome-help {
+    color: $icarus-muted;
+}
+
+.message-label {
+    width: auto;
+    color: $icarus-muted;
+    text-style: bold;
+}
+
+.user-message {
+    border-left: thick $icarus-blue;
+    padding-left: 1;
+}
+
+.assistant-message {
+    border-left: thick $icarus-accent;
+    padding-left: 1;
+}
+
+.assistant-markdown {
+    height: auto;
+}
+
+.tool-message {
+    border-left: thick $icarus-yellow;
+    padding: 0 1;
+    background: $icarus-surface;
+}
+
+.tool-summary {
+    color: $icarus-yellow;
+}
+
+.tool-state {
+    color: $icarus-muted;
+}
+
+.tool-message.is-success .tool-state {
+    color: $icarus-green;
+}
+
+.tool-message.is-failed .tool-state {
+    color: $icarus-red;
+}
+
+.error-message {
+    border-left: thick $icarus-red;
+    padding-left: 1;
+    color: $icarus-red;
+}
+
+.turn-status {
+    color: $icarus-muted;
+}
+
+.turn-failed {
+    color: $icarus-red;
+}
+
+#queue-panel {
+    height: auto;
+    max-height: 8;
+    margin: 0 2;
+    border-top: solid $icarus-border;
+    border-bottom: solid $icarus-border;
+    background: $icarus-surface;
+    scrollbar-size-vertical: 1;
+}
+
+#queue-panel.is-empty {
+    display: none;
+}
+
+#queue-title {
+    height: 1;
+    padding: 0 1;
+    color: $icarus-yellow;
+    text-style: bold;
+}
+
+#queue-items {
+    height: auto;
+    max-height: 6;
+}
+
+.queue-item {
+    height: 1;
+    padding: 0 1;
+    color: $icarus-muted;
+    text-overflow: ellipsis;
+}
+
+#composer-shell {
+    dock: bottom;
+    height: auto;
+    min-height: 3;
+    max-height: 10;
+    margin: 0 2;
+    layout: horizontal;
+    border: round $icarus-accent;
+    background: $icarus-panel;
+}
+
+#composer-prompt {
+    width: 3;
+    height: 1;
+    padding: 0 0 0 1;
+    color: $icarus-accent;
+    content-align: center middle;
+}
+
+#composer {
+    width: 1fr;
+    height: 1;
+    min-height: 1;
+    max-height: 8;
+    border: none;
+    background: $icarus-panel;
+    scrollbar-size-vertical: 1;
+}
+
+#composer:focus {
+    border: none;
+}
+
+#status-bar {
+    dock: bottom;
+    height: 1;
+    padding: 0 2;
+    color: $icarus-muted;
+    background: $icarus-surface;
+    text-overflow: ellipsis;
+}
+
+Screen.-narrow #workspace-label {
+    display: none;
+}
+
+Screen.-narrow #conversation {
+    padding: 0 1;
+}
+
+Screen.-narrow #queue-panel,
+Screen.-narrow #composer-shell {
+    margin: 0 1;
+}
+
+Screen.-narrow .welcome-help {
+    display: none;
+}
