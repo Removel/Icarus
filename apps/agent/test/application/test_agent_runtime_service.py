@@ -109,13 +109,13 @@ class MaintenanceFactoryStub:
 
 
 async def collect_task_events(
-    service: AgentRuntimeService,
+    subscription,
     task_id: str,
 ):
     events = []
     while True:
         source_plugin_id, event = await asyncio.wait_for(
-            service.next_event(),
+            subscription.next_event(),
             timeout=1,
         )
         if event.correlation_id != task_id:
@@ -139,14 +139,22 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
         agent = AgentStub()
         service.agent_factory.get_agent = lambda model_role: agent
         await service.start()
+        first_subscription = service.subscribe_events()
+        second_subscription = service.subscribe_events()
         accepted = await service.submit("hello")
-        events = await collect_task_events(service, accepted.task_id)
+        events, second_events = await asyncio.gather(
+            collect_task_events(first_subscription, accepted.task_id),
+            collect_task_events(second_subscription, accepted.task_id),
+        )
         running_session_id = service.session_id
+        first_subscription.close()
+        second_subscription.close()
         await service.stop(timeout=1)
         return (
             service,
             accepted,
             events,
+            second_events,
             running_session_id,
             service.persistence.trace_hook.skipped_count,
             maintenance_factory,
@@ -159,6 +167,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
         service,
         accepted,
         events,
+        second_events,
         running_session_id,
         skipped_count,
         maintenance_factory,
@@ -184,6 +193,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
     assert isinstance(events[4][1], AgentCompletedEvent)
     assert isinstance(events[5][1], InputFinishedEvent)
     assert events[5][1].status == "completed"
+    assert second_events == events
     assert service.is_running is False
     assert service.session_id is None
     assert skipped_count == 0
@@ -194,7 +204,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
     assert skill_runtime.processed_count == 2
 
 
-def test_runtime_service_未启动时拒绝提交和读取事件(tmp_path):
+def test_runtime_service_未启动时拒绝提交和订阅事件(tmp_path):
     async def run():
         service = AgentRuntimeService(
             workspace_path=tmp_path,
@@ -203,7 +213,7 @@ def test_runtime_service_未启动时拒绝提交和读取事件(tmp_path):
         with pytest.raises(RuntimeError, match="not running"):
             await service.submit("hello")
         with pytest.raises(RuntimeError, match="not running"):
-            await service.next_event()
+            service.subscribe_events()
 
     asyncio.run(run())
 
@@ -221,6 +231,26 @@ def test_runtime_service_停止后再次启动给出明确生命周期错误(tmp
             await service.start()
 
     asyncio.run(run())
+
+
+def test_runtime_service_停止时关闭仍存活的输出订阅(tmp_path):
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+        )
+        await service.start()
+        subscription = service.subscribe_events()
+        waiter = asyncio.create_task(subscription.next_event())
+        await asyncio.sleep(0)
+
+        await service.stop(timeout=1)
+
+        with pytest.raises(RuntimeError, match="subscription is closed"):
+            await asyncio.wait_for(waiter, timeout=1)
+        return subscription.closed
+
+    assert asyncio.run(run()) is True
 
 
 def test_runtime_service_start被取消时完成全部资源清理(tmp_path):
@@ -385,11 +415,13 @@ def test_runtime_service_由blackboard维护跨轮history并支持初始化消�
         agent = AgentStub()
         service.agent_factory.get_agent = lambda model_role: agent
         await service.start()
+        subscription = service.subscribe_events()
 
         first = await service.submit("first")
-        await collect_task_events(service, first.task_id)
+        await collect_task_events(subscription, first.task_id)
         second = await service.submit("second")
-        await collect_task_events(service, second.task_id)
+        await collect_task_events(subscription, second.task_id)
+        subscription.close()
         await service.stop(timeout=1)
         return agent.calls
 
@@ -435,10 +467,12 @@ def test_runtime_service_检索skill并注入blackboard_prompt(tmp_path):
         agent = AgentStub()
         service.agent_factory.get_agent = lambda model_role: agent
         await service.start()
+        subscription = service.subscribe_events()
         accepted = await service.submit("create a reusable skill")
-        await collect_task_events(service, accepted.task_id)
+        await collect_task_events(subscription, accepted.task_id)
         skill_plugin = service.plugin_manager.registry.get("skill")
         blackboard = service.plugin_manager.registry.get("blackboard")
+        subscription.close()
         await service.stop(timeout=1)
         return agent.calls, embedding, skill_plugin, blackboard
 

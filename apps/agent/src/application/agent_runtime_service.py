@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 
 from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
-from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher, HookRegistry
 from apps.agent.src.agent_orchestration.plugin_runtime import PluginManager
 from apps.agent.src.agent_orchestration.plugins import (
@@ -32,7 +31,10 @@ from apps.agent.src.agent_orchestration.plugins.skill import (
     SkillUsageStore,
     WorkspaceMaintenanceCoordinator,
 )
-from apps.agent.src.application.output_bridge import OutputBridgePlugin
+from apps.agent.src.application.output_bridge import (
+    OutputBridgePlugin,
+    OutputEventSubscription,
+)
 from apps.agent.src.model_config import ConfigModel, get_config
 from apps.agent.src.model_provider.base_embedding import BaseEmbedding
 from apps.agent.src.model_provider.embedding_factory import EmbeddingFactory
@@ -217,12 +219,10 @@ class AgentRuntimeService:
             input_images=input_images,
         )
 
-    async def next_event(self) -> tuple[str, Event]:
+    def subscribe_events(self) -> OutputEventSubscription:
         if not self._started:
             raise RuntimeError("AgentRuntimeService is not running")
-        item = await self.output_bridge.next_event()
-        self.output_bridge.task_done()
-        return item
+        return self.output_bridge.subscribe()
 
     async def stop(self, timeout: float | None = 30) -> None:
         if not self._started:
@@ -252,7 +252,7 @@ class AgentRuntimeService:
         except BaseException as error:
             stop_error = error
         finally:
-            self.output_bridge.discard_pending()
+            self.output_bridge.close_subscriptions()
             try:
                 await self.agent_factory.aclose()
             except BaseException as error:
