@@ -1,5 +1,12 @@
 # REPL TUI MVP Development Plan｜REPL TUI MVP 开发计划
 
+> 历史计划：本文记录最初标准库 REPL MVP 的实施决策，不再作为当前 TUI 开发依据。
+> 第一阶段终端框架设计和实施记录分别见
+> `apps/tui/docs/arch/tui-terminal-framework-design.md` 与
+> `apps/tui/docs/plan/tui-terminal-framework-development-plan.md`。当前 Textual TUI 设计和
+> 计划见 `apps/tui/docs/arch/tui-persistent-input-queue-design.md` 与
+> `apps/tui/docs/plan/textual-tui-development-plan.md`。
+
 ## 目标
 
 实现一个标准库 REPL，用于验证和使用当前 Agent Core：

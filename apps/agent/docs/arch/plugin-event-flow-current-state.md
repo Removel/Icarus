@@ -43,7 +43,7 @@ async def consume(
 | `skill` | `SkillPlugin` | 第一、二阶段已实现并接入 | 对话前动态检索和注入 Skill；对话后从完整 Agent 终态恢复工具轨迹并尝试后台维护 Skill |
 | `blackboard` | `BlackboardPlugin` | 已实现、已接入 | 汇聚必需 Context，维护跨轮历史，发布主 Agent 完整调用快照 |
 | `agent` | `AgentPlugin` | 已实现、已接入 | 适配无状态 ReActAgent，并发布原始 Agent Stream / Terminal Event |
-| `output-bridge` | `OutputBridgePlugin` | 已实现、应用内部接入 | 将 UserInput 和 Agent Event 转交 `AgentRuntimeService.next_event()`，供 TUI/Transport 消费 |
+| `output-bridge` | `OutputBridgePlugin` | 已实现、应用内部接入 | 将 UserInput 和 Agent Event 广播到 `AgentRuntimeService.subscribe_events()` 创建的实时订阅，供 TUI/Transport 独立消费 |
 
 ### 当前不是独立 Plugin 的组件
 
@@ -112,7 +112,7 @@ flowchart LR
     A -- "AgentCompletedEvent" --> S
     A -- "Agent Stream / Terminal Event" --> O
 
-    O -. "next_event" .-> Service
+    O -. "per-subscription queue" .-> Service
     Service --> User
 
     A -. "invoke / stream" .-> ReAct
@@ -133,12 +133,12 @@ flowchart LR
 |---|---|---|
 | `user-input` | `skill` | `UserInputEvent`：启动本轮 Skill 检索并建立轮状态；失败的 `InputFinishedEvent`：清理轮状态 |
 | `user-input` | `blackboard` | `UserInputEvent`、`InputFinishedEvent`：保存本轮输入和终态 |
-| `user-input` | `output-bridge` | 用户输入队列及任务状态 Event，转交 TUI / 上层应用 |
+| `user-input` | `output-bridge` | 用户输入队列及任务状态 Event，广播给 TUI / 上层应用的独立实时订阅 |
 | `skill` | `blackboard` | `ContextContributionEvent`：本轮 Skill 上下文或降级错误 |
 | `blackboard` | `agent` | `BlackboardContextReadyEvent`：完整历史、最终 User Prompt、模型角色和工具配置 |
 | `agent` | `user-input` | `AgentCompletedEvent`、`AgentErrorEvent`：结束当前 FIFO 任务 |
 | `agent` | `blackboard` | `AgentCompletedEvent`、`AgentErrorEvent`：成功提交历史或结束失败任务 |
-| `agent` | `output-bridge` | 原始 Agent Stream Event，转交 TUI / 上层应用 |
+| `agent` | `output-bridge` | 原始 Agent Stream Event，广播给 TUI / 上层应用的独立实时订阅 |
 | `agent` | `skill` | 只接收 `AgentCompletedEvent`：从完整 messages 恢复轮轨迹并判断轮后维护 |
 
 同一个来源可能发布其他 Event，例如 `AgentTextDeltaEvent`。EventBus 仍只按来源找到
