@@ -1,0 +1,1 @@
+"""Icarus Agent application package."""
