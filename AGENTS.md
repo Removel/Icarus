@@ -16,6 +16,16 @@ Implementation plans are maintained in:
 
 - `apps/agent/docs/plan/`
 
+Application-specific designs and implementation plans belong to that application:
+
+- `apps/<app-name>/docs/arch/`
+- `apps/<app-name>/docs/plan/`
+
+Use the repository-root `spec/` only for an indivisible requirement that requires changes in at
+least two applications. If a cross-application requirement can be split into app-owned parts, keep
+each part in the corresponding application's docs instead. Do not put a single-application spec in
+the root `spec/`.
+
 Read the relevant design before changing architecture or data flow. When implementation and documentation differ, verify the current code and tests first, then update the corresponding document.
 
 ## Development Red Lines
