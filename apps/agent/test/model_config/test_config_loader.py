@@ -3,6 +3,7 @@ import json
 import pydantic
 import pytest
 
+import apps.agent as agent_package
 from apps.agent.src.model_config import config_loader
 from apps.agent.src.model_config import ConfigModel, get_config
 
@@ -36,8 +37,8 @@ def test_get_config_读取模型配置并使用环境变量密钥(
     settings_path.write_text(json.dumps(settings), encoding="utf-8")
     monkeypatch.setattr(
         config_loader,
-        "Path",
-        lambda _: tmp_path / "src/model_config/config_loader.py",
+        "_settings_resource",
+        lambda: settings_path,
     )
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
@@ -55,6 +56,16 @@ def test_get_config_读取模型配置并使用环境变量密钥(
     assert config.skill.minimum_content_score == 0.8
     assert config.model_settings.thinking.model_name == "thinking-model"
     assert config.model_settings.perception.max_tokens == 4096
+
+
+def test_get_config_默认配置来自可安装包资源():
+    assert agent_package.__file__ is not None
+    resource = config_loader._settings_resource()
+
+    assert resource.name == "settings.json"
+    assert resource.is_file()
+    with resource.open("r", encoding="utf-8") as file:
+        assert json.load(file)["model_settings"]["thinking"]["model_name"]
 
 
 def test_config_model_embedding为必填配置():
