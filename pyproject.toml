@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "icarus-agent"
+version = "0.1.0"
+description = "Extensible Agent runtime and terminal client"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic",
+    "openai",
+    "pydantic",
+    "python-dotenv",
+    "fastembed",
+    "numpy",
+    "PyYAML",
+    "rich>=14.2,<15",
+    "textual>=8.2.8,<9",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest-textual-snapshot>=1.1,<2",
+]
+
+[project.scripts]
+icarus = "apps.tui.src.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["apps*"]
+exclude = ["apps.agent.test*", "apps.tui.test*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"apps.agent" = ["settings.json"]
+"apps.tui.src" = ["styles.tcss"]
