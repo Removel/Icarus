@@ -1,4 +1,5 @@
 import enum
+from pathlib import Path
 from typing import Literal
 
 import pydantic
@@ -20,12 +21,20 @@ class LLMConfig(pydantic.BaseModel):
 
 class ModelSettings(pydantic.BaseModel):
     thinking: LLMConfig
-    execution: LLMConfig
     perception: LLMConfig
 
 
+class EmbeddingSettings(pydantic.BaseModel):
+    provider: Literal["fastembed"]
+    model_name: str
+
+
+class SkillSettings(pydantic.BaseModel):
+    minimum_content_score: float = pydantic.Field(default=0.8, ge=0, le=1)
+
+
 LLMProtocol = Literal["openai", "anthropic"]
-LLMRole = Literal["thinking", "execution", "perception"]
+LLMRole = Literal["thinking", "perception"]
 
 
 class ConfigModel(pydantic.BaseModel):
@@ -33,5 +42,8 @@ class ConfigModel(pydantic.BaseModel):
     anthropic_base_url: str
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    icarus_data_dir: Path | None = None
+    embedding: EmbeddingSettings
+    skill: SkillSettings = pydantic.Field(default_factory=SkillSettings)
     model_settings: ModelSettings
     use_protocol: LLMProtocol = "openai"
