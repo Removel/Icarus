@@ -46,8 +46,12 @@ def main(argv: list[str] | None = None) -> int:
     service = ReplayRuntimeService(
         scenario, events_per_second=args.speed
     )
+
+    async def runtime_factory():
+        return service
+
     app = IcarusTextualApp(
-        service=service,
+        runtime_factory=runtime_factory,
         workspace_path=Path.cwd().resolve(),
     )
     app.run()

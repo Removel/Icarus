@@ -17,7 +17,6 @@ Screen {
 }
 
 #app-title {
-    dock: top;
     height: 1;
     padding: 0 2;
     color: $icarus-accent;
@@ -26,7 +25,6 @@ Screen {
 }
 
 #workspace-label {
-    dock: top;
     height: 1;
     padding: 0 2;
     color: $icarus-muted;
@@ -151,7 +149,6 @@ Screen {
 }
 
 #composer-shell {
-    dock: bottom;
     height: auto;
     min-height: 3;
     max-height: 10;
@@ -184,7 +181,6 @@ Screen {
 }
 
 #status-bar {
-    dock: bottom;
     height: 1;
     padding: 0 2;
     color: $icarus-muted;
@@ -207,4 +203,20 @@ Screen.-narrow #composer-shell {
 
 Screen.-narrow .welcome-help {
     display: none;
+}
+
+Screen.-short #composer-shell {
+    max-height: 6;
+}
+
+Screen.-short #composer {
+    max-height: 4;
+}
+
+Screen.-short #queue-panel {
+    max-height: 3;
+}
+
+Screen.-short #queue-items {
+    max-height: 1;
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -15,8 +16,6 @@ from textual.message import Message
 from textual.widgets import Static
 from textual.worker import Worker
 
-from apps.agent.src.agent_orchestration.events import Event
-from apps.agent.src.agent_orchestration.plugins import InputAccepted
 from apps.tui.src.chat_state import (
     ChatState,
     InterruptAction,
@@ -39,7 +38,7 @@ from apps.tui.src.widgets import (
 
 
 class RuntimeSubscription(Protocol):
-    async def next_event(self) -> tuple[str, Event]:
+    async def next_event(self) -> tuple[str, object]:
         ...
 
     def close(self) -> None:
@@ -59,17 +58,25 @@ class RuntimeService(Protocol):
         self,
         prompt: str,
         input_images=None,
-    ) -> InputAccepted:
+    ) -> SubmitAccepted:
         ...
 
     async def stop(self, timeout: float | None = 30) -> None:
         ...
 
 
+class SubmitAccepted(Protocol):
+    task_id: str
+    queue_position: int
+
+
+RuntimeFactory = Callable[[], Awaitable[RuntimeService]]
+
+
 @dataclass
 class RuntimeOutputReceived(Message):
     source_plugin_id: str
-    event: Event
+    event: object
 
 
 @dataclass
@@ -100,28 +107,46 @@ class IcarusTextualApp(App[int]):
             priority=True,
         ),
         Binding("ctrl+d", "eof", show=False, priority=True),
+        Binding(
+            "pageup",
+            "conversation_page_up",
+            show=False,
+            priority=True,
+        ),
+        Binding(
+            "pagedown",
+            "conversation_page_down",
+            show=False,
+            priority=True,
+        ),
+        Binding(
+            "ctrl+end",
+            "conversation_end",
+            show=False,
+            priority=True,
+        ),
     ]
 
     def __init__(
         self,
         *,
-        service: RuntimeService,
+        runtime_factory: RuntimeFactory,
         workspace_path: str | Path,
         projector_registry: ProjectorRegistry | None = None,
     ) -> None:
         super().__init__()
-        self.service = service
+        self.runtime_factory = runtime_factory
+        self.service: RuntimeService | None = None
         self.workspace_path = Path(workspace_path).expanduser().resolve()
         self.chat_state = ChatState()
-        self.projector_registry = (
-            projector_registry or create_default_projector_registry()
-        )
+        self.projector_registry = projector_registry
         self.subscription: RuntimeSubscription | None = None
         self._runtime_start_worker: Worker[Any] | None = None
         self._event_worker: Worker[Any] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._dispatch_scheduled = False
         self._accepting_input = True
+        self._has_user_submission = False
         self._fatal_message = ""
 
     def compose(self) -> ComposeResult:
@@ -135,9 +160,9 @@ class IcarusTextualApp(App[int]):
         yield RuntimeStatusBar(id="status-bar")
 
     def on_mount(self) -> None:
-        self.screen.set_class(self.size.width <= 70, "-narrow")
+        self._update_responsive_classes(self.size.width, self.size.height)
         self.query_one(PersistentComposer).focus()
-        self._refresh_status("Starting runtime")
+        self._refresh_status()
         self._runtime_start_worker = self.run_worker(
             self._start_runtime(),
             name="runtime-start",
@@ -146,15 +171,46 @@ class IcarusTextualApp(App[int]):
         )
 
     def on_resize(self, event: events.Resize) -> None:
-        self.screen.set_class(event.size.width <= 70, "-narrow")
+        self._update_responsive_classes(event.size.width, event.size.height)
+
+    def _update_responsive_classes(self, width: int, height: int) -> None:
+        self.screen.set_class(width <= 70, "-narrow")
+        self.screen.set_class(height <= 12, "-short")
 
     async def _start_runtime(self) -> None:
         try:
-            await self.service.start()
-            subscription = self.service.subscribe_events()
+            service = await self.runtime_factory()
+            self.service = service
+            if not self._accepting_input:
+                await service.stop()
+                self.service = None
+                return
+            if self.projector_registry is None:
+                self.projector_registry = create_default_projector_registry()
+            await service.start()
         except asyncio.CancelledError:
             raise
         except BaseException as error:
+            self.post_message(RuntimeStartFailed(error))
+            return
+
+        try:
+            subscription = service.subscribe_events()
+        except asyncio.CancelledError:
+            raise
+        except BaseException as error:
+            cleanup_error: BaseException | None = None
+            try:
+                await service.stop()
+            except BaseException as stop_error:
+                cleanup_error = stop_error
+            else:
+                self.service = None
+            if cleanup_error is not None:
+                error.add_note(
+                    "Runtime cleanup after subscription failure also failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
             self.post_message(RuntimeStartFailed(error))
             return
         self.post_message(RuntimeStarted(subscription))
@@ -165,9 +221,12 @@ class IcarusTextualApp(App[int]):
             return
         self.subscription = message.subscription
         self.chat_state.mark_ready()
-        session_id = getattr(self.service, "session_id", None)
+        service = self.service
+        session_id = getattr(service, "session_id", None)
         self._refresh_status(
-            f"Session {session_id}" if session_id else "Ready"
+            (f"Session {session_id}" if session_id else "Ready")
+            if self._has_user_submission
+            else ""
         )
         self._event_worker = self.run_worker(
             self._consume_runtime_events(message.subscription),
@@ -184,12 +243,13 @@ class IcarusTextualApp(App[int]):
         self._fatal_message = (
             f"{type(message.error).__name__}: {message.error}"
         )
-        self._refresh_status(self._fatal_message)
-        self.notify(
-            f"Runtime failed to start: {message.error}",
-            title="Icarus startup failed",
-            severity="error",
-        )
+        if self._has_user_submission:
+            self._refresh_status(self._fatal_message)
+            self.notify(
+                f"Runtime failed to start: {message.error}",
+                title="Icarus startup failed",
+                severity="error",
+            )
 
     async def _consume_runtime_events(
         self, subscription: RuntimeSubscription
@@ -232,9 +292,16 @@ class IcarusTextualApp(App[int]):
             self.request_shutdown(return_code=0)
             return
 
+        self._has_user_submission = True
         self.chat_state.enqueue(message.text)
         await self._refresh_queue()
         self._refresh_status()
+        if self.chat_state.phase == RuntimePhase.FAILED:
+            self.notify(
+                self._fatal_message or "Runtime initialization failed",
+                title="Icarus startup failed",
+                severity="error",
+            )
         await self._dispatch_next()
 
     async def _dispatch_next(self) -> None:
@@ -244,8 +311,14 @@ class IcarusTextualApp(App[int]):
             return
 
         self._refresh_status("Submitting queued message")
+        service = self.service
+        if service is None:
+            self.chat_state.fail_dispatch()
+            self._fatal_message = "Runtime is unavailable"
+            self._refresh_status(self._fatal_message)
+            return
         try:
-            accepted = await self.service.submit(prompt=prompt)
+            accepted = await service.submit(prompt=prompt)
         except asyncio.CancelledError:
             self.chat_state.fail_dispatch()
             raise
@@ -270,7 +343,10 @@ class IcarusTextualApp(App[int]):
     async def on_runtime_output_received(
         self, message: RuntimeOutputReceived
     ) -> None:
-        actions = self.projector_registry.project(
+        projector_registry = self.projector_registry
+        if projector_registry is None:
+            raise RuntimeError("Runtime output arrived before projectors were ready")
+        actions = projector_registry.project(
             message.source_plugin_id,
             message.event,
             active_task_id=self.chat_state.active_task_id,
@@ -314,6 +390,10 @@ class IcarusTextualApp(App[int]):
             self.chat_state.phase,
             pending_count=len(self.chat_state.pending),
             message=message or self._fatal_message,
+            show_phase=(
+                self._has_user_submission
+                or self.chat_state.phase == RuntimePhase.STOPPING
+            ),
         )
 
     def action_context_interrupt(self) -> None:
@@ -347,6 +427,15 @@ class IcarusTextualApp(App[int]):
             composer.action_delete_right()
             return
         self.request_shutdown(return_code=0)
+
+    def action_conversation_page_up(self) -> None:
+        self.query_one(ConversationView).page_up()
+
+    def action_conversation_page_down(self) -> None:
+        self.query_one(ConversationView).page_down()
+
+    def action_conversation_end(self) -> None:
+        self.query_one(ConversationView).resume_follow()
 
     def request_shutdown(self, *, return_code: int) -> None:
         if self._cleanup_task is not None:
@@ -386,10 +475,12 @@ class IcarusTextualApp(App[int]):
                 pass
 
         stop_error: BaseException | None = None
-        try:
-            await self.service.stop()
-        except BaseException as error:
-            stop_error = error
+        service = self.service
+        if service is not None:
+            try:
+                await service.stop()
+            except BaseException as error:
+                stop_error = error
 
         if stop_error is not None:
             self._fatal_message = (
@@ -409,4 +500,6 @@ class IcarusTextualApp(App[int]):
             if self.subscription is not None:
                 self.subscription.close()
                 self.subscription = None
-            await self.service.stop()
+            service = self.service
+            if service is not None:
+                await service.stop()

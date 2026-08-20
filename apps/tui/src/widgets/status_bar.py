@@ -11,6 +11,7 @@ class RuntimeStatusBar(Static):
         self.phase = RuntimePhase.STARTING
         self.pending_count = 0
         self.status_message = ""
+        self.show_phase = False
         self.refresh_status()
 
     def set_status(
@@ -19,21 +20,28 @@ class RuntimeStatusBar(Static):
         *,
         pending_count: int,
         message: str = "",
+        show_phase: bool = True,
     ) -> None:
         self.phase = phase
         self.pending_count = pending_count
         self.status_message = message
+        self.show_phase = show_phase
         self.refresh_status()
 
     def refresh_status(self) -> None:
         labels = {
-            RuntimePhase.STARTING: "Starting",
             RuntimePhase.READY: "Ready",
             RuntimePhase.RUNNING: "Running",
             RuntimePhase.STOPPING: "Stopping",
             RuntimePhase.FAILED: "Failed",
         }
-        parts = [labels[self.phase]]
+        parts = []
+        if self.show_phase:
+            if self.phase == RuntimePhase.STARTING:
+                if self.pending_count:
+                    parts.append("Initializing")
+            else:
+                parts.append(labels[self.phase])
         if self.pending_count:
             parts.append(f"Queued {self.pending_count}")
         if self.status_message:
