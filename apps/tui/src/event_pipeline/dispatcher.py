@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from apps.agent.src.agent_orchestration.events import Event
 from apps.tui.src.event_pipeline.actions import UiAction
 
 
@@ -16,7 +15,7 @@ class EventProjector(Protocol):
     recognized but intentionally has no visible projection.
     """
 
-    def project(self, event: Event) -> tuple[UiAction, ...] | None:
+    def project(self, event: object) -> tuple[UiAction, ...] | None:
         ...
 
 
@@ -46,7 +45,7 @@ class ProjectorRegistry:
     def project(
         self,
         source_plugin_id: str,
-        event: Event,
+        event: object,
         *,
         active_task_id: str | None,
     ) -> tuple[UiAction, ...]:
@@ -60,13 +59,14 @@ class ProjectorRegistry:
             )
             return ()
 
-        if active_task_id is None or event.correlation_id != active_task_id:
+        correlation_id = getattr(event, "correlation_id", None)
+        if active_task_id is None or correlation_id != active_task_id:
             self.unrelated_event_count += 1
             self._logger.debug(
                 "Ignoring unrelated runtime event: source=%s type=%s correlation=%s active=%s",
                 source_plugin_id,
                 type(event).__name__,
-                event.correlation_id,
+                correlation_id,
                 active_task_id,
             )
             return ()

@@ -82,9 +82,26 @@ class SnapshotService:
         self.subscription.close()
 
 
-def make_app() -> IcarusTextualApp:
+class BlockingSnapshotService(SnapshotService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_entered = asyncio.Event()
+        self.start_release = asyncio.Event()
+
+    async def start(self) -> None:
+        self.start_entered.set()
+        await self.start_release.wait()
+        await super().start()
+
+
+def make_app(service: SnapshotService | None = None) -> IcarusTextualApp:
+    service = service or SnapshotService()
+
+    async def runtime_factory():
+        return service
+
     return IcarusTextualApp(
-        service=SnapshotService(),
+        runtime_factory=runtime_factory,
         workspace_path=WORKSPACE,
     )
 
@@ -107,10 +124,14 @@ async def wait_ready(pilot) -> None:
 async def submit_text(pilot, text: str) -> None:
     keys = ["ctrl+j" if character == "\n" else character for character in text]
     await pilot.press(*keys, "enter")
-    await wait_until(pilot, lambda: bool(pilot.app.service.submissions))
+    await wait_until(
+        pilot,
+        lambda: bool(pilot.app.service and pilot.app.service.submissions),
+    )
 
 
 def publish(pilot, source_plugin_id: str, event: object) -> None:
+    assert pilot.app.service is not None
     pilot.app.service.subscription.publish(source_plugin_id, event)
 
 
@@ -119,12 +140,95 @@ def input_started(task_id: str = "task-1") -> InputStartedEvent:
 
 
 def test_snapshot_initial_welcome(snap_compare):
+    service = SnapshotService()
+
     async def prepare(pilot) -> None:
         await wait_ready(pilot)
 
     assert snap_compare(
-        make_app(),
+        make_app(service),
         terminal_size=(100, 30),
+        run_before=prepare,
+    )
+
+
+def test_snapshot_initializing_with_multiline_queue(snap_compare):
+    service = BlockingSnapshotService()
+
+    async def prepare(pilot) -> None:
+        await service.start_entered.wait()
+        await pilot.press(*"Wait for the runtime", "enter")
+        await pilot.press(
+            *"line 1",
+            "ctrl+j",
+            *"line 2",
+            "ctrl+j",
+            *"line 3",
+            "enter",
+        )
+        await pilot.press(
+            *"draft 1",
+            "ctrl+j",
+            *"draft 2",
+            "ctrl+j",
+            *"draft 3",
+            "ctrl+j",
+            *"draft 4",
+            "ctrl+j",
+            *"draft 5",
+            "ctrl+j",
+            *"draft 6",
+            "ctrl+j",
+            *"draft 7",
+            "ctrl+j",
+            *"draft 8",
+        )
+        await wait_until(
+            pilot,
+            lambda: pilot.app.query_one(QueuePanel).items
+            == ("Wait for the runtime", "line 1\nline 2\nline 3"),
+        )
+
+    assert snap_compare(
+        make_app(service),
+        terminal_size=(58, 24),
+        run_before=prepare,
+    )
+
+
+def test_snapshot_short_initializing_with_queue(snap_compare):
+    service = BlockingSnapshotService()
+
+    async def prepare(pilot) -> None:
+        await service.start_entered.wait()
+        await pilot.press(*"queued first", "enter")
+        await pilot.press(*"queued second", "enter")
+        await pilot.press(
+            *"draft 1",
+            "ctrl+j",
+            *"draft 2",
+            "ctrl+j",
+            *"draft 3",
+            "ctrl+j",
+            *"draft 4",
+            "ctrl+j",
+            *"draft 5",
+            "ctrl+j",
+            *"draft 6",
+            "ctrl+j",
+            *"draft 7",
+            "ctrl+j",
+            *"draft 8",
+        )
+        await wait_until(
+            pilot,
+            lambda: pilot.app.query_one(QueuePanel).items
+            == ("queued first", "queued second"),
+        )
+
+    assert snap_compare(
+        make_app(service),
+        terminal_size=(58, 12),
         run_before=prepare,
     )
 

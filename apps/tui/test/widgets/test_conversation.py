@@ -22,12 +22,38 @@ from apps.tui.src.widgets.messages import (
 
 
 class ConversationTestApp(App):
+    CSS = """
+    #conversation { height: 8; }
+    .message { height: auto; margin-bottom: 1; }
+    """
+
     def __init__(self, workspace) -> None:
         super().__init__()
         self.workspace = workspace
 
     def compose(self) -> ComposeResult:
         yield ConversationView(self.workspace, id="conversation")
+
+
+def test_conversation初始欢迎卡位于顶部且尚未启用底部anchor(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(50, 20)) as pilot:
+            await pilot.pause()
+            view = app.query_one(ConversationView)
+            welcome = app.query_one(WelcomeMessage)
+            return (
+                view.scroll_y,
+                welcome.region.y,
+                view.content_region.y,
+                view._anchored,
+            )
+
+    scroll_y, welcome_y, content_y, anchored = asyncio.run(run())
+
+    assert scroll_y == 0
+    assert welcome_y == content_y
+    assert anchored is False
 
 
 def test_conversation分割文本工具文本并更新工具状态(tmp_path):
@@ -133,3 +159,58 @@ def test_conversation对缺失start的失败工具降级并显示错误终态(tm
     assert error_count == 1
     assert status_count == 1
     assert handled is False
+
+
+def test_conversation上滚后新输出保持阅读位置且恢复后继续跟随(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(50, 10)) as pilot:
+            view = app.query_one(ConversationView)
+            for index in range(30):
+                await view.append_user_message(
+                    f"message {index} with enough content to overflow"
+                )
+            await pilot.pause()
+            following = (view.scroll_y, view.max_scroll_y)
+
+            view.page_up()
+            await pilot.pause()
+            detached_before = view.scroll_y
+            await view.apply_action(
+                AppendAssistantDelta(task_id="task-1", text="new delta")
+            )
+            await pilot.pause()
+            detached_after = view.scroll_y
+            max_after = view.max_scroll_y
+
+            view.resume_follow()
+            await pilot.pause()
+            resumed = (view.scroll_y, view.max_scroll_y)
+            await view.apply_action(
+                AppendAssistantDelta(task_id="task-1", text="\nmore")
+            )
+            await pilot.pause()
+            followed_after_delta = (view.scroll_y, view.max_scroll_y)
+            return (
+                following,
+                detached_before,
+                detached_after,
+                max_after,
+                resumed,
+                followed_after_delta,
+            )
+
+    (
+        following,
+        detached_before,
+        detached_after,
+        max_after,
+        resumed,
+        followed_after_delta,
+    ) = asyncio.run(run())
+
+    assert following[0] == following[1]
+    assert detached_before < max_after
+    assert detached_after == detached_before
+    assert resumed[0] == resumed[1]
+    assert followed_after_delta[0] == followed_after_delta[1]
