@@ -7,6 +7,8 @@
 当前界面提供：
 
 - 简洁欢迎页和当前 Workspace；
+- 欢迎页显示后并发初始化 Agent Runtime；初始化完成前页面保持可编辑且不展示启动日志，
+  只有消息正在等待 Runtime 时才显示 `Initializing`；
 - 固定在底部、可增长到八行的持久多行输入框；
 - Agent 运行期间继续编辑和提交；
 - TUI 本地 FIFO 待发送队列，以及从队尾撤回的 LIFO 操作；
@@ -45,7 +47,13 @@ icarus --session-id demo-session
 - `Enter`：把非空草稿加入 TUI 本地队列；Runtime 空闲时立即提交，否则排队；
 - `Shift+Enter`：在终端能区分该按键时插入换行；
 - `Ctrl+J`：在所有支持终端中插入换行；
-- 左右键、上下键：在 TextArea 中移动光标；
+- Composer 聚焦时，左右键、上下键和 `Home` / `End` 在 TextArea 中移动光标，滚轮不控制
+  Conversation；
+- Conversation 聚焦时，上下键、`Home` / `End` 和滚轮浏览对话；用户上滚后流式输出不会
+  把阅读位置拉回底部；
+- `PageUp` / `PageDown`：无论当前焦点在哪，都按页浏览 Conversation，同时保留 Composer
+  草稿、光标和焦点；
+- `Ctrl+End`：回到 Conversation 底部并恢复自动跟随；
 - `Ctrl+D`：输入框为空时退出；有内容时执行 TextArea 的向右删除；
 - `exit`、`quit`：作为完整提交内容时退出。
 
