@@ -6,6 +6,11 @@
 上下文相关 `Ctrl+C` 行为。该设计已于 2026-08-19 落地；实现与测试位于 `apps/tui/src/`
 和 `apps/tui/test/`。
 
+首帧后并发初始化 Runtime、修复布局重叠以及流式输出期间脱离自动跟随的增量设计，
+见 `apps/tui/docs/arch/tui-first-interaction-experience-design.md`。该文实施后细化本文的启动时序
+与状态展示，并替代 dock 布局和始终滚底选择；本地队列、Event 投影和 Agent 边界继续以本文
+为基础。
+
 本设计有意替代第一阶段基于 `prompt_toolkit + Rich + 原生 scrollback` 的交互形态：
 
 - TUI 是独立外部应用，可以使用成熟 UI 框架；
