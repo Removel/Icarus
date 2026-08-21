@@ -10,10 +10,13 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputFinishedEvent,
     InputQueuedEvent,
 )
-from apps.tui.src.app import IcarusTextualApp
+from apps.tui.src.app import IcarusTextualApp, RuntimeSubscriptionFailed
 from apps.tui.src.chat_state import RuntimePhase
+from apps.tui.src.event_pipeline import FinishTurn, ShowNotification
+from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
 from apps.tui.src.widgets import (
     AssistantMessage,
+    ConversationView,
     PersistentComposer,
     QueuePanel,
     RuntimeStatusBar,
@@ -21,10 +24,11 @@ from apps.tui.src.widgets import (
 
 
 class ControlledSubscription:
-    def __init__(self, actions) -> None:
+    def __init__(self, actions, *, close_error=None) -> None:
         self.actions = actions
         self.queue = asyncio.Queue()
         self.closed = False
+        self.close_error = close_error
 
     async def next_event(self):
         item = await self.queue.get()
@@ -41,6 +45,8 @@ class ControlledSubscription:
         self.closed = True
         self.actions.append("subscription-close")
         self.queue.put_nowait(None)
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class ControlledService:
@@ -52,9 +58,14 @@ class ControlledService:
         submit_error: BaseException | None = None,
         start_error: BaseException | None = None,
         subscribe_error: BaseException | None = None,
+        subscription_close_error: BaseException | None = None,
+        stop_error: BaseException | None = None,
     ) -> None:
         self.actions = []
-        self.subscription = ControlledSubscription(self.actions)
+        self.subscription = ControlledSubscription(
+            self.actions,
+            close_error=subscription_close_error,
+        )
         self.start_entered = asyncio.Event()
         self.start_release = asyncio.Event()
         if not block_start:
@@ -63,6 +74,7 @@ class ControlledService:
         self.submit_error = submit_error
         self.start_error = start_error
         self.subscribe_error = subscribe_error
+        self.stop_error = stop_error
         self.submissions = []
         self.session_id = "test-session"
         self.stopped = False
@@ -105,9 +117,16 @@ class ControlledService:
         self.actions.append("service-stop")
         self.stopped = True
         self.subscription.close()
+        if self.stop_error is not None:
+            raise self.stop_error
 
 
-def make_app(service: ControlledService, workspace_path) -> IcarusTextualApp:
+def make_app(
+    service: ControlledService,
+    workspace_path,
+    *,
+    projector_registry: ProjectorRegistry | None = None,
+) -> IcarusTextualApp:
     async def runtime_factory():
         service.actions.append("factory")
         return service
@@ -115,6 +134,7 @@ def make_app(service: ControlledService, workspace_path) -> IcarusTextualApp:
     return IcarusTextualApp(
         runtime_factory=runtime_factory,
         workspace_path=workspace_path,
+        projector_registry=projector_registry,
     )
 
 
@@ -139,6 +159,32 @@ def finish_event(task_id: str, status="completed") -> InputFinishedEvent:
         task_id=task_id,
         status=status,
     )
+
+
+class FailingProjector:
+    def project(self, event):
+        del event
+        raise RuntimeError("projector exploded")
+
+
+class NotificationThenFinishProjector:
+    def project(self, event):
+        return (
+            ShowNotification(level="information", text="finished"),
+            FinishTurn(task_id=event.task_id, status="completed"),
+        )
+
+
+class UnknownActionProjector:
+    def project(self, event):
+        del event
+        return (object(),)
+
+
+def registry_with(source: str, projector) -> ProjectorRegistry:
+    registry = ProjectorRegistry()
+    registry.register(source, projector)
+    return registry
 
 
 def test_app启动订阅后ready并保持composer焦点(tmp_path):
@@ -282,6 +328,44 @@ def test_subscribe失败立即停止service并在退出时不重复stop(tmp_path
     assert pending == ("keep after subscribe failure",)
     assert actions.count("service-stop") == 1
     assert app_service is None
+
+
+def test_subscription运行中失败后忽略迟到终态且不调度队首(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "active")
+            await enter_text(pilot, "must stay queued")
+            app.post_message(
+                RuntimeSubscriptionFailed(RuntimeError("stream exploded"))
+            )
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED
+            )
+            service.subscription.publish(
+                "user-input", finish_event("task-1")
+            )
+            await pilot.pause()
+            result = (
+                app.chat_state.phase,
+                app.chat_state.active_task_id,
+                app.chat_state.pending_items,
+                tuple(service.submissions),
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    phase, active, pending, submissions = asyncio.run(run())
+
+    assert phase == RuntimePhase.FAILED
+    assert active == "task-1"
+    assert pending == ("must stay queued",)
+    assert submissions == ("active",)
 
 
 def test运行中输入按FIFO排队并在finish后每次只提交一条(tmp_path):
@@ -514,6 +598,348 @@ def test_submit失败保留队首且可由ctrl_c恢复(tmp_path):
     assert pending_before == ("  keep\n    indentation  ",)
     assert restored == "  keep\n    indentation  "
     assert pending_after == ()
+
+
+def test_projector失败进入fatal并保留当前任务队列和草稿(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(
+            service,
+            tmp_path,
+            projector_registry=registry_with("agent", FailingProjector()),
+        )
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "active")
+            await enter_text(pilot, "keep queued")
+            composer = app.query_one(PersistentComposer)
+            composer.load_text("keep draft")
+            service.subscription.publish(
+                "agent",
+                type(
+                    "RuntimeEvent",
+                    (),
+                    {"correlation_id": "task-1"},
+                )(),
+            )
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED
+            )
+            result = (
+                app.chat_state.active_task_id,
+                app.chat_state.pending_items,
+                composer.text,
+                str(app.query_one(RuntimeStatusBar).render()),
+                app._exception,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    active, pending, draft, status, exception = asyncio.run(run())
+
+    assert active == "task-1"
+    assert pending == ("keep queued",)
+    assert draft == "keep draft"
+    assert "event projection" in status
+    assert "projector exploded" in status
+    assert exception is None
+
+
+def test_conversation更新失败后忽略后续event且不调度队首(
+    monkeypatch, tmp_path
+):
+    async def fail_action(self, action):
+        del self, action
+        raise RuntimeError("conversation exploded")
+
+    monkeypatch.setattr(ConversationView, "apply_action", fail_action)
+
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "active")
+            await enter_text(pilot, "must not dispatch")
+            service.subscription.publish(
+                "agent",
+                AgentTextDeltaEvent(
+                    correlation_id="task-1",
+                    step=1,
+                    text="broken update",
+                ),
+            )
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED
+            )
+            service.subscription.publish(
+                "user-input", finish_event("task-1")
+            )
+            await pilot.pause()
+            await asyncio.sleep(0)
+            result = (
+                tuple(service.submissions),
+                app.chat_state.active_task_id,
+                app.chat_state.pending_items,
+                str(app.query_one(RuntimeStatusBar).render()),
+                app._exception,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    submissions, active, pending, status, exception = asyncio.run(run())
+
+    assert submissions == ("active",)
+    assert active == "task-1"
+    assert pending == ("must not dispatch",)
+    assert "ConversationView action" in status
+    assert "conversation exploded" in status
+    assert exception is None
+
+
+def test_runtime接受后用户消息渲染失败不把消息重新入队(
+    monkeypatch, tmp_path
+):
+    async def fail_user_message(self, text):
+        del self, text
+        raise RuntimeError("user message exploded")
+
+    monkeypatch.setattr(
+        ConversationView,
+        "append_user_message",
+        fail_user_message,
+    )
+
+    async def run():
+        service = ControlledService(block_start=True)
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await service.start_entered.wait()
+            await enter_text(pilot, "accepted")
+            await enter_text(pilot, "still pending")
+            service.start_release.set()
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED
+            )
+            result = (
+                tuple(service.submissions),
+                app.chat_state.active_task_id,
+                app.chat_state.pending_items,
+                str(app.query_one(RuntimeStatusBar).render()),
+                app._exception,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    submissions, active, pending, status, exception = asyncio.run(run())
+
+    assert submissions == ("accepted",)
+    assert active == "task-1"
+    assert pending == ("still pending",)
+    assert "accepted message rendering" in status
+    assert "user message exploded" in status
+    assert exception is None
+
+
+def test_notification展示失败不阻止同一event完成任务(monkeypatch, tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(
+            service,
+            tmp_path,
+            projector_registry=registry_with(
+                "test-source", NotificationThenFinishProjector()
+            ),
+        )
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "active")
+
+            def fail_notification(*args, **kwargs):
+                del args, kwargs
+                raise RuntimeError("notification exploded")
+
+            monkeypatch.setattr(app, "notify", fail_notification)
+            service.subscription.publish(
+                "test-source",
+                type(
+                    "RuntimeEvent",
+                    (),
+                    {
+                        "correlation_id": "task-1",
+                        "task_id": "task-1",
+                    },
+                )(),
+            )
+            await wait_until(
+                pilot, lambda: app.chat_state.active_task_id is None
+            )
+            result = (app.chat_state.phase, app._exception)
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    phase, exception = asyncio.run(run())
+
+    assert phase == RuntimePhase.READY
+    assert exception is None
+
+
+def test清理汇总subscription和service错误后仍退出(tmp_path):
+    async def run():
+        service = ControlledService(
+            subscription_close_error=RuntimeError("close exploded"),
+            stop_error=RuntimeError("stop exploded"),
+        )
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: app.return_code == 1)
+            return (
+                tuple(service.actions),
+                service.stopped,
+                app._fatal_message,
+                app._exception,
+            )
+
+    actions, stopped, fatal_message, exception = asyncio.run(run())
+
+    assert "subscription-close" in actions
+    assert "service-stop" in actions
+    assert stopped is True
+    assert "close exploded" in fatal_message
+    assert "stop exploded" in fatal_message
+    assert exception is None
+
+
+def test_queue更新失败进入fatal并保留未提交消息(monkeypatch, tmp_path):
+    async def fail_queue(self, messages):
+        del self, messages
+        raise RuntimeError("queue exploded")
+
+    monkeypatch.setattr(QueuePanel, "show_pending", fail_queue)
+
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "keep queued")
+            result = (
+                tuple(service.submissions),
+                app.chat_state.pending_items,
+                str(app.query_one(RuntimeStatusBar).render()),
+                app._exception,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    submissions, pending, status, exception = asyncio.run(run())
+
+    assert submissions == ()
+    assert pending == ("keep queued",)
+    assert "queue rendering" in status
+    assert "queue exploded" in status
+    assert exception is None
+
+
+def test_status更新失败进入fatal但保留composer草稿(monkeypatch, tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            composer = app.query_one(PersistentComposer)
+            composer.load_text("keep draft")
+            status = app.query_one(RuntimeStatusBar)
+
+            def fail_status(*args, **kwargs):
+                del args, kwargs
+                raise RuntimeError("status exploded")
+
+            monkeypatch.setattr(status, "set_status", fail_status)
+            app._refresh_status("trigger failure")
+            draft_after_failure = composer.text
+            composer.clear_draft()
+            await enter_text(pilot, "must not submit")
+            result = (
+                app.chat_state.phase,
+                draft_after_failure,
+                app._fatal_message,
+                app._exception,
+                tuple(service.submissions),
+                app.chat_state.pending_items,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    phase, draft, fatal_message, exception, submissions, pending = asyncio.run(
+        run()
+    )
+
+    assert phase == RuntimePhase.FAILED
+    assert draft == "keep draft"
+    assert "status bar update" in fatal_message
+    assert "status exploded" in fatal_message
+    assert exception is None
+    assert submissions == ()
+    assert pending == ("must not submit",)
+
+
+def test未知ui_action进入fatal而不是终止textual消息循环(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(
+            service,
+            tmp_path,
+            projector_registry=registry_with(
+                "test-source", UnknownActionProjector()
+            ),
+        )
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "active")
+            service.subscription.publish(
+                "test-source",
+                type(
+                    "RuntimeEvent",
+                    (),
+                    {"correlation_id": "task-1"},
+                )(),
+            )
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED
+            )
+            result = (app._fatal_message, app._exception)
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    fatal_message, exception = asyncio.run(run())
+
+    assert "UI action routing" in fatal_message
+    assert "Unhandled UiAction" in fatal_message
+    assert exception is None
 
 
 @pytest.mark.parametrize(
