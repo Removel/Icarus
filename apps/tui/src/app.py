@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
+import logging
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -14,7 +16,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import Static
-from textual.worker import Worker
+from textual.worker import Worker, WorkerCancelled
 
 from apps.tui.src.chat_state import (
     ChatState,
@@ -35,6 +37,9 @@ from apps.tui.src.widgets import (
     QueuePanel,
     RuntimeStatusBar,
 )
+
+
+logger = logging.getLogger("icarus.tui.app")
 
 
 class RuntimeSubscription(Protocol):
@@ -148,6 +153,7 @@ class IcarusTextualApp(App[int]):
         self._accepting_input = True
         self._has_user_submission = False
         self._fatal_message = ""
+        self._fatal_failure = False
 
     def compose(self) -> ComposeResult:
         yield Static("Icarus", id="app-title", markup=False)
@@ -164,7 +170,7 @@ class IcarusTextualApp(App[int]):
         self.query_one(PersistentComposer).focus()
         self._refresh_status()
         self._runtime_start_worker = self.run_worker(
-            self._start_runtime(),
+            self._start_runtime,
             name="runtime-start",
             group="runtime",
             exit_on_error=False,
@@ -217,7 +223,14 @@ class IcarusTextualApp(App[int]):
 
     async def on_runtime_started(self, message: RuntimeStarted) -> None:
         if not self._accepting_input:
-            message.subscription.close()
+            try:
+                message.subscription.close()
+            except Exception as error:
+                logger.error(
+                    "Unable to close late runtime subscription: %s: %s",
+                    type(error).__name__,
+                    error,
+                )
             return
         self.subscription = message.subscription
         self.chat_state.mark_ready()
@@ -228,8 +241,10 @@ class IcarusTextualApp(App[int]):
             if self._has_user_submission
             else ""
         )
+        if self._fatal_failure:
+            return
         self._event_worker = self.run_worker(
-            self._consume_runtime_events(message.subscription),
+            partial(self._consume_runtime_events, message.subscription),
             name="runtime-events",
             group="runtime",
             exit_on_error=False,
@@ -239,13 +254,16 @@ class IcarusTextualApp(App[int]):
     async def on_runtime_start_failed(
         self, message: RuntimeStartFailed
     ) -> None:
+        if not self._accepting_input:
+            return
+        self._fatal_failure = True
         self.chat_state.mark_failed()
         self._fatal_message = (
             f"{type(message.error).__name__}: {message.error}"
         )
         if self._has_user_submission:
             self._refresh_status(self._fatal_message)
-            self.notify(
+            self._safe_notify(
                 f"Runtime failed to start: {message.error}",
                 title="Icarus startup failed",
                 severity="error",
@@ -271,12 +289,13 @@ class IcarusTextualApp(App[int]):
     ) -> None:
         if not self._accepting_input:
             return
+        self._fatal_failure = True
         self.chat_state.mark_failed()
         self._fatal_message = (
             f"Output stream closed: {type(message.error).__name__}: {message.error}"
         )
         self._refresh_status(self._fatal_message)
-        self.notify(
+        self._safe_notify(
             self._fatal_message,
             title="Icarus output failed",
             severity="error",
@@ -294,10 +313,11 @@ class IcarusTextualApp(App[int]):
 
         self._has_user_submission = True
         self.chat_state.enqueue(message.text)
-        await self._refresh_queue()
+        if not await self._refresh_queue():
+            return
         self._refresh_status()
         if self.chat_state.phase == RuntimePhase.FAILED:
-            self.notify(
+            self._safe_notify(
                 self._fatal_message or "Runtime initialization failed",
                 title="Icarus startup failed",
                 severity="error",
@@ -311,6 +331,8 @@ class IcarusTextualApp(App[int]):
             return
 
         self._refresh_status("Submitting queued message")
+        if self._fatal_failure:
+            return
         service = self.service
         if service is None:
             self.chat_state.fail_dispatch()
@@ -326,43 +348,76 @@ class IcarusTextualApp(App[int]):
             self.chat_state.fail_dispatch()
             self._fatal_message = f"Submit failed: {type(error).__name__}: {error}"
             self._refresh_status(self._fatal_message)
-            self.notify(
+            self._safe_notify(
                 self._fatal_message,
                 title="Message was not submitted",
                 severity="error",
             )
             return
 
-        accepted_prompt = self.chat_state.accept_dispatch(accepted.task_id)
-        await self.query_one(ConversationView).append_user_message(
-            accepted_prompt
-        )
-        await self._refresh_queue()
+        try:
+            accepted_prompt = self.chat_state.accept_dispatch(accepted.task_id)
+            await self.query_one(ConversationView).append_user_message(
+                accepted_prompt
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._enter_fatal("accepted message rendering", error)
+            return
+        if not await self._refresh_queue():
+            return
         self._refresh_status("Accepted by runtime")
 
     async def on_runtime_output_received(
         self, message: RuntimeOutputReceived
     ) -> None:
+        if self._fatal_failure or not self._accepting_input:
+            return
         projector_registry = self.projector_registry
         if projector_registry is None:
-            raise RuntimeError("Runtime output arrived before projectors were ready")
-        actions = projector_registry.project(
-            message.source_plugin_id,
-            message.event,
-            active_task_id=self.chat_state.active_task_id,
-        )
+            self._enter_fatal(
+                "event projection",
+                RuntimeError(
+                    "Runtime output arrived before projectors were ready"
+                ),
+            )
+            return
+        try:
+            actions = projector_registry.project(
+                message.source_plugin_id,
+                message.event,
+                active_task_id=self.chat_state.active_task_id,
+            )
+        except Exception as error:
+            self._enter_fatal("event projection", error)
+            return
         for action in actions:
-            await self._apply_action(action)
+            if self._fatal_failure:
+                break
+            try:
+                await self._apply_action(action)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self._enter_fatal("UI action routing", error)
+                break
 
     async def _apply_action(self, action: UiAction) -> None:
         if isinstance(action, SetRuntimeStatus):
             self._refresh_status(action.text)
             return
         if isinstance(action, ShowNotification):
-            self.notify(action.text, severity=action.level)
+            self._safe_notify(action.text, severity=action.level)
             return
 
-        handled = await self.query_one(ConversationView).apply_action(action)
+        try:
+            handled = await self.query_one(ConversationView).apply_action(action)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._enter_fatal("ConversationView action", error)
+            return
         if not handled:
             raise TypeError(f"Unhandled UiAction: {type(action).__name__}")
 
@@ -380,21 +435,99 @@ class IcarusTextualApp(App[int]):
         self._dispatch_scheduled = True
         self.call_later(self._dispatch_next)
 
-    async def _refresh_queue(self) -> None:
-        await self.query_one(QueuePanel).show_pending(
-            self.chat_state.pending_items
-        )
+    async def _refresh_queue(self) -> bool:
+        try:
+            await self.query_one(QueuePanel).show_pending(
+                self.chat_state.pending_items
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._enter_fatal("queue rendering", error)
+            return False
+        return True
 
     def _refresh_status(self, message: str = "") -> None:
+        try:
+            self._render_status(message)
+        except Exception as error:
+            self._enter_fatal(
+                "status bar update",
+                error,
+                render_status=False,
+            )
+
+    def _render_status(self, message: str = "") -> None:
+        visible_message = (
+            self._fatal_message
+            if self._fatal_failure
+            else message or self._fatal_message
+        )
         self.query_one(RuntimeStatusBar).set_status(
             self.chat_state.phase,
             pending_count=len(self.chat_state.pending),
-            message=message or self._fatal_message,
+            message=visible_message,
             show_phase=(
                 self._has_user_submission
                 or self.chat_state.phase == RuntimePhase.STOPPING
             ),
         )
+
+    def _enter_fatal(
+        self,
+        stage: str,
+        error: BaseException,
+        *,
+        render_status: bool = True,
+    ) -> None:
+        if self._fatal_failure:
+            logger.error(
+                "Additional TUI failure after fatal handling began: stage=%s error=%s: %s",
+                stage,
+                type(error).__name__,
+                error,
+            )
+            return
+
+        self._fatal_failure = True
+        self._dispatch_scheduled = False
+        self.chat_state.mark_failed()
+        self._fatal_message = (
+            f"TUI {stage} failed: {type(error).__name__}: {error}"
+        )
+        logger.error(
+            self._fatal_message,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+        event_worker = self._event_worker
+        if event_worker is not None:
+            event_worker.cancel()
+
+        if render_status:
+            try:
+                self._render_status(self._fatal_message)
+            except Exception as status_error:
+                logger.error(
+                    "Unable to render fatal TUI status: %s: %s",
+                    type(status_error).__name__,
+                    status_error,
+                )
+        self._safe_notify(
+            self._fatal_message,
+            title="Icarus interface failed",
+            severity="error",
+        )
+
+    def _safe_notify(self, message: str, **kwargs: Any) -> None:
+        try:
+            self.notify(message, **kwargs)
+        except Exception as error:
+            logger.error(
+                "Unable to display TUI notification: %s: %s",
+                type(error).__name__,
+                error,
+            )
 
     def action_context_interrupt(self) -> None:
         if not self._accepting_input:
@@ -410,16 +543,23 @@ class IcarusTextualApp(App[int]):
             if restored is None:
                 return
             composer.restore_draft(restored)
-            self.call_later(self._refresh_queue)
+            self.call_later(self._refresh_queue_after_interrupt)
             self._refresh_status("Latest queued message restored")
             composer.focus()
             return
         if action == InterruptAction.NOTIFY_CANCEL_UNAVAILABLE:
             text = "Current Agent task cannot be cancelled by this Runtime yet."
             self._refresh_status(text)
-            self.notify(text, title="Cancellation unavailable", severity="warning")
+            self._safe_notify(
+                text,
+                title="Cancellation unavailable",
+                severity="warning",
+            )
             return
         self.request_shutdown(return_code=0)
+
+    async def _refresh_queue_after_interrupt(self) -> None:
+        await self._refresh_queue()
 
     def action_eof(self) -> None:
         composer = self.query_one(PersistentComposer)
@@ -449,45 +589,63 @@ class IcarusTextualApp(App[int]):
         )
 
     async def _cleanup_and_exit(self, return_code: int) -> None:
+        cleanup_errors = await self._release_runtime_resources()
+        if cleanup_errors:
+            self._fatal_message = "Cleanup failed: " + "; ".join(
+                cleanup_errors
+            )
+            logger.error(self._fatal_message)
+            return_code = return_code or 1
+        self.exit(result=return_code, return_code=return_code)
+
+    async def _release_runtime_resources(self) -> list[str]:
+        errors: list[str] = []
+
         start_worker = self._runtime_start_worker
+        self._runtime_start_worker = None
         if start_worker is not None:
             start_worker.cancel()
             try:
                 await start_worker.wait()
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, WorkerCancelled):
                 pass
-            except BaseException:
-                pass
+            except Exception as error:
+                errors.append(self._cleanup_error("runtime start worker", error))
 
         subscription = self.subscription
         self.subscription = None
         if subscription is not None:
-            subscription.close()
+            try:
+                subscription.close()
+            except Exception as error:
+                errors.append(self._cleanup_error("subscription close", error))
 
         event_worker = self._event_worker
+        self._event_worker = None
         if event_worker is not None:
             event_worker.cancel()
             try:
                 await event_worker.wait()
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, WorkerCancelled):
                 pass
-            except BaseException:
-                pass
+            except Exception as error:
+                errors.append(self._cleanup_error("event worker", error))
 
-        stop_error: BaseException | None = None
         service = self.service
+        self.service = None
         if service is not None:
             try:
                 await service.stop()
-            except BaseException as error:
-                stop_error = error
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                errors.append(self._cleanup_error("runtime stop", error))
 
-        if stop_error is not None:
-            self._fatal_message = (
-                f"Cleanup failed: {type(stop_error).__name__}: {stop_error}"
-            )
-            return_code = return_code or 1
-        self.exit(result=return_code, return_code=return_code)
+        return errors
+
+    @staticmethod
+    def _cleanup_error(stage: str, error: BaseException) -> str:
+        return f"{stage}: {type(error).__name__}: {error}"
 
     async def on_unmount(self, event: events.Unmount) -> None:
         del event
@@ -497,9 +655,9 @@ class IcarusTextualApp(App[int]):
             return
         if cleanup is None:
             self._accepting_input = False
-            if self.subscription is not None:
-                self.subscription.close()
-                self.subscription = None
-            service = self.service
-            if service is not None:
-                await service.stop()
+            cleanup_errors = await self._release_runtime_resources()
+            if cleanup_errors:
+                logger.error(
+                    "Cleanup during unmount failed: %s",
+                    "; ".join(cleanup_errors),
+                )
