@@ -369,11 +369,11 @@ def _decode_agent_completed(
 
 def _decode_input_finished(task_id: str, payload: dict[str, Any]) -> Event:
     status = _require_str(payload, "status")
-    if status not in {"completed", "failed"}:
+    if status not in {"completed", "failed", "cancelled"}:
         raise ReplayFormatError(
-            "payload.status must be completed or failed"
+            "payload.status must be completed, failed, or cancelled"
         )
-    typed_status: Literal["completed", "failed"] = status  # type: ignore[assignment]
+    typed_status: Literal["completed", "failed", "cancelled"] = status  # type: ignore[assignment]
     return InputFinishedEvent(
         task_id=task_id,
         status=typed_status,

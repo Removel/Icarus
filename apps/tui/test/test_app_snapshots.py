@@ -16,6 +16,7 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputFinishedEvent,
     InputStartedEvent,
 )
+from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolCall
 from apps.tui.src.app import IcarusTextualApp
@@ -80,6 +81,10 @@ class SnapshotService:
         del timeout
         self.started = False
         self.subscription.close()
+
+    async def cancel_task(self, task_id: str, reason: str | None = None):
+        del reason
+        return TaskOperationResult(task_id=task_id, status="accepted")
 
 
 class BlockingSnapshotService(SnapshotService):
