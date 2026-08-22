@@ -15,6 +15,9 @@ class ObservableEventBus(EventBus):
         self._dispatcher = dispatcher
 
     async def publish(self, source_plugin_id: str, event: Event) -> None:
+        if not event.trace_event_flow:
+            await super().publish(source_plugin_id, event)
+            return
         data = {"source_plugin_id": source_plugin_id, "event": event}
         await self._dispatcher.atrigger("event.publish", "before", data)
         try:
@@ -33,6 +36,9 @@ class ObservableEventBus(EventBus):
             published_event.hook_context,
             run_id=published_event.hook_run_id,
         ):
+            if not published_event.event.trace_event_flow:
+                await super()._route(published_event)
+                return
             data = {"published_event": published_event}
             await self._dispatcher.atrigger("event.route", "before", data)
             try:

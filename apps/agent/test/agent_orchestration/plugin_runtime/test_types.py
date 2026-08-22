@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from types import MappingProxyType
 
 from apps.agent.src.agent_orchestration.plugin_runtime import (
     PluginRuntimeSnapshot,
@@ -27,5 +28,7 @@ def test_plugin_runtime_types_保持不可变和来源分离():
 
     assert published.source_plugin_id == "producer"
     assert published.event is event
+    assert published.hook_context == {}
+    assert isinstance(published.hook_context, MappingProxyType)
     assert subscription.subscription_id
     assert asdict(snapshot)["status"] == PluginStatus.RUNNING

@@ -75,11 +75,17 @@ class PluginRuntime:
             self.registry.set_status(self.plugin_id, PluginStatus.FAILED)
             raise
 
-    async def enqueue(self, published_event: PublishedEvent) -> None:
+    async def enqueue(self, published_event: PublishedEvent) -> bool:
         if not self._accepting or self.status != PluginStatus.RUNNING:
             raise RuntimeError(f"Plugin is not accepting events: {self.plugin_id}")
+        if not self.plugin.accepts_event(
+            published_event.source_plugin_id,
+            published_event.event,
+        ):
+            return False
         await self._inbox.put(published_event)
         self._accepted_count += 1
+        return True
 
     async def drain(self) -> None:
         await self._inbox.join()

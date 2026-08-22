@@ -1,24 +1,43 @@
 """单个 Agent Runtime 的应用服务入口。"""
 
+import asyncio
 import logging
 from pathlib import Path
 
 from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
-from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher, HookRegistry
 from apps.agent.src.agent_orchestration.plugin_runtime import PluginManager
 from apps.agent.src.agent_orchestration.plugins import (
     AgentPlugin,
     BlackboardPlugin,
     InputAccepted,
+    SkillPlugin,
     UserInputPlugin,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence import (
     PersistenceRuntime,
     PersistenceSession,
 )
-from apps.agent.src.application.output_bridge import OutputBridgePlugin
+from apps.agent.src.agent_orchestration.plugins.skill import (
+    PROCESS_WORKSPACE_MAINTENANCE_COORDINATOR,
+    SessionSkillState,
+    SkillMaintainer,
+    SkillMaintenanceParser,
+    SkillMaintenancePromptBuilder,
+    SkillRanker,
+    SkillRepository,
+    SkillScanner,
+    SkillTurnState,
+    SkillUsageStore,
+    WorkspaceMaintenanceCoordinator,
+)
+from apps.agent.src.application.output_bridge import (
+    OutputBridgePlugin,
+    OutputEventSubscription,
+)
 from apps.agent.src.model_config import ConfigModel, get_config
+from apps.agent.src.model_provider.base_embedding import BaseEmbedding
+from apps.agent.src.model_provider.embedding_factory import EmbeddingFactory
 from apps.agent.src.model_provider.types import ImagePart, Message
 
 
@@ -37,6 +56,9 @@ class AgentRuntimeService:
         ),
         tools: list[str] | None = None,
         initial_messages: list[Message] | None = None,
+        embedding: BaseEmbedding | None = None,
+        maintenance_agent_factory: AgentFactory | None = None,
+        maintenance_coordinator: WorkspaceMaintenanceCoordinator | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.workspace_path = Path(workspace_path).expanduser().resolve()
@@ -45,6 +67,7 @@ class AgentRuntimeService:
         self.system_prompt = system_prompt
         self.tools = tools
         self.initial_messages = list(initial_messages or [])
+        self.embedding = embedding
         self.logger = logger or logging.getLogger("icarus.agent.runtime")
 
         self.hook_registry = HookRegistry()
@@ -58,6 +81,15 @@ class AgentRuntimeService:
             config=self.config,
             hook_registry=self.hook_registry,
         )
+        self.maintenance_agent_factory = maintenance_agent_factory or AgentFactory(
+            config=self.config,
+            hook_registry=self.hook_registry,
+            register_builtin_tools=False,
+        )
+        self.maintenance_coordinator = (
+            maintenance_coordinator
+            or PROCESS_WORKSPACE_MAINTENANCE_COORDINATOR
+        )
         self.plugin_manager = PluginManager(
             hook_dispatcher=HookDispatcher(self.hook_registry),
         )
@@ -65,6 +97,10 @@ class AgentRuntimeService:
         self._session_context = None
         self._session: PersistenceSession | None = None
         self._user_input: UserInputPlugin | None = None
+        self._skill_plugin: SkillPlugin | None = None
+        self._pending_embedding: BaseEmbedding | None = None
+        self._usage_store_task: asyncio.Task[SkillUsageStore] | None = None
+        self._pending_usage_store: SkillUsageStore | None = None
         self._started = False
         self._closed = False
 
@@ -89,9 +125,53 @@ class AgentRuntimeService:
             self._session = self._session_context.__enter__()
 
             user_input = UserInputPlugin("user-input", self._session)
+            resolver = self.persistence.resolver
+            embedding = self.embedding or EmbeddingFactory(
+                self.config,
+                resolver.fastembed_cache_dir,
+            ).create_embedding()
+            self._pending_embedding = embedding
+            usage_store = await self._create_skill_usage_store()
+            self._pending_usage_store = usage_store
+            repository = SkillRepository(
+                resolver.global_skills_dir,
+                resolver.workspace_skills_dir(self._session.identity),
+                logger=self.logger,
+            )
+            skill = SkillPlugin(
+                "skill",
+                workspace_key=self._session.identity.workspace_key,
+                user_input_plugin_id="user-input",
+                scanner=SkillScanner(
+                    resolver.global_skills_dir,
+                    resolver.workspace_skills_dir(self._session.identity),
+                    logger=self.logger,
+                ),
+                usage_store=usage_store,
+                embedding=embedding,
+                ranker=SkillRanker(
+                    minimum_content_score=(
+                        self.config.skill.minimum_content_score
+                    )
+                ),
+                session_state=SessionSkillState(),
+                maintainer=SkillMaintainer(
+                    lambda: self.maintenance_agent_factory.get_agent("thinking"),
+                    SkillMaintenancePromptBuilder(self.persistence.redactor),
+                    SkillMaintenanceParser(),
+                ),
+                repository=repository,
+                coordinator=self.maintenance_coordinator,
+                turn_state=SkillTurnState(),
+                hook_dispatcher=HookDispatcher(self.hook_registry),
+                logger=self.logger,
+            )
+            self._skill_plugin = skill
+            self._pending_embedding = None
+            self._pending_usage_store = None
             blackboard = BlackboardPlugin(
                 "blackboard",
-                required_context_sources=set(),
+                required_context_sources={"skill"},
                 model_role="thinking",
                 system_prompt=self.system_prompt,
                 tools=self.tools,
@@ -100,13 +180,17 @@ class AgentRuntimeService:
             agent = AgentPlugin("agent", self.agent_factory)
             for plugin in (
                 user_input,
+                skill,
                 blackboard,
                 agent,
                 self.output_bridge,
             ):
                 self.plugin_manager.register(plugin)
 
+            self.plugin_manager.subscribe("skill", "user-input")
+            self.plugin_manager.subscribe("skill", "agent")
             self.plugin_manager.subscribe("blackboard", "user-input")
+            self.plugin_manager.subscribe("blackboard", "skill")
             self.plugin_manager.subscribe("output-bridge", "user-input")
             self.plugin_manager.subscribe("agent", "blackboard")
             self.plugin_manager.subscribe("user-input", "agent")
@@ -116,6 +200,9 @@ class AgentRuntimeService:
                 await self.plugin_manager.start()
             self._user_input = user_input
             self._started = True
+        except asyncio.CancelledError:
+            await self._finish_cancelled_start_cleanup()
+            raise
         except Exception:
             await self._cleanup_after_start_failure()
             raise
@@ -132,16 +219,32 @@ class AgentRuntimeService:
             input_images=input_images,
         )
 
-    async def next_event(self) -> tuple[str, Event]:
+    def subscribe_events(self) -> OutputEventSubscription:
         if not self._started:
             raise RuntimeError("AgentRuntimeService is not running")
-        item = await self.output_bridge.next_event()
-        self.output_bridge.task_done()
-        return item
+        return self.output_bridge.subscribe()
 
     async def stop(self, timeout: float | None = 30) -> None:
         if not self._started:
             return
+        stop_task = asyncio.create_task(
+            self._stop_impl(timeout),
+            name="agent-runtime:stop",
+        )
+        cancelled = False
+        while not stop_task.done():
+            try:
+                await asyncio.shield(stop_task)
+            except asyncio.CancelledError:
+                cancelled = True
+                continue
+        error = stop_task.exception()
+        if cancelled:
+            raise asyncio.CancelledError
+        if error is not None:
+            raise error
+
+    async def _stop_impl(self, timeout: float | None) -> None:
         stop_error: BaseException | None = None
         try:
             with self._session.context_scope():
@@ -149,7 +252,7 @@ class AgentRuntimeService:
         except BaseException as error:
             stop_error = error
         finally:
-            self.output_bridge.discard_pending()
+            self.output_bridge.close_subscriptions()
             try:
                 await self.agent_factory.aclose()
             except BaseException as error:
@@ -160,6 +263,17 @@ class AgentRuntimeService:
                         "AgentFactory cleanup failed",
                         exc_info=(type(error), error, error.__traceback__),
                     )
+            if self.maintenance_agent_factory is not self.agent_factory:
+                try:
+                    await self.maintenance_agent_factory.aclose()
+                except BaseException as error:
+                    if stop_error is None:
+                        stop_error = error
+                    else:
+                        self.logger.exception(
+                            "Maintenance AgentFactory cleanup failed",
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
             self._close_session()
             try:
                 self.persistence.stop(drain=True, logger=self.logger)
@@ -172,6 +286,7 @@ class AgentRuntimeService:
                         exc_info=(type(error), error, error.__traceback__),
                     )
             self._user_input = None
+            self._skill_plugin = None
             self._started = False
             self._closed = True
         if stop_error is not None:
@@ -187,18 +302,85 @@ class AgentRuntimeService:
                         await self.plugin_manager.stop(timeout=5)
             except Exception:
                 self.logger.exception("PluginManager cleanup failed")
+        if self._skill_plugin is not None:
+            try:
+                await self._skill_plugin.stop()
+            except Exception:
+                self.logger.exception("SkillPlugin cleanup failed")
+        await self._cleanup_pending_skill_resources()
         try:
             await self.agent_factory.aclose()
         except Exception:
             self.logger.exception("AgentFactory cleanup failed")
+        if self.maintenance_agent_factory is not self.agent_factory:
+            try:
+                await self.maintenance_agent_factory.aclose()
+            except Exception:
+                self.logger.exception("Maintenance AgentFactory cleanup failed")
         self._close_session()
         self.persistence.stop(drain=False, logger=self.logger)
         self._user_input = None
+        self._skill_plugin = None
         self._started = False
         self._closed = True
+
+    async def _finish_cancelled_start_cleanup(self) -> None:
+        cleanup = asyncio.create_task(self._cleanup_after_start_failure())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        await cleanup
 
     def _close_session(self) -> None:
         if self._session_context is not None:
             self._session_context.__exit__(None, None, None)
             self._session_context = None
         self._session = None
+
+    async def _create_skill_usage_store(self) -> SkillUsageStore | None:
+        try:
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    SkillUsageStore,
+                    self.persistence.resolver.skill_state_database,
+                ),
+                name="skill-usage-store:init",
+            )
+            self._usage_store_task = task
+            store = await asyncio.shield(task)
+            self._usage_store_task = None
+            return store
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._usage_store_task = None
+            self.logger.exception(
+                "Skill usage store initialization failed; "
+                "continuing without persisted usage state"
+            )
+            return None
+
+    async def _cleanup_pending_skill_resources(self) -> None:
+        task = self._usage_store_task
+        self._usage_store_task = None
+        if task is not None:
+            try:
+                self._pending_usage_store = await asyncio.shield(task)
+            except Exception:
+                self.logger.exception("Pending SkillUsageStore initialization failed")
+        store = self._pending_usage_store
+        self._pending_usage_store = None
+        if store is not None:
+            try:
+                await asyncio.to_thread(store.close)
+            except Exception:
+                self.logger.exception("Pending SkillUsageStore cleanup failed")
+        embedding = self._pending_embedding
+        self._pending_embedding = None
+        if embedding is not None:
+            try:
+                await embedding.aclose()
+            except Exception:
+                self.logger.exception("Pending Embedding cleanup failed")

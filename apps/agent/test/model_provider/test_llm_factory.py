@@ -2,6 +2,7 @@ import pytest
 
 from apps.agent.src.model_config import (
     ConfigModel,
+    EmbeddingSettings,
     LLMConfig,
     ModelSettings,
     ThinkMode,
@@ -23,6 +24,13 @@ def make_config() -> ConfigModel:
         anthropic_base_url="https://anthropic.example.com",
         openai_api_key="openai-key",
         anthropic_api_key="anthropic-key",
+        embedding=EmbeddingSettings(
+            provider="fastembed",
+            model_name=(
+                "sentence-transformers/"
+                "paraphrase-multilingual-MiniLM-L12-v2"
+            ),
+        ),
         model_settings=ModelSettings(
             thinking=model,
             perception=model,

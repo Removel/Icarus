@@ -1,6 +1,7 @@
 """Agent 能力层统一类型。"""
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
@@ -26,18 +27,24 @@ class AgentResponse:
 
 @dataclass(frozen=True, kw_only=True)
 class AgentTextDeltaEvent(Event):
+    trace_event_flow: ClassVar[bool] = False
+
     step: int
     text: str
 
 
 @dataclass(frozen=True, kw_only=True)
 class AgentToolStartedEvent(Event):
+    trace_event_flow: ClassVar[bool] = False
+
     step: int
     tool_call: ToolCall
 
 
 @dataclass(frozen=True, kw_only=True)
 class AgentToolCompletedEvent(Event):
+    trace_event_flow: ClassVar[bool] = False
+
     step: int
     tool_call: ToolCall
     result: ToolExecutionResult
