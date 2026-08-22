@@ -1,6 +1,6 @@
 """Plugin Runtime 通信与状态类型。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import enum
 from types import MappingProxyType
@@ -27,7 +27,9 @@ class PublishedEvent:
     source_plugin_id: PluginId
     event: Event
     hook_run_id: str | None = None
-    hook_context: Mapping[str, Any] = MappingProxyType({})
+    hook_context: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(

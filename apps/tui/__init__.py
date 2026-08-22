@@ -1,1 +1,0 @@
-"""Icarus simple terminal application."""

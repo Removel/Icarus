@@ -54,6 +54,30 @@ def test_event_bus_同一事件扇出且不检查事件类型():
     assert second_events == [event]
 
 
+def test_event_bus_由订阅插件在入队前过滤事件():
+    class FilteringPlugin(RecordingPlugin):
+        def accepts_event(self, source_plugin_id, event):
+            return isinstance(event, SampleEvent) and event.value == "accepted"
+
+    async def run():
+        manager = PluginManager()
+        producer = RecordingPlugin("producer")
+        consumer = FilteringPlugin("consumer")
+        manager.register(producer)
+        manager.register(consumer)
+        manager.subscribe("consumer", "producer")
+        await manager.start()
+        await producer.publish(SampleEvent(value="ignored"))
+        await producer.publish(SampleEvent(value="accepted"))
+        await manager.stop(timeout=1)
+        return consumer.events, manager.get_runtime_snapshot("consumer")
+
+    events, snapshot = asyncio.run(run())
+
+    assert [event.value for event in events] == ["accepted"]
+    assert snapshot.processed_count == 1
+
+
 def test_event_bus_拒绝非运行来源发布():
     async def run():
         manager = PluginManager()

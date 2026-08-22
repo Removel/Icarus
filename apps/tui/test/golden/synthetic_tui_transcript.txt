@@ -1,0 +1,30 @@
+[task] accepted: Accepted by runtime
+[task] running: Agent is running
+[assistant]
+正在**检查配置**……
+
+- 环境正常
+- 准备读取文件
+[tool] read {"path":"配置/你好.md"}
+[tool] read completed: success
+[assistant]
+读取完成。
+
+```python
+print('你好')
+```
+[task] completed
+[task] accepted: Accepted by runtime
+[task] running: Agent is running
+[assistant]
+开始执行失败工具。
+[tool] bash {"command":"false"}
+[tool] bash completed: failed
+[tool-error] exit code 1
+[error] RuntimeError: agent failed
+[task] failed
+[task] accepted: Accepted by runtime
+[task] running: Agent is running
+[assistant]
+第三轮：中文宽字符，队列验证完成。
+[task] completed

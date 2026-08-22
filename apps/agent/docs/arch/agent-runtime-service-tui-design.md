@@ -1,17 +1,22 @@
-# Agent Runtime Service and REPL TUI Design｜Agent 应用服务与 REPL TUI 设计
+# Agent Runtime Service and Textual TUI Integration Design｜Agent 应用服务与 Textual TUI 集成设计
 
 ## 文档定位
 
-本文描述用于验证 Agent Core 的最小应用层与终端应用。
+本文描述 Agent Core 对外提供的进程内应用服务，以及 Textual 终端应用如何只通过该服务
+完成输入提交和实时输出消费。
 
 目标是提供：
 
 - 一个进程内 `AgentRuntimeService`；
-- 一个独立 `apps/tui` REPL 应用；
+- 一个独立 `apps/tui` Textual 全屏应用；
 - 从终端输入到真实 Agent、Tool、Stream、Trace 的完整链路；
 - 未来 HTTP/SSE Transport 可以复用的应用服务入口。
 
-本文不实现正式全屏 TUI、HTTP Server、WebSocket、后端适配器和用户产品功能。
+本文不定义 HTTP Server、WebSocket、后端适配器和用户产品功能。
+
+Textual 布局、持久输入框、本地队列、Markdown 投影和按键交互以
+`apps/tui/docs/arch/tui-persistent-input-queue-design.md` 为准。本文只保留
+`AgentRuntimeService`、输出订阅、TUI 集成路径和业务 History 的应用层边界。
 
 ## Monorepo 位置
 
@@ -22,11 +27,19 @@ apps/
 │       ├── agent_orchestration/
 │       └── application/
 │           ├── __init__.py
-│           └── agent_runtime_service.py
+│           ├── agent_runtime_service.py
+│           └── output_bridge.py
 └── tui/
-    ├── __init__.py
-    ├── main.py
-    ├── renderer.py
+    ├── src/
+    │   ├── __init__.py
+    │   ├── app.py
+    │   ├── chat_state.py
+    │   ├── event_pipeline/
+    │   ├── main.py
+    │   ├── replay.py
+    │   ├── styles.tcss
+    │   ├── transcript.py
+    │   └── widgets/
     └── test/
 ```
 
@@ -39,7 +52,8 @@ apps/
 ```mermaid
 flowchart TD
     U["Terminal User"]
-    T["apps/tui REPL"]
+    T["apps/tui Textual App"]
+    Q["TUI Local Queue"]
     S["AgentRuntimeService"]
     I["UserInputPlugin"]
     B["BlackboardPlugin"]
@@ -49,7 +63,8 @@ flowchart TD
     P["PersistenceRuntime"]
 
     U --> T
-    T --> S
+    T --> Q
+    Q --> S
     S --> I
     I --> B
     B --> A
@@ -92,14 +107,20 @@ class AgentRuntimeService:
     ) -> InputAccepted:
         ...
 
-    async def next_event(self) -> tuple[str, Event]:
+    def subscribe_events(self) -> OutputEventSubscription:
         ...
 
-    async def stop(self) -> None:
+    async def stop(self, timeout: float | None = 30) -> None:
         ...
 ```
 
-初版使用 `next_event()`，而不是提供复杂的多订阅 Stream API。TUI 每次提交后循环读取 Event，直到收到对应任务的 `InputFinishedEvent`。
+每个应用层消费者通过 `subscribe_events()` 创建独立实时订阅。订阅只接收创建后的 Event，
+不回放历史；每个订阅拥有独立队列，因此 TUI、SSE 或其他 Transport 不会竞争消费。
+消费者在 Service 生命周期内从 `OutputEventSubscription.next_event()` 持续读取 Event，使用
+`InputFinishedEvent` 判断对应任务结束，并在自身退出时调用 `close()`。
+
+当前最小实现使用无界队列。未及时消费的 Event 会暂存在该订阅自己的队列中，不阻塞
+其他订阅；暂不实现容量限制、淘汰和慢消费者断开策略。
 
 未来 HTTP/SSE Adapter 可以基于同一 Service 封装为 AsyncIterator 或网络流。
 
@@ -111,6 +132,7 @@ class AgentRuntimeService:
 
 ```text
 UserInputPlugin
+SkillPlugin
 BlackboardPlugin
 AgentPlugin
 OutputBridgePlugin
@@ -119,12 +141,15 @@ OutputBridgePlugin
 订阅关系：
 
 ```text
+user-input → skill
 user-input → blackboard
 user-input → output-bridge
 
+skill → blackboard
 blackboard → agent
 
 agent → user-input
+agent → skill
 agent → blackboard
 agent → output-bridge
 ```
@@ -136,7 +161,7 @@ agent → output-bridge
 职责：
 
 - 订阅 UserInputPlugin 和 AgentPlugin；
-- 将 Event 放入 Service 的输出队列；
+- 将 Event 广播到每个当前实时订阅的独立队列；
 - 不转换 Event；
 - 不处理业务逻辑；
 - 不直接打印终端。
@@ -145,18 +170,19 @@ agent → output-bridge
 
 ## Blackboard 配置
 
-TUI MVP 暂未接 Memory、Skill、Knowledge 等 Context Plugin，因此：
+当前应用服务已经接入 SkillPlugin，Blackboard 每轮等待 Skill Context 后再生成 Agent
+Context：
 
 ```python
 BlackboardPlugin(
-    required_context_sources=set(),
+    required_context_sources={"skill"},
     model_role="thinking",
     system_prompt=<stable prompt>,
     tools=None,
 )
 ```
 
-`tools=None` 表示使用全部已注册工具。
+`tools=None` 表示使用全部已注册工具。Memory、Knowledge 等其他 Context Plugin 尚未接入。
 
 System Prompt 使用稳定固定值，不从用户输入动态修改。
 
@@ -190,35 +216,35 @@ workspaces/<workspace_key>/sessions/<session_id>/
 TUI 不读取 Trace 恢复 History。需要恢复业务历史时，由上层在创建
 `AgentRuntimeService` 时通过 `initial_messages` 一次性注入 Blackboard。
 
-## REPL 交互
+## Textual TUI 交互
 
-采用串行 REPL：
+当前终端应用保持一个持久 Composer，并在 TUI 层维护待发送队列：
 
 ```text
-Icarus> 用户输入
-→ 提交 UserInputPlugin
-→ 流式展示 Agent 事件
-→ 等待 InputFinishedEvent
-→ 再显示 Icarus>
+Enter
+→ 消息进入 TUI 本地 deque
+→ Runtime 空闲时提交队首
+→ 流式展示当前任务 Event
+→ InputFinishedEvent 结束当前活动任务
+→ 若队列非空则自动提交下一条
 ```
 
-任务执行期间不开放新输入，避免标准终端中输入行与流式输出冲突。
+Agent 执行期间 Composer 仍可编辑，`Enter` 可以继续加入本地队列。TUI 一次只向 Runtime
+提交一个活动任务：正常消费从队首开始，只有当前任务的 `InputFinishedEvent` 到达后才调度
+下一条。Runtime 的内部 FIFO 不替代面向用户展示和撤回的 TUI 队列。
 
-底层 UserInputPlugin 仍支持 FIFO 队列；未来全屏 TUI 可以开放任务执行中的继续输入。
+队首消息仅在 `submit()` 返回 `InputAccepted` 后从本地队列移除。TUI 保存返回的 `task_id`，
+只让匹配当前活动任务的 Event 改变当前任务状态；Output Bridge 广播的原始 Event 不承担
+UI 排队语义。
 
 ### 退出
 
-输入：
-
-```text
-exit
-quit
-```
-
-执行：
+完整输入 `exit` / `quit`、空输入上的 `Ctrl+D`，或 Agent 空闲且草稿和队列均为空时按
+`Ctrl+C`，都会退出整个 TUI。退出流程为：
 
 ```text
 停止接受输入
+→ 关闭 Output Event 订阅
 → PluginManager Drain
 → Persistence Writer Drain
 → 关闭 LLM Client
@@ -229,11 +255,9 @@ quit
 
 ### AgentTextDeltaEvent
 
-原地输出：
-
-```python
-print(event.text, end="", flush=True)
-```
+连续文字增量由 TUI 投影到当前 Textual Markdown 消息组件，并在应用内 Conversation
+滚动区域实时刷新；工具或终止事件到达时结束当前流式段。应用服务只广播原始 Event，
+不参与样式处理。
 
 ### AgentToolStartedEvent
 
@@ -258,8 +282,10 @@ print(event.text, end="", flush=True)
 ### InputQueuedEvent
 
 ```text
-[queue] task accepted, position=0
+[task] accepted by runtime, position=0
 ```
+
+该事件只表示 Runtime 已接收当前活动任务，不作为 TUI 本地待发送队列项重复展示。
 
 ### InputStartedEvent
 
@@ -267,7 +293,7 @@ print(event.text, end="", flush=True)
 
 ### InputFinishedEvent
 
-用于结束当前 REPL 等待并显示下一次提示。
+用于结束当前活动任务；TUI 随后回到等待状态，或自动调度本地队列中的下一条消息。
 
 ### AgentErrorEvent
 
@@ -292,37 +318,43 @@ ToolCall、ToolResult、Reasoning 和 Plugin Event 仍不进入跨轮业务 Hist
 - `ICARUS_DATA_DIR` 缺失：启动失败；
 - AgentErrorEvent：显示错误并等待 InputFinishedEvent；
 - Plugin Runtime 启动失败：关闭已启动组件；
-- EOF / Ctrl+D：等价于退出；
-- KeyboardInterrupt / Ctrl+C：
-  - 输入阶段：退出；
-  - 任务执行阶段：当前 MVP 不实现任务取消，打印提示并继续等待任务完成。
+- 空输入上的 EOF / `Ctrl+D`：退出整个 TUI；
+- `Ctrl+C` 按上下文只执行一个动作：
+  - 草稿非空：清空草稿；
+  - 草稿为空且本地队列非空：从队尾撤回最新消息并恢复到 Composer；
+  - 草稿和队列为空但任务运行中：提示当前 Runtime 尚不支持任务级取消，任务继续运行；
+  - 草稿和队列为空且 Agent 空闲：正常退出整个 TUI。
 
-取消能力在后续阶段加入。
+任务级取消能力在后续阶段加入；当前实现不会通过停止并重启整个 Runtime 或发送普通消息
+伪造取消。
 
-## 不实现
+## 应用服务层不实现
 
-- Textual/Rich/prompt_toolkit；
-- 全屏布局；
+- 全屏布局与 Textual；
 - HTTP/SSE/WebSocket；
-- Markdown 渲染；
 - 历史 Session 恢复；
 - 任务取消；
 - 队列重排；
 - StylePlugin；
-- Memory/Skill/Knowledge；
+- Memory/Knowledge 等尚未接入的 Context Plugin；
 - 图片本地上传；
 - 配置页面；
 - 自动补全和快捷键。
+
+Textual 输入、Markdown 渲染和快捷键属于 `apps/tui`，不属于
+`AgentRuntimeService` 职责。
 
 ## 验收标准
 
 - `apps/tui` 可直接启动；
 - 真实模型可以完成纯文本对话；
 - 工具调用能展示开始和完成状态；
-- 文字按 Delta 流式打印；
+- 文字按 Delta 流式更新 Markdown 消息；
+- Agent 运行中仍可编辑并把消息加入 TUI 本地队列；
+- Runtime 的多个实时订阅各自收到相同 Event，不竞争消费；
 - 多轮输入使用内存 History；
-- `exit/quit/EOF` 正常 Drain；
+- `exit/quit/EOF` 和空闲 `Ctrl+C` 正常 Drain；
 - Trace 和 runtime.log 正常生成；
 - TUI 不直接依赖 PluginManager、EventBus、BlackboardPlugin；
 - AgentRuntimeService 可以被未来 Transport 复用；
-- 全量 Agent 测试不回归。
+- 相关 Runtime 测试和 TUI 测试通过。

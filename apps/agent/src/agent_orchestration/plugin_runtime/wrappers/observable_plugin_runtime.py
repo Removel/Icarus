@@ -24,6 +24,9 @@ class ObservablePluginRuntime(PluginRuntime):
         await self._lifecycle("stop", stop_runtime)
 
     async def _consume(self, published_event: PublishedEvent) -> None:
+        if not published_event.event.trace_event_flow:
+            await super()._consume(published_event)
+            return
         data = {
             "plugin_id": self.plugin_id,
             "published_event": published_event,

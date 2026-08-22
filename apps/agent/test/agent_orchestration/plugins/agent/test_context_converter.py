@@ -61,3 +61,25 @@ def test_blackboard_context_converter_失败上下文追加到当前用户输入
     assert invocation.system_prompt == "stable-system"
     assert "<plugin_context_errors>" in invocation.input_prompt
     assert '"memory":"timeout"' in invocation.input_prompt
+
+
+def test_blackboard_context_converter_优先使用blackboard已组合的input_prompt():
+    converter = BlackboardContextConverter()
+    event = BlackboardContextReadyEvent(
+        correlation_id="task-1",
+        model_role="thinking",
+        system_prompt="stable-system",
+        prompt="raw request",
+        input_prompt="already composed",
+        context_blocks=[
+            ContextBlock(
+                source_plugin_id="memory",
+                context_type="memory",
+                content="must not be composed again",
+            )
+        ],
+    )
+
+    invocation = converter.convert(event)
+
+    assert invocation.input_prompt == "already composed"

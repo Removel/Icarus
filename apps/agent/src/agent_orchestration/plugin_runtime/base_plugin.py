@@ -40,6 +40,15 @@ class BasePlugin(ABC):
     async def drain(self) -> None:
         pass
 
+    def accepts_event(
+        self,
+        source_plugin_id: PluginId,
+        event: Event,
+    ) -> bool:
+        """Return whether a source-routed Event should enter this Plugin inbox."""
+
+        return True
+
     async def publish(self, event: Event) -> None:
         if self._publisher is None:
             raise RuntimeError(f"Plugin is not bound to EventBus: {self.plugin_id}")
