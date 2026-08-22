@@ -14,11 +14,20 @@ from apps.tui.src.widgets.conversation import ConversationView
 from apps.tui.src.widgets.messages import (
     AssistantMessage,
     ErrorMessage,
+    ICARUS_LOGO,
     ToolMessage,
     TurnStatusMessage,
     UserMessage,
     WelcomeMessage,
 )
+
+
+def test_icarus_logo保持八行且包含完整品牌名():
+    lines = ICARUS_LOGO.splitlines()
+
+    assert len(lines) == 8
+    assert all(line.strip() for line in lines)
+    assert max(len(line) for line in lines) <= 72
 
 
 class ConversationTestApp(App):
