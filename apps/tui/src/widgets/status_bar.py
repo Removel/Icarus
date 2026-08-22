@@ -35,6 +35,8 @@ class RuntimeStatusBar(Static):
             RuntimePhase.STOPPING: "Stopping",
             RuntimePhase.FAILED: "Failed",
         }
+        for phase in RuntimePhase:
+            self.set_class(self.phase == phase, f"phase-{phase.value}")
         parts = []
         if self.show_phase:
             if self.phase == RuntimePhase.STARTING:

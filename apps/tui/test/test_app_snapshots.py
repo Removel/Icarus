@@ -20,12 +20,16 @@ from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolCall
 from apps.tui.src.app import IcarusTextualApp
 from apps.tui.src.chat_state import RuntimePhase
+from apps.tui.src.event_pipeline import AppendToolStarted, UpdateToolCompleted
 from apps.tui.src.widgets import (
     AssistantMessage,
+    ConversationView,
     ErrorMessage,
     QueuePanel,
     ToolMessage,
     TurnStatusMessage,
+    UserMessage,
+    WelcomeMessage,
 )
 
 
@@ -116,8 +120,14 @@ async def wait_until(pilot, predicate: Callable[[], bool]) -> None:
 
 
 async def wait_ready(pilot) -> None:
+    conversation = pilot.app.query_one(ConversationView)
     await wait_until(
-        pilot, lambda: pilot.app.chat_state.phase == RuntimePhase.READY
+        pilot,
+        lambda: (
+            pilot.app.chat_state.phase == RuntimePhase.READY
+            and conversation.is_mounted
+            and len(conversation.query(WelcomeMessage)) == 1
+        ),
     )
 
 
@@ -126,7 +136,11 @@ async def submit_text(pilot, text: str) -> None:
     await pilot.press(*keys, "enter")
     await wait_until(
         pilot,
-        lambda: bool(pilot.app.service and pilot.app.service.submissions),
+        lambda: (
+            bool(pilot.app.service and pilot.app.service.submissions)
+            and len(pilot.app.query(UserMessage))
+            == len(pilot.app.service.submissions)
+        ),
     )
 
 
@@ -300,6 +314,45 @@ def test_snapshot_running_with_pending_queue(snap_compare):
                 "Review the documentation",
                 "Run the complete suite\nand inspect the snapshots",
             ),
+        )
+
+    assert snap_compare(
+        make_app(),
+        terminal_size=(100, 32),
+        run_before=prepare,
+    )
+
+
+def test_snapshot_tool_success_uses_positive_state_color(snap_compare):
+    tool_call = ToolCall(
+        id="call-read",
+        name="read_workspace_config",
+        arguments={"path": "settings.json"},
+    )
+
+    async def prepare(pilot) -> None:
+        await wait_ready(pilot)
+        await submit_text(pilot, "Inspect the workspace configuration")
+        conversation = pilot.app.query_one(ConversationView)
+        await conversation.apply_action(
+            AppendToolStarted(
+                task_id="task-1",
+                call_id=tool_call.id,
+                tool_name=tool_call.name,
+                arguments_json='{"path":"settings.json"}',
+            )
+        )
+        await conversation.apply_action(
+            UpdateToolCompleted(
+                task_id="task-1",
+                call_id=tool_call.id,
+                tool_name=tool_call.name,
+                success=True,
+            )
+        )
+        await wait_until(
+            pilot,
+            lambda: pilot.app.query_one(ToolMessage).success is True,
         )
 
     assert snap_compare(

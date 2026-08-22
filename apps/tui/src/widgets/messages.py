@@ -9,12 +9,23 @@ from textual.containers import Vertical
 from textual.widgets import Label, Markdown, Static
 
 
+ICARUS_LOGO = """▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄▄    ▄▄▄▄▄    ▄▄▄▄▄▄▄▄▄   ▄▄▄▄▄ ▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄▄▄
+█▒░░█ █▒░░░░░░░█  ▄▀░░░░░ ▄  █▒░░░░░░░█▄ █▒░░█ █░░░█ █▒░░░░░▒░░█
+█▓▒▒█ █▓▒▒█▀▀▀▀▀ █▓▒▒▄▀▄▓▒▒█ █▓▒▒█▀▄▒▒▒█ █▓▒▒█ █▒▒▒█ █▓▒▒█▀▀▀▀▀▀
+██▓▓█ ██▓▓█      ██▓▓▄▄██▓▓█ ██▓▓▄▄▓▓▓▄▀ ██▓▓█ █▓▓▓█ ██▓▓▄███▓▓█
+█▄▄▄█ █▄▄▄█      █▄▄▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄▄█  █▄▄▄█ █▄▄▄█ ▀▄▄▄▄▄▄▄▄▄█
+█▒░░█ █▒░░▀▄▄▄▄▄ █▒░░█ █▒░░█ █▒░░█ █▒░░█ █▓░░▀▄▄▒░░█ ▄▄▄▄▄▄█▒░░█
+█░░░█ █░░░░░░░░█ █░░░█ █░░░█ █░░░█ █░░░█ █░░░░░░░░░█ █░░░░░░░░░█
+▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀▀▀"""
+
+
 class WelcomeMessage(Vertical):
     def __init__(self, workspace_path: str | Path) -> None:
         super().__init__(classes="message welcome-message")
         self.workspace_path = Path(workspace_path).expanduser().resolve()
 
     def compose(self) -> ComposeResult:
+        yield Static(ICARUS_LOGO, markup=False, classes="welcome-logo")
         yield Label("Icarus", classes="welcome-title")
         yield Static(
             f"Workspace  {self.workspace_path}",

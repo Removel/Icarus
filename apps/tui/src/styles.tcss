@@ -1,14 +1,15 @@
-$icarus-background: #101317;
-$icarus-surface: #171b21;
-$icarus-panel: #1d232b;
-$icarus-border: #3a4552;
-$icarus-muted: #8a95a3;
-$icarus-text: #e7ebef;
-$icarus-accent: #6fd3d5;
-$icarus-blue: #77a8ff;
-$icarus-green: #79d694;
-$icarus-red: #ff7f87;
-$icarus-yellow: #e6c66a;
+$icarus-background: #0d0d11;
+$icarus-surface: #151217;
+$icarus-panel: #1b171c;
+$icarus-raised: #211a1f;
+$icarus-border: #49343c;
+$icarus-muted: #9b8b92;
+$icarus-text: #f2eaeb;
+$icarus-accent: #f3c5cf;
+$icarus-pink: #d5687d;
+$icarus-green: #70c79a;
+$icarus-red: #f07883;
+$icarus-yellow: #e2bd78;
 
 Screen {
     background: $icarus-background;
@@ -21,14 +22,14 @@ Screen {
     padding: 0 2;
     color: $icarus-accent;
     text-style: bold;
-    background: $icarus-surface;
+    background: $icarus-raised;
 }
 
 #workspace-label {
     height: 1;
     padding: 0 2;
     color: $icarus-muted;
-    background: $icarus-surface;
+    background: $icarus-raised;
     text-overflow: ellipsis;
 }
 
@@ -36,6 +37,9 @@ Screen {
     height: 1fr;
     padding: 1 2;
     scrollbar-size-vertical: 1;
+    scrollbar-color: $icarus-pink;
+    scrollbar-color-hover: $icarus-accent;
+    scrollbar-background: $icarus-background;
 }
 
 .message {
@@ -50,7 +54,15 @@ Screen {
     background: $icarus-surface;
 }
 
+.welcome-logo {
+    width: auto;
+    height: 8;
+    color: $icarus-accent;
+    text-style: bold;
+}
+
 .welcome-title {
+    display: none;
     color: $icarus-accent;
     text-style: bold;
 }
@@ -66,13 +78,21 @@ Screen {
 }
 
 .user-message {
-    border-left: thick $icarus-blue;
+    border-left: thick $icarus-pink;
     padding-left: 1;
+}
+
+.user-message .message-label {
+    color: $icarus-pink;
 }
 
 .assistant-message {
     border-left: thick $icarus-accent;
     padding-left: 1;
+}
+
+.assistant-message .message-label {
+    color: $icarus-accent;
 }
 
 .assistant-markdown {
@@ -97,7 +117,23 @@ Screen {
     color: $icarus-green;
 }
 
+.tool-message.is-success {
+    border-left: thick $icarus-green;
+}
+
+.tool-message.is-success .tool-summary {
+    color: $icarus-green;
+}
+
 .tool-message.is-failed .tool-state {
+    color: $icarus-red;
+}
+
+.tool-message.is-failed {
+    border-left: thick $icarus-red;
+}
+
+.tool-message.is-failed .tool-summary {
     color: $icarus-red;
 }
 
@@ -115,6 +151,10 @@ Screen {
     color: $icarus-red;
 }
 
+.turn-cancelled {
+    color: $icarus-red;
+}
+
 #queue-panel {
     height: auto;
     max-height: 8;
@@ -123,6 +163,8 @@ Screen {
     border-bottom: solid $icarus-border;
     background: $icarus-surface;
     scrollbar-size-vertical: 1;
+    scrollbar-color: $icarus-yellow;
+    scrollbar-background: $icarus-surface;
 }
 
 #queue-panel.is-empty {
@@ -174,6 +216,8 @@ Screen {
     border: none;
     background: $icarus-panel;
     scrollbar-size-vertical: 1;
+    scrollbar-color: $icarus-pink;
+    scrollbar-background: $icarus-panel;
 }
 
 #composer:focus {
@@ -186,6 +230,19 @@ Screen {
     color: $icarus-muted;
     background: $icarus-surface;
     text-overflow: ellipsis;
+}
+
+#status-bar.phase-ready {
+    color: $icarus-green;
+}
+
+#status-bar.phase-running {
+    color: $icarus-accent;
+}
+
+#status-bar.phase-cancelling,
+#status-bar.phase-failed {
+    color: $icarus-red;
 }
 
 Screen.-narrow #workspace-label {
@@ -203,6 +260,16 @@ Screen.-narrow #composer-shell {
 
 Screen.-narrow .welcome-help {
     display: none;
+}
+
+Screen.-narrow .welcome-logo,
+Screen.-short .welcome-logo {
+    display: none;
+}
+
+Screen.-narrow .welcome-title,
+Screen.-short .welcome-title {
+    display: block;
 }
 
 Screen.-short #composer-shell {

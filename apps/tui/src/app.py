@@ -156,7 +156,7 @@ class IcarusTextualApp(App[int]):
         self._fatal_failure = False
 
     def compose(self) -> ComposeResult:
-        yield Static("Icarus", id="app-title", markup=False)
+        yield Static("ICARUS", id="app-title", markup=False)
         yield Static(str(self.workspace_path), id="workspace-label", markup=False)
         yield ConversationView(self.workspace_path, id="conversation")
         yield QueuePanel(id="queue-panel")
