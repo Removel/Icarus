@@ -7,6 +7,10 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentResponse,
     AgentTextDeltaEvent,
 )
+from apps.agent.src.agent_orchestration.run_control import (
+    TaskCancelResultEvent,
+    TaskContextInputResultEvent,
+)
 from apps.agent.src.agent_orchestration.plugins import (
     InputFinishedEvent,
     InputQueuedEvent,
@@ -216,6 +220,52 @@ def test_runtime_service_未启动时拒绝提交和订阅事件(tmp_path):
             service.subscribe_events()
 
     asyncio.run(run())
+
+
+def test_runtime_service_未启动时取消返回not_running(tmp_path):
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+        )
+        cancel = await service.cancel_task("task-1", "stop")
+        return cancel
+
+    cancel = asyncio.run(run())
+
+    assert cancel.status == "not_running"
+
+
+def test_runtime_service准备阶段取消task(tmp_path):
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+        )
+        agent = AgentStub()
+        service.agent_factory.get_agent = lambda model_role: agent
+        await service.start()
+        subscription = service.subscribe_events()
+
+        accepted = await service.submit("hello")
+        cancel = await service.cancel_task(accepted.task_id, "user_requested")
+        events = await collect_task_events(subscription, accepted.task_id)
+        subscription.close()
+        await service.stop(timeout=1)
+        return accepted, cancel, events, agent.calls
+
+    accepted, cancel, events, calls = asyncio.run(run())
+
+    assert cancel.status == "accepted"
+    assert calls == []
+    finished = next(
+        event for _, event in events if isinstance(event, InputFinishedEvent)
+    )
+    assert finished.status == "cancelled"
+    assert not any(
+        isinstance(event, (TaskContextInputResultEvent, TaskCancelResultEvent))
+        for _, event in events
+    )
 
 
 def test_runtime_service_停止后再次启动给出明确生命周期错误(tmp_path):

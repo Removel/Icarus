@@ -1,16 +1,30 @@
 import asyncio
 
 from apps.agent.src.agent_orchestration.capability import (
+    AgentCancelledEvent,
     AgentCompletedEvent,
+    AgentErrorEvent,
     AgentResponse,
     AgentTextDeltaEvent,
 )
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.hooks import (
+    BaseHook,
+    HookDispatcher,
+    HookRegistry,
+)
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin, PluginManager
 from apps.agent.src.agent_orchestration.plugins import (
     AgentPlugin,
     BlackboardContextReadyEvent,
+)
+from apps.agent.src.agent_orchestration.run_control import TaskChannelRegistry
+from apps.agent.src.agent_orchestration.run_control import (
+    TaskCancelRequestedEvent,
+    TaskCancelResultEvent,
+    TaskContextInputEvent,
+    TaskContextInputResultEvent,
 )
 from apps.agent.src.model_provider.types import Message, TextPart
 
@@ -39,6 +53,7 @@ class StubAgent(BaseAgent):
         input_prompt,
         input_images=None,
         tools=None,
+        run_control=None,
     ):
         self.calls.append(
             {
@@ -47,6 +62,7 @@ class StubAgent(BaseAgent):
                 "input_prompt": input_prompt,
                 "input_images": input_images,
                 "tools": tools,
+                "run_control": run_control,
             }
         )
         yield AgentTextDeltaEvent(step=1, text="hello")
@@ -81,12 +97,23 @@ class SinkPlugin(BasePlugin):
         self.events.append(event)
 
 
+class RecordingHook(BaseHook):
+    def __init__(self) -> None:
+        self.events = []
+
+    def handle(self, event) -> None:
+        self.events.append(event)
+
+
 def test_agent_plugin_只消费context并原样发布stream_event():
     async def run():
         manager = PluginManager()
         blackboard = SinkPlugin("blackboard")
         factory = StubAgentFactory()
-        agent_plugin = AgentPlugin("agent", factory)
+        task_channels = TaskChannelRegistry()
+        channel = task_channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, task_channels)
         sink = SinkPlugin("sink")
         for plugin in (blackboard, agent_plugin, sink):
             manager.register(plugin)
@@ -146,3 +173,295 @@ def test_blackboard_context_event_保持扁平agent参数():
     assert event.input_prompt == "composed-input"
     assert event.input_images == []
     assert event.tools == ["read"]
+
+
+def test_agent_plugin运行中取消发布唯一cancelled终态():
+    class BlockingAgent(StubAgent):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def astream(self, *args, run_control=None, **kwargs):
+            del args, kwargs
+            self.started.set()
+            await asyncio.Event().wait()
+            if False:
+                yield
+
+    async def run():
+        manager = PluginManager()
+        blackboard = SinkPlugin("blackboard")
+        factory = StubAgentFactory()
+        factory.agent = BlockingAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (blackboard, agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("agent", "blackboard")
+        manager.subscribe("sink", "agent")
+        await manager.start()
+
+        await blackboard.publish(
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            )
+        )
+        await factory.agent.started.wait()
+        channel.checkpoint_history(
+            [Message("user", [TextPart("safe prefix")])]
+        )
+        first = agent_plugin.handle_task_operation(
+            "external",
+            TaskCancelRequestedEvent(
+                task_id="task-1",
+                reason="user_requested",
+            ),
+        )
+        second = agent_plugin.handle_task_operation(
+            "external",
+            TaskCancelRequestedEvent(task_id="task-1", reason="again"),
+        )
+        await agent_plugin.drain()
+        await manager.event_bus.drain()
+        await sink.drain()
+        events = list(sink.events)
+        await manager.stop(timeout=1)
+        return first, second, events, channel
+
+    first, second, events, channel = asyncio.run(run())
+    cancelled = [event for event in events if isinstance(event, AgentCancelledEvent)]
+
+    assert first.status == "accepted"
+    assert second.status in {"already_cancelling", "already_finished"}
+    assert len(cancelled) == 1
+    assert cancelled[0].reason == "user_requested"
+    assert cancelled[0].task_messages == (
+        Message("user", [TextPart("safe prefix")]),
+    )
+    assert channel.status.value == "cancelled"
+
+
+def test_agent_plugin在run协程启动前取消仍发布cancelled终态():
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+
+        await agent_plugin.consume(
+            "blackboard",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            ),
+        )
+        result = agent_plugin.handle_task_operation(
+            "external",
+            TaskCancelRequestedEvent(
+                task_id="task-1",
+                reason="cancel_before_start",
+            ),
+        )
+        await agent_plugin.drain()
+        await manager.stop(timeout=1)
+        return result, factory, sink.events, channel
+
+    result, factory, events, channel = asyncio.run(run())
+    cancelled = [event for event in events if isinstance(event, AgentCancelledEvent)]
+
+    assert result.status == "accepted"
+    assert factory.roles == []
+    assert len(cancelled) == 1
+    assert cancelled[0].reason == "cancel_before_start"
+    assert channel.status.value == "cancelled"
+
+
+def test_agent_plugin仅为eventbus操作发布结果事件():
+    async def run():
+        manager = PluginManager()
+        source = SinkPlugin("source")
+        factory = StubAgentFactory()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (source, agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("agent", "source")
+        manager.subscribe("sink", "agent")
+        await manager.start()
+
+        direct = agent_plugin.handle_task_operation(
+            "service",
+            TaskContextInputEvent(task_id="task-1", content="direct"),
+        )
+        await manager.event_bus.drain()
+        await sink.drain()
+        direct_events = list(sink.events)
+
+        request = TaskContextInputEvent(
+            task_id="task-1",
+            content="from event",
+        )
+        await source.publish(request)
+        await manager.stop(timeout=1)
+        return direct, direct_events, request, sink.events
+
+    direct, direct_events, request, events = asyncio.run(run())
+    results = [
+        event for event in events if isinstance(event, TaskContextInputResultEvent)
+    ]
+
+    assert direct.status == "accepted"
+    assert direct_events == []
+    assert len(results) == 1
+    assert results[0].request_event_id == request.event_id
+    assert results[0].status == "accepted"
+    assert not any(isinstance(event, TaskCancelResultEvent) for event in events)
+
+
+def test_agent_plugin记录操作结果和已应用context():
+    registry = HookRegistry()
+    recorder = RecordingHook()
+    registry.register("*", recorder)
+    channels = TaskChannelRegistry()
+    channel = channels.create("task-1")
+    channel.mark_preparing_context()
+    channel.start_run("run-1")
+    plugin = AgentPlugin(
+        "agent",
+        StubAgentFactory(),
+        channels,
+        hook_dispatcher=HookDispatcher(registry),
+    )
+    request = TaskContextInputEvent(task_id="task-1", content="extra")
+
+    result = plugin.handle_task_operation("memory", request)
+    batch = channel.drain_context(applied_before_step=2)
+    assert batch is not None
+    plugin._trace_applied_context(
+        "task-1",
+        channel,
+    )
+
+    assert result.status == "accepted"
+    assert [event.name for event in recorder.events] == [
+        "task.operation",
+        "task.operation",
+        "task.context",
+    ]
+    assert [event.phase for event in recorder.events] == [
+        "before",
+        "after",
+        "applied",
+    ]
+    assert {event.run_id for event in recorder.events} == {"run-1"}
+    assert recorder.events[1].data["status"] == "accepted"
+    assert recorder.events[2].data["request_event_id"] == request.event_id
+
+
+def test_agent_plugin为直接异常发布failed终态():
+    class FailingAgent(StubAgent):
+        async def astream(self, *args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("agent exploded")
+            if False:
+                yield
+
+    async def run():
+        manager = PluginManager()
+        blackboard = SinkPlugin("blackboard")
+        factory = StubAgentFactory()
+        factory.agent = FailingAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (blackboard, agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("agent", "blackboard")
+        manager.subscribe("sink", "agent")
+        await manager.start()
+
+        await blackboard.publish(
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            )
+        )
+        await manager.stop(timeout=1)
+        events = list(sink.events)
+        return events, channel
+
+    events, channel = asyncio.run(run())
+    errors = [event for event in events if isinstance(event, AgentErrorEvent)]
+
+    assert len(errors) == 1
+    assert errors[0].error_message == "agent exploded"
+    assert channel.status.value == "failed"
+
+
+def test_agent_plugin最终关闭后异常仍发布failed终态():
+    class ErrorAfterCloseAgent(StubAgent):
+        async def astream(self, *args, run_control=None, **kwargs):
+            del args, kwargs
+            assert run_control is not None
+            run_control.close_or_drain(applied_before_step=1)
+            yield AgentErrorEvent(
+                step=0,
+                error_type="RuntimeError",
+                error_message="too late",
+            )
+
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        factory.agent = ErrorAfterCloseAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+
+        await agent_plugin.consume(
+            "blackboard",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            ),
+        )
+        await agent_plugin.drain()
+        await manager.stop(timeout=1)
+        return sink.events, channel
+
+    events, channel = asyncio.run(run())
+
+    errors = [event for event in events if isinstance(event, AgentErrorEvent)]
+    assert len(errors) == 1
+    assert errors[0].error_message == "too late"
+    assert channel.status.value == "failed"

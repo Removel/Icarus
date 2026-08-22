@@ -200,10 +200,15 @@ def _has_task_id(task_id: str | None) -> bool:
 
 def tool_traces_from_messages(
     messages: Sequence[Message],
+    *,
+    task_message_start: int | None = None,
 ) -> tuple[ToolCallTrace, ...]:
     """Build ordered current-turn traces from a completed Agent message list."""
 
-    current_turn = _current_turn_messages(messages)
+    current_turn = _current_turn_messages(
+        messages,
+        task_message_start=task_message_start,
+    )
 
     mutable: list[_MutableToolCallTrace] = []
     step = 0
@@ -256,17 +261,32 @@ def tool_traces_from_messages(
     )
 
 
-def tool_call_count_from_messages(messages: Sequence[Message]) -> int:
+def tool_call_count_from_messages(
+    messages: Sequence[Message],
+    *,
+    task_message_start: int | None = None,
+) -> int:
     """Count current-turn ToolCalls without parsing potentially large results."""
 
     return sum(
         len(message.tool_calls)
-        for message in _current_turn_messages(messages)
+        for message in _current_turn_messages(
+            messages,
+            task_message_start=task_message_start,
+        )
         if message.role == "assistant"
     )
 
 
-def _current_turn_messages(messages: Sequence[Message]) -> Sequence[Message]:
+def _current_turn_messages(
+    messages: Sequence[Message],
+    *,
+    task_message_start: int | None = None,
+) -> Sequence[Message]:
+    if task_message_start is not None:
+        if not 0 <= task_message_start < len(messages):
+            raise ToolTrajectoryError("task_message_start is out of range")
+        return messages[task_message_start:]
     user_indexes = [
         index for index, message in enumerate(messages) if message.role == "user"
     ]

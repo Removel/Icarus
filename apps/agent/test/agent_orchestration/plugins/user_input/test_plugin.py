@@ -4,10 +4,12 @@ from contextlib import contextmanager
 import pytest
 
 from apps.agent.src.agent_orchestration.capability import (
+    AgentCancelledEvent,
     AgentCompletedEvent,
     AgentErrorEvent,
     AgentResponse,
 )
+from apps.agent.src.agent_orchestration.run_control import TaskChannelRegistry
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin, PluginManager
 from apps.agent.src.agent_orchestration.plugins import (
@@ -222,3 +224,115 @@ def test_user_input_plugin_未启动时拒绝submit():
             await plugin.submit("hello")
 
     asyncio.run(run())
+
+
+def test_user_input_plugin准备阶段取消直接收口并开始下一task():
+    async def run():
+        manager = PluginManager()
+        channels = TaskChannelRegistry()
+        user_input = UserInputPlugin(
+            "user-input",
+            SessionStub(),
+            task_channels=channels,
+        )
+        sink = SinkPlugin("sink")
+        agent = SinkPlugin("agent")
+        for plugin in (user_input, sink, agent):
+            manager.register(plugin)
+        manager.subscribe("sink", "user-input")
+        manager.subscribe("user-input", "agent")
+        await manager.start()
+
+        first = await user_input.submit("first")
+        second = await user_input.submit("second")
+        await wait_until(
+            lambda: any(
+                isinstance(event, UserInputEvent) and event.task_id == first.task_id
+                for _, event in sink.received
+            )
+        )
+        channels.request_cancel(first.task_id, "user_requested")
+        await wait_until(
+            lambda: any(
+                isinstance(event, UserInputEvent) and event.task_id == second.task_id
+                for _, event in sink.received
+            )
+        )
+        await agent.publish(
+            AgentCompletedEvent(
+                task_id=second.task_id,
+                step=1,
+                response=AgentResponse(
+                    message=Message("assistant", [TextPart("done")])
+                ),
+            )
+        )
+        await user_input.drain()
+        await manager.stop(timeout=1)
+        return first, second, sink.received, channels
+
+    first, second, events, channels = asyncio.run(run())
+    finished = [
+        event for _, event in events if isinstance(event, InputFinishedEvent)
+    ]
+
+    assert [(event.task_id, event.status) for event in finished] == [
+        (first.task_id, "cancelled"),
+        (second.task_id, "completed"),
+    ]
+    assert channels.request_cancel(first.task_id).status == "already_finished"
+
+
+def test_user_input_plugin运行阶段等待agent取消终态():
+    async def run():
+        manager = PluginManager()
+        channels = TaskChannelRegistry()
+        user_input = UserInputPlugin(
+            "user-input",
+            SessionStub(),
+            task_channels=channels,
+        )
+        sink = SinkPlugin("sink")
+        agent = SinkPlugin("agent")
+        for plugin in (user_input, sink, agent):
+            manager.register(plugin)
+        manager.subscribe("sink", "user-input")
+        manager.subscribe("user-input", "agent")
+        await manager.start()
+
+        accepted = await user_input.submit("first")
+        await wait_until(
+            lambda: any(
+                isinstance(event, UserInputEvent)
+                for _, event in sink.received
+            )
+        )
+        channel = channels.get(accepted.task_id)
+        assert channel is not None
+        channel.start_run("run-1")
+        channels.request_cancel(accepted.task_id, "user_requested")
+        await asyncio.sleep(0)
+        assert not any(
+            isinstance(event, InputFinishedEvent)
+            for _, event in sink.received
+        )
+
+        channel.mark_cancelled()
+        await agent.publish(
+            AgentCancelledEvent(
+                task_id=accepted.task_id,
+                step=0,
+                reason="user_requested",
+            )
+        )
+        await user_input.drain()
+        await manager.stop(timeout=1)
+        return accepted, sink.received
+
+    accepted, events = asyncio.run(run())
+    finished = [
+        event for _, event in events if isinstance(event, InputFinishedEvent)
+    ]
+    assert [(event.task_id, event.status) for event in finished] == [
+        (accepted.task_id, "cancelled")
+    ]

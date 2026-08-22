@@ -154,6 +154,27 @@ def test完整messages可只统计工具数量而不解析结果正文():
         tool_traces_from_messages(messages)
 
 
+def test显式task起点不会被运行中context截断工具轨迹():
+    first = ToolCall(id="first", name="read", arguments={})
+    second = ToolCall(id="second", name="bash", arguments={})
+    messages = [
+        Message("user", [TextPart("old turn")]),
+        Message("assistant", [TextPart("old answer")]),
+        Message("user", [TextPart("current turn")]),
+        Message("assistant", [], tool_calls=[first]),
+        result_message(first.id, ToolExecutionResult(success=True, output="first")),
+        Message("user", [TextPart("<runtime_context>extra</runtime_context>")]),
+        Message("assistant", [], tool_calls=[second]),
+        result_message(second.id, ToolExecutionResult(success=True, output="second")),
+        Message("assistant", [TextPart("done")]),
+    ]
+
+    traces = tool_traces_from_messages(messages, task_message_start=2)
+
+    assert [trace.tool_call.id for trace in traces] == ["first", "second"]
+    assert tool_call_count_from_messages(messages, task_message_start=2) == 2
+
+
 def test完整messages轨迹快照不受原tool_call后续修改():
     call = ToolCall(
         id="call-1",

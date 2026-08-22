@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.capability import (
+    AgentCancelledEvent,
     AgentCompletedEvent,
     AgentErrorEvent,
 )
@@ -17,6 +18,10 @@ from apps.agent.src.agent_orchestration.plugins.user_input.events import (
     UserInputEvent,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence import PersistenceSession
+from apps.agent.src.agent_orchestration.run_control import (
+    TaskChannelRegistry,
+    TaskChannelStatus,
+)
 from apps.agent.src.model_provider.types import ImagePart
 
 
@@ -41,10 +46,12 @@ class UserInputPlugin(BasePlugin):
         plugin_id: str,
         session: PersistenceSession,
         agent_plugin_id: str = "agent",
+        task_channels: TaskChannelRegistry | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.session = session
         self.agent_plugin_id = agent_plugin_id
+        self.task_channels = task_channels or TaskChannelRegistry()
         self._queue: asyncio.Queue[PendingInput] = asyncio.Queue()
         self._worker: asyncio.Task[None] | None = None
         self._active_task_id: str | None = None
@@ -77,6 +84,7 @@ class UserInputPlugin(BasePlugin):
                 prompt=prompt,
                 input_images=list(input_images or []),
             )
+            self.task_channels.create(task_id)
             await self._queue.put(pending)
         with self.session.task_scope(task_id):
             await self.publish(
@@ -103,6 +111,8 @@ class UserInputPlugin(BasePlugin):
             self._active_status = "completed"
         elif isinstance(event, AgentErrorEvent):
             self._active_status = "failed"
+        elif isinstance(event, AgentCancelledEvent):
+            self._active_status = "cancelled"
         else:
             return
         if self._active_completed is not None:
@@ -125,25 +135,58 @@ class UserInputPlugin(BasePlugin):
             self._active_task_id = pending.task_id
             self._active_completed = asyncio.Event()
             self._active_status = None
+            channel = self.task_channels.get(pending.task_id)
+            if channel is None:
+                self._queue.task_done()
+                raise RuntimeError(
+                    f"Task channel is not found: {pending.task_id}"
+                )
             try:
                 with self.session.task_scope(pending.task_id):
-                    await self.publish(
-                        InputStartedEvent(
-                            task_id=pending.task_id,
+                    if channel.mark_preparing_context():
+                        await self.publish(
+                            InputStartedEvent(
+                                task_id=pending.task_id,
+                            )
                         )
-                    )
-                    await self.publish(
-                        UserInputEvent(
-                            task_id=pending.task_id,
-                            prompt=pending.prompt,
-                            input_images=pending.input_images,
+                        await self.publish(
+                            UserInputEvent(
+                                task_id=pending.task_id,
+                                prompt=pending.prompt,
+                                input_images=pending.input_images,
+                            )
                         )
-                    )
-                    await self._active_completed.wait()
+                        completed = asyncio.create_task(
+                            self._active_completed.wait()
+                        )
+                        cancelled = asyncio.create_task(
+                            channel.wait_cancel_requested()
+                        )
+                        done, waiting = await asyncio.wait(
+                            {completed, cancelled},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for waiter in waiting:
+                            waiter.cancel()
+                        await asyncio.gather(*waiting, return_exceptions=True)
+                        del done
+                    if channel.status == TaskChannelStatus.CANCELLING:
+                        if channel.run_id is None:
+                            self._active_status = "cancelled"
+                            channel.mark_cancelled()
+                        elif self._active_status is None:
+                            await self._active_completed.wait()
+                    if self._active_status == "completed":
+                        channel.mark_completed()
+                    elif self._active_status == "failed":
+                        channel.mark_failed()
+                    elif self._active_status == "cancelled":
+                        channel.mark_cancelled()
                     await self.publish(
                         InputFinishedEvent(
                             task_id=pending.task_id,
                             status=self._active_status or "failed",
+                            run_id=channel.run_id,
                         )
                     )
             finally:
@@ -151,4 +194,5 @@ class UserInputPlugin(BasePlugin):
                 self._active_completed = None
                 self._active_status = None
                 self._outstanding_count -= 1
+                self.task_channels.finish(pending.task_id)
                 self._queue.task_done()

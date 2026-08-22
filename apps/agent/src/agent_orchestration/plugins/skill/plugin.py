@@ -142,7 +142,7 @@ class SkillPlugin(BasePlugin):
         if source_plugin_id == self.user_input_plugin_id:
             return isinstance(event, UserInputEvent) or (
                 isinstance(event, InputFinishedEvent)
-                and event.status == "failed"
+                and event.status in {"failed", "cancelled"}
             )
         if source_plugin_id == self.agent_plugin_id:
             return isinstance(event, AgentCompletedEvent)
@@ -158,7 +158,7 @@ class SkillPlugin(BasePlugin):
         if source_plugin_id == self.user_input_plugin_id and isinstance(
             event, InputFinishedEvent
         ):
-            if event.status == "failed":
+            if event.status in {"failed", "cancelled"}:
                 self.turn_state.discard(event.task_id)
             return
         if source_plugin_id == self.agent_plugin_id and isinstance(
@@ -361,7 +361,8 @@ class SkillPlugin(BasePlugin):
             return
         try:
             tool_call_count = tool_call_count_from_messages(
-                event.response.messages
+                event.response.messages,
+                task_message_start=event.response.task_message_start,
             )
             if tool_call_count <= self.maintenance_tool_threshold:
                 self.turn_state.discard(event.task_id)
@@ -369,6 +370,7 @@ class SkillPlugin(BasePlugin):
             tool_traces = await asyncio.to_thread(
                 tool_traces_from_messages,
                 event.response.messages,
+                task_message_start=event.response.task_message_start,
             )
             turn = self.turn_state.pop_with_tool_traces(
                 event.task_id,

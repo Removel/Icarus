@@ -1,6 +1,9 @@
 """汇聚 Agent 上下文的 BlackboardPlugin。"""
 
+from collections.abc import Sequence
+
 from apps.agent.src.agent_orchestration.capability import (
+    AgentCancelledEvent,
     AgentCompletedEvent,
     AgentErrorEvent,
 )
@@ -59,6 +62,8 @@ class BlackboardPlugin(BasePlugin):
             if state is None:
                 return
             state.input_finished = True
+            if event.status == "cancelled" and event.run_id is None:
+                state.agent_finished = True
             self._remove_task_if_finished(state)
             return
 
@@ -67,9 +72,18 @@ class BlackboardPlugin(BasePlugin):
             if state is None:
                 return
             if isinstance(event, AgentCompletedEvent):
-                self._commit_completed_task(state, event)
+                task_messages = event.response.task_messages
+                if not task_messages:
+                    task_messages = self._fallback_completed_messages(
+                        state,
+                        event,
+                    )
+                self._commit_task_messages(state, task_messages)
                 state.agent_finished = True
             elif isinstance(event, AgentErrorEvent):
+                state.agent_finished = True
+            elif isinstance(event, AgentCancelledEvent):
+                self._commit_task_messages(state, event.task_messages)
                 state.agent_finished = True
             self._remove_task_if_finished(state)
             return
@@ -162,28 +176,31 @@ class BlackboardPlugin(BasePlugin):
         state.context_published = True
         await self.publish(context_event)
 
-    def _commit_completed_task(
+    def _commit_task_messages(
         self,
         state: BlackboardTaskState,
-        event: AgentCompletedEvent,
+        messages: Sequence[Message],
     ) -> None:
-        if (
-            state.context_committed
-            or state.user_input is None
-            or state.input_prompt is None
-        ):
+        if state.history_committed or not messages:
             return
+        self._messages.extend(messages)
+        state.history_committed = True
+
+    @staticmethod
+    def _fallback_completed_messages(
+        state: BlackboardTaskState,
+        event: AgentCompletedEvent,
+    ) -> tuple[Message, ...]:
+        if state.user_input is None or state.input_prompt is None:
+            return ()
         user_content = [
             TextPart(state.input_prompt),
             *state.user_input.input_images,
         ]
-        self._messages.extend(
-            [
-                Message("user", user_content),
-                event.response.message,
-            ]
+        return (
+            Message("user", user_content),
+            event.response.message,
         )
-        state.context_committed = True
 
     def _remove_task_if_finished(self, state: BlackboardTaskState) -> None:
         if state.agent_finished and state.input_finished:

@@ -16,6 +16,7 @@ from apps.agent.src.agent_orchestration.hooks.wrappers import (
     ObservableLLM,
     ObservableToolExecutor,
 )
+from apps.agent.src.agent_orchestration.run_control import TaskChannel
 from apps.agent.src.agent_orchestration.tools import (
     BaseTool,
     ToolExecutionResult,
@@ -92,6 +93,7 @@ class StubAgent(BaseAgent):
         input_prompt,
         input_images=None,
         tools=None,
+        run_control=None,
     ):
         return AgentResponse(Message("assistant", [TextPart("done")]))
 
@@ -102,6 +104,7 @@ class StubAgent(BaseAgent):
         input_prompt,
         input_images=None,
         tools=None,
+        run_control=None,
     ):
         return self.invoke(
             system_prompt,
@@ -118,6 +121,7 @@ class StubAgent(BaseAgent):
         input_prompt,
         input_images=None,
         tools=None,
+        run_control=None,
     ):
         yield AgentTextDeltaEvent(step=1, text="done")
         yield AgentCompletedEvent(
@@ -138,6 +142,7 @@ class StubAgent(BaseAgent):
         input_prompt,
         input_images=None,
         tools=None,
+        run_control=None,
     ):
         yield AgentTextDeltaEvent(step=1, text="done")
         yield AgentCompletedEvent(
@@ -176,6 +181,7 @@ def test_observable_agent_llm_tool_共享同一个run_id():
             input_prompt,
             input_images=None,
             tools=None,
+            run_control=None,
         ):
             llm.invoke([Message("user", [TextPart(input_prompt)])])
             executor.execute(ToolCall("call-1", "echo", {"value": 1}))
@@ -248,6 +254,7 @@ def test_observable_tool_executor_同步并发保持hook_context():
             input_prompt,
             input_images=None,
             tools=None,
+            run_control=None,
         ):
             executor.execute_many(
                 [
@@ -311,3 +318,14 @@ def test_observable_agent_stream_保持事件并记录生命周期():
     assert [event.phase for event in stream_events] == ["before", "after"]
     assert len({event.run_id for event in stream_events}) == 1
     assert stream_events[0].run_id is not None
+
+
+def test_observable_agent使用业务run_id():
+    recorder, _, _, agent = make_observed_components()
+    channel = TaskChannel("task-1")
+    channel.mark_preparing_context()
+    channel.start_run("business-run")
+
+    agent.invoke("system", [], "hello", run_control=channel)
+
+    assert {event.run_id for event in recorder.events} == {"business-run"}
