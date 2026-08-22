@@ -61,12 +61,13 @@ icarus --session-id demo-session
 
 1. 输入框非空：清空当前草稿；
 2. 输入框为空、待发送队列非空：撤回最新加入的消息，并恢复完整内容到输入框；
-3. 输入框和队列为空、Agent 正在运行：明确提示 Runtime 尚不支持任务级取消；
+3. 输入框和队列为空、Agent 正在运行：调用 `cancel_task(task_id)` 请求取消，显示
+   `Cancelling` 并保留已产生的输出；
 4. 输入框和队列为空、Agent 空闲：退出 `icarus`。
 
-正常队列消费从队首开始，撤回从队尾开始。当前 Runtime 还没有
-`cancel(task_id)`，因此第三种操作不会通过停止或重启 Runtime 伪造取消。多轮业务对话
-上下文仍由 Agent Core 的 Blackboard 维护；TUI Conversation 只是当前进程的 UI 投影。
+正常队列消费从队首开始，撤回从队尾开始。取消只结束当前 Task，不停止或重启 Runtime；
+收到 `InputFinishedEvent(status="cancelled")` 后才调度下一条消息。多轮业务对话上下文仍由
+Agent Core 的 Blackboard 维护；TUI Conversation 只是当前进程的 UI 投影。
 
 仓库内开发启动：
 

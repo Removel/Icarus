@@ -39,13 +39,13 @@ PersistentComposer
 - 应用内滚动、全屏退出后恢复原终端画面；
 - 不依赖真实模型即可完成事件顺序、交互和视觉回归。
 
-本计划不实现任务级取消、历史 Session 浏览、多模态队列、队列持久化、队列重排或新的
-Agent Event。当前 Runtime 没有 `cancel(task_id)`，运行中的第三类 `Ctrl+C` 只显示真实能力
-提示。
+本计划初始范围不包含任务级取消、历史 Session 浏览、多模态队列、队列持久化或队列重排。
+任务级取消已在后续 TUI-06 中完成：运行中的第三类 `Ctrl+C` 调用
+`AgentRuntimeService.cancel_task(task_id)`，等待 cancelled 终态后恢复队列调度。
 
 ## 实施边界
 
-- TUI 只调用 `AgentRuntimeService.start / subscribe_events / submit / stop`；
+- TUI 只调用 `AgentRuntimeService.start / subscribe_events / submit / cancel_task / stop`；
 - 不直接导入或访问 PluginManager、EventBus、Blackboard 或具体 Plugin 实例；
 - `OutputBridgePlugin` 继续广播原始 `(source_plugin_id, Event)`，不解释 UI；
 - `ProjectorRegistry` 和 `UiAction` 归 `apps/tui` 所有；

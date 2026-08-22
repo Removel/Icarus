@@ -307,7 +307,8 @@ TUI 不维护业务 History，也不在每轮提交时传递历史消息。
 
 当前 Agent 实例的跨轮 User/Assistant Message 由 BlackboardPlugin 维护。
 AgentCompletedEvent 更新 Blackboard，下一轮上下文快照自动携带已有消息。
-ToolCall、ToolResult、Reasoning 和 Plugin Event 仍不进入跨轮业务 History。
+ToolCall、ToolResult 和已实际应用的 Plugin Context 进入跨轮业务 History；Reasoning 和原始
+Plugin Event 不进入。取消 Task 只提交最近的协议完整消息前缀。
 
 正式业务历史继续由后端数据库保存。恢复会话时，上层从后端数据库读取业务消息，
 并在 Agent Runtime 初始化时一次性注入 Blackboard；本地 Trace 不用于恢复 History。
@@ -322,11 +323,11 @@ ToolCall、ToolResult、Reasoning 和 Plugin Event 仍不进入跨轮业务 Hist
 - `Ctrl+C` 按上下文只执行一个动作：
   - 草稿非空：清空草稿；
   - 草稿为空且本地队列非空：从队尾撤回最新消息并恢复到 Composer；
-  - 草稿和队列为空但任务运行中：提示当前 Runtime 尚不支持任务级取消，任务继续运行；
+  - 草稿和队列为空但任务运行中：调用 `cancel_task(task_id)`，等待 cancelled 终态；
   - 草稿和队列为空且 Agent 空闲：正常退出整个 TUI。
 
-任务级取消能力在后续阶段加入；当前实现不会通过停止并重启整个 Runtime 或发送普通消息
-伪造取消。
+任务级取消已经通过 TaskChannel 和 Agent Run 协程取消实现；不会通过停止并重启整个 Runtime
+或发送普通消息伪造取消。运行中 Context 只面向内部 Plugin，不属于 TUI 应用服务接口。
 
 ## 应用服务层不实现
 

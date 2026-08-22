@@ -424,8 +424,12 @@ Blackboard 收齐 UserInput 和必需 ContextContribution
 → BlackboardContextReadyEvent 携带 final_input_prompt
 → AgentPlugin 原样传给 ReActAgent
 → AgentCompletedEvent 到达后
-→ Blackboard 将同一份 final_input_prompt 与最终 Assistant Message 写入历史
+→ Blackboard 将当前 Task 的完整 Message 链写入历史
 ```
+
+完整 Message 链包括 final_input_prompt、运行中实际应用的 Plugin Context、Assistant ToolCall、
+对应 ToolResult 和最终 Assistant Message。AgentCancelledEvent 到达时只提交最近的协议完整消息
+前缀；部分 Assistant 和不完整 Tool Batch 不提交。
 
 最终 User Prompt 仍保持：
 
@@ -474,7 +478,7 @@ SkillPlugin 订阅 AgentPlugin，按 `task_id` 维护本轮临时状态。
 Plugin Runtime 在事件进入 inbox 前调用消费者的通用 `accepts_event(source, event)`；
 默认 Plugin 接收来源订阅送达的全部事件。SkillPlugin 声明：
 
-- 从 `user-input` 接收 `UserInputEvent` 和状态为 `failed` 的 `InputFinishedEvent`；
+- 从 `user-input` 接收 `UserInputEvent` 和状态为 `failed / cancelled` 的 `InputFinishedEvent`；
 - 从 `agent` 只接收 `AgentCompletedEvent`；
 - 拒绝其他来源和其他事件。
 
@@ -486,7 +490,7 @@ Plugin Runtime 在事件进入 inbox 前调用消费者的通用 `accepts_event(
 
 - 收到 `UserInputEvent`：创建本轮临时状态并记录用户输入、图片和匹配 Skill；
 - 收到 `AgentCompletedEvent`：在整轮对话结束点，从完整响应恢复工具轨迹并判断一次；
-- 收到 `InputFinishedEvent(status="failed")`：清理失败轮次的临时状态；
+- 收到 `InputFinishedEvent(status="failed" / "cancelled")`：清理未完成轮次的临时状态；
 - 文字、工具开始、工具完成和 Agent Error 流事件不进入 SkillPlugin。
 
 唯一自动触发条件是：
