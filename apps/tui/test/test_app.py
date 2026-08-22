@@ -104,7 +104,6 @@ class ControlledService:
             self.subscription.publish(
                 "user-input",
                 InputQueuedEvent(
-                    correlation_id=task_id,
                     task_id=task_id,
                     queue_position=0,
                 ),
@@ -155,7 +154,6 @@ async def enter_text(pilot, text: str) -> None:
 
 def finish_event(task_id: str, status="completed") -> InputFinishedEvent:
     return InputFinishedEvent(
-        correlation_id=task_id,
         task_id=task_id,
         status=status,
     )
@@ -484,7 +482,7 @@ def test_agent输出期间草稿光标和焦点保持不变(tmp_path):
             service.subscription.publish(
                 "agent",
                 AgentTextDeltaEvent(
-                    correlation_id="task-1",
+                    task_id="task-1",
                     step=1,
                     text="**streaming**",
                 ),
@@ -621,7 +619,7 @@ def test_projector失败进入fatal并保留当前任务队列和草稿(tmp_path
                 type(
                     "RuntimeEvent",
                     (),
-                    {"correlation_id": "task-1"},
+                    {"task_id": "task-1"},
                 )(),
             )
             await wait_until(
@@ -669,7 +667,7 @@ def test_conversation更新失败后忽略后续event且不调度队首(
             service.subscription.publish(
                 "agent",
                 AgentTextDeltaEvent(
-                    correlation_id="task-1",
+                    task_id="task-1",
                     step=1,
                     text="broken update",
                 ),
@@ -775,7 +773,7 @@ def test_notification展示失败不阻止同一event完成任务(monkeypatch, t
                     "RuntimeEvent",
                     (),
                     {
-                        "correlation_id": "task-1",
+                        "task_id": "task-1",
                         "task_id": "task-1",
                     },
                 )(),
@@ -924,7 +922,7 @@ def test未知ui_action进入fatal而不是终止textual消息循环(tmp_path):
                 type(
                     "RuntimeEvent",
                     (),
-                    {"correlation_id": "task-1"},
+                    {"task_id": "task-1"},
                 )(),
             )
             await wait_until(

@@ -36,7 +36,7 @@ def test_trace_record_保留关联id但不重复workspace_session():
             "workspace_key": "workspace",
             "workspace_path": "/work",
             "session_id": "session-1",
-            "correlation_id": "task-1",
+            "task_id": "task-1",
             "model_role": "thinking",
         },
         data={"token": "secret", "result": {"success": True}},
@@ -45,7 +45,7 @@ def test_trace_record_保留关联id但不重复workspace_session():
     record = TraceRecord.from_hook_event(event, Redactor())
     payload = json.loads(record.to_json_line())
 
-    assert payload["correlation_id"] == "task-1"
+    assert payload["task_id"] == "task-1"
     assert payload["run_id"] == "run-1"
     assert payload["context"] == {"model_role": "thinking"}
     assert payload["data"]["token"] == "[REDACTED]"

@@ -9,9 +9,8 @@ from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin, PluginManager
 from apps.agent.src.agent_orchestration.plugins import (
-    AgentContextReadyEvent,
     AgentPlugin,
-    ContextBlock,
+    BlackboardContextReadyEvent,
 )
 from apps.agent.src.model_provider.types import Message, TextPart
 
@@ -95,26 +94,18 @@ def test_agent_plugin_只消费context并原样发布stream_event():
         manager.subscribe("sink", "agent")
         await manager.start()
 
-        unrelated = Event(correlation_id="ignored")
+        unrelated = Event(task_id="ignored")
         await blackboard.publish(unrelated)
         await blackboard.publish(
-            AgentContextReadyEvent(
-                correlation_id="task-1",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
                 model_role="thinking",
                 system_prompt="system",
-                prompt="hello",
                 input_prompt=(
                     "<plugin_context>\ncomposed context\n</plugin_context>"
                     "\n\n<user_request>\nhello\n</user_request>"
                 ),
                 tools=[],
-                context_blocks=[
-                    ContextBlock(
-                        source_plugin_id="memory",
-                        context_type="memory",
-                        content="remember this",
-                    )
-                ],
             )
         )
         await manager.stop(timeout=1)
@@ -127,7 +118,6 @@ def test_agent_plugin_只消费context并原样发布stream_event():
     assert factory.agent.calls[0]["system_prompt"] == "system"
     assert "<plugin_context>" in factory.agent.calls[0]["input_prompt"]
     assert "composed context" in factory.agent.calls[0]["input_prompt"]
-    assert "remember this" not in factory.agent.calls[0]["input_prompt"]
     assert "<user_request>\nhello\n</user_request>" in factory.agent.calls[0][
         "input_prompt"
     ]
@@ -135,18 +125,17 @@ def test_agent_plugin_只消费context并原样发布stream_event():
         AgentTextDeltaEvent,
         AgentCompletedEvent,
     ]
-    assert {event.correlation_id for event in events} == {"task-1"}
+    assert {event.task_id for event in events} == {"task-1"}
     assert events[0].text == "hello"
     assert events[1].response.message.content == [TextPart("hello")]
 
 
-def test_agent_context_event_保持扁平agent参数():
-    event = AgentContextReadyEvent(
-        correlation_id="task-1",
+def test_blackboard_context_event_保持扁平agent参数():
+    event = BlackboardContextReadyEvent(
+        task_id="task-1",
         model_role="perception",
         system_prompt="system",
         history_messages=[Message("user", [TextPart("history")])],
-        prompt="input",
         input_prompt="composed-input",
         tools=["read"],
     )
@@ -154,7 +143,6 @@ def test_agent_context_event_保持扁平agent参数():
     assert event.model_role == "perception"
     assert event.system_prompt == "system"
     assert event.history_messages[0].role == "user"
-    assert event.prompt == "input"
     assert event.input_prompt == "composed-input"
     assert event.input_images == []
     assert event.tools == ["read"]

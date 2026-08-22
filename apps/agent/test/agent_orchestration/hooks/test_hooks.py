@@ -96,7 +96,7 @@ def test_hook_context_嵌套合并并可生成新run():
     ) as session_context:
         with hook_context(
             {
-                "correlation_id": "task-1",
+                "task_id": "task-1",
                 "model_role": "thinking",
             },
             new_run=True,
@@ -104,7 +104,7 @@ def test_hook_context_嵌套合并并可生成新run():
             assert run_context.data == {
                 "workspace_key": "workspace",
                 "session_id": "session-1",
-                "correlation_id": "task-1",
+                "task_id": "task-1",
                 "model_role": "thinking",
             }
             assert run_context.run_id

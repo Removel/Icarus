@@ -37,13 +37,7 @@ class BlackboardContextReadyEvent(Event):
 
     model_role: LLMRole
     system_prompt: str
+    input_prompt: str
     history_messages: list[Message] = field(default_factory=list)
-    prompt: str
-    input_prompt: str | None = None
     input_images: list[ImagePart] = field(default_factory=list)
     tools: list[str] | None = None
-    context_blocks: list[ContextBlock] = field(default_factory=list)
-    context_errors: dict[str, str] = field(default_factory=dict)
-
-
-AgentContextReadyEvent = BlackboardContextReadyEvent

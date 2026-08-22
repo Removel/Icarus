@@ -133,12 +133,11 @@ class PersistenceRuntime:
         self,
         *,
         session_id: str | None = None,
-        correlation_id: str | None = None,
+        task_id: str | None = None,
     ) -> Iterator[SessionIdentity]:
         identity = SessionIdentity.create(
             workspace_path=self.workspace_identity.workspace_path,
             session_id=session_id,
-            correlation_id=correlation_id,
         )
         self.metadata_store.initialize(identity)
         with hook_context(
@@ -146,7 +145,7 @@ class PersistenceRuntime:
                 "workspace_path": str(identity.workspace_path),
                 "workspace_key": identity.workspace_key,
                 "session_id": identity.session_id,
-                "correlation_id": identity.correlation_id,
+                "task_id": task_id,
             },
             run_id=None,
         ):
@@ -172,23 +171,21 @@ class PersistenceSession:
                 "workspace_path": str(self.identity.workspace_path),
                 "workspace_key": self.identity.workspace_key,
                 "session_id": self.identity.session_id,
-                "correlation_id": self.identity.correlation_id,
             },
             run_id=None,
         ):
             yield self.identity
 
     @contextmanager
-    def task_scope(self, correlation_id: str) -> Iterator[SessionIdentity]:
-        task_identity = self.identity.with_correlation_id(correlation_id)
-        self.runtime.metadata_store.initialize(task_identity)
+    def task_scope(self, task_id: str) -> Iterator[SessionIdentity]:
+        self.runtime.metadata_store.initialize(self.identity)
         with hook_context(
             {
-                "workspace_path": str(task_identity.workspace_path),
-                "workspace_key": task_identity.workspace_key,
-                "session_id": task_identity.session_id,
-                "correlation_id": correlation_id,
+                "workspace_path": str(self.identity.workspace_path),
+                "workspace_key": self.identity.workspace_key,
+                "session_id": self.identity.session_id,
+                "task_id": task_id,
             },
             run_id=None,
         ):
-            yield task_identity
+            yield self.identity

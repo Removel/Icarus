@@ -56,7 +56,7 @@ class ToolCallTrace:
 class TurnRecord:
     """Deeply immutable snapshot of one completed Agent turn."""
 
-    correlation_id: str
+    task_id: str
     prompt: str
     input_images: tuple[ImagePart, ...]
     matched_skills: tuple[SkillDefinition, ...]
@@ -95,7 +95,7 @@ class _MutableToolCallTrace:
 
 @dataclass
 class _MutableTurnRecord:
-    correlation_id: str
+    task_id: str
     prompt: str
     input_images: tuple[ImagePart, ...]
     matched_skills: tuple[SkillDefinition, ...] = ()
@@ -108,19 +108,19 @@ class SkillTurnState:
         self._turns: dict[str, _MutableTurnRecord] = {}
 
     def start(self, event: UserInputEvent) -> bool:
-        """Start a turn, replacing stale state for a duplicate correlation ID.
+        """Start a turn, replacing stale state for a duplicate task ID.
 
-        Returns ``True`` for a new correlation ID and ``False`` when no ID was
+        Returns ``True`` for a new task ID and ``False`` when no ID was
         supplied or an existing record had to be replaced. The input is copied
         immediately so later mutation of the source event cannot alter state.
         """
 
-        correlation_id = event.correlation_id
-        if not _has_correlation_id(correlation_id):
+        task_id = event.task_id
+        if not _has_task_id(task_id):
             return False
-        is_new = correlation_id not in self._turns
-        self._turns[correlation_id] = _MutableTurnRecord(
-            correlation_id=correlation_id,
+        is_new = task_id not in self._turns
+        self._turns[task_id] = _MutableTurnRecord(
+            task_id=task_id,
             prompt=event.prompt,
             input_images=tuple(
                 ImagePart(url=image.url, media_type=image.media_type)
@@ -131,12 +131,12 @@ class SkillTurnState:
 
     def set_matched_skills(
         self,
-        correlation_id: str | None,
+        task_id: str | None,
         skills: Iterable[SkillDefinition],
     ) -> bool:
         """Save a defensive snapshot of Skills matched during this turn."""
 
-        turn = self._get(correlation_id)
+        turn = self._get(task_id)
         if turn is None:
             return False
         turn.matched_skills = tuple(_snapshot_skill(skill) for skill in skills)
@@ -144,58 +144,58 @@ class SkillTurnState:
 
     def pop_completed(
         self,
-        correlation_id: str | None,
+        task_id: str | None,
         messages: Sequence[Message],
     ) -> TurnRecord | None:
         """Pop a turn and rebuild its complete tool trajectory from messages."""
 
         return self.pop_with_tool_traces(
-            correlation_id,
+            task_id,
             tool_traces_from_messages(messages),
         )
 
     def pop_with_tool_traces(
         self,
-        correlation_id: str | None,
+        task_id: str | None,
         tool_calls: Sequence[ToolCallTrace],
     ) -> TurnRecord | None:
         """Pop a turn using an already validated immutable trajectory."""
 
-        turn = self._pop_mutable(correlation_id)
+        turn = self._pop_mutable(task_id)
         if turn is None:
             return None
         return TurnRecord(
-            correlation_id=turn.correlation_id,
+            task_id=turn.task_id,
             prompt=turn.prompt,
             input_images=turn.input_images,
             matched_skills=turn.matched_skills,
             tool_calls=tuple(tool_calls),
         )
 
-    def discard(self, correlation_id: str | None) -> bool:
+    def discard(self, task_id: str | None) -> bool:
         """Remove a failed or non-maintained turn when present."""
 
-        return self._pop_mutable(correlation_id) is not None
+        return self._pop_mutable(task_id) is not None
 
     def _get(
         self,
-        correlation_id: str | None,
+        task_id: str | None,
     ) -> _MutableTurnRecord | None:
-        if not _has_correlation_id(correlation_id):
+        if not _has_task_id(task_id):
             return None
-        return self._turns.get(correlation_id)
+        return self._turns.get(task_id)
 
     def _pop_mutable(
         self,
-        correlation_id: str | None,
+        task_id: str | None,
     ) -> _MutableTurnRecord | None:
-        if not _has_correlation_id(correlation_id):
+        if not _has_task_id(task_id):
             return None
-        return self._turns.pop(correlation_id, None)
+        return self._turns.pop(task_id, None)
 
 
-def _has_correlation_id(correlation_id: str | None) -> bool:
-    return bool(correlation_id and correlation_id.strip())
+def _has_task_id(task_id: str | None) -> bool:
+    return bool(task_id and task_id.strip())
 
 
 def tool_traces_from_messages(

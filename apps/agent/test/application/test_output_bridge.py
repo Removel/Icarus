@@ -11,8 +11,8 @@ def test_output_bridge_向每个实时订阅按来源与顺序广播事件():
         bridge = OutputBridgePlugin()
         first_subscription = bridge.subscribe()
         second_subscription = bridge.subscribe()
-        first = Event(correlation_id="task-1")
-        second = Event(correlation_id="task-2")
+        first = Event(task_id="task-1")
+        second = Event(task_id="task-2")
 
         await bridge.consume("user-input", first)
         await bridge.consume("agent", second)
@@ -38,9 +38,9 @@ def test_output_bridge_向每个实时订阅按来源与顺序广播事件():
 def test_output_bridge_只发送订阅后事件并暂存未及时消费事件():
     async def run():
         bridge = OutputBridgePlugin()
-        before_subscription = Event(correlation_id="before-subscription")
-        first = Event(correlation_id="task-1")
-        second = Event(correlation_id="task-2")
+        before_subscription = Event(task_id="before-subscription")
+        first = Event(task_id="task-1")
+        second = Event(task_id="task-2")
         await bridge.consume("agent", before_subscription)
 
         subscription = bridge.subscribe()
@@ -57,7 +57,7 @@ def test_output_bridge_只发送订阅后事件并暂存未及时消费事件():
 
     items = asyncio.run(run())
 
-    assert [event.correlation_id for _, event in items] == ["task-1", "task-2"]
+    assert [event.task_id for _, event in items] == ["task-1", "task-2"]
 
 
 def test_output_bridge_关闭单个订阅不影响其他订阅():
@@ -67,7 +67,7 @@ def test_output_bridge_关闭单个订阅不影响其他订阅():
         active_subscription = bridge.subscribe()
         closed_subscription.close()
 
-        event = Event(correlation_id="task-1")
+        event = Event(task_id="task-1")
         await bridge.consume("agent", event)
         active_item = await active_subscription.next_event()
         with pytest.raises(RuntimeError, match="subscription is closed"):

@@ -229,7 +229,7 @@ def test_skill_plugin空扫描直接发布completed且不调用embedding(tmp_pat
         plugin, dependencies, published = make_plugin(tmp_path, [])
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-empty", prompt="hello"),
+            UserInputEvent(task_id="task-empty", prompt="hello"),
         )
         return dependencies, published
 
@@ -238,7 +238,7 @@ def test_skill_plugin空扫描直接发布completed且不调用embedding(tmp_pat
     assert dependencies["embedding"].document_calls == []
     assert dependencies["usage_store"].ensure_calls == []
     assert len(published) == 1
-    assert published[0].correlation_id == "task-empty"
+    assert published[0].task_id == "task-empty"
     assert published[0].status == "completed"
     assert published[0].context_blocks == []
 
@@ -257,12 +257,12 @@ def test_skill_plugin已有累计skill后空扫描仍保留上下文并推进刷
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-1", prompt="first"),
+            UserInputEvent(task_id="task-1", prompt="first"),
         )
         scanner.skills = []
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-2", prompt="second"),
+            UserInputEvent(task_id="task-2", prompt="second"),
         )
         return plugin, published
 
@@ -282,7 +282,7 @@ def test_skill_plugin正常检索并发布确定性full上下文(tmp_path):
         plugin, dependencies, published = make_plugin(tmp_path, skills)
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-1", prompt="find skill"),
+            UserInputEvent(task_id="task-1", prompt="find skill"),
         )
         return dependencies, published
 
@@ -324,7 +324,7 @@ def test_skill_plugin无新增发布unchanged但仍记录top3使用(tmp_path):
 
     async def run():
         plugin, dependencies, published = make_plugin(tmp_path, skills)
-        event = UserInputEvent(correlation_id="task-1", prompt="same")
+        event = UserInputEvent(task_id="task-1", prompt="same")
         await plugin.consume("user-input", event)
         await plugin.consume("user-input", event)
         return dependencies, published
@@ -353,7 +353,7 @@ def test_skill_plugin空召回不注入且不更新使用状态(tmp_path):
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-empty", prompt="hello"),
+            UserInputEvent(task_id="task-empty", prompt="hello"),
         )
         return plugin, dependencies, published
 
@@ -379,7 +379,7 @@ def test_skill_plugin聚合检索hook不记录prompt向量或skill正文(tmp_pat
         await plugin.consume(
             "user-input",
             UserInputEvent(
-                correlation_id="task-hook",
+                task_id="task-hook",
                 prompt="SECRET PROMPT MUST NOT APPEAR",
             ),
         )
@@ -442,12 +442,12 @@ def test_skill_plugin同名workspace覆盖即使未进本轮top3也替换累计�
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-1", prompt="first"),
+            UserInputEvent(task_id="task-1", prompt="first"),
         )
         scanner.skills = [other, workspace_skill]
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-2", prompt="second"),
+            UserInputEvent(task_id="task-2", prompt="second"),
         )
         return plugin, published
 
@@ -470,13 +470,13 @@ def test_skill_plugin异常发布failed防止blackboard卡住(tmp_path):
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-fail", prompt="hello"),
+            UserInputEvent(task_id="task-fail", prompt="hello"),
         )
         return published
 
     published = asyncio.run(run())
     assert len(published) == 1
-    assert published[0].correlation_id == "task-fail"
+    assert published[0].task_id == "task-fail"
     assert published[0].status == "failed"
     assert published[0].error == "scan failed"
     assert published[0].context_blocks == []
@@ -501,7 +501,7 @@ def test_skill_plugin聚合错误hook不透传可能包含prompt的底层异常(
         await plugin.consume(
             "user-input",
             UserInputEvent(
-                correlation_id="task-error-hook",
+                task_id="task-error-hook",
                 prompt="SECRET USER PROMPT",
             ),
         )
@@ -538,11 +538,11 @@ def test_skill_plugin检索超时后熔断并持续发布failed(tmp_path):
         plugin.retrieval_timeout_seconds = 0.01
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-1", prompt="first"),
+            UserInputEvent(task_id="task-1", prompt="first"),
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-2", prompt="second"),
+            UserInputEvent(task_id="task-2", prompt="second"),
         )
         return published
 
@@ -562,7 +562,7 @@ def test_skill_plugin无usage_store仍正常检索发布(tmp_path):
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-1", prompt="hello"),
+            UserInputEvent(task_id="task-1", prompt="hello"),
         )
         return dependencies, published
 
@@ -591,7 +591,7 @@ def test_skill_plugin_usage_store中途异常降级但仍发布completed(tmp_pat
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-1", prompt="hello"),
+            UserInputEvent(task_id="task-1", prompt="hello"),
         )
         return dependencies, published
 

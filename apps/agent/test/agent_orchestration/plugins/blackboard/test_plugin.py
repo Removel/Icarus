@@ -28,7 +28,7 @@ class ProducerPlugin(BasePlugin):
 
 class SessionStub:
     @contextmanager
-    def task_scope(self, correlation_id: str):
+    def task_scope(self, task_id: str):
         yield
 
 
@@ -50,14 +50,17 @@ class ReplyAgentPlugin(BasePlugin):
         if not isinstance(event, BlackboardContextReadyEvent):
             return
         self.contexts.append(event)
+        user_prompt = event.input_prompt.split(
+            "<user_request>\n", 1
+        )[1].split("\n</user_request>", 1)[0]
         await self.publish(
             AgentCompletedEvent(
-                correlation_id=event.correlation_id,
+                task_id=event.task_id,
                 step=1,
                 response=AgentResponse(
                     message=Message(
                         "assistant",
-                        [TextPart(f"answer:{event.prompt}")],
+                        [TextPart(f"answer:{user_prompt}")],
                     ),
                     finish_reason="stop",
                     steps=1,
@@ -89,13 +92,13 @@ def test_blackboard_plugin_等待固定来源并只发布一次context():
 
         await user_input.publish(
             UserInputEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 prompt="hello",
             )
         )
         await memory.publish(
             ContextContributionEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 status="completed",
                 context_blocks=[
                     ContextBlock(
@@ -108,7 +111,7 @@ def test_blackboard_plugin_等待固定来源并只发布一次context():
         )
         await skill.publish(
             ContextContributionEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 status="completed",
                 context_blocks=[],
             )
@@ -122,9 +125,6 @@ def test_blackboard_plugin_等待固定来源并只发布一次context():
     source, context = events[0]
     assert source == "blackboard"
     assert isinstance(context, BlackboardContextReadyEvent)
-    assert [block.content for block in context.context_blocks] == [
-        "memory-value"
-    ]
     assert "memory-value" in context.input_prompt
     assert context.input_prompt.endswith(
         "<user_request>\nhello\n</user_request>"
@@ -155,14 +155,14 @@ def test_blackboard_plugin_失败来源计为完成并记录错误():
 
         await memory.publish(
             ContextContributionEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 status="failed",
                 error="timeout",
             )
         )
         await user_input.publish(
             UserInputEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 prompt="hello",
             )
         )
@@ -173,7 +173,6 @@ def test_blackboard_plugin_失败来源计为完成并记录错误():
 
     assert len(events) == 1
     context = events[0][1]
-    assert context.context_errors == {"memory": "timeout"}
     assert context.input_prompt == (
         "<plugin_context_errors>\n"
         '{"memory":"timeout"}\n'
@@ -197,12 +196,12 @@ def test_blackboard_plugin_成功历史复用发布给agent的完整input_prompt
         blackboard.bind_publisher(publish)
         await blackboard.consume(
             "user-input",
-            UserInputEvent(correlation_id="task-1", prompt="hello"),
+            UserInputEvent(task_id="task-1", prompt="hello"),
         )
         await blackboard.consume(
             "memory",
             ContextContributionEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 status="completed",
                 context_blocks=[
                     ContextBlock(
@@ -216,7 +215,7 @@ def test_blackboard_plugin_成功历史复用发布给agent的完整input_prompt
         await blackboard.consume(
             "agent",
             AgentCompletedEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 response=AgentResponse(
                     message=Message("assistant", [TextPart("done")]),
@@ -258,14 +257,14 @@ def test_blackboard_plugin_消费agent结果更新跨轮消息并在任务完成
         await blackboard.consume(
             "user-input",
             UserInputEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 prompt="hello",
             ),
         )
         await blackboard.consume(
             "agent",
             AgentCompletedEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 response=AgentResponse(
                     message=Message("assistant", [TextPart("done")]),
@@ -277,7 +276,6 @@ def test_blackboard_plugin_消费agent结果更新跨轮消息并在任务完成
         await blackboard.consume(
             "user-input",
             InputFinishedEvent(
-                correlation_id="task-1",
                 task_id="task-1",
                 status="completed",
             ),
@@ -316,14 +314,14 @@ def test_blackboard_plugin_下一轮自动使用已完成消息作为history():
         await blackboard.consume(
             "user-input",
             UserInputEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 prompt="first",
             ),
         )
         await blackboard.consume(
             "agent",
             AgentCompletedEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 response=AgentResponse(
                     message=Message("assistant", [TextPart("first-answer")]),
@@ -335,7 +333,6 @@ def test_blackboard_plugin_下一轮自动使用已完成消息作为history():
         await blackboard.consume(
             "user-input",
             InputFinishedEvent(
-                correlation_id="task-1",
                 task_id="task-1",
                 status="completed",
             ),
@@ -343,7 +340,7 @@ def test_blackboard_plugin_下一轮自动使用已完成消息作为history():
         await blackboard.consume(
             "user-input",
             UserInputEvent(
-                correlation_id="task-2",
+                task_id="task-2",
                 prompt="second",
             ),
         )
@@ -384,7 +381,7 @@ def test_blackboard_plugin_初始化历史只复制一次并用于首轮context(
         await blackboard.consume(
             "user-input",
             UserInputEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 prompt="continue",
             ),
         )
@@ -409,14 +406,13 @@ def test_blackboard_plugin_失败任务不写入跨轮消息():
         await blackboard.consume(
             "user-input",
             UserInputEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 prompt="failed",
             ),
         )
         await blackboard.consume(
             "user-input",
             InputFinishedEvent(
-                correlation_id="task-1",
                 task_id="task-1",
                 status="failed",
             ),
@@ -424,7 +420,7 @@ def test_blackboard_plugin_失败任务不写入跨轮消息():
         await blackboard.consume(
             "agent",
             AgentErrorEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 error_type="RuntimeError",
                 error_message="failed",
@@ -450,14 +446,13 @@ def test_blackboard_plugin_input完成先到时等待agent结果再提交并清�
         await blackboard.consume(
             "user-input",
             UserInputEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 prompt="hello",
             ),
         )
         await blackboard.consume(
             "user-input",
             InputFinishedEvent(
-                correlation_id="task-1",
                 task_id="task-1",
                 status="completed",
             ),
@@ -466,7 +461,7 @@ def test_blackboard_plugin_input完成先到时等待agent结果再提交并清�
         await blackboard.consume(
             "agent",
             AgentCompletedEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 response=AgentResponse(
                     message=Message("assistant", [TextPart("done")]),
@@ -554,7 +549,7 @@ def test_blackboard_plugin_拒绝伪造context来源():
         await blackboard.consume(
             "memory",
             ContextContributionEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 status="completed",
                 context_blocks=[
                     ContextBlock(

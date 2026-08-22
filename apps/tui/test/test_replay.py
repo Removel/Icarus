@@ -20,12 +20,12 @@ def test_load_replay按终态切分三轮并保留unrelated事件():
     scenario = load_replay(FIXTURE)
 
     assert scenario.task_ids == ("task-1", "task-2", "task-3")
-    first_correlations = [
-        event.correlation_id for _, event in scenario.turns[0].events
+    first_task_ids = [
+        event.task_id for _, event in scenario.turns[0].events
     ]
-    assert "unrelated-task" in first_correlations
-    assert first_correlations[0] == "task-1"
-    assert first_correlations[-1] == "task-1"
+    assert "unrelated-task" in first_task_ids
+    assert first_task_ids[0] == "task-1"
+    assert first_task_ids[-1] == "task-1"
 
 
 @pytest.mark.parametrize(
@@ -38,10 +38,10 @@ def test_load_replay按终态切分三轮并保留unrelated事件():
 )
 def test_decode_replay_record严格拒绝未知或缺失字段(change, message):
     record = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_plugin_id": "agent",
         "event_type": "agent_text_delta",
-        "correlation_id": "task-1",
+        "task_id": "task-1",
         "payload": {"step": 1, "text": "hello"},
     }
     record.update(change)
@@ -75,7 +75,7 @@ def test_replay_service在submit返回前发布queued并依次消费turn():
             item = await asyncio.wait_for(subscription.next_event(), timeout=1)
             remaining.append(item)
             if (
-                item[1].correlation_id == accepted.task_id
+                item[1].task_id == accepted.task_id
                 and type(item[1]).__name__ == "InputFinishedEvent"
             ):
                 break
@@ -90,7 +90,7 @@ def test_replay_service在submit返回前发布queued并依次消费turn():
     assert isinstance(first_event, InputQueuedEvent)
     assert first_event.task_id == accepted.task_id
     assert service.submissions == ["first prompt"]
-    assert any(event.correlation_id == "unrelated-task" for _, event in remaining)
+    assert any(event.task_id == "unrelated-task" for _, event in remaining)
 
 
 def test_replay_subscription关闭后唤醒等待者():

@@ -118,7 +118,7 @@ async def collect_task_events(
             subscription.next_event(),
             timeout=1,
         )
-        if event.correlation_id != task_id:
+        if event.task_id != task_id:
             continue
         events.append((source_plugin_id, event))
         if isinstance(event, InputFinishedEvent):

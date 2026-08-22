@@ -57,7 +57,7 @@ async def consume(
 | `SkillRepository` | SkillPlugin 内部文件边界 | 校验并执行 Workspace Skill CRUD，全局 Skill 只读 |
 | `SkillUsageStore` | SkillPlugin 内部状态存储 | 按 Workspace 保存发现、使用和维护激活时间 |
 | `WorkspaceMaintenanceCoordinator` | 进程级内部组件 | 使用所有权 Token 保证同进程同 Workspace 同时最多一个维护任务 |
-| `SkillTurnState` | SkillPlugin 会话内状态 | 按 correlation_id 保存当前轮输入和命中 Skill；终态时从完整 Agent messages 恢复工具轨迹 |
+| `SkillTurnState` | SkillPlugin 会话内状态 | 按 task_id 保存当前轮输入和命中 Skill；终态时从完整 Agent messages 恢复工具轨迹 |
 
 这些组件是普通对象，不注册为子 Plugin，也不通过 EventBus 互相通信。
 
@@ -337,7 +337,7 @@ flowchart TB
 | 状态 | 所有者 | 生命周期 |
 |---|---|---|
 | 跨轮 User / Assistant 历史 | BlackboardPlugin | 当前 Agent Runtime / Session |
-| 本轮 UserInput 和 Context 汇聚状态 | BlackboardPlugin | correlation_id 双终态结束后清理 |
+| 本轮 UserInput 和 Context 汇聚状态 | BlackboardPlugin | task_id 双终态结束后清理 |
 | 当前会话累计 Skill 与七轮刷新计数 | SessionSkillState | 当前 Agent Runtime |
 | 当前轮输入与命中 Skill；由完整 messages 恢复出的工具轨迹 | SkillTurnState | Agent 终态到达后 pop/discard |
 | Skill 使用时间与次数 | SkillUsageStore | Icarus 级 SQLite，按 Workspace 隔离 |

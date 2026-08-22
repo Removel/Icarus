@@ -18,13 +18,11 @@ class UserInputProjector:
     """Convert input lifecycle Events without duplicating user messages."""
 
     def project(self, event: Event) -> tuple[UiAction, ...] | None:
-        task_id = event.correlation_id
+        task_id = event.task_id
         if task_id is None:
             return ()
 
         if isinstance(event, InputQueuedEvent):
-            if event.task_id != task_id:
-                return ()
             return (
                 SetRuntimeStatus(
                     task_id=task_id,
@@ -34,8 +32,6 @@ class UserInputProjector:
             )
 
         if isinstance(event, InputStartedEvent):
-            if event.task_id != task_id:
-                return ()
             return (
                 SetRuntimeStatus(
                     task_id=task_id,
@@ -45,8 +41,6 @@ class UserInputProjector:
             )
 
         if isinstance(event, InputFinishedEvent):
-            if event.task_id != task_id:
-                return ()
             return (FinishTurn(task_id=task_id, status=event.status),)
 
         if isinstance(event, UserInputEvent):

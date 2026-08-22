@@ -23,7 +23,7 @@ def make_event(session_id="session-1", value=1):
             "workspace_path": "/workspace",
             "workspace_key": "workspace-key",
             "session_id": session_id,
-            "correlation_id": "task-1",
+            "task_id": "task-1",
         },
         data={"value": value},
     )

@@ -1,22 +1,22 @@
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_queued","correlation_id":"task-1","payload":{"queue_position":0}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_started","correlation_id":"task-1","payload":{}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"user_input","correlation_id":"task-1","payload":{"prompt":"检查配置并读取文件"}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_text_delta","correlation_id":"task-1","payload":{"step":1,"text":"正在**检查"}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_text_delta","correlation_id":"unrelated-task","payload":{"step":1,"text":"这段不应显示"}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_text_delta","correlation_id":"task-1","payload":{"step":1,"text":"配置**……\n\n- 环境正常\n- 准备读取文件"}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_tool_started","correlation_id":"task-1","payload":{"step":1,"call_id":"call-read","tool_name":"read","arguments":{"path":"配置/你好.md"}}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_tool_completed","correlation_id":"task-1","payload":{"step":1,"call_id":"call-read","tool_name":"read","arguments":{"path":"配置/你好.md"},"success":true,"error":null}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_text_delta","correlation_id":"task-1","payload":{"step":2,"text":"读取完成。\n\n```python\nprint('你好')\n```"}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_completed","correlation_id":"task-1","payload":{"step":2,"text":"读取完成。"}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_finished","correlation_id":"task-1","payload":{"status":"completed"}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_queued","correlation_id":"task-2","payload":{"queue_position":0}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_started","correlation_id":"task-2","payload":{}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_text_delta","correlation_id":"task-2","payload":{"step":1,"text":"开始执行失败工具。"}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_tool_started","correlation_id":"task-2","payload":{"step":1,"call_id":"call-bash","tool_name":"bash","arguments":{"command":"false"}}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_tool_completed","correlation_id":"task-2","payload":{"step":1,"call_id":"call-bash","tool_name":"bash","arguments":{"command":"false"},"success":false,"error":"exit code 1"}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_error","correlation_id":"task-2","payload":{"step":1,"error_type":"RuntimeError","error_message":"agent failed"}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_finished","correlation_id":"task-2","payload":{"status":"failed"}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_queued","correlation_id":"task-3","payload":{"queue_position":0}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_started","correlation_id":"task-3","payload":{}}
-{"schema_version":1,"source_plugin_id":"agent","event_type":"agent_text_delta","correlation_id":"task-3","payload":{"step":1,"text":"第三轮：中文宽字符，队列验证完成。"}}
-{"schema_version":1,"source_plugin_id":"user-input","event_type":"input_finished","correlation_id":"task-3","payload":{"status":"completed"}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_queued","task_id":"task-1","payload":{"queue_position":0}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_started","task_id":"task-1","payload":{}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"user_input","task_id":"task-1","payload":{"prompt":"检查配置并读取文件"}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_text_delta","task_id":"task-1","payload":{"step":1,"text":"正在**检查"}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_text_delta","task_id":"unrelated-task","payload":{"step":1,"text":"这段不应显示"}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_text_delta","task_id":"task-1","payload":{"step":1,"text":"配置**……\n\n- 环境正常\n- 准备读取文件"}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_tool_started","task_id":"task-1","payload":{"step":1,"call_id":"call-read","tool_name":"read","arguments":{"path":"配置/你好.md"}}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_tool_completed","task_id":"task-1","payload":{"step":1,"call_id":"call-read","tool_name":"read","arguments":{"path":"配置/你好.md"},"success":true,"error":null}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_text_delta","task_id":"task-1","payload":{"step":2,"text":"读取完成。\n\n```python\nprint('你好')\n```"}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_completed","task_id":"task-1","payload":{"step":2,"text":"读取完成。"}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_finished","task_id":"task-1","payload":{"status":"completed"}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_queued","task_id":"task-2","payload":{"queue_position":0}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_started","task_id":"task-2","payload":{}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_text_delta","task_id":"task-2","payload":{"step":1,"text":"开始执行失败工具。"}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_tool_started","task_id":"task-2","payload":{"step":1,"call_id":"call-bash","tool_name":"bash","arguments":{"command":"false"}}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_tool_completed","task_id":"task-2","payload":{"step":1,"call_id":"call-bash","tool_name":"bash","arguments":{"command":"false"},"success":false,"error":"exit code 1"}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_error","task_id":"task-2","payload":{"step":1,"error_type":"RuntimeError","error_message":"agent failed"}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_finished","task_id":"task-2","payload":{"status":"failed"}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_queued","task_id":"task-3","payload":{"queue_position":0}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_started","task_id":"task-3","payload":{}}
+{"schema_version":2,"source_plugin_id":"agent","event_type":"agent_text_delta","task_id":"task-3","payload":{"step":1,"text":"第三轮：中文宽字符，队列验证完成。"}}
+{"schema_version":2,"source_plugin_id":"user-input","event_type":"input_finished","task_id":"task-3","payload":{"status":"completed"}}
