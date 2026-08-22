@@ -17,7 +17,7 @@ class BlackboardTaskState:
     )
     input_prompt: str | None = None
     context_published: bool = False
-    context_committed: bool = False
+    history_committed: bool = False
     agent_finished: bool = False
     input_finished: bool = False
 

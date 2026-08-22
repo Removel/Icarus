@@ -25,4 +25,5 @@ class InputStartedEvent(Event):
 
 @dataclass(frozen=True, kw_only=True)
 class InputFinishedEvent(Event):
-    status: Literal["completed", "failed"]
+    status: Literal["completed", "failed", "cancelled"]
+    run_id: str | None = None

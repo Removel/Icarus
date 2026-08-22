@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Iterator
 
 from apps.agent.src.agent_orchestration.capability.types import AgentResponse
 from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.run_control.types import AgentRunControl
 from apps.agent.src.model_config import LLMRole
 from apps.agent.src.model_provider.types import ImagePart, Message
 
@@ -25,6 +26,7 @@ class BaseAgent(ABC):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AgentResponse:
         ...
 
@@ -36,6 +38,7 @@ class BaseAgent(ABC):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AgentResponse:
         ...
 
@@ -47,6 +50,7 @@ class BaseAgent(ABC):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> Iterator[Event]:
         ...
 
@@ -58,5 +62,6 @@ class BaseAgent(ABC):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AsyncIterator[Event]:
         ...

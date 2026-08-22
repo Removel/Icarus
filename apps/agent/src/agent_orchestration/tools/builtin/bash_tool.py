@@ -1,5 +1,6 @@
 """执行本地 Bash 命令。"""
 
+import asyncio
 import subprocess
 from typing import Any
 
@@ -9,6 +10,8 @@ from apps.agent.src.model_provider.types import ToolDefinition
 
 
 class BashTool(BaseTool):
+    TERMINATE_GRACE_SECONDS = 1.0
+
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -42,6 +45,64 @@ class BashTool(BaseTool):
         )
 
     def invoke(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        command, workdir, timeout = self._validate_arguments(arguments)
+
+        try:
+            completed = subprocess.run(
+                ["bash", "-lc", command],
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            return ToolExecutionResult(success=False, error=str(error))
+
+        return self._result(
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+        )
+
+    async def ainvoke(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        command, workdir, timeout = self._validate_arguments(arguments)
+        process = await asyncio.create_subprocess_exec(
+            "bash",
+            "-lc",
+            command,
+            cwd=workdir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            if timeout is None:
+                stdout, stderr = await process.communicate()
+            else:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout,
+                )
+        except asyncio.CancelledError:
+            await asyncio.shield(self._terminate(process))
+            raise
+        except TimeoutError:
+            await self._terminate(process)
+            return ToolExecutionResult(
+                success=False,
+                error=f"Command timed out after {timeout:g} seconds",
+            )
+
+        return self._result(
+            process.returncode or 0,
+            stdout.decode(errors="replace"),
+            stderr.decode(errors="replace"),
+        )
+
+    @staticmethod
+    def _validate_arguments(
+        arguments: dict[str, Any],
+    ) -> tuple[str, str | None, float | None]:
         command = arguments.get("command")
         workdir = arguments.get("workdir")
         timeout = arguments.get("timeout")
@@ -58,28 +119,37 @@ class BashTool(BaseTool):
             raise ValueError("timeout must be a positive number")
         if not isinstance(parallel, bool):
             raise ValueError("parallel must be a boolean")
+        return command, workdir, timeout
 
+    @classmethod
+    async def _terminate(cls, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        process.terminate()
         try:
-            completed = subprocess.run(
-                ["bash", "-lc", command],
-                cwd=workdir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
+            await asyncio.wait_for(
+                process.wait(),
+                timeout=cls.TERMINATE_GRACE_SECONDS,
             )
-        except (OSError, subprocess.SubprocessError) as error:
-            return ToolExecutionResult(success=False, error=str(error))
+        except TimeoutError:
+            process.kill()
+            await process.wait()
 
+    @staticmethod
+    def _result(
+        return_code: int,
+        stdout: str,
+        stderr: str,
+    ) -> ToolExecutionResult:
         output = {
-            "exit_code": completed.returncode,
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
+            "exit_code": return_code,
+            "stdout": stdout,
+            "stderr": stderr,
         }
         return ToolExecutionResult(
-            success=completed.returncode == 0,
+            success=return_code == 0,
             output=output,
-            error=None if completed.returncode == 0 else completed.stderr,
+            error=None if return_code == 0 else stderr,
         )
 
     def can_run_parallel(self, arguments: dict[str, Any]) -> bool:

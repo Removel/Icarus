@@ -11,6 +11,10 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentToolStartedEvent,
     ReActAgent,
 )
+from apps.agent.src.agent_orchestration.run_control import (
+    AgentRunCancelled,
+    TaskChannel,
+)
 from apps.agent.src.agent_orchestration.tools import (
     BaseTool,
     ToolExecutionResult,
@@ -70,6 +74,13 @@ def make_agent(streams):
     registry.register(EchoTool())
     llm = StreamQueueLLM(streams)
     return ReActAgent("thinking", llm, ToolExecutor(registry)), llm
+
+
+def active_channel() -> TaskChannel:
+    channel = TaskChannel("task-1")
+    channel.mark_preparing_context()
+    channel.start_run("run-1")
+    return channel
 
 
 def tool_stream():
@@ -138,6 +149,12 @@ def test_stream_完成多轮工具调用且不流出reasoning():
         "tool",
         "assistant",
     ]
+    assert [message.role for message in final.response.task_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
     tool_message = llm.calls[1][0][-1]
     assert json.loads(tool_message.content[0].text)["success"] is True
 
@@ -168,6 +185,255 @@ def test_astream_与同步流保持相同事件语义():
         AgentCompletedEvent,
     ]
     assert events[-1].response.finish_reason == "stop"
+
+
+def test_stream和astream都在首个step前注入context():
+    sync_agent, sync_llm = make_agent([final_stream()])
+    sync_channel = active_channel()
+    sync_channel.add_context("sync extra", source_id="external")
+
+    sync_events = list(
+        sync_agent.stream("", [], "original", run_control=sync_channel)
+    )
+
+    async def run_async():
+        async_agent, async_llm = make_agent([final_stream()])
+        async_channel = active_channel()
+        async_channel.add_context("async extra", source_id="external")
+        events = [
+            event
+            async for event in async_agent.astream(
+                "",
+                [],
+                "original",
+                run_control=async_channel,
+            )
+        ]
+        return events, async_llm
+
+    async_events, async_llm = asyncio.run(run_async())
+
+    assert sync_llm.calls[0][0][-1].content[0].text == (
+        "<runtime_context>\n1. sync extra\n</runtime_context>"
+    )
+    assert async_llm.calls[0][0][-1].content[0].text == (
+        "<runtime_context>\n1. async extra\n</runtime_context>"
+    )
+    assert sync_events[-1].response.task_messages[1].content[0].text == (
+        "<runtime_context>\n1. sync extra\n</runtime_context>"
+    )
+    assert async_events[-1].response.task_messages[1].content[0].text == (
+        "<runtime_context>\n1. async extra\n</runtime_context>"
+    )
+
+
+def test_stream和astream取消后都不启动tool():
+    sync_channel = active_channel()
+
+    class CancellingLLM(StreamQueueLLM):
+        def stream(self, messages, tools=None):
+            yield from super().stream(messages, tools)
+            sync_channel.request_cancel("stop")
+
+    sync_agent = ReActAgent(
+        "thinking",
+        CancellingLLM([tool_stream()]),
+        ToolExecutor(ToolRegistry()),
+    )
+    with pytest.raises(AgentRunCancelled):
+        list(sync_agent.stream("", [], "original", run_control=sync_channel))
+
+    async def run_async():
+        async_channel = active_channel()
+
+        class AsyncCancellingLLM(StreamQueueLLM):
+            async def astream(self, messages, tools=None):
+                async for chunk in super().astream(messages, tools):
+                    yield chunk
+                async_channel.request_cancel("stop")
+
+        async_agent = ReActAgent(
+            "thinking",
+            AsyncCancellingLLM([tool_stream()]),
+            ToolExecutor(ToolRegistry()),
+        )
+        with pytest.raises(AgentRunCancelled):
+            async for _ in async_agent.astream(
+                "",
+                [],
+                "original",
+                run_control=async_channel,
+            ):
+                pass
+
+    asyncio.run(run_async())
+
+
+def test_astream取消时checkpoint保留完整tool_step并排除部分assistant():
+    channel = active_channel()
+
+    class CancelDuringSecondStepLLM(StreamQueueLLM):
+        async def astream(self, messages, tools=None):
+            self.calls.append((list(messages), list(tools or [])))
+            stream = self.streams.pop(0)
+            if len(self.calls) == 2:
+                channel.request_cancel("stop during answer")
+            for chunk in stream:
+                yield chunk
+
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    agent = ReActAgent(
+        "thinking",
+        CancelDuringSecondStepLLM([tool_stream(), final_stream()]),
+        ToolExecutor(registry),
+    )
+
+    async def run():
+        with pytest.raises(AgentRunCancelled):
+            async for _ in agent.astream(
+                "system",
+                [],
+                "original",
+                tools=["echo"],
+                run_control=channel,
+            ):
+                pass
+
+    asyncio.run(run())
+
+    assert [message.role for message in channel.history_checkpoint] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert channel.history_checkpoint[1].tool_calls[0].id == "call-1"
+    assert channel.history_checkpoint[2].tool_call_id == "call-1"
+
+
+def test_astream首次llm中取消只保留已提交输入不保留部分assistant():
+    async def run():
+        channel = active_channel()
+
+        class BlockingLLM(StreamQueueLLM):
+            def __init__(self):
+                super().__init__([])
+                self.started = asyncio.Event()
+
+            async def astream(self, messages, tools=None):
+                self.calls.append((list(messages), list(tools or [])))
+                yield LLMStreamChunk(text_delta="partial")
+                self.started.set()
+                await asyncio.Event().wait()
+
+        llm = BlockingLLM()
+        agent = ReActAgent("thinking", llm, ToolExecutor(ToolRegistry()))
+
+        async def consume():
+            async for _ in agent.astream(
+                "system",
+                [],
+                "original",
+                run_control=channel,
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await llm.started.wait()
+        channel.request_cancel("stop during first answer")
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return channel
+
+    channel = asyncio.run(run())
+
+    assert channel.history_checkpoint == (
+        Message("user", [TextPart("original")]),
+    )
+
+
+def test_astream_tool执行中取消不保留未完成toolcall():
+    async def run():
+        channel = active_channel()
+        started = asyncio.Event()
+
+        class BlockingTool(EchoTool):
+            @property
+            def definition(self):
+                return ToolDefinition("block", "等待取消", {"type": "object"})
+
+            async def ainvoke(self, arguments):
+                del arguments
+                started.set()
+                await asyncio.Event().wait()
+
+        registry = ToolRegistry()
+        registry.register(BlockingTool())
+        response = [
+            LLMStreamChunk(
+                tool_calls=[ToolCall("call-1", "block", {})],
+                finish_reason="tool_call",
+            )
+        ]
+        agent = ReActAgent(
+            "thinking",
+            StreamQueueLLM([response]),
+            ToolExecutor(registry),
+        )
+
+        async def consume():
+            async for _ in agent.astream(
+                "system",
+                [],
+                "original",
+                tools=["block"],
+                run_control=channel,
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await started.wait()
+        channel.request_cancel("stop during tool")
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return channel
+
+    channel = asyncio.run(run())
+
+    assert channel.history_checkpoint == (
+        Message("user", [TextPart("original")]),
+    )
+
+
+def test_astream最后一个tool完成事件可见时完整step已进入checkpoint():
+    async def run():
+        channel = active_channel()
+        agent, _ = make_agent([tool_stream(), final_stream()])
+        events = []
+
+        with pytest.raises(AgentRunCancelled):
+            async for event in agent.astream(
+                "system",
+                [],
+                "original",
+                tools=["echo"],
+                run_control=channel,
+            ):
+                events.append(event)
+                if isinstance(event, AgentToolCompletedEvent):
+                    channel.request_cancel("stop after tool")
+        return events, channel
+
+    events, channel = asyncio.run(run())
+
+    assert any(isinstance(event, AgentToolCompletedEvent) for event in events)
+    assert [message.role for message in channel.history_checkpoint] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
 
 
 def test_stream_先流出error再抛出原始异常():

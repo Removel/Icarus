@@ -1,7 +1,13 @@
 import asyncio
 import json
 
+import pytest
+
 from apps.agent.src.agent_orchestration.capability import ReActAgent
+from apps.agent.src.agent_orchestration.run_control import (
+    AgentRunCancelled,
+    TaskChannel,
+)
 from apps.agent.src.agent_orchestration.tools import (
     BaseTool,
     ToolExecutionResult,
@@ -127,6 +133,31 @@ def test_react_agent_完成toolcall回填并继续对话():
     }
 
 
+def test_react_agent_task_messages只包含当前task完整轨迹():
+    agent, _ = make_agent([tool_response(), final_response()])
+
+    result = agent.invoke(
+        "system",
+        [
+            Message("user", [TextPart("old")]),
+            Message("assistant", [TextPart("old answer")]),
+        ],
+        "current",
+        tools=["echo"],
+    )
+
+    assert [message.role for message in result.task_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert result.task_messages[0].content == [TextPart("current")]
+    assert result.task_messages[1].tool_calls[0].id == "call-1"
+    assert result.task_messages[2].tool_call_id == "call-1"
+    assert result.task_messages[-1].content == [TextPart("done")]
+
+
 def test_react_agent_tools空列表禁用工具():
     agent, llm = make_agent([final_response()])
 
@@ -170,3 +201,193 @@ def test_react_agent_异步路径与同步语义一致():
     assert result.message.content == [TextPart("done")]
     assert result.steps == 2
     assert len(llm.calls) == 2
+
+
+def test_react_agent_异步调用在首个step前注入context():
+    agent, llm = make_agent([final_response()])
+    channel = active_channel()
+    channel.add_context("async extra", source_id="external")
+
+    result = asyncio.run(
+        agent.ainvoke("", [], "original", run_control=channel)
+    )
+
+    assert llm.calls[0][0][-1].content[0].text == (
+        "<runtime_context>\n1. async extra\n</runtime_context>"
+    )
+    assert result.task_messages[1].content[0].text == (
+        "<runtime_context>\n1. async extra\n</runtime_context>"
+    )
+
+
+def active_channel() -> TaskChannel:
+    channel = TaskChannel("task-1")
+    channel.mark_preparing_context()
+    channel.start_run("run-1")
+    return channel
+
+
+def test_react_agent首次step前按fifo合并运行中context():
+    agent, llm = make_agent([final_response()])
+    channel = active_channel()
+    channel.add_context("first", source_id="memory")
+    channel.add_context("second", source_id="external")
+
+    result = agent.invoke("", [], "original", run_control=channel)
+
+    assert llm.calls[0][0] == [
+        Message("user", [TextPart("original")]),
+        Message(
+            "user",
+            [
+                TextPart(
+                    "<runtime_context>\n"
+                    "1. first\n"
+                    "2. second\n"
+                    "</runtime_context>"
+                )
+            ],
+        ),
+    ]
+    assert result.task_messages[1].content[0].text == (
+        "<runtime_context>\n1. first\n2. second\n</runtime_context>"
+    )
+
+
+def test_react_agent工具完成后在下一step前注入context():
+    channel = active_channel()
+
+    class ContextTool(EchoTool):
+        def invoke(self, arguments):
+            result = super().invoke(arguments)
+            channel.add_context("after tool", source_id="supervisor")
+            return result
+
+    registry = ToolRegistry()
+    registry.register(ContextTool())
+    llm = QueueLLM([tool_response(), final_response()])
+    agent = ReActAgent("thinking", llm, ToolExecutor(registry))
+
+    agent.invoke("", [], "original", tools=["echo"], run_control=channel)
+
+    second_messages = llm.calls[1][0]
+    assert [message.role for message in second_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    assert second_messages[-1].content[0].text == (
+        "<runtime_context>\n1. after tool\n</runtime_context>"
+    )
+
+
+def test_react_agent完成竞争时补充context触发额外step():
+    channel = active_channel()
+
+    class FinalBoundaryLLM(QueueLLM):
+        def invoke(self, messages, tools=None):
+            response = super().invoke(messages, tools)
+            if len(self.calls) == 1:
+                channel.add_context("late but accepted", source_id="memory")
+            return response
+
+    llm = FinalBoundaryLLM([final_response("draft"), final_response("revised")])
+    agent = ReActAgent("thinking", llm, ToolExecutor(ToolRegistry()))
+
+    result = agent.invoke("", [], "original", run_control=channel)
+
+    assert result.message.content == [TextPart("revised")]
+    assert result.steps == 2
+    assert llm.calls[1][0][-1].content[0].text == (
+        "<runtime_context>\n1. late but accepted\n</runtime_context>"
+    )
+
+
+def test_react_agent取消后不启动tool():
+    channel = active_channel()
+
+    class CancellingLLM(QueueLLM):
+        def invoke(self, messages, tools=None):
+            response = super().invoke(messages, tools)
+            channel.request_cancel("stop")
+            return response
+
+    class RecordingTool(EchoTool):
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, arguments):
+            self.calls += 1
+            return super().invoke(arguments)
+
+    tool = RecordingTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    agent = ReActAgent(
+        "thinking",
+        CancellingLLM([tool_response()]),
+        ToolExecutor(registry),
+    )
+
+    with pytest.raises(AgentRunCancelled):
+        agent.invoke("", [], "original", tools=["echo"], run_control=channel)
+
+    assert tool.calls == 0
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_react_agent在每个tool_batch前检查取消(async_mode):
+    channel = active_channel()
+
+    class CancellingTool(EchoTool):
+        def __init__(self):
+            self.calls = []
+
+        def invoke(self, arguments):
+            self.calls.append(arguments["value"])
+            channel.request_cancel("stop after first batch")
+            return super().invoke(arguments)
+
+    tool = CancellingTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    response = LLMResponse(
+        message=Message(
+            role="assistant",
+            content=[],
+            tool_calls=[
+                ToolCall("call-1", "echo", {"value": "first"}),
+                ToolCall("call-2", "echo", {"value": "second"}),
+            ],
+        ),
+        finish_reason="tool_call",
+    )
+    agent = ReActAgent(
+        "thinking",
+        QueueLLM([response]),
+        ToolExecutor(registry),
+    )
+
+    if async_mode:
+        with pytest.raises(AgentRunCancelled):
+            asyncio.run(
+                agent.ainvoke(
+                    "",
+                    [],
+                    "original",
+                    tools=["echo"],
+                    run_control=channel,
+                )
+            )
+    else:
+        with pytest.raises(AgentRunCancelled):
+            agent.invoke(
+                "",
+                [],
+                "original",
+                tools=["echo"],
+                run_control=channel,
+            )
+
+    assert tool.calls == ["first"]

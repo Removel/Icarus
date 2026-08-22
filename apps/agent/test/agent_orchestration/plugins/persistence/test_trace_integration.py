@@ -16,6 +16,7 @@ from apps.agent.src.agent_orchestration.plugins import (
     UserInputEvent,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence import PersistenceRuntime
+from apps.agent.src.agent_orchestration.run_control import TaskChannelRegistry
 from apps.agent.src.model_provider.base_llm import BaseLLM
 from apps.agent.src.model_provider.types import LLMStreamChunk
 
@@ -86,7 +87,10 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
             system_prompt="system",
             tools=[],
         )
-        agent = AgentPlugin("agent", factory)
+        task_channels = TaskChannelRegistry()
+        channel = task_channels.create("task-1")
+        channel.mark_preparing_context()
+        agent = AgentPlugin("agent", factory, task_channels)
         sink = SinkPlugin("sink")
         for plugin in (user_input, blackboard, agent, sink):
             manager.register(plugin)

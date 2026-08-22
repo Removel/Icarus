@@ -13,6 +13,7 @@ from apps.agent.src.agent_orchestration.hooks.hook_context import hook_context
 from apps.agent.src.agent_orchestration.hooks.hook_dispatcher import (
     HookDispatcher,
 )
+from apps.agent.src.agent_orchestration.run_control.types import AgentRunControl
 from apps.agent.src.model_config import LLMRole
 from apps.agent.src.model_provider.types import ImagePart, Message
 
@@ -39,8 +40,9 @@ class ObservableAgent(BaseAgent):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AgentResponse:
-        with hook_context({"model_role": self.model_role}, new_run=True):
+        with self._run_context(run_control):
             self._dispatcher.trigger(
                 "agent.invoke",
                 "before",
@@ -59,6 +61,7 @@ class ObservableAgent(BaseAgent):
                     input_prompt,
                     input_images,
                     tools,
+                    run_control=run_control,
                 )
             except Exception as error:
                 self._dispatcher.trigger(
@@ -81,8 +84,9 @@ class ObservableAgent(BaseAgent):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AgentResponse:
-        with hook_context({"model_role": self.model_role}, new_run=True):
+        with self._run_context(run_control):
             await self._dispatcher.atrigger(
                 "agent.invoke",
                 "before",
@@ -101,6 +105,7 @@ class ObservableAgent(BaseAgent):
                     input_prompt,
                     input_images,
                     tools,
+                    run_control=run_control,
                 )
             except Exception as error:
                 await self._dispatcher.atrigger(
@@ -123,8 +128,9 @@ class ObservableAgent(BaseAgent):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> Iterator[Event]:
-        with hook_context({"model_role": self.model_role}, new_run=True):
+        with self._run_context(run_control):
             self._dispatcher.trigger(
                 "agent.stream",
                 "before",
@@ -144,6 +150,7 @@ class ObservableAgent(BaseAgent):
                     input_prompt,
                     input_images,
                     tools,
+                    run_control=run_control,
                 ):
                     if isinstance(event, AgentCompletedEvent):
                         self._dispatcher.trigger(
@@ -178,8 +185,9 @@ class ObservableAgent(BaseAgent):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AsyncIterator[Event]:
-        with hook_context({"model_role": self.model_role}, new_run=True):
+        with self._run_context(run_control):
             await self._dispatcher.atrigger(
                 "agent.stream",
                 "before",
@@ -199,6 +207,7 @@ class ObservableAgent(BaseAgent):
                     input_prompt,
                     input_images,
                     tools,
+                    run_control=run_control,
                 ):
                     if isinstance(event, AgentCompletedEvent):
                         await self._dispatcher.atrigger(
@@ -255,3 +264,9 @@ class ObservableAgent(BaseAgent):
             "error_type": type(error).__name__,
             "error_message": str(error),
         }
+
+    def _run_context(self, run_control: AgentRunControl | None):
+        data = {"model_role": self.model_role}
+        if run_control is not None and run_control.run_id is not None:
+            return hook_context(data, run_id=run_control.run_id)
+        return hook_context(data, new_run=True)
