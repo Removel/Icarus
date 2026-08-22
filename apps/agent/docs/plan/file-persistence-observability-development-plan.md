@@ -29,7 +29,7 @@
 
 - 必须配置 `ICARUS_DATA_DIR`；
 - Workspace/Session 由目录表达，不在每条 Trace 中重复；
-- Trace 保留 `correlation_id`、`run_id` 和 `event_id`；
+- Trace 保留 `task_id`、`run_id` 和 `event_id`；
 - 后端数据库是业务对话的权威来源；
 - Agent 本地文件只保存技术轨迹和监测日志；
 - Hook 只等待内存队列接受，不等待磁盘；
@@ -122,7 +122,6 @@ class SessionIdentity:
     workspace_path: Path
     workspace_key: str
     session_id: str
-    correlation_id: str | None = None
 ```
 
 - Workspace Path 规范化；
@@ -130,7 +129,7 @@ class SessionIdentity:
 - 后端可传 `session_id`；
 - 未传时生成 UUID；
 - 默认不复用 Workspace 下旧 Session；
-- correlation_id 可以在一次用户任务开始时补充。
+- task_id 不属于 SessionIdentity，在一次用户任务的 Task Scope 中补充。
 
 **验证**
 
@@ -213,7 +212,7 @@ class SessionIdentity:
 - Session Scope 提供：
   - `workspace_key`
   - `session_id`
-  - `correlation_id`
+  - `task_id`
 - Agent Scope 增加：
   - `run_id`
   - `model_role`
@@ -286,7 +285,7 @@ class SessionIdentity:
   - `record_type`
   - `event_id`
   - `occurred_at`
-  - `correlation_id`
+  - `task_id`
   - `run_id`
   - `name`
   - `phase`
@@ -302,7 +301,7 @@ class SessionIdentity:
 - 一行一个 JSON；
 - 记录可重新解析；
 - Workspace/Session 不重复进入 JSON；
-- correlation/run/event ID 保留；
+- task/run/event ID 保留；
 - 完整 LLM/Tool 快照可以序列化；
 - 脱敏在序列化前生效。
 
@@ -403,7 +402,7 @@ offer 成功
   - 时间
   - level
   - logger
-  - correlation_id
+  - task_id
   - run_id
   - plugin_id（如有）
   - message
@@ -453,7 +452,7 @@ runtime.start()
 with runtime.session_scope(
     workspace_path=...,
     session_id=...,
-    correlation_id=...,
+    task_id=...,
 ):
     ...
 
@@ -493,7 +492,7 @@ Session Scope：
 - 注册 `FileTraceHook` 到 HookRegistry；
 - ObservableAgent/LLM/Tool 使用 Session Scope；
 - ObservableEventBus/PluginRuntime 使用同一 HookRegistry；
-- correlation_id 从 Blackboard/AgentPlugin 进入 Session Scope；
+- task_id 从 Blackboard/AgentPlugin 进入 Session Scope；
 - trace 包含 Agent、LLM、Tool、EventBus、Plugin 消费；
 - runtime.log 包含生命周期和错误。
 
@@ -530,7 +529,7 @@ Session Scope：
 - ToolCall/ToolResult；
 - Usage；
 - EventBus 和 Plugin 生命周期；
-- correlation/run/event ID；
+- task/run/event ID；
 - 脱敏；
 - Writer Drain。
 

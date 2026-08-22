@@ -136,7 +136,7 @@ def publish(pilot, source_plugin_id: str, event: object) -> None:
 
 
 def input_started(task_id: str = "task-1") -> InputStartedEvent:
-    return InputStartedEvent(correlation_id=task_id, task_id=task_id)
+    return InputStartedEvent(task_id=task_id)
 
 
 def test_snapshot_initial_welcome(snap_compare):
@@ -250,7 +250,7 @@ def test_snapshot_streaming_markdown_with_draft(snap_compare):
             pilot,
             "agent",
             AgentTextDeltaEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 text=markdown,
             ),
@@ -278,7 +278,7 @@ def test_snapshot_running_with_pending_queue(snap_compare):
             pilot,
             "agent",
             AgentTextDeltaEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 text=(
                     "The projection layer is in place. I am validating the "
@@ -324,7 +324,7 @@ def test_snapshot_tool_failure_and_agent_error(snap_compare):
             pilot,
             "agent",
             AgentTextDeltaEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 text="I will read the workspace configuration first.",
             ),
@@ -333,7 +333,7 @@ def test_snapshot_tool_failure_and_agent_error(snap_compare):
             pilot,
             "agent",
             AgentToolStartedEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 tool_call=tool_call,
             ),
@@ -342,7 +342,7 @@ def test_snapshot_tool_failure_and_agent_error(snap_compare):
             pilot,
             "agent",
             AgentToolCompletedEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 tool_call=tool_call,
                 result=ToolExecutionResult(
@@ -355,7 +355,7 @@ def test_snapshot_tool_failure_and_agent_error(snap_compare):
             pilot,
             "agent",
             AgentErrorEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 error_type="ToolExecutionError",
                 error_message="Could not read settings.json",
@@ -365,7 +365,6 @@ def test_snapshot_tool_failure_and_agent_error(snap_compare):
             pilot,
             "user-input",
             InputFinishedEvent(
-                correlation_id="task-1",
                 task_id="task-1",
                 status="failed",
             ),
@@ -395,7 +394,7 @@ def test_snapshot_narrow_running_layout(snap_compare):
             pilot,
             "agent",
             AgentTextDeltaEvent(
-                correlation_id="task-1",
+                task_id="task-1",
                 step=1,
                 text=expected_markdown,
             ),

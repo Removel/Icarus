@@ -194,10 +194,10 @@ def tool_messages(count):
     return messages
 
 
-def completed_event(correlation_id, *, finish_reason="stop", tool_count=0):
+def completed_event(task_id, *, finish_reason="stop", tool_count=0):
     messages = tool_messages(tool_count)
     return AgentCompletedEvent(
-        correlation_id=correlation_id,
+        task_id=task_id,
         step=12,
         response=AgentResponse(
             message=messages[-1],
@@ -208,14 +208,14 @@ def completed_event(correlation_id, *, finish_reason="stop", tool_count=0):
     )
 
 
-async def feed_turn(plugin, correlation_id, tool_count):
+async def feed_turn(plugin, task_id, tool_count):
     await plugin.consume(
         "user-input",
-        UserInputEvent(correlation_id=correlation_id, prompt="work"),
+        UserInputEvent(task_id=task_id, prompt="work"),
     )
     await plugin.consume(
         "agent",
-        completed_event(correlation_id, tool_count=tool_count),
+        completed_event(task_id, tool_count=tool_count),
     )
 
 
@@ -259,12 +259,11 @@ def test_plugin失败对话不触发且清理轮状态(tmp_path):
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="failed", prompt="work"),
+            UserInputEvent(task_id="failed", prompt="work"),
         )
         await plugin.consume(
             "user-input",
             InputFinishedEvent(
-                correlation_id="failed",
                 task_id="failed",
                 status="failed",
             ),
@@ -289,7 +288,7 @@ def test_plugin非stop终止原因不触发维护(tmp_path):
         )
         await plugin.consume(
             "user-input",
-            UserInputEvent(correlation_id="truncated", prompt="work"),
+            UserInputEvent(task_id="truncated", prompt="work"),
         )
         await plugin.consume(
             "agent",

@@ -97,11 +97,11 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
 
         with persistence.session_scope(
             session_id="session-1",
-            correlation_id="task-1",
+            task_id="task-1",
         ) as identity:
             await user_input.publish(
                 UserInputEvent(
-                    correlation_id="task-1",
+                    task_id="task-1",
                     prompt="hello",
                 )
             )
@@ -127,7 +127,7 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
         "agent.stream",
         "llm.stream",
     } <= names
-    assert {record["correlation_id"] for record in records} == {"task-1"}
+    assert {record["task_id"] for record in records} == {"task-1"}
     assert all("workspace_key" not in record for record in records)
     assert all("session_id" not in record for record in records)
     assert [type(event) for event in events] == [

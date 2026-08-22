@@ -25,8 +25,8 @@ class SessionStub:
         self.task_ids = []
 
     @contextmanager
-    def task_scope(self, correlation_id: str):
-        self.task_ids.append(correlation_id)
+    def task_scope(self, task_id: str):
+        self.task_ids.append(task_id)
         yield
 
 
@@ -97,7 +97,7 @@ def test_user_input_plugin_fifo并返回queue_position():
 
         await agent.publish(
             AgentCompletedEvent(
-                correlation_id=first.task_id,
+                task_id=first.task_id,
                 step=1,
                 response=AgentResponse(
                     message=Message("assistant", [TextPart("done")]),
@@ -118,7 +118,7 @@ def test_user_input_plugin_fifo并返回queue_position():
         )
         await agent.publish(
             AgentCompletedEvent(
-                correlation_id=second.task_id,
+                task_id=second.task_id,
                 step=1,
                 response=AgentResponse(
                     message=Message("assistant", [TextPart("done")]),
@@ -165,7 +165,7 @@ def test_user_input_plugin_完成或失败后开始下一条():
 
         await agent.publish(
             AgentCompletedEvent(
-                correlation_id=first.task_id,
+                task_id=first.task_id,
                 step=1,
                 response=AgentResponse(
                     message=Message("assistant", [TextPart("done")]),
@@ -186,7 +186,7 @@ def test_user_input_plugin_完成或失败后开始下一条():
         )
         await agent.publish(
             AgentErrorEvent(
-                correlation_id=second.task_id,
+                task_id=second.task_id,
                 step=1,
                 error_type="RuntimeError",
                 error_message="failed",

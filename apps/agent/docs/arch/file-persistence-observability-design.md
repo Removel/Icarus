@@ -88,19 +88,19 @@ Session 是一组技术执行轨迹的归档身份。
 - 只有未来 InputPlugin 显式指定已有 Session 时才选择旧 Session；
 - Agent 本地文件不用于恢复 History。
 
-当前 UserInputPlugin 绑定一个长期 PersistenceSession；每次输入只创建新的 Task Scope 和 correlation_id。
+当前 UserInputPlugin 绑定一个长期 PersistenceSession；每次输入只创建新的 Task Scope 和 task_id。
 
 ### Task 与 Run
 
 ```text
 session_id
-└── correlation_id
+└── task_id
     └── run_id
         └── event_id
 ```
 
 - `session_id`：一段技术会话归档；
-- `correlation_id`：一次用户任务链；
+- `task_id`：一次用户任务链；
 - `run_id`：一次具体 Agent 执行；
 - `event_id`：一条 Hook 或业务 Event。
 
@@ -182,11 +182,11 @@ Workspace 和 Session 由文件路径表达，不在每条记录中重复写入�
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "record_type": "hook_event",
   "event_id": "event-uuid",
   "occurred_at": "UTC timestamp",
-  "correlation_id": "task-uuid",
+  "task_id": "task-uuid",
   "run_id": "run-uuid",
   "name": "tool.execute",
   "phase": "after",
@@ -251,7 +251,6 @@ class SessionIdentity:
     workspace_path: Path
     workspace_key: str
     session_id: str
-    correlation_id: str | None = None
 ```
 
 身份来源：
@@ -259,7 +258,7 @@ class SessionIdentity:
 - Workspace Path：Runtime 启动参数；
 - Workspace Key：PathResolver 计算；
 - Session ID：后端提供或 Runtime 生成；
-- Correlation ID：一次用户输入 Event。
+- Task ID 不属于 SessionIdentity；进入 Task Scope 后单独写入 HookContext。
 
 ## HookContext 传播
 
@@ -269,7 +268,7 @@ class SessionIdentity:
 Session Scope
   workspace_key
   session_id
-  correlation_id
+  task_id
 
 Agent Scope
   run_id
@@ -284,7 +283,7 @@ LLM / Tool / Plugin Hook
 HookEvent 中：
 
 - `workspace_key` 和 `session_id` 用于 Writer 路由；
-- `correlation_id`、`run_id` 保留在 Trace 记录；
+- `task_id`、`run_id` 保留在 Trace 记录；
 - 其他 Context 进入 `context`。
 
 ## Trace 写入链
@@ -498,7 +497,7 @@ Agent 负责技术日志：
 - 关闭 Drain 后队列为空且文件完整；
 - Trace 包含 Agent、LLM、Tool 和 Plugin Runtime 聚合轨迹；
 - Workspace/Session 不重复写入每条 JSON；
-- correlation_id、run_id 和 event_id 可用于关联；
+- task_id、run_id 和 event_id 可用于关联；
 - 递归脱敏生效；
 - runtime.log 正确路由；
 - 写入失败不影响 Agent 主流程；

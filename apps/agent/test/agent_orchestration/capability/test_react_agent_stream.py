@@ -117,7 +117,7 @@ def test_stream_完成多轮工具调用且不流出reasoning():
         "最终",
         "回答",
     ]
-    assert len({event.correlation_id for event in events}) == 1
+    assert {event.task_id for event in events} == {None}
     started = next(event for event in events if isinstance(event, AgentToolStartedEvent))
     completed = next(
         event for event in events if isinstance(event, AgentToolCompletedEvent)

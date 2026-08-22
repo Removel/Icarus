@@ -66,18 +66,12 @@ class WorkspaceSessionFileHandler(logging.Handler):
         workspace_path = context.data.get("workspace_path")
         workspace_key = context.data.get("workspace_key")
         session_id = context.data.get("session_id")
-        correlation_id = context.data.get("correlation_id")
         if not workspace_path or not workspace_key or not session_id:
             return None
         return SessionIdentity(
             workspace_path=Path(str(workspace_path)),
             workspace_key=str(workspace_key),
             session_id=str(session_id),
-            correlation_id=(
-                str(correlation_id)
-                if correlation_id is not None
-                else None
-            ),
         )
 
     def _write(
@@ -107,7 +101,7 @@ class WorkspaceSessionFileHandler(logging.Handler):
                 record.levelname,
                 record.name,
                 f"session={identity.session_id if identity else '-'}",
-                f"correlation={context_data.get('correlation_id', '-')}",
+                f"task={context_data.get('task_id', '-')}",
                 f"run={context.run_id if context else '-'}",
                 f"plugin={context_data.get('plugin_id', '-')}",
                 record.getMessage(),

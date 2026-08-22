@@ -6,17 +6,11 @@ from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     ContextContributionEvent,
 )
 from apps.agent.src.agent_orchestration.plugins.user_input.events import UserInputEvent
-from apps.agent.src.model_provider.types import Message
-
-
-@dataclass
-class BlackboardContextState:
-    messages: list[Message] = field(default_factory=list)
 
 
 @dataclass
 class BlackboardTaskState:
-    correlation_id: str
+    task_id: str
     user_input: UserInputEvent | None = None
     contributions: dict[str, ContextContributionEvent] = field(
         default_factory=dict

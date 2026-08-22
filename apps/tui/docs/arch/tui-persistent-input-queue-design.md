@@ -484,14 +484,14 @@ apps/tui/
 - 拒绝未知 schema version、缺失字段和不支持的 Event 类型；
 - 不读取或修改 Agent Persistence。
 
-第一版 JSONL 使用最小稳定 envelope，只保留 UI 回放需要的数据：
+当前 JSONL v2 使用最小稳定 envelope，只保留 UI 回放需要的数据：
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_plugin_id": "agent",
   "event_type": "agent_text_delta",
-  "correlation_id": "task-1",
+  "task_id": "task-1",
   "payload": {"step": 1, "text": "正在检查配置……"}
 }
 ```
@@ -572,7 +572,7 @@ Worker 不直接修改 Widget 或按当时的 `active_task_id` 丢弃 Event；�
 一个 Textual async Worker 持续调用 `subscription.next_event()`，并把结果封装成 App Message：
 
 - Worker 不解析、过滤或直接渲染 Event，所有状态变更都回到 Textual Message Loop；
-- App 忽略或仅诊断 correlation ID 不匹配的 Event；
+- App 忽略或仅诊断 task_id 不匹配的 Event；
 - 匹配 Event 交给 `ProjectorRegistry` 生成 UiAction，再按 target 应用到对应 View；
 - `InputFinishedEvent` 关闭本轮 UI，清空 `active_task_id`；
 - 如果本地队列非空，立即尝试调度下一条；否则进入 ready/idle；
@@ -599,7 +599,7 @@ Markdown 显示。隐藏 reasoning 不因迁移 Textual 而自动暴露。
 ## 过渡期任务取消
 
 当前 `AgentRuntimeService` 没有 `cancel(task_id)`，`UserInputPlugin` 没有活动任务取消协议，
-`AgentPlugin` 也没有按 correlation ID 暴露任务句柄。因此第三类 `Ctrl+C` 在本阶段只通过
+`AgentPlugin` 也没有按 task_id 暴露任务句柄。因此第三类 `Ctrl+C` 在本阶段只通过
 StatusBar 或 Notification 显示：
 
 ```text
@@ -691,7 +691,7 @@ synthetic / recorded public-output JSONL
 - 一个用户任务的 accepted、started、分段 Markdown 和 completed；
 - 文本 → tool started → tool completed → 文本的段边界；
 - 工具失败和 AgentError；
-- unrelated correlation Event；
+- unrelated Task Event；
 - 多个 task ID 的任务终态，供 Pilot 输入第二、第三条消息后验证 FIFO 自动调度；
 - Markdown 列表、代码块、中文、宽字符和多行内容。
 
@@ -734,7 +734,7 @@ synthetic / recorded public-output JSONL
 - 文本、工具、文本形成正确的 UiAction 顺序；
 - ToolResult 默认不完整展开；
 - AgentError 与 InputFinished 产生明确终态；
-- unrelated correlation、隐藏 reasoning 和未知 Event 不显示；
+- unrelated Task Event、隐藏 reasoning 和未知 Event 不显示；
 - 同一个跨来源 Event 序列多次运行得到相同 UiAction。
 
 ### Transcript golden

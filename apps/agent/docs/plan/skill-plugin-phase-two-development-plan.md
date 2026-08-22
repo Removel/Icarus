@@ -75,7 +75,7 @@ apps/agent/test/agent_orchestration/plugins/skill/
 
 **实现内容**
 
-- `SkillTurnState` 按 `correlation_id` 保存：
+- `SkillTurnState` 按 `task_id` 保存：
   - 本轮原始用户输入；
   - 本轮检索命中的 Skill；
   - 有序的工具调用与完成结果；
@@ -87,7 +87,7 @@ apps/agent/test/agent_orchestration/plugins/skill/
 - `AgentCompletedEvent` 弹出状态并只判断一次；
 - 10 次工具调用不触发，11 次触发；
 - 工具完成失败仍计入调用数；
-- 未识别来源、无 correlation_id 或迟到事件安全忽略。
+- 未识别来源、无 task_id 或迟到事件安全忽略。
 
 **验证**
 

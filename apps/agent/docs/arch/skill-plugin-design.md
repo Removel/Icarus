@@ -412,7 +412,8 @@ metadata.mode    = "unchanged"
 
 ## Blackboard 调整
 
-当前实现由 AgentPlugin 内部的 Converter 把 `ContextBlock` 与原始用户输入拼成最终 `input_prompt`，但 Blackboard 成功提交历史时只保存原始用户输入。这会导致下一轮历史中没有此前注入的 Skill。
+早期实现曾由 AgentPlugin 侧组合 `ContextBlock` 与原始用户输入，导致 Blackboard 保存的历史
+与 Agent 实际输入不一致。当前由 BlackboardPlugin 统一生成最终 `input_prompt`。
 
 设计调整为：
 
@@ -468,7 +469,7 @@ SkillPlugin 不实现关键词分支，不强制注入管理 Skill，也不让�
 
 ### 事件消费边界
 
-SkillPlugin 订阅 AgentPlugin，按 `correlation_id` 维护本轮临时状态。
+SkillPlugin 订阅 AgentPlugin，按 `task_id` 维护本轮临时状态。
 
 Plugin Runtime 在事件进入 inbox 前调用消费者的通用 `accepts_event(source, event)`；
 默认 Plugin 接收来源订阅送达的全部事件。SkillPlugin 声明：
@@ -581,7 +582,7 @@ Observable EventBus 和 Observable Plugin Runtime 只读取通用策略，不判
 
 `skill.retrieval` 成功记录包含：
 
-- `correlation_id`；
+- `task_id`；
 - 扫描候选数量、通过门槛数量和 `minimum_content_score`；
 - 最多三个命中项的 `name`、`scope`、`content_score`、`lifecycle_status` 和
   `final_score`；
@@ -590,9 +591,9 @@ Observable EventBus 和 Observable Plugin Runtime 只读取通用策略，不判
 - 检索耗时。
 
 空召回是正常结果，写一条 `selected=[]`、`mode=empty` 的聚合记录，不写错误。检索
-失败或超时只写一条聚合错误，包含 `correlation_id`、错误类型、错误信息和耗时。
+失败或超时只写一条聚合错误，包含 `task_id`、错误类型、错误信息和耗时。
 
-`skill.maintenance` 记录沿用完整轮次边界：开始时记录 `correlation_id`、工具调用数量和
+`skill.maintenance` 记录沿用完整轮次边界：开始时记录 `task_id`、工具调用数量和
 父 Run；结束时记录结构化操作的 action、target、status 和清理结果；失败时记录错误类型
 与错误信息。不记录维护 Agent 的流式输出。
 
@@ -719,7 +720,7 @@ Skill 是增强上下文，不应因为检索或后台维护失败使主 Agent �
 - Usage Store：首次发现、重复命中、Workspace 隔离、生命周期边界；
 - Ranker：最低内容门槛、80/20 计算、Top 3、少于三个候选、稳定 tie-break；
 - Session State：新增、无变化、七轮刷新、Runtime 新实例重置；
-- SkillPlugin：Runtime 入队前的来源与完整事件过滤、空召回、correlation_id 透传、
+- SkillPlugin：Runtime 入队前的来源与完整事件过滤、空召回、task_id 透传、
   成功与失败贡献；
 - Blackboard：等待 Skill、完整 Prompt 发布、成功历史提交、失败不提交；
 - 应用集成：UserInput → Skill → Blackboard → Agent；

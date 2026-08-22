@@ -28,12 +28,12 @@ def test_agent_projector映射文本和稳定工具参数():
 
     assert projector.project(
         AgentTextDeltaEvent(
-            correlation_id="task-1", step=1, text="检查中"
+            task_id="task-1", step=1, text="检查中"
         )
     ) == (AppendAssistantDelta(task_id="task-1", text="检查中"),)
     assert projector.project(
         AgentToolStartedEvent(
-            correlation_id="task-1",
+            task_id="task-1",
             step=1,
             tool_call=tool_call,
         )
@@ -53,7 +53,7 @@ def test_agent_projector工具完成不暴露完整output():
 
     success = projector.project(
         AgentToolCompletedEvent(
-            correlation_id="task-1",
+            task_id="task-1",
             step=1,
             tool_call=tool_call,
             result=ToolExecutionResult(
@@ -63,7 +63,7 @@ def test_agent_projector工具完成不暴露完整output():
     )
     failure = projector.project(
         AgentToolCompletedEvent(
-            correlation_id="task-1",
+            task_id="task-1",
             step=1,
             tool_call=tool_call,
             result=ToolExecutionResult(success=False, error="exit code 1"),
@@ -99,7 +99,7 @@ def test_agent_projector映射错误并有意忽略completed与空delta():
 
     assert projector.project(
         AgentErrorEvent(
-            correlation_id="task-1",
+            task_id="task-1",
             step=1,
             error_type="RuntimeError",
             error_message="broken",
@@ -113,10 +113,10 @@ def test_agent_projector映射错误并有意忽略completed与空delta():
     )
     assert projector.project(
         AgentCompletedEvent(
-            correlation_id="task-1", step=1, response=response
+            task_id="task-1", step=1, response=response
         )
     ) == ()
     assert projector.project(
-        AgentTextDeltaEvent(correlation_id="task-1", step=1, text="")
+        AgentTextDeltaEvent(task_id="task-1", step=1, text="")
     ) == ()
-    assert projector.project(Event(correlation_id="task-1")) is None
+    assert projector.project(Event(task_id="task-1")) is None

@@ -81,7 +81,6 @@ class UserInputPlugin(BasePlugin):
         with self.session.task_scope(task_id):
             await self.publish(
                 InputQueuedEvent(
-                    correlation_id=task_id,
                     task_id=task_id,
                     queue_position=queue_position,
                 )
@@ -98,7 +97,7 @@ class UserInputPlugin(BasePlugin):
     ) -> None:
         if source_plugin_id != self.agent_plugin_id:
             return
-        if event.correlation_id != self._active_task_id:
+        if event.task_id != self._active_task_id:
             return
         if isinstance(event, AgentCompletedEvent):
             self._active_status = "completed"
@@ -130,13 +129,12 @@ class UserInputPlugin(BasePlugin):
                 with self.session.task_scope(pending.task_id):
                     await self.publish(
                         InputStartedEvent(
-                            correlation_id=pending.task_id,
                             task_id=pending.task_id,
                         )
                     )
                     await self.publish(
                         UserInputEvent(
-                            correlation_id=pending.task_id,
+                            task_id=pending.task_id,
                             prompt=pending.prompt,
                             input_images=pending.input_images,
                         )
@@ -144,7 +142,6 @@ class UserInputPlugin(BasePlugin):
                     await self._active_completed.wait()
                     await self.publish(
                         InputFinishedEvent(
-                            correlation_id=pending.task_id,
                             task_id=pending.task_id,
                             status=self._active_status or "failed",
                         )

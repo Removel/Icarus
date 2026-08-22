@@ -53,7 +53,7 @@ Event 是未来插件系统中的统一消息基础。
 class Event:
     event_id: str
     occurred_at: datetime
-    correlation_id: str | None = None
+    task_id: str | None = None
 ```
 
 ### 字段语义
@@ -62,7 +62,7 @@ class Event:
 |---|---|
 | `event_id` | 当前 Event 的唯一标识 |
 | `occurred_at` | Event 产生时间 |
-| `correlation_id` | 关联同一次 Agent Run、用户任务或未来插件事件链 |
+| `task_id` | 关联同一次用户 Task 及其插件事件链 |
 
 Event 基类只定义所有消息共有的身份信息，不预设 EventBus 路由规则。
 

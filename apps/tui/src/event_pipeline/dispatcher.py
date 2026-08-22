@@ -59,14 +59,14 @@ class ProjectorRegistry:
             )
             return ()
 
-        correlation_id = getattr(event, "correlation_id", None)
-        if active_task_id is None or correlation_id != active_task_id:
+        task_id = getattr(event, "task_id", None)
+        if active_task_id is None or task_id != active_task_id:
             self.unrelated_event_count += 1
             self._logger.debug(
-                "Ignoring unrelated runtime event: source=%s type=%s correlation=%s active=%s",
+                "Ignoring unrelated runtime event: source=%s type=%s task=%s active=%s",
                 source_plugin_id,
                 type(event).__name__,
-                correlation_id,
+                task_id,
                 active_task_id,
             )
             return ()

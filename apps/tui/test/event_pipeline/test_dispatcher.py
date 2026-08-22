@@ -21,7 +21,7 @@ def test_default_registry只显式注册当前公开来源():
 def test_dispatcher同时按来源和当前task过滤():
     registry = create_default_projector_registry()
     event = AgentTextDeltaEvent(
-        correlation_id="task-1",
+        task_id="task-1",
         step=1,
         text="hello",
     )
@@ -39,7 +39,7 @@ def test_dispatcher同时按来源和当前task过滤():
 
 def test未知来源和未知event只诊断不显示repr():
     registry = create_default_projector_registry()
-    event = Event(correlation_id="task-1")
+    event = Event(task_id="task-1")
 
     assert registry.project("memory", event, active_task_id="task-1") == ()
     assert registry.project("agent", event, active_task_id="task-1") == ()

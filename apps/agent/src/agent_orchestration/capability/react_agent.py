@@ -2,7 +2,6 @@
 
 from collections.abc import AsyncIterator, Iterator
 import json
-from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.capability.types import (
@@ -143,7 +142,6 @@ class ReActAgent(BaseAgent):
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
     ) -> Iterator[Event]:
-        correlation_id = uuid4().hex
         messages = self._build_messages(
             system_prompt,
             history_messages,
@@ -166,7 +164,6 @@ class ReActAgent(BaseAgent):
                 ):
                     if chunk.text_delta:
                         yield AgentTextDeltaEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             text=chunk.text_delta,
                         )
@@ -187,7 +184,6 @@ class ReActAgent(BaseAgent):
                         steps,
                     )
                     yield AgentCompletedEvent(
-                        correlation_id=correlation_id,
                         step=steps,
                         response=agent_response,
                     )
@@ -198,7 +194,6 @@ class ReActAgent(BaseAgent):
                 ):
                     for tool_call in batch:
                         yield AgentToolStartedEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             tool_call=tool_call,
                         )
@@ -207,7 +202,6 @@ class ReActAgent(BaseAgent):
                     for tool_call, result in self._tool_executor.iter_completed(batch):
                         results_by_id[tool_call.id] = result
                         yield AgentToolCompletedEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             tool_call=tool_call,
                             result=result,
@@ -222,7 +216,6 @@ class ReActAgent(BaseAgent):
                         )
         except Exception as error:
             yield AgentErrorEvent(
-                correlation_id=correlation_id,
                 step=steps,
                 error_type=type(error).__name__,
                 error_message=str(error),
@@ -237,7 +230,6 @@ class ReActAgent(BaseAgent):
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
     ) -> AsyncIterator[Event]:
-        correlation_id = uuid4().hex
         messages = self._build_messages(
             system_prompt,
             history_messages,
@@ -260,7 +252,6 @@ class ReActAgent(BaseAgent):
                 ):
                     if chunk.text_delta:
                         yield AgentTextDeltaEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             text=chunk.text_delta,
                         )
@@ -281,7 +272,6 @@ class ReActAgent(BaseAgent):
                         steps,
                     )
                     yield AgentCompletedEvent(
-                        correlation_id=correlation_id,
                         step=steps,
                         response=agent_response,
                     )
@@ -292,7 +282,6 @@ class ReActAgent(BaseAgent):
                 ):
                     for tool_call in batch:
                         yield AgentToolStartedEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             tool_call=tool_call,
                         )
@@ -303,7 +292,6 @@ class ReActAgent(BaseAgent):
                     ):
                         results_by_id[tool_call.id] = result
                         yield AgentToolCompletedEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             tool_call=tool_call,
                             result=result,
@@ -318,7 +306,6 @@ class ReActAgent(BaseAgent):
                         )
         except Exception as error:
             yield AgentErrorEvent(
-                correlation_id=correlation_id,
                 step=steps,
                 error_type=type(error).__name__,
                 error_message=str(error),
