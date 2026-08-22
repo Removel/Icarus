@@ -54,3 +54,11 @@ def test_user_input_projector拒绝未知event():
         )
     ) == (FinishTurn(task_id="task-2", status="failed"),)
     assert projector.project(Event(task_id="task-1")) is None
+
+
+def test_user_input_projector映射取消终态():
+    projector = UserInputProjector()
+
+    assert projector.project(
+        InputFinishedEvent(task_id="task-1", status="cancelled")
+    ) == (FinishTurn(task_id="task-1", status="cancelled"),)

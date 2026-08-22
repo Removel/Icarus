@@ -72,7 +72,7 @@ class ConversationView(VerticalScroll):
             await self.mount(ErrorMessage(action.error_type, action.message))
         elif isinstance(action, FinishTurn):
             await self._finish_assistant_segment()
-            if action.status == "failed":
+            if action.status in {"failed", "cancelled"}:
                 await self.mount(TurnStatusMessage(action.status))
             self._tools.clear()
         else:

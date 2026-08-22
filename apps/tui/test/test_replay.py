@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from apps.agent.src.agent_orchestration.plugins import InputQueuedEvent
+from apps.agent.src.agent_orchestration.plugins import (
+    InputFinishedEvent,
+    InputQueuedEvent,
+)
 from apps.tui.src.replay import (
     ReplayFormatError,
     ReplayRuntimeService,
@@ -48,6 +51,23 @@ def test_decode_replay_record严格拒绝未知或缺失字段(change, message):
 
     with pytest.raises(ReplayFormatError, match=message):
         decode_replay_record(record)
+
+
+def test_decode_replay_record支持cancelled终态():
+    source, event = decode_replay_record(
+        {
+            "schema_version": 2,
+            "source_plugin_id": "user-input",
+            "event_type": "input_finished",
+            "task_id": "task-1",
+            "payload": {"status": "cancelled"},
+        }
+    )
+
+    assert source == "user-input"
+    assert isinstance(event, InputFinishedEvent)
+    assert event.task_id == "task-1"
+    assert event.status == "cancelled"
 
 
 def test_load_replay错误包含行号(tmp_path):
