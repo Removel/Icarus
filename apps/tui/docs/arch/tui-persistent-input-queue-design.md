@@ -585,7 +585,7 @@ Worker 不直接修改 Widget 或按当时的 `active_task_id` 丢弃 Event；�
 | `user-input` | `InputQueuedEvent` | `SetRuntimeStatus(accepted)` | 无；本地队列已经移除活动项 |
 | `user-input` | `InputStartedEvent` | `SetRuntimeStatus(running)` | 无 |
 | `user-input` | `UserInputEvent` | 不投影，避免重复显示已提交用户消息 | 无 |
-| `user-input` | `InputFinishedEvent` | `FinishTurn(completed/failed)` | 清 active，调度下一条 |
+| `user-input` | `InputFinishedEvent` | `FinishTurn(completed/failed/cancelled)` | 清 active，调度下一条 |
 | `agent` | `AgentTextDeltaEvent` | `AppendAssistantDelta` | 无 |
 | `agent` | `AgentToolStartedEvent` | `AppendToolStarted` | 结束当前 Markdown 段 |
 | `agent` | `AgentToolCompletedEvent` | `UpdateToolCompleted` | 结束当前 Markdown 段 |
@@ -596,41 +596,42 @@ Worker 不直接修改 Widget 或按当时的 `active_task_id` 丢弃 Event；�
 模型是否在工具前输出可见叙述仍由模型决定；只要成为 `AgentTextDeltaEvent`，TUI 就按
 Markdown 显示。隐藏 reasoning 不因迁移 Textual 而自动暴露。
 
-## 过渡期任务取消
+## 已实现的任务取消
 
-当前 `AgentRuntimeService` 没有 `cancel(task_id)`，`UserInputPlugin` 没有活动任务取消协议，
-`AgentPlugin` 也没有按 task_id 暴露任务句柄。因此第三类 `Ctrl+C` 在本阶段只通过
-StatusBar 或 Notification 显示：
+当前 `AgentRuntimeService` 提供 `cancel_task(task_id)`，`UserInputPlugin` 和 `AgentPlugin`
+通过共享 TaskChannel 传播取消。第三类 `Ctrl+C` 会显示：
 
 ```text
-Current Agent task cannot be cancelled by this Runtime yet.
+Cancelling
 ```
 
-它不得：
+取消仍不得：
 
 - 停止消费输出并伪装任务已结束；
 - 向模型发送一条普通的“停止”用户消息；
 - 调用 `service.stop()` 后重建 Session；
-- 允许下一条消息越过仍在运行的任务。
+- 允许下一条消息越过尚未确认取消的任务。
 
-提示后 Composer 继续可用，用户可以编辑并排队后续消息。
+取消期间 Composer 继续可用，用户可以编辑并排队后续消息。只有收到
+`InputFinishedEvent(status="cancelled")` 后才调度下一条。
 
-## 未来任务级取消契约
+## 任务级取消契约
 
-Agent Core 后续需要独立实现并验证：
+Agent Core 已实现并验证：
 
-- `AgentRuntimeService.cancel(task_id)` 的公开应用服务接口；
+- `AgentRuntimeService.cancel_task(task_id)` 的公开应用服务接口；
 - UserInputPlugin 对活动任务和尚未启动任务的明确取消结果；
 - AgentPlugin 使用 `task_id -> asyncio.Task` 精确停止对应 Agent Stream；
 - 工具调用和模型流对 `CancelledError` 的真实传播与资源清理；
 - `InputFinishedEvent.status` 增加 `cancelled`；
-- Blackboard 对取消轮次只清理任务状态，不提交不完整用户/助手历史；
+- Blackboard 对取消轮次提交最近一个协议完整的消息前缀，不提交部分 Assistant 或不完整 Tool Batch；
 - Skill、Persistence 和其他订阅方对 cancelled 终态做一致处理；
 - 重复取消、任务已结束和 task ID 不匹配时返回幂等、可判断的结果。
 
 真实取消完成后，已显示的部分输出仍保留在 Conversation，当前 Markdown 流先结束，再
-追加明确的 cancelled 状态。取消轮次不写入 Blackboard 对话历史，已经产生的文件修改或
-外部副作用不回滚。该契约只替换第三类 `Ctrl+C` 动作，不改变其余优先级。
+追加明确的 cancelled 状态。取消轮次会把最近一个协议完整的消息前缀写入 Blackboard，正在
+生成的部分 Assistant 和不完整 Tool Batch 不写入；已经产生的文件修改或外部副作用不回滚。
+该契约只替换第三类 `Ctrl+C` 动作，不改变其余优先级。
 
 ## Session 与历史边界
 

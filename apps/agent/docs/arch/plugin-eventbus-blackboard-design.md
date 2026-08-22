@@ -385,8 +385,8 @@ BlackboardPlugin 的状态分为两部分。
 当前 Agent 实例的跨轮上下文状态：
 
 - History；
-- 已成功完成的 User Message；
-- Agent 最终 Assistant Message；
+- 已完成 Task 的 User、Plugin Context、Assistant ToolCall、ToolResult 和最终 Assistant Message；
+- 已取消 Task 截至最近协议完整边界的安全消息前缀；
 - 初始化 Agent Runtime 时恢复的历史消息。
 
 每轮任务的临时组装状态：
@@ -397,8 +397,8 @@ BlackboardPlugin 的状态分为两部分。
 - 是否已经发布本轮 Agent Context；
 - Agent 和 UserInput 两个终态事件是否均已到达。
 
-BlackboardPlugin 收到 AgentCompletedEvent 后，将本轮 User Message 和最终
-Assistant Message 写入跨轮上下文。收到 AgentErrorEvent 时不写入失败任务。
+BlackboardPlugin 收到 AgentCompletedEvent 后，将本轮完整 Message 链写入跨轮上下文；收到
+AgentCancelledEvent 后写入最近的协议完整消息前缀；收到 AgentErrorEvent 时不写入失败任务。
 Agent 与 UserInput 的终态事件都到达后，删除该轮临时组装状态。
 
 ### 生产
@@ -447,6 +447,7 @@ BlackboardPlugin 等待 UserInput 和全部固定来源返回后，只发布一�
 - ContextBlock 声明来源必须与真实发布方一致；
 - Agent Stream Event 使用原始任务 task_id 回写 Blackboard；
 - AgentCompletedEvent 用于更新 Blackboard 的跨轮消息上下文；
+- AgentCancelledEvent 用于提交取消前的协议完整消息前缀；
 - AgentErrorEvent 用于结束失败任务，但失败任务不写入跨轮消息上下文；
 - InputFinishedEvent 与 Agent 终态事件共同触发本轮临时状态清理；
 - 不依赖 AgentCompletedEvent 与 InputFinishedEvent 的异步消费顺序。
