@@ -32,6 +32,7 @@ class RuntimeStatusBar(Static):
         labels = {
             RuntimePhase.READY: "Ready",
             RuntimePhase.RUNNING: "Running",
+            RuntimePhase.CANCELLING: "Cancelling",
             RuntimePhase.STOPPING: "Stopping",
             RuntimePhase.FAILED: "Failed",
         }

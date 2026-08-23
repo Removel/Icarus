@@ -11,7 +11,7 @@
 - P0：启动首帧、布局正确性、稳定性和错误恢复，先处理会导致长时间空白、界面失效、
   状态无法恢复或缺少回归保护的问题。
 - P1：滚动、长内容、输入、队列和诊断体验。
-- P1（跨层依赖）：Agent Kernel 支持任务级取消后完成 `TUI-06`。
+- P1：继续完善任务控制和异常恢复体验。
 - P2：多模态输入、Session 历史、恢复和切换。
 
 ## 基础交互能力
@@ -28,10 +28,10 @@
   本地双端队列：Agent 运行期间输入框保持可编辑；Enter 先 `append`，空闲时从队首
   FIFO 自动提交；待发送消息实时展示；`Ctrl+C` 可以从队尾 LIFO 撤回最新消息并恢复
   完整内容到输入框。
-- [ ] `TUI-06` 完成运行时任务取消：输入框和本地队列都为空且 Agent 正在运行时，
-  `Ctrl+C` 通过 `AgentRuntimeService.cancel(task_id)` 停止当前任务，保留终端中的部分输出
-  但不提交不完整 Blackboard 历史。该项依赖 Agent Core 的任务级取消契约；契约完成前
-  TUI 只明确提示暂不支持取消，不伪造成功。
+- [x] `TUI-06` 完成运行时任务取消：输入框和本地队列都为空且 Agent 正在运行时，
+  `Ctrl+C` 通过 `AgentRuntimeService.cancel_task(task_id)` 请求取消当前任务，显示
+  `Cancelling`，保留终端中的部分输出，并在 `InputFinishedEvent(status="cancelled")`
+  到达后恢复调度下一条消息；取消轮次只提交最近的协议完整 Blackboard 历史。
 - [x] `TUI-07` 支持流式 Agent Markdown 输出渲染。
 - [x] `TUI-08` 为 Event Projector、UI Action 和 Widget 更新增加应用级错误边界；异常需要
   转换成可理解的界面状态，并补齐 Runtime 启动失败、订阅失败、投影失败、Widget 失败和
@@ -67,7 +67,7 @@
 - [ ] `TUI-13` 限制 Tool 参数和错误摘要的默认展示长度，保留查看完整诊断信息的明确入口，
   并避免敏感信息或超长内容淹没对话区域；实施前明确上游数据脱敏与 TUI 展示裁剪各自的
   责任。
-- [ ] `TUI-14` 增加可选诊断视图，展示未知 Event、被忽略的 correlation、Runtime 状态和
+- [ ] `TUI-14` 增加可选诊断视图，展示未知 Event、被忽略的 task_id、Runtime 状态和
   必要的调试计数，同时保持普通对话界面简洁；设计时决定诊断信息只属于当前进程还是需要
   持久化。
 

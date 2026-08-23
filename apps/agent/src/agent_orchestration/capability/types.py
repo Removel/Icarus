@@ -23,6 +23,13 @@ class AgentResponse:
     finish_reason: FinishReason | None = None
     steps: int = 0
     messages: list[Message] = field(default_factory=list)
+    task_message_start: int | None = None
+
+    @property
+    def task_messages(self) -> tuple[Message, ...]:
+        if self.task_message_start is None:
+            return ()
+        return tuple(self.messages[self.task_message_start :])
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -61,3 +68,10 @@ class AgentErrorEvent(Event):
     step: int
     error_type: str
     error_message: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentCancelledEvent(Event):
+    step: int
+    reason: str | None = None
+    task_messages: tuple[Message, ...] = ()

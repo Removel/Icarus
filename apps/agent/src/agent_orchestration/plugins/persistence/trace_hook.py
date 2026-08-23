@@ -54,16 +54,10 @@ class FileTraceHook(BaseHook):
         workspace_path = event.context.get("workspace_path")
         workspace_key = event.context.get("workspace_key")
         session_id = event.context.get("session_id")
-        correlation_id = event.context.get("correlation_id")
         if not workspace_path or not workspace_key or not session_id:
             return None
         return SessionIdentity(
             workspace_path=Path(str(workspace_path)),
             workspace_key=str(workspace_key),
             session_id=str(session_id),
-            correlation_id=(
-                str(correlation_id)
-                if correlation_id is not None
-                else None
-            ),
         )

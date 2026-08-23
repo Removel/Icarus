@@ -335,7 +335,7 @@ service.start()
 - 欢迎页每个进程只展示一次；
 - 多轮输入严格串行；
 - 原始多行 Prompt 完整传给 `submit()`；
-- unrelated correlation Event 不展示；
+- unrelated Task Event 不展示；
 - 失败任务收到 InputFinished 后可以进入下一轮；
 - 空输入、exit、quit 和 EOF 不提交；
 - 读取、提交、消费和渲染任一步失败时都关闭订阅并停止 Service；

@@ -1,6 +1,9 @@
 import asyncio
+import threading
 import time
 from typing import Any
+
+import pytest
 
 from apps.agent.src.agent_orchestration.tools import (
     BaseTool,
@@ -152,6 +155,34 @@ def test_tool_executor_异步批量并发且保持原始顺序():
     assert elapsed < 0.14
     assert [tool_call.id for tool_call, _ in results] == ["call-1", "call-2"]
     assert [result.output for _, result in results] == [1, 2]
+
+
+def test_tool_executor_取消后不等待或消费同步tool迟到结果():
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingTool(EchoTool):
+        def invoke(self, arguments):
+            started.set()
+            release.wait(timeout=1)
+            return ToolExecutionResult(success=True, output="late")
+
+    async def run():
+        registry = ToolRegistry()
+        registry.register(BlockingTool())
+        executor = ToolExecutor(registry)
+        task = asyncio.create_task(
+            executor.aexecute_many([ToolCall("call-1", "echo", {})])
+        )
+        await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release.set()
+
+    asyncio.run(run())
 
 
 def test_tool_executor_按照连续可并行调用分批():

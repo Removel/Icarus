@@ -39,13 +39,13 @@ PersistentComposer
 - 应用内滚动、全屏退出后恢复原终端画面；
 - 不依赖真实模型即可完成事件顺序、交互和视觉回归。
 
-本计划不实现任务级取消、历史 Session 浏览、多模态队列、队列持久化、队列重排或新的
-Agent Event。当前 Runtime 没有 `cancel(task_id)`，运行中的第三类 `Ctrl+C` 只显示真实能力
-提示。
+本计划初始范围不包含任务级取消、历史 Session 浏览、多模态队列、队列持久化或队列重排。
+任务级取消已在后续 TUI-06 中完成：运行中的第三类 `Ctrl+C` 调用
+`AgentRuntimeService.cancel_task(task_id)`，等待 cancelled 终态后恢复队列调度。
 
 ## 实施边界
 
-- TUI 只调用 `AgentRuntimeService.start / subscribe_events / submit / stop`；
+- TUI 只调用 `AgentRuntimeService.start / subscribe_events / submit / cancel_task / stop`；
 - 不直接导入或访问 PluginManager、EventBus、Blackboard 或具体 Plugin 实例；
 - `OutputBridgePlugin` 继续广播原始 `(source_plugin_id, Event)`，不解释 UI；
 - `ProjectorRegistry` 和 `UiAction` 归 `apps/tui` 所有；
@@ -194,9 +194,9 @@ git diff --check
 
 - 定义 `EventProjector` Protocol：输入公开 Event，返回 `tuple[UiAction, ...]`；
 - `ProjectorRegistry` 按 `source_plugin_id` 显式注册 Projector；
-- Dispatcher 接收 `(source_plugin_id, event, active_task_id)`，先验证 correlation，再交给对应
+- Dispatcher 接收 `(source_plugin_id, event, active_task_id)`，先验证 task_id，再交给对应
   Projector；
-- 未注册来源、已注册来源的未知 Event、空 correlation 和非当前任务 Event 默认返回空 tuple，
+- 未注册来源、已注册来源的未知 Event、空 task_id 和非当前任务 Event 默认返回空 tuple，
   只增加诊断计数或 debug 日志；
 - `AgentProjector` 映射文本、工具开始/完成和 AgentError；
 - `AgentCompletedEvent` 默认不重复投影完整回答；
@@ -209,7 +209,7 @@ git diff --check
 - 同一种 Event 从错误来源到达时不被错误 Projector 处理；
 - 未注册 Plugin 来源不会自动显示 `repr(event)`；
 - 新增未知 Event 不会意外暴露内部数据；
-- unrelated correlation 不产生 UiAction；
+- unrelated Task Event 不产生 UiAction；
 - 连续 Delta、工具边界、工具失败、AgentError 和 FinishTurn 的动作顺序准确；
 - 相同输入事件序列多次投影结果完全一致；
 - reasoning 不在公开 Agent Event 中，因此投影层不会自行生成或显示 reasoning。
@@ -226,7 +226,7 @@ git diff --check
 **开发内容**
 
 - 使用固定 envelope：`schema_version`、`source_plugin_id`、`event_type`、
-  `correlation_id`、`payload`；
+  `task_id`、`payload`；
 - codec 只支持首期公开可见 Event 白名单，并解码为现有 Agent Event dataclass；
 - 严格拒绝未知 schema、缺字段、类型错误和不支持的 event type；
 - Tool Call 参数使用稳定 JSON，fixture 不保存 secret、绝对临时目录或未展示的完整结果；
@@ -244,7 +244,7 @@ git diff --check
 - completed 任务的 accepted、started、分段 Markdown 和 finished；
 - 文本 → tool started → tool completed → 文本；
 - 工具失败和 AgentError；
-- unrelated task correlation；
+- unrelated Task Event；
 - 至少三个 task，供 FIFO 自动调度和 LIFO 撤回测试；
 - Markdown 列表、代码块、中文、宽字符与多行内容。
 
@@ -376,7 +376,7 @@ git diff --check
 - `await service.start()` 成功后先创建唯一长生命周期 Subscription，再允许 submit；
 - 输出 Worker 只调用 `next_event()` 并投递 `RuntimeOutputReceived` Textual Message；
 - Worker 不解析、过滤或直接更新 Widget；
-- App Message Loop 验证 active task correlation，调用 ProjectorRegistry，并按 UiAction target
+- App Message Loop 验证 active task_id，调用 ProjectorRegistry，并按 UiAction target
   更新 Conversation、Status 或 notification；
 - Runtime 启动、订阅关闭和 Worker 异常都转换为可读 App 状态；
 - 统一且幂等的 shutdown：禁止新调度 → close subscription → stop service → exit；
@@ -598,7 +598,7 @@ Wheel 验收必须确认：
 - Subscription 意外关闭：不伪造当前任务完成，进入 fatal 状态并统一清理；
 - Projector 或 Widget 更新失败：显示可读错误，Composer 与退出路径继续可用；
 - unknown source/Event：忽略并诊断，不自动显示内部结构；
-- unrelated correlation：不改变 active task，不触发下一条；
+- unrelated Task Event：不改变 active task，不触发下一条；
 - Worker 被取消：不能绕过 subscription 和 Service 清理；
 - Snapshot 不一致：先区分语义变化、视觉变化和环境抖动，不能直接覆盖基线；
 - 测试出现无关既有失败：单独报告，不在本次迁移中顺手重构。

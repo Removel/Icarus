@@ -142,7 +142,7 @@ class SkillPlugin(BasePlugin):
         if source_plugin_id == self.user_input_plugin_id:
             return isinstance(event, UserInputEvent) or (
                 isinstance(event, InputFinishedEvent)
-                and event.status == "failed"
+                and event.status in {"failed", "cancelled"}
             )
         if source_plugin_id == self.agent_plugin_id:
             return isinstance(event, AgentCompletedEvent)
@@ -158,8 +158,8 @@ class SkillPlugin(BasePlugin):
         if source_plugin_id == self.user_input_plugin_id and isinstance(
             event, InputFinishedEvent
         ):
-            if event.status == "failed":
-                self.turn_state.discard(event.correlation_id)
+            if event.status in {"failed", "cancelled"}:
+                self.turn_state.discard(event.task_id)
             return
         if source_plugin_id == self.agent_plugin_id and isinstance(
             event, AgentCompletedEvent
@@ -192,9 +192,9 @@ class SkillPlugin(BasePlugin):
                 "disabled for this runtime"
             )
             self.logger.error(
-                "%s: correlation_id=%s",
+                "%s: task_id=%s",
                 self._disabled_reason,
-                event.correlation_id,
+                event.task_id,
             )
             await self._publish_failure(event, self._disabled_reason)
             await self._trigger_retrieval_hook(
@@ -208,8 +208,8 @@ class SkillPlugin(BasePlugin):
             )
         except Exception as error:
             self.logger.exception(
-                "Skill retrieval failed: correlation_id=%s",
-                event.correlation_id,
+                "Skill retrieval failed: task_id=%s",
+                event.task_id,
             )
             await self._publish_failure(
                 event,
@@ -228,7 +228,7 @@ class SkillPlugin(BasePlugin):
             await self._trigger_retrieval_hook(
                 "after",
                 {
-                    "correlation_id": event.correlation_id,
+                    "task_id": event.task_id,
                     "candidate_count": outcome.candidate_count,
                     "qualified_count": outcome.qualified_count,
                     "minimum_content_score": (
@@ -313,7 +313,7 @@ class SkillPlugin(BasePlugin):
                 usages,
             )
         selected = [item.skill for item in ranked]
-        self.turn_state.set_matched_skills(event.correlation_id, selected)
+        self.turn_state.set_matched_skills(event.task_id, selected)
         if selected and self.usage_store is not None:
             try:
                 await asyncio.to_thread(
@@ -339,7 +339,7 @@ class SkillPlugin(BasePlugin):
         else:
             await self.publish(
                 ContextContributionEvent(
-                    correlation_id=event.correlation_id,
+                    task_id=event.task_id,
                     status="completed",
                 )
             )
@@ -354,37 +354,39 @@ class SkillPlugin(BasePlugin):
 
     async def _consume_agent_event(self, event: AgentCompletedEvent) -> None:
         if event.response.finish_reason != "stop":
-            self.turn_state.discard(event.correlation_id)
+            self.turn_state.discard(event.task_id)
             return
         if not self._maintenance_enabled:
-            self.turn_state.discard(event.correlation_id)
+            self.turn_state.discard(event.task_id)
             return
         try:
             tool_call_count = tool_call_count_from_messages(
-                event.response.messages
+                event.response.messages,
+                task_message_start=event.response.task_message_start,
             )
             if tool_call_count <= self.maintenance_tool_threshold:
-                self.turn_state.discard(event.correlation_id)
+                self.turn_state.discard(event.task_id)
                 return
             tool_traces = await asyncio.to_thread(
                 tool_traces_from_messages,
                 event.response.messages,
+                task_message_start=event.response.task_message_start,
             )
             turn = self.turn_state.pop_with_tool_traces(
-                event.correlation_id,
+                event.task_id,
                 tool_traces,
             )
         except ToolTrajectoryError as error:
-            self.turn_state.discard(event.correlation_id)
+            self.turn_state.discard(event.task_id)
             self.logger.error(
-                "Skill maintenance trajectory is invalid: correlation_id=%s: %s",
-                event.correlation_id,
+                "Skill maintenance trajectory is invalid: task_id=%s: %s",
+                event.task_id,
                 error,
             )
             await self._trigger_maintenance_hook(
                 "error",
                 {
-                    "correlation_id": event.correlation_id,
+                    "task_id": event.task_id,
                     "stage": "trajectory",
                     "error_type": type(error).__name__,
                     "error_message": str(error),
@@ -423,7 +425,7 @@ class SkillPlugin(BasePlugin):
                 ),
                 name=(
                     f"skill-maintenance:{self.workspace_key}:"
-                    f"{event.correlation_id}"
+                    f"{event.task_id}"
                 ),
             )
         except BaseException:
@@ -454,7 +456,7 @@ class SkillPlugin(BasePlugin):
             {
                 "plugin_id": self.plugin_id,
                 "workspace_key": self.workspace_key,
-                "correlation_id": turn.correlation_id,
+                "task_id": turn.task_id,
                 "parent_run_id": parent_run_id,
                 "maintenance": True,
             },
@@ -464,7 +466,7 @@ class SkillPlugin(BasePlugin):
                 await self._trigger_maintenance_hook(
                     "before",
                     {
-                        "correlation_id": turn.correlation_id,
+                        "task_id": turn.task_id,
                         "tool_call_count": turn.tool_call_count,
                         "parent_run_id": parent_run_id,
                     },
@@ -490,7 +492,7 @@ class SkillPlugin(BasePlugin):
                 await self._trigger_maintenance_hook(
                     "after",
                     {
-                        "correlation_id": turn.correlation_id,
+                        "task_id": turn.task_id,
                         "operations": [
                             {
                                 "action": item.action,
@@ -509,13 +511,13 @@ class SkillPlugin(BasePlugin):
                 raise
             except Exception as error:
                 self.logger.exception(
-                    "Skill maintenance failed: correlation_id=%s",
-                    turn.correlation_id,
+                    "Skill maintenance failed: task_id=%s",
+                    turn.task_id,
                 )
                 await self._trigger_maintenance_hook(
                     "error",
                     {
-                        "correlation_id": turn.correlation_id,
+                        "task_id": turn.task_id,
                         "error_type": type(error).__name__,
                         "error_message": str(error),
                     },
@@ -662,7 +664,7 @@ class SkillPlugin(BasePlugin):
         started_at: float,
     ) -> dict:
         return {
-            "correlation_id": event.correlation_id,
+            "task_id": event.task_id,
             "error_type": error_type,
             "error_message": error_message,
             "duration_ms": self._elapsed_ms(started_at),
@@ -743,7 +745,7 @@ class SkillPlugin(BasePlugin):
 
         await self.publish(
             ContextContributionEvent(
-                correlation_id=event.correlation_id,
+                task_id=event.task_id,
                 status="completed",
                 context_blocks=[
                     ContextBlock(
@@ -763,7 +765,7 @@ class SkillPlugin(BasePlugin):
     ) -> None:
         await self.publish(
             ContextContributionEvent(
-                correlation_id=event.correlation_id,
+                task_id=event.task_id,
                 status="failed",
                 error=error,
             )

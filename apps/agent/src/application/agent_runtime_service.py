@@ -7,6 +7,11 @@ from pathlib import Path
 from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher, HookRegistry
 from apps.agent.src.agent_orchestration.plugin_runtime import PluginManager
+from apps.agent.src.agent_orchestration.run_control import (
+    TaskCancelRequestedEvent,
+    TaskChannelRegistry,
+    TaskOperationResult,
+)
 from apps.agent.src.agent_orchestration.plugins import (
     AgentPlugin,
     BlackboardPlugin,
@@ -94,9 +99,11 @@ class AgentRuntimeService:
             hook_dispatcher=HookDispatcher(self.hook_registry),
         )
         self.output_bridge = OutputBridgePlugin()
+        self.task_channels = TaskChannelRegistry()
         self._session_context = None
         self._session: PersistenceSession | None = None
         self._user_input: UserInputPlugin | None = None
+        self._agent_plugin: AgentPlugin | None = None
         self._skill_plugin: SkillPlugin | None = None
         self._pending_embedding: BaseEmbedding | None = None
         self._usage_store_task: asyncio.Task[SkillUsageStore] | None = None
@@ -124,7 +131,11 @@ class AgentRuntimeService:
             )
             self._session = self._session_context.__enter__()
 
-            user_input = UserInputPlugin("user-input", self._session)
+            user_input = UserInputPlugin(
+                "user-input",
+                self._session,
+                task_channels=self.task_channels,
+            )
             resolver = self.persistence.resolver
             embedding = self.embedding or EmbeddingFactory(
                 self.config,
@@ -177,7 +188,12 @@ class AgentRuntimeService:
                 tools=self.tools,
                 initial_messages=self.initial_messages,
             )
-            agent = AgentPlugin("agent", self.agent_factory)
+            agent = AgentPlugin(
+                "agent",
+                self.agent_factory,
+                task_channels=self.task_channels,
+                hook_dispatcher=HookDispatcher(self.hook_registry),
+            )
             for plugin in (
                 user_input,
                 skill,
@@ -199,6 +215,7 @@ class AgentRuntimeService:
             with self._session.context_scope():
                 await self.plugin_manager.start()
             self._user_input = user_input
+            self._agent_plugin = agent
             self._started = True
         except asyncio.CancelledError:
             await self._finish_cancelled_start_cleanup()
@@ -223,6 +240,23 @@ class AgentRuntimeService:
         if not self._started:
             raise RuntimeError("AgentRuntimeService is not running")
         return self.output_bridge.subscribe()
+
+    async def cancel_task(
+        self,
+        task_id: str,
+        reason: str | None = None,
+    ) -> TaskOperationResult:
+        if (
+            not self._started
+            or self._agent_plugin is None
+            or self._session is None
+        ):
+            return TaskOperationResult(task_id=task_id, status="not_running")
+        with self._session.task_scope(task_id):
+            return self._agent_plugin.handle_task_operation(
+                "external",
+                TaskCancelRequestedEvent(task_id=task_id, reason=reason),
+            )
 
     async def stop(self, timeout: float | None = 30) -> None:
         if not self._started:
@@ -286,6 +320,7 @@ class AgentRuntimeService:
                         exc_info=(type(error), error, error.__traceback__),
                     )
             self._user_input = None
+            self._agent_plugin = None
             self._skill_plugin = None
             self._started = False
             self._closed = True
@@ -320,6 +355,7 @@ class AgentRuntimeService:
         self._close_session()
         self.persistence.stop(drain=False, logger=self.logger)
         self._user_input = None
+        self._agent_plugin = None
         self._skill_plugin = None
         self._started = False
         self._closed = True

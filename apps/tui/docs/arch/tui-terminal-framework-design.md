@@ -176,7 +176,7 @@ ReActAgent。
 - 启动 Service，并在第一次提交前创建一个长期输出订阅；
 - 展示一次欢迎页；
 - 串行执行“读取输入、提交、消费当前任务 Event、结束本轮”；
-- 只渲染 `correlation_id == accepted.task_id` 的当前任务 Event；
+- 只渲染 `task_id == accepted.task_id` 的当前任务 Event；
 - 识别空输入、`exit`、`quit`、EOF 和输入阶段中断；
 - 通过 `finally` 关闭订阅和 Service。
 
@@ -356,7 +356,7 @@ Markdown 展示。
 3. Renderer 固化用户消息
 4. AgentRuntimeService.submit(prompt) 返回 InputAccepted(task_id)
 5. REPL 从长期 OutputEventSubscription 读取 (source_plugin_id, event)
-6. 忽略 correlation_id 不等于当前 task_id 的 Event
+6. 忽略 task_id 不等于当前 task_id 的 Event
 7. Renderer 按 Event 类型更新普通输出或当前 Markdown 段
 8. 收到匹配的 InputFinishedEvent 后固化本轮
 9. 回到下一次 prompt_toolkit 输入
@@ -446,7 +446,7 @@ capture cwd
 - Service 启动后、第一次提交前创建订阅；
 - 欢迎页只显示一次；
 - 多轮严格串行；
-- 只消费当前 task correlation；
+- 只消费当前 task_id 对应的 Event；
 - 原始多行 Prompt 传给 `submit()`；
 - EOF、exit、quit、异常和输入阶段 Ctrl+C 行为；
 - 任意退出路径关闭订阅并停止 Service；
@@ -469,7 +469,7 @@ capture cwd
 - 用户输入、Agent Markdown、工具状态和错误按事件顺序显示；
 - 流式 Markdown 最终内容完整，不语义重复；
 - TUI 继续只通过 `AgentRuntimeService` 控制 Agent；
-- 当前实时订阅、task correlation 和 `InputFinishedEvent` 终止语义不回归；
+- 当前实时订阅、task_id 关联和 `InputFinishedEvent` 终止语义不回归；
 - 本阶段没有引入 TUI 本地消息队列、运行中输入或伪取消；
 - 相关 TUI、应用层和配置测试通过，compileall 与 `git diff --check` 通过。
 

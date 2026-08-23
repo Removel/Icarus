@@ -86,7 +86,7 @@ Terminal Input
 
 - Event 原样转发；
 - 不同来源顺序稳定；
-- Service 可以按 correlation_id 筛选当前任务；
+- Service 可以按 task_id 筛选当前任务；
 - 空队列异步等待不占 CPU。
 
 ## 任务三：创建 TUI 应用骨架

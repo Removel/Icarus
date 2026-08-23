@@ -30,7 +30,7 @@ from apps.agent.src.application.output_bridge import OutputEvent
 from apps.agent.src.model_provider.types import Message, TextPart, ToolCall
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ReplayFormatError(ValueError):
@@ -85,7 +85,7 @@ def decode_replay_record(value: object) -> OutputEvent:
 
     source = _require_str(record, "source_plugin_id")
     event_type = _require_str(record, "event_type")
-    correlation_id = _require_str(record, "correlation_id")
+    task_id = _require_str(record, "task_id")
     payload = _require_dict(record.get("payload"), "payload")
 
     decoders = {
@@ -102,7 +102,7 @@ def decode_replay_record(value: object) -> OutputEvent:
     decoder = decoders.get(event_type)
     if decoder is None:
         raise ReplayFormatError(f"unsupported event_type: {event_type}")
-    event = decoder(correlation_id, payload)
+    event = decoder(task_id, payload)
     return source, event
 
 
@@ -124,10 +124,6 @@ def build_replay_scenario(events: Iterable[OutputEvent]) -> ReplayScenario:
                 raise ReplayFormatError(
                     "InputQueuedEvent must come from user-input"
                 )
-            if event.correlation_id != event.task_id:
-                raise ReplayFormatError(
-                    "InputQueuedEvent task_id must match correlation_id"
-                )
             active_task_id = event.task_id
             active_events = [output_event]
             continue
@@ -137,7 +133,6 @@ def build_replay_scenario(events: Iterable[OutputEvent]) -> ReplayScenario:
             isinstance(event, InputFinishedEvent)
             and source == "user-input"
             and event.task_id == active_task_id
-            and event.correlation_id == active_task_id
         ):
             turns.append(
                 ReplayTurn(
@@ -297,66 +292,63 @@ class ReplayRuntimeService:
         self._subscriptions.discard(subscription)
 
 
-def _decode_input_queued(correlation_id: str, payload: dict[str, Any]) -> Event:
+def _decode_input_queued(task_id: str, payload: dict[str, Any]) -> Event:
     return InputQueuedEvent(
-        correlation_id=correlation_id,
-        task_id=correlation_id,
+        task_id=task_id,
         queue_position=_require_int(payload, "queue_position"),
     )
 
 
-def _decode_input_started(correlation_id: str, payload: dict[str, Any]) -> Event:
+def _decode_input_started(task_id: str, payload: dict[str, Any]) -> Event:
     del payload
-    return InputStartedEvent(
-        correlation_id=correlation_id, task_id=correlation_id
-    )
+    return InputStartedEvent(task_id=task_id)
 
 
-def _decode_user_input(correlation_id: str, payload: dict[str, Any]) -> Event:
+def _decode_user_input(task_id: str, payload: dict[str, Any]) -> Event:
     return UserInputEvent(
-        correlation_id=correlation_id,
+        task_id=task_id,
         prompt=_require_str(payload, "prompt"),
     )
 
 
 def _decode_agent_text_delta(
-    correlation_id: str, payload: dict[str, Any]
+    task_id: str, payload: dict[str, Any]
 ) -> Event:
     return AgentTextDeltaEvent(
-        correlation_id=correlation_id,
+        task_id=task_id,
         step=_require_int(payload, "step"),
         text=_require_str(payload, "text", allow_empty=True),
     )
 
 
 def _decode_agent_tool_started(
-    correlation_id: str, payload: dict[str, Any]
+    task_id: str, payload: dict[str, Any]
 ) -> Event:
     return AgentToolStartedEvent(
-        correlation_id=correlation_id,
+        task_id=task_id,
         step=_require_int(payload, "step"),
         tool_call=_decode_tool_call(payload),
     )
 
 
 def _decode_agent_tool_completed(
-    correlation_id: str, payload: dict[str, Any]
+    task_id: str, payload: dict[str, Any]
 ) -> Event:
     success = _require_bool(payload, "success")
     error = payload.get("error")
     if error is not None and not isinstance(error, str):
         raise ReplayFormatError("payload.error must be a string or null")
     return AgentToolCompletedEvent(
-        correlation_id=correlation_id,
+        task_id=task_id,
         step=_require_int(payload, "step"),
         tool_call=_decode_tool_call(payload),
         result=ToolExecutionResult(success=success, error=error),
     )
 
 
-def _decode_agent_error(correlation_id: str, payload: dict[str, Any]) -> Event:
+def _decode_agent_error(task_id: str, payload: dict[str, Any]) -> Event:
     return AgentErrorEvent(
-        correlation_id=correlation_id,
+        task_id=task_id,
         step=_require_int(payload, "step"),
         error_type=_require_str(payload, "error_type"),
         error_message=_require_str(payload, "error_message"),
@@ -364,27 +356,26 @@ def _decode_agent_error(correlation_id: str, payload: dict[str, Any]) -> Event:
 
 
 def _decode_agent_completed(
-    correlation_id: str, payload: dict[str, Any]
+    task_id: str, payload: dict[str, Any]
 ) -> Event:
     text = _require_str(payload, "text", allow_empty=True)
     message = Message("assistant", [TextPart(text)])
     return AgentCompletedEvent(
-        correlation_id=correlation_id,
+        task_id=task_id,
         step=_require_int(payload, "step"),
         response=AgentResponse(message=message, messages=[message]),
     )
 
 
-def _decode_input_finished(correlation_id: str, payload: dict[str, Any]) -> Event:
+def _decode_input_finished(task_id: str, payload: dict[str, Any]) -> Event:
     status = _require_str(payload, "status")
-    if status not in {"completed", "failed"}:
+    if status not in {"completed", "failed", "cancelled"}:
         raise ReplayFormatError(
-            "payload.status must be completed or failed"
+            "payload.status must be completed, failed, or cancelled"
         )
-    typed_status: Literal["completed", "failed"] = status  # type: ignore[assignment]
+    typed_status: Literal["completed", "failed", "cancelled"] = status  # type: ignore[assignment]
     return InputFinishedEvent(
-        correlation_id=correlation_id,
-        task_id=correlation_id,
+        task_id=task_id,
         status=typed_status,
     )
 

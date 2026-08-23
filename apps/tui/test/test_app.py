@@ -10,6 +10,7 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputFinishedEvent,
     InputQueuedEvent,
 )
+from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.tui.src.app import IcarusTextualApp, RuntimeSubscriptionFailed
 from apps.tui.src.chat_state import RuntimePhase
 from apps.tui.src.event_pipeline import FinishTurn, ShowNotification
@@ -60,6 +61,7 @@ class ControlledService:
         subscribe_error: BaseException | None = None,
         subscription_close_error: BaseException | None = None,
         stop_error: BaseException | None = None,
+        cancel_error: BaseException | None = None,
     ) -> None:
         self.actions = []
         self.subscription = ControlledSubscription(
@@ -75,9 +77,11 @@ class ControlledService:
         self.start_error = start_error
         self.subscribe_error = subscribe_error
         self.stop_error = stop_error
+        self.cancel_error = cancel_error
         self.submissions = []
         self.session_id = "test-session"
         self.stopped = False
+        self.cancelled_tasks = []
 
     async def start(self) -> None:
         self.actions.append("service-start")
@@ -104,7 +108,6 @@ class ControlledService:
             self.subscription.publish(
                 "user-input",
                 InputQueuedEvent(
-                    correlation_id=task_id,
                     task_id=task_id,
                     queue_position=0,
                 ),
@@ -119,6 +122,12 @@ class ControlledService:
         self.subscription.close()
         if self.stop_error is not None:
             raise self.stop_error
+
+    async def cancel_task(self, task_id, reason=None):
+        self.cancelled_tasks.append((task_id, reason))
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        return TaskOperationResult(task_id=task_id, status="accepted")
 
 
 def make_app(
@@ -155,7 +164,6 @@ async def enter_text(pilot, text: str) -> None:
 
 def finish_event(task_id: str, status="completed") -> InputFinishedEvent:
     return InputFinishedEvent(
-        correlation_id=task_id,
         task_id=task_id,
         status=status,
     )
@@ -484,7 +492,7 @@ def test_agent输出期间草稿光标和焦点保持不变(tmp_path):
             service.subscription.publish(
                 "agent",
                 AgentTextDeltaEvent(
-                    correlation_id="task-1",
+                    task_id="task-1",
                     step=1,
                     text="**streaming**",
                 ),
@@ -506,7 +514,7 @@ def test_agent输出期间草稿光标和焦点保持不变(tmp_path):
     assert markdown == "**streaming**"
 
 
-def test_ctrl_c依次清草稿撤回队尾提示不可取消并在空闲退出(tmp_path):
+def test_ctrl_c依次清草稿撤回队尾取消任务并在空闲退出(tmp_path):
     async def run():
         service = ControlledService()
         app = make_app(service, tmp_path)
@@ -535,11 +543,13 @@ def test_ctrl_c依次清草稿撤回队尾提示不可取消并在空闲退出(t
             after_second_clear = composer.text
 
             await pilot.press("ctrl+c")
-            await pilot.pause()
-            running_status = str(app.query_one(RuntimeStatusBar).render())
+            await wait_until(pilot, lambda: bool(service.cancelled_tasks))
+            cancelling_status = str(app.query_one(RuntimeStatusBar).render())
             still_active = app.chat_state.active_task_id
 
-            service.subscription.publish("user-input", finish_event("task-1"))
+            service.subscription.publish(
+                "user-input", finish_event("task-1", "cancelled")
+            )
             await wait_until(
                 pilot, lambda: app.chat_state.active_task_id is None
             )
@@ -549,8 +559,9 @@ def test_ctrl_c依次清草稿撤回队尾提示不可取消并在空闲退出(t
                 after_clear,
                 after_restore,
                 after_second_clear,
-                running_status,
+                cancelling_status,
                 still_active,
+                tuple(service.cancelled_tasks),
                 app.return_code,
             )
 
@@ -558,17 +569,55 @@ def test_ctrl_c依次清草稿撤回队尾提示不可取消并在空闲退出(t
         after_clear,
         after_restore,
         after_second_clear,
-        running_status,
+        cancelling_status,
         still_active,
+        cancelled_tasks,
         return_code,
     ) = asyncio.run(run())
 
     assert after_clear == ("", ("second\nline",))
     assert after_restore == ("second\nline", (1, 4), ())
     assert after_second_clear == ""
-    assert "cannot be cancelled" in running_status
+    assert "Cancelling" in cancelling_status
     assert still_active == "task-1"
+    assert cancelled_tasks == (("task-1", "user_requested"),)
     assert return_code == 0
+
+
+def test_ctrl_c取消失败时保留active_task并显示错误(tmp_path):
+    async def run():
+        service = ControlledService(cancel_error=RuntimeError("cancel broken"))
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "active")
+            await wait_until(
+                pilot, lambda: app.chat_state.active_task_id == "task-1"
+            )
+
+            await pilot.press("ctrl+c")
+            await wait_until(pilot, lambda: bool(service.cancelled_tasks))
+            await wait_until(
+                pilot,
+                lambda: "Cancellation failed"
+                in str(app.query_one(RuntimeStatusBar).render()),
+            )
+            result = (
+                app.chat_state.active_task_id,
+                app.chat_state.phase,
+                str(app.query_one(RuntimeStatusBar).render()),
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    active_task_id, phase, status = asyncio.run(run())
+
+    assert active_task_id == "task-1"
+    assert phase == RuntimePhase.RUNNING
+    assert "Cancellation failed" in status
 
 
 def test_submit失败保留队首且可由ctrl_c恢复(tmp_path):
@@ -621,7 +670,7 @@ def test_projector失败进入fatal并保留当前任务队列和草稿(tmp_path
                 type(
                     "RuntimeEvent",
                     (),
-                    {"correlation_id": "task-1"},
+                    {"task_id": "task-1"},
                 )(),
             )
             await wait_until(
@@ -669,7 +718,7 @@ def test_conversation更新失败后忽略后续event且不调度队首(
             service.subscription.publish(
                 "agent",
                 AgentTextDeltaEvent(
-                    correlation_id="task-1",
+                    task_id="task-1",
                     step=1,
                     text="broken update",
                 ),
@@ -775,7 +824,7 @@ def test_notification展示失败不阻止同一event完成任务(monkeypatch, t
                     "RuntimeEvent",
                     (),
                     {
-                        "correlation_id": "task-1",
+                        "task_id": "task-1",
                         "task_id": "task-1",
                     },
                 )(),
@@ -924,7 +973,7 @@ def test未知ui_action进入fatal而不是终止textual消息循环(tmp_path):
                 type(
                     "RuntimeEvent",
                     (),
-                    {"correlation_id": "task-1"},
+                    {"task_id": "task-1"},
                 )(),
             )
             await wait_until(

@@ -16,6 +16,7 @@ from apps.agent.src.agent_orchestration.plugins import (
     UserInputEvent,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence import PersistenceRuntime
+from apps.agent.src.agent_orchestration.run_control import TaskChannelRegistry
 from apps.agent.src.model_provider.base_llm import BaseLLM
 from apps.agent.src.model_provider.types import LLMStreamChunk
 
@@ -86,7 +87,10 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
             system_prompt="system",
             tools=[],
         )
-        agent = AgentPlugin("agent", factory)
+        task_channels = TaskChannelRegistry()
+        channel = task_channels.create("task-1")
+        channel.mark_preparing_context()
+        agent = AgentPlugin("agent", factory, task_channels)
         sink = SinkPlugin("sink")
         for plugin in (user_input, blackboard, agent, sink):
             manager.register(plugin)
@@ -97,11 +101,11 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
 
         with persistence.session_scope(
             session_id="session-1",
-            correlation_id="task-1",
+            task_id="task-1",
         ) as identity:
             await user_input.publish(
                 UserInputEvent(
-                    correlation_id="task-1",
+                    task_id="task-1",
                     prompt="hello",
                 )
             )
@@ -127,7 +131,7 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
         "agent.stream",
         "llm.stream",
     } <= names
-    assert {record["correlation_id"] for record in records} == {"task-1"}
+    assert {record["task_id"] for record in records} == {"task-1"}
     assert all("workspace_key" not in record for record in records)
     assert all("session_id" not in record for record in records)
     assert [type(event) for event in events] == [

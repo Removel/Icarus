@@ -41,11 +41,10 @@ Agent Orchestration Layer
 - PluginManager 与 Shutdown Drain；
 - Runtime Hook 观测；
 - AgentPlugin；
-- AgentContextReadyEvent；
+- BlackboardContextReadyEvent；
 - BlackboardPlugin；
-- Blackboard Context 状态；
+- Blackboard 跨轮消息状态；
 - ContextBlock 与 ContextContributionEvent；
-- BlackboardContextConverter；
 - 真实模型 Plugin 链路验证。
 
 SkillPlugin、KnowledgePlugin、MemoryPlugin、StylePlugin 和其他领域 Plugin 仍属于后续阶段。
@@ -180,7 +179,7 @@ Event 使用 `agent-stream-event-design.md` 定义的通用 Event 基类。
 
 - `event_id`；
 - `occurred_at`；
-- `correlation_id`。
+- `task_id`。
 
 来源插件身份不固定写入纯能力内核的 Event 基类，而由 Plugin 调用 EventBus 发布时一并提交，或由 EventBus 发布信封补充。
 
@@ -386,8 +385,8 @@ BlackboardPlugin 的状态分为两部分。
 当前 Agent 实例的跨轮上下文状态：
 
 - History；
-- 已成功完成的 User Message；
-- Agent 最终 Assistant Message；
+- 已完成 Task 的 User、Plugin Context、Assistant ToolCall、ToolResult 和最终 Assistant Message；
+- 已取消 Task 截至最近协议完整边界的安全消息前缀；
 - 初始化 Agent Runtime 时恢复的历史消息。
 
 每轮任务的临时组装状态：
@@ -398,15 +397,16 @@ BlackboardPlugin 的状态分为两部分。
 - 是否已经发布本轮 Agent Context；
 - Agent 和 UserInput 两个终态事件是否均已到达。
 
-BlackboardPlugin 收到 AgentCompletedEvent 后，将本轮 User Message 和最终
-Assistant Message 写入跨轮上下文。收到 AgentErrorEvent 时不写入失败任务。
+BlackboardPlugin 收到 AgentCompletedEvent 后，将本轮完整 Message 链写入跨轮上下文；收到
+AgentCancelledEvent 后写入最近的协议完整消息前缀；收到 AgentErrorEvent 时不写入失败任务。
 Agent 与 UserInput 的终态事件都到达后，删除该轮临时组装状态。
 
 ### 生产
 
 BlackboardPlugin 整合上下文后，生产 AgentPlugin 可以消费的上下文 Event。
 
-当前上下文 Event 使用固定核心字段和可扩展 ContextBlock：
+Blackboard 使用 ContextBlock 汇聚各来源内容，完成组合后仅向 AgentPlugin 发布执行所需的
+固定字段：
 
 ```python
 @dataclass(frozen=True)
@@ -421,12 +421,10 @@ class ContextBlock:
 class BlackboardContextReadyEvent(Event):
     model_role: LLMRole
     system_prompt: str
+    input_prompt: str
     history_messages: list[Message]
-    prompt: str
     input_images: list[ImagePart]
     tools: list[str] | None
-    context_blocks: list[ContextBlock]
-    context_errors: dict[str, str]
 ```
 
 每个固定来源必须返回 ContextContributionEvent：
@@ -447,8 +445,9 @@ BlackboardPlugin 等待 UserInput 和全部固定来源返回后，只发布一�
 - BlackboardPlugin 聚合后再发布给 AgentPlugin；
 - AgentPlugin 正常任务的输入只来自 BlackboardPlugin。
 - ContextBlock 声明来源必须与真实发布方一致；
-- Agent Stream Event 使用原始任务 correlation_id 回写 Blackboard；
+- Agent Stream Event 使用原始任务 task_id 回写 Blackboard；
 - AgentCompletedEvent 用于更新 Blackboard 的跨轮消息上下文；
+- AgentCancelledEvent 用于提交取消前的协议完整消息前缀；
 - AgentErrorEvent 用于结束失败任务，但失败任务不写入跨轮消息上下文；
 - InputFinishedEvent 与 Agent 终态事件共同触发本轮临时状态清理；
 - 不依赖 AgentCompletedEvent 与 InputFinishedEvent 的异步消费顺序。
@@ -459,7 +458,8 @@ BlackboardPlugin 等待 UserInput 和全部固定来源返回后，只发布一�
 
 AgentPlugin 是当前 ReActAgent 在插件系统中的适配层。
 
-AgentPlugin 内部持有 BlackboardContextConverter 组件对象。Converter 不是 Plugin，不注册到 Registry，也不直接使用 EventBus。
+最终 User Prompt 由 BlackboardPlugin 唯一生成；AgentPlugin 不再解释 ContextBlock，也不重复
+组合 Prompt。
 
 ### 消费
 
@@ -480,13 +480,12 @@ AgentPlugin 不直接订阅：
 AgentPlugin：
 
 1. 消费 BlackboardPlugin 生产的 Agent Context Event；
-2. 使用 BlackboardContextConverter 拍平动态 ContextBlock；
-3. 动态 Context 追加到当前 User Prompt，不修改稳定 System Prompt；
-4. 获取对应模型角色的 ReActAgent；
-5. 调用 `stream` 或 `astream`；
-6. 消费 Agent Stream Event；
-7. 将原始执行流 Event 发布到 EventBus；
-8. 只等待 EventBus 接受，不等待其他 Plugin 消费。
+2. 读取 Blackboard 已生成的最终 User Prompt；
+3. 获取对应模型角色的 ReActAgent；
+4. 调用 `stream` 或 `astream`；
+5. 消费 Agent Stream Event；
+6. 将原始执行流 Event 发布到 EventBus；
+7. 只等待 EventBus 接受，不等待其他 Plugin 消费。
 
 ### 生产
 

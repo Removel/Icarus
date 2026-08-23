@@ -15,16 +15,15 @@ class UserInputEvent(Event):
 
 @dataclass(frozen=True, kw_only=True)
 class InputQueuedEvent(Event):
-    task_id: str
     queue_position: int
 
 
 @dataclass(frozen=True, kw_only=True)
 class InputStartedEvent(Event):
-    task_id: str
+    pass
 
 
 @dataclass(frozen=True, kw_only=True)
 class InputFinishedEvent(Event):
-    task_id: str
-    status: Literal["completed", "failed"]
+    status: Literal["completed", "failed", "cancelled"]
+    run_id: str | None = None

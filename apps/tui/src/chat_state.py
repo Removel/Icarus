@@ -13,6 +13,7 @@ class RuntimePhase(str, Enum):
     STARTING = "starting"
     READY = "ready"
     RUNNING = "running"
+    CANCELLING = "cancelling"
     STOPPING = "stopping"
     FAILED = "failed"
 
@@ -22,6 +23,7 @@ class InterruptAction(str, Enum):
 
     CLEAR_DRAFT = "clear_draft"
     RESTORE_PENDING = "restore_pending"
+    CANCEL_ACTIVE = "cancel_active"
     NOTIFY_CANCEL_UNAVAILABLE = "notify_cancel_unavailable"
     EXIT = "exit"
 
@@ -128,6 +130,14 @@ class ChatState:
             return InterruptAction.CLEAR_DRAFT
         if self.pending:
             return InterruptAction.RESTORE_PENDING
-        if self.active_task_id is not None or self.dispatch_in_progress:
+        if self.active_task_id is not None:
+            return InterruptAction.CANCEL_ACTIVE
+        if self.dispatch_in_progress:
             return InterruptAction.NOTIFY_CANCEL_UNAVAILABLE
         return InterruptAction.EXIT
+
+    def mark_cancelling(self, task_id: str) -> bool:
+        if self.active_task_id != task_id:
+            return False
+        self.phase = RuntimePhase.CANCELLING
+        return True
