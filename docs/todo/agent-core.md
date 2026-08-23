@@ -67,17 +67,42 @@
 
 ## Tool 与 Plugin
 
-- [ ] 保留 `read`、`write`、`insert`、`bash` 四个默认通用基础 Tool，并将其作为默认装配
+- [x] 保留 `read`、`write`、`insert`、`bash` 四个默认通用基础 Tool，并将其作为默认装配
   能力，而不是散落在 Kernel 主循环中的特例。
-- [ ] 设计领域 Plugin 向 Agent Kernel 贡献一个或多个 Tool 的正式机制；Tool 不需要因此
-  成为独立的 Runtime 子 Plugin。
-- [ ] Kernel 通过统一 Tool 契约使用默认 Tool 和 Plugin Tool，不依赖其具体来源。
-- [ ] Agent Run 开始时取得稳定 Tool 快照；Plugin 生命周期变化从下一次 Run 开始生效。
-- [ ] 在 Tool 设计阶段明确快照实际持有的定义、可执行能力和生命周期；覆盖 Plugin 在快照
-  建立后卸载或重启、名称冲突或替换、能力失效、并发 Run 使用不同快照以及资源清理责任。
-- [ ] 当前不实现同一个 Run 内的 Tool 热加载、热卸载和替换；未来只有在出现明确场景后
+- [x] 设计领域 Plugin 通过 Manifest 和 `PluginRegistration` 向 Agent Kernel 贡献一个或多个
+  Tool 的正式机制；Tool 是 Plugin 内部普通组件，不注册成 Runtime 子 Plugin。
+- [x] Kernel 通过统一 Tool 契约使用默认 Tool 和 Plugin Tool，不依赖其具体来源。
+- [x] 明确 Agent Run 开始时取得稳定 Tool 快照；第一阶段在 Runtime READY 后冻结 Plugin、
+  Tool 和 Event 拓扑，变更只在下一次 Runtime 启动后生效。
+- [x] 明确快照持有本次 Run 允许的 Tool 定义和执行对象；第一阶段 Runtime 运行中不支持
+  Plugin 卸载或重启，名称冲突在 READY 前处理，资源由所属 Plugin 在退出阶段清理。
+- [x] 当前不实现同一个 Run 内的 Tool 热加载、热卸载和替换；未来只有在出现明确场景后
   才重新评估。
-- [ ] 后续完善 Tool 名称冲突、校验、作用域、权限、安全策略、并发上限、取消与资源清理。
+- [ ] Tool 名称冲突和基础形式校验已在 READY 前处理；后续继续完善作用域、权限、安全策略、
+  并发上限、取消与资源清理。
+
+## Runtime Host 与 Plugin Manifest
+
+- [x] 完成 Manifest 驱动的 Runtime 生命周期架构设计，明确发现、解析、校验、启动、恢复、
+  运行、收束、快照和停止阶段。
+- [x] 明确 Runtime 只发现 Icarus 内置 Plugin 和配置显式目录，不扫描 Workspace，不在启动时
+  自动安装 Python 依赖。
+- [x] 明确 Factory 返回完整 `PluginRegistration`，Host 校验后原子注册 Plugin、Capability、
+  Tool 和状态提供者。
+- [x] 明确 Event 发布与消费由 Manifest 声明，Host 自动生成现有 EventBus 的来源订阅，
+  EventBus 继续不解释领域 Event。
+- [x] 明确 Tool 执行直接透传 `task_id`、`run_id`、`step` 和不可变 `task_messages`，不新增
+  上下文包装类，也不通过 Hook 隐式读取身份。
+- [x] 明确 Runtime 退出复用现有任务取消，Plugin 收束自身后台工作，按 Workspace 与 Session
+  保存持久状态但不恢复运行栈。
+- [x] 实现 Manifest 模型、发现器、Python 依赖检查、依赖图和启动诊断。
+- [x] 实现 `PluginRegistration`、Capability 注册、Plugin Tool 收集和原子校验。
+- [x] 实现 Manifest 驱动的 Event 自动订阅和未声明 Event 发布保护。
+- [x] 实现 Tool 执行身份参数透传和单次 Run Tool 快照。
+- [x] 实现 Plugin `quiesce`、状态快照/恢复、退出收束和启动失败回滚。
+- [x] 将当前内置 Plugin 迁移到 Manifest 装配，并保持现有行为与测试兼容。
+
+详细设计见 `apps/agent/docs/arch/plugin-runtime-manifest-lifecycle-design.md`。
 
 ## SkillPlugin 重构
 
