@@ -12,7 +12,7 @@ ROUTING_CONTEXT_FIELDS = frozenset(
         "workspace_key",
         "workspace_path",
         "session_id",
-        "correlation_id",
+        "task_id",
     }
 )
 
@@ -23,7 +23,7 @@ class TraceRecord:
     record_type: str
     event_id: str
     occurred_at: str
-    correlation_id: str | None
+    task_id: str | None
     run_id: str | None
     name: str
     phase: str
@@ -41,15 +41,15 @@ class TraceRecord:
             for key, value in event.context.items()
             if key not in ROUTING_CONTEXT_FIELDS
         }
-        correlation_id = event.context.get("correlation_id")
+        task_id = event.context.get("task_id")
         return cls(
-            schema_version=1,
+            schema_version=2,
             record_type="hook_event",
             event_id=event.event_id,
             occurred_at=event.occurred_at.isoformat(),
-            correlation_id=(
-                str(correlation_id)
-                if correlation_id is not None
+            task_id=(
+                str(task_id)
+                if task_id is not None
                 else None
             ),
             run_id=event.run_id,
@@ -65,7 +65,7 @@ class TraceRecord:
             "record_type": self.record_type,
             "event_id": self.event_id,
             "occurred_at": self.occurred_at,
-            "correlation_id": self.correlation_id,
+            "task_id": self.task_id,
             "run_id": self.run_id,
             "name": self.name,
             "phase": self.phase,

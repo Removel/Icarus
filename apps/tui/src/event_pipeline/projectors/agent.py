@@ -23,7 +23,7 @@ class AgentProjector:
     """Convert Agent output without exposing full results or reasoning."""
 
     def project(self, event: Event) -> tuple[UiAction, ...] | None:
-        task_id = event.correlation_id
+        task_id = event.task_id
         if task_id is None:
             return ()
 

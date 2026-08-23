@@ -68,7 +68,7 @@ Event 基类
 **开发内容**
 
 - 定义不可变 Event 基类；
-- 包含 `event_id`、`occurred_at` 和 `correlation_id`；
+- 包含 `event_id`、`occurred_at` 和 `task_id`；
 - 提供简单创建方式，自动生成 Event ID 和时间；
 - Event 基类不包含 EventBus 路由逻辑；
 - 未来来源插件身份由 EventBus 发布入口补充，不写入纯能力内核的 Event 基类；
@@ -78,7 +78,7 @@ Event 基类
 
 - 每个 Event 自动获得唯一 ID；
 - 时间字段正确；
-- correlation_id 可以关联同一次 Agent Run；
+- task_id 关联同一次用户 Task；
 - Event 可以被 dataclass 序列化适配器转换为 JSON。
 
 ## 任务二：定义 Agent Stream Event

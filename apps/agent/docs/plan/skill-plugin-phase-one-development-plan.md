@@ -127,7 +127,7 @@ apps/agent/.venv/bin/python -m pytest apps/agent/test/agent_orchestration/plugin
 - 扫描、状态或 Embedding 异常发布 `failed`；
 - 整段检索使用 30 秒预算，超时后在当前 Runtime 熔断；
 - 扫描、排名和 SQLite 操作移到工作线程；
-- correlation_id 原样透传。
+- task_id 原样透传。
 
 **验证**
 
@@ -158,7 +158,7 @@ apps/agent/.venv/bin/python -m pytest apps/agent/test/agent_orchestration/plugin
 - AgentPlugin/Converter 原样传递，不再次解释 ContextBlock；
 - 成功任务把最终 Prompt写入历史；
 - 失败任务仍不提交历史；
-- 保留已有扁平 AgentInvocation 参数。
+- AgentPlugin 继续以扁平参数调用 ReActAgent。
 
 **验证**
 

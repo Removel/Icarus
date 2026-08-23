@@ -66,6 +66,13 @@ class RuntimeService(Protocol):
     ) -> SubmitAccepted:
         ...
 
+    async def cancel_task(
+        self,
+        task_id: str,
+        reason: str | None = None,
+    ) -> TaskOperationResult:
+        ...
+
     async def stop(self, timeout: float | None = 30) -> None:
         ...
 
@@ -73,6 +80,11 @@ class RuntimeService(Protocol):
 class SubmitAccepted(Protocol):
     task_id: str
     queue_position: int
+
+
+class TaskOperationResult(Protocol):
+    task_id: str | None
+    status: str
 
 
 RuntimeFactory = Callable[[], Awaitable[RuntimeService]]
@@ -425,7 +437,11 @@ class IcarusTextualApp(App[int]):
             if not self.chat_state.finish_active(action.task_id):
                 return
             self._refresh_status(
-                "" if action.status == "completed" else "Task failed"
+                {
+                    "completed": "",
+                    "failed": "Task failed",
+                    "cancelled": "Task cancelled",
+                }[action.status]
             )
             self._schedule_dispatch()
 
@@ -547,16 +563,55 @@ class IcarusTextualApp(App[int]):
             self._refresh_status("Latest queued message restored")
             composer.focus()
             return
+        if action == InterruptAction.CANCEL_ACTIVE:
+            self.run_worker(
+                self._cancel_active_task,
+                name="cancel-active-task",
+                group="task-control",
+                exclusive=True,
+                exit_on_error=False,
+            )
+            return
         if action == InterruptAction.NOTIFY_CANCEL_UNAVAILABLE:
-            text = "Current Agent task cannot be cancelled by this Runtime yet."
+            text = "Waiting for the Runtime to confirm the submitted task."
             self._refresh_status(text)
             self._safe_notify(
                 text,
-                title="Cancellation unavailable",
+                title="Cancellation pending",
                 severity="warning",
             )
             return
         self.request_shutdown(return_code=0)
+
+    async def _cancel_active_task(self) -> None:
+        task_id = self.chat_state.active_task_id
+        service = self.service
+        if task_id is None or service is None:
+            return
+        try:
+            result = await service.cancel_task(task_id, "user_requested")
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._refresh_status("Cancellation failed")
+            self._safe_notify(
+                f"Unable to cancel task: {type(error).__name__}: {error}",
+                title="Cancellation failed",
+                severity="warning",
+            )
+            return
+        if result.status in {"accepted", "already_cancelling"}:
+            if self.chat_state.mark_cancelling(task_id):
+                self._refresh_status("Cancellation requested")
+            return
+        if result.status == "already_finished":
+            self._refresh_status("Task already finished")
+            return
+        self._safe_notify(
+            f"Unable to cancel task: {result.status}",
+            title="Cancellation failed",
+            severity="warning",
+        )
 
     async def _refresh_queue_after_interrupt(self) -> None:
         await self._refresh_queue()

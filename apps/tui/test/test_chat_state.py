@@ -89,7 +89,7 @@ def test只有匹配当前task的终态能结束并恢复调度():
         ("draft", ["queued"], "task-1", InterruptAction.CLEAR_DRAFT),
         ("   ", ["queued"], "task-1", InterruptAction.CLEAR_DRAFT),
         ("", ["queued"], "task-1", InterruptAction.RESTORE_PENDING),
-        ("", [], "task-1", InterruptAction.NOTIFY_CANCEL_UNAVAILABLE),
+        ("", [], "task-1", InterruptAction.CANCEL_ACTIVE),
         ("", [], None, InterruptAction.EXIT),
     ],
 )

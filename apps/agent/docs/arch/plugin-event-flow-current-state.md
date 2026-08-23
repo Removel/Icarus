@@ -41,8 +41,8 @@ async def consume(
 |---|---|---|---|
 | `user-input` | `UserInputPlugin` | 已实现、已接入 | FIFO 接收用户输入，发布队列/开始/输入/结束 Event |
 | `skill` | `SkillPlugin` | 第一、二阶段已实现并接入 | 对话前动态检索和注入 Skill；对话后从完整 Agent 终态恢复工具轨迹并尝试后台维护 Skill |
-| `blackboard` | `BlackboardPlugin` | 已实现、已接入 | 汇聚必需 Context，维护跨轮历史，发布主 Agent 完整调用快照 |
-| `agent` | `AgentPlugin` | 已实现、已接入 | 适配无状态 ReActAgent，并发布原始 Agent Stream / Terminal Event |
+| `blackboard` | `BlackboardPlugin` | 已实现、已接入 | 汇聚必需 Context，维护含 ToolCall/ToolResult 的跨轮历史，发布主 Agent 完整调用快照 |
+| `agent` | `AgentPlugin` | 已实现、已接入 | 适配无状态 ReActAgent，处理 Task Context / Cancel，并发布原始 Agent Stream / Terminal Event |
 | `output-bridge` | `OutputBridgePlugin` | 已实现、应用内部接入 | 将 UserInput 和 Agent Event 广播到 `AgentRuntimeService.subscribe_events()` 创建的实时订阅，供 TUI/Transport 独立消费 |
 
 ### 当前不是独立 Plugin 的组件
@@ -57,7 +57,8 @@ async def consume(
 | `SkillRepository` | SkillPlugin 内部文件边界 | 校验并执行 Workspace Skill CRUD，全局 Skill 只读 |
 | `SkillUsageStore` | SkillPlugin 内部状态存储 | 按 Workspace 保存发现、使用和维护激活时间 |
 | `WorkspaceMaintenanceCoordinator` | 进程级内部组件 | 使用所有权 Token 保证同进程同 Workspace 同时最多一个维护任务 |
-| `SkillTurnState` | SkillPlugin 会话内状态 | 按 correlation_id 保存当前轮输入和命中 Skill；终态时从完整 Agent messages 恢复工具轨迹 |
+| `SkillTurnState` | SkillPlugin 会话内状态 | 按 task_id 保存当前轮输入和命中 Skill；终态时从完整 Agent messages 恢复工具轨迹 |
+| `TaskChannelRegistry` | Agent Runtime 会话内控制状态 | 保存活动 TaskChannel 和有界已结束 Task 墓碑，供 UserInputPlugin、AgentPlugin 和 Service 共享 |
 
 这些组件是普通对象，不注册为子 Plugin，也不通过 EventBus 互相通信。
 
@@ -99,6 +100,7 @@ flowchart LR
 
     User --> Service
     Service -. "submit" .-> U
+    Service -. "cancel_task" .-> A
 
     U -- "UserInputEvent" --> S
     U -- "UserInputEvent / InputFinishedEvent" --> B
@@ -107,8 +109,8 @@ flowchart LR
     S -- "ContextContributionEvent" --> B
     B -- "BlackboardContextReadyEvent" --> A
 
-    A -- "AgentCompleted / AgentError" --> U
-    A -- "AgentCompleted / AgentError" --> B
+    A -- "AgentCompleted / AgentError / AgentCancelled" --> U
+    A -- "AgentCompleted / AgentError / AgentCancelled" --> B
     A -- "AgentCompletedEvent" --> S
     A -- "Agent Stream / Terminal Event" --> O
 
@@ -131,13 +133,13 @@ flowchart LR
 
 | 来源 Plugin | 订阅 Plugin | 订阅者实际处理的主要 Event |
 |---|---|---|
-| `user-input` | `skill` | `UserInputEvent`：启动本轮 Skill 检索并建立轮状态；失败的 `InputFinishedEvent`：清理轮状态 |
+| `user-input` | `skill` | `UserInputEvent`：启动本轮 Skill 检索并建立轮状态；失败或取消的 `InputFinishedEvent`：清理轮状态 |
 | `user-input` | `blackboard` | `UserInputEvent`、`InputFinishedEvent`：保存本轮输入和终态 |
 | `user-input` | `output-bridge` | 用户输入队列及任务状态 Event，广播给 TUI / 上层应用的独立实时订阅 |
 | `skill` | `blackboard` | `ContextContributionEvent`：本轮 Skill 上下文或降级错误 |
 | `blackboard` | `agent` | `BlackboardContextReadyEvent`：完整历史、最终 User Prompt、模型角色和工具配置 |
-| `agent` | `user-input` | `AgentCompletedEvent`、`AgentErrorEvent`：结束当前 FIFO 任务 |
-| `agent` | `blackboard` | `AgentCompletedEvent`、`AgentErrorEvent`：成功提交历史或结束失败任务 |
+| `agent` | `user-input` | `AgentCompletedEvent`、`AgentErrorEvent`、`AgentCancelledEvent`：结束当前 FIFO 任务 |
+| `agent` | `blackboard` | 三种 Agent 终态：成功提交完整 Task 消息，取消提交安全前缀，失败只清理任务 |
 | `agent` | `output-bridge` | 原始 Agent Stream Event，广播给 TUI / 上层应用的独立实时订阅 |
 | `agent` | `skill` | 只接收 `AgentCompletedEvent`：从完整 messages 恢复轮轨迹并判断轮后维护 |
 
@@ -195,7 +197,7 @@ sequenceDiagram
     B->>B: 组合最终 input_prompt 和 history_messages
     B->>Bus: BlackboardContextReadyEvent
     Bus-->>A: source=blackboard
-    A->>R: astream(system, history, input_prompt, tools)
+    A->>R: astream(system, history, input_prompt, tools, run_control)
 
     loop 当前轮 ReAct Step
         R-->>A: AgentTextDeltaEvent / AgentToolStartedEvent / AgentToolCompletedEvent
@@ -204,27 +206,42 @@ sequenceDiagram
         Note over Bus,S: SkillPlugin 入队前拒绝文本与工具增量
     end
 
-    R-->>A: AgentCompletedEvent / AgentErrorEvent
-    A->>Bus: 发布 Agent 终态 Event
+    R-->>A: AgentCompletedEvent / AgentErrorEvent，或抛出取消
+    A->>Bus: 发布 Completed / Error / Cancelled 终态 Event
     par 结束 FIFO 输入任务
-        Bus-->>U: AgentCompletedEvent / AgentErrorEvent
+        Bus-->>U: AgentCompletedEvent / AgentErrorEvent / AgentCancelledEvent
     and 更新 Blackboard
-        Bus-->>B: AgentCompletedEvent / AgentErrorEvent
+        Bus-->>B: AgentCompletedEvent / AgentErrorEvent / AgentCancelledEvent
     and 输出给用户
-        Bus-->>O: AgentCompletedEvent / AgentErrorEvent
+        Bus-->>O: AgentCompletedEvent / AgentErrorEvent / AgentCancelledEvent
     and 判断轮后维护
         Bus-->>S: AgentCompletedEvent
     end
 
     U->>Bus: InputFinishedEvent
     Bus-->>B: 标记 input_finished，满足双终态后清理轮状态
-    opt status=failed
-        Bus-->>S: 清理失败轮状态
+    opt status=failed / cancelled
+        Bus-->>S: 清理失败或取消轮状态
     end
     Bus-->>O: 结束当前 TUI 轮次
 ```
 
-Blackboard 是主会话跨轮状态的权威所有者。SkillPlugin 不直接读取 Blackboard；它通过订阅 `agent` 来源，在 `AgentCompletedEvent.response.messages` 中取得主 Agent 本轮真实使用的多轮消息快照。
+Blackboard 是主会话跨轮状态的权威所有者。正常完成时，它保存本 Task 的 User、已应用
+Plugin Context、Assistant ToolCall、对应 ToolResult 和最终 Assistant；取消时只保存最近一个
+协议完整的安全消息前缀。SkillPlugin 不直接读取 Blackboard；它通过订阅 `agent` 来源，在
+`AgentCompletedEvent.response.messages` 中取得主 Agent 本轮真实使用的多轮消息快照。
+
+## 运行中介入
+
+`AgentRuntimeService` 在当前 Session 内共享一个 `TaskChannelRegistry`。用户侧只通过
+`cancel_task(task_id, reason)` 请求确定性取消，不提供运行中 Context API。Memory、Knowledge
+或 Supervisor 等内部 Plugin 通过明确订阅向 AgentPlugin 发布 `TaskContextInputEvent`；Plugin
+也可以发布 `TaskCancelRequestedEvent`。EventBus 请求会异步收到带原请求 event_id 的结果 Event。
+
+ReActAgent 只通过每次调用传入的 `run_control` 在稳定边界读取控制状态：每次 LLM 前注入 FIFO
+Context Batch、每个 Tool Batch 前检查取消、Completed 前原子关闭或继续一轮。AgentPlugin 负责
+取消活动执行协程；BashTool 的异步路径负责 `terminate → kill → wait`。取消只阻止后续执行，
+不回滚已经发生的 Tool 副作用。
 
 ## 对话后自动维护
 
@@ -337,7 +354,7 @@ flowchart TB
 | 状态 | 所有者 | 生命周期 |
 |---|---|---|
 | 跨轮 User / Assistant 历史 | BlackboardPlugin | 当前 Agent Runtime / Session |
-| 本轮 UserInput 和 Context 汇聚状态 | BlackboardPlugin | correlation_id 双终态结束后清理 |
+| 本轮 UserInput 和 Context 汇聚状态 | BlackboardPlugin | task_id 双终态结束后清理 |
 | 当前会话累计 Skill 与七轮刷新计数 | SessionSkillState | 当前 Agent Runtime |
 | 当前轮输入与命中 Skill；由完整 messages 恢复出的工具轨迹 | SkillTurnState | Agent 终态到达后 pop/discard |
 | Skill 使用时间与次数 | SkillUsageStore | Icarus 级 SQLite，按 Workspace 隔离 |

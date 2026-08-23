@@ -2,7 +2,6 @@
 
 from collections.abc import AsyncIterator, Iterator
 import json
-from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.capability.types import (
@@ -14,6 +13,7 @@ from apps.agent.src.agent_orchestration.capability.types import (
     AgentToolStartedEvent,
 )
 from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.run_control.types import AgentRunControl
 from apps.agent.src.agent_orchestration.tools.tool_executor import BaseToolExecutor
 from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 from apps.agent.src.model_config import LLMRole
@@ -54,6 +54,7 @@ class ReActAgent(BaseAgent):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AgentResponse:
         messages = self._build_messages(
             system_prompt,
@@ -61,6 +62,7 @@ class ReActAgent(BaseAgent):
             input_prompt,
             input_images,
         )
+        task_message_start = len(messages) - 1
         tool_definitions = self._tool_executor.definitions(tools)
         usage = Usage(input_tokens=0, output_tokens=0)
         has_usage = False
@@ -68,26 +70,58 @@ class ReActAgent(BaseAgent):
         steps = 0
 
         while True:
+            self._prepare_step(
+                messages,
+                run_control,
+                steps + 1,
+                task_message_start,
+            )
             response = self._llm.invoke(messages, tool_definitions or None)
             steps += 1
+            self._mark_step(run_control, steps)
             messages.append(response.message)
             usage, has_usage = self._add_usage(usage, has_usage, response)
             if response.reasoning:
                 reasoning_parts.append(response.reasoning)
 
             if not response.message.tool_calls:
+                if not self._close_or_continue(messages, run_control, steps + 1):
+                    continue
+                self._checkpoint_history(
+                    messages,
+                    run_control,
+                    task_message_start,
+                )
                 return self._build_response(
                     response,
                     messages,
                     reasoning_parts,
                     usage if has_usage else None,
                     steps,
+                    run_control,
+                    task_message_start,
                 )
 
-            for tool_call, result in self._tool_executor.execute_many(
-                response.message.tool_calls,
+            for batch in self._tool_executor.build_batches(
+                response.message.tool_calls
             ):
-                messages.append(self._tool_result_message(tool_call.id, result))
+                self._raise_if_cancelled(run_control)
+                results_by_id = {
+                    tool_call.id: result
+                    for tool_call, result in self._tool_executor.iter_completed(batch)
+                }
+                for tool_call in batch:
+                    messages.append(
+                        self._tool_result_message(
+                            tool_call.id,
+                            results_by_id[tool_call.id],
+                        )
+                    )
+            self._checkpoint_history(
+                messages,
+                run_control,
+                task_message_start,
+            )
 
     async def ainvoke(
         self,
@@ -96,6 +130,7 @@ class ReActAgent(BaseAgent):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AgentResponse:
         messages = self._build_messages(
             system_prompt,
@@ -103,6 +138,7 @@ class ReActAgent(BaseAgent):
             input_prompt,
             input_images,
         )
+        task_message_start = len(messages) - 1
         tool_definitions = self._tool_executor.definitions(tools)
         usage = Usage(input_tokens=0, output_tokens=0)
         has_usage = False
@@ -110,30 +146,62 @@ class ReActAgent(BaseAgent):
         steps = 0
 
         while True:
+            self._prepare_step(
+                messages,
+                run_control,
+                steps + 1,
+                task_message_start,
+            )
             response = await self._llm.ainvoke(
                 messages,
                 tool_definitions or None,
             )
             steps += 1
+            self._mark_step(run_control, steps)
             messages.append(response.message)
             usage, has_usage = self._add_usage(usage, has_usage, response)
             if response.reasoning:
                 reasoning_parts.append(response.reasoning)
 
             if not response.message.tool_calls:
+                if not self._close_or_continue(messages, run_control, steps + 1):
+                    continue
+                self._checkpoint_history(
+                    messages,
+                    run_control,
+                    task_message_start,
+                )
                 return self._build_response(
                     response,
                     messages,
                     reasoning_parts,
                     usage if has_usage else None,
                     steps,
+                    run_control,
+                    task_message_start,
                 )
 
-            results = await self._tool_executor.aexecute_many(
-                response.message.tool_calls,
+            for batch in self._tool_executor.build_batches(
+                response.message.tool_calls
+            ):
+                self._raise_if_cancelled(run_control)
+                results_by_id: dict[str, ToolExecutionResult] = {}
+                async for tool_call, result in self._tool_executor.aiter_completed(
+                    batch
+                ):
+                    results_by_id[tool_call.id] = result
+                for tool_call in batch:
+                    messages.append(
+                        self._tool_result_message(
+                            tool_call.id,
+                            results_by_id[tool_call.id],
+                        )
+                    )
+            self._checkpoint_history(
+                messages,
+                run_control,
+                task_message_start,
             )
-            for tool_call, result in results:
-                messages.append(self._tool_result_message(tool_call.id, result))
 
     def stream(
         self,
@@ -142,14 +210,15 @@ class ReActAgent(BaseAgent):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> Iterator[Event]:
-        correlation_id = uuid4().hex
         messages = self._build_messages(
             system_prompt,
             history_messages,
             input_prompt,
             input_images,
         )
+        task_message_start = len(messages) - 1
         tool_definitions = self._tool_executor.definitions(tools)
         usage = Usage(input_tokens=0, output_tokens=0)
         has_usage = False
@@ -158,7 +227,14 @@ class ReActAgent(BaseAgent):
 
         try:
             while True:
+                self._prepare_step(
+                    messages,
+                    run_control,
+                    steps + 1,
+                    task_message_start,
+                )
                 steps += 1
+                self._mark_step(run_control, steps)
                 chunks: list[LLMStreamChunk] = []
                 for chunk in self._llm.stream(
                     messages,
@@ -166,7 +242,6 @@ class ReActAgent(BaseAgent):
                 ):
                     if chunk.text_delta:
                         yield AgentTextDeltaEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             text=chunk.text_delta,
                         )
@@ -179,26 +254,40 @@ class ReActAgent(BaseAgent):
                     reasoning_parts.append(response.reasoning)
 
                 if not response.message.tool_calls:
+                    if not self._close_or_continue(
+                        messages,
+                        run_control,
+                        steps + 1,
+                    ):
+                        continue
+                    self._checkpoint_history(
+                        messages,
+                        run_control,
+                        task_message_start,
+                    )
                     agent_response = self._build_response(
                         response,
                         messages,
                         reasoning_parts,
                         usage if has_usage else None,
                         steps,
+                        run_control,
+                        task_message_start,
                     )
                     yield AgentCompletedEvent(
-                        correlation_id=correlation_id,
                         step=steps,
                         response=agent_response,
                     )
                     return
 
-                for batch in self._tool_executor.build_batches(
-                    response.message.tool_calls,
-                ):
+                self._raise_if_cancelled(run_control)
+                batches = self._tool_executor.build_batches(
+                    response.message.tool_calls
+                )
+                for batch_index, batch in enumerate(batches):
+                    self._raise_if_cancelled(run_control)
                     for tool_call in batch:
                         yield AgentToolStartedEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             tool_call=tool_call,
                         )
@@ -206,23 +295,28 @@ class ReActAgent(BaseAgent):
                     results_by_id: dict[str, ToolExecutionResult] = {}
                     for tool_call, result in self._tool_executor.iter_completed(batch):
                         results_by_id[tool_call.id] = result
+                        is_last_result = len(results_by_id) == len(batch)
+                        is_last_batch = batch_index == len(batches) - 1
+                        if is_last_result:
+                            self._append_tool_results(
+                                messages,
+                                batch,
+                                results_by_id,
+                            )
+                            if is_last_batch:
+                                self._checkpoint_history(
+                                    messages,
+                                    run_control,
+                                    task_message_start,
+                                )
                         yield AgentToolCompletedEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             tool_call=tool_call,
                             result=result,
                         )
 
-                    for tool_call in batch:
-                        messages.append(
-                            self._tool_result_message(
-                                tool_call.id,
-                                results_by_id[tool_call.id],
-                            )
-                        )
         except Exception as error:
             yield AgentErrorEvent(
-                correlation_id=correlation_id,
                 step=steps,
                 error_type=type(error).__name__,
                 error_message=str(error),
@@ -236,14 +330,15 @@ class ReActAgent(BaseAgent):
         input_prompt: str,
         input_images: list[ImagePart] | None = None,
         tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
     ) -> AsyncIterator[Event]:
-        correlation_id = uuid4().hex
         messages = self._build_messages(
             system_prompt,
             history_messages,
             input_prompt,
             input_images,
         )
+        task_message_start = len(messages) - 1
         tool_definitions = self._tool_executor.definitions(tools)
         usage = Usage(input_tokens=0, output_tokens=0)
         has_usage = False
@@ -252,7 +347,14 @@ class ReActAgent(BaseAgent):
 
         try:
             while True:
+                self._prepare_step(
+                    messages,
+                    run_control,
+                    steps + 1,
+                    task_message_start,
+                )
                 steps += 1
+                self._mark_step(run_control, steps)
                 chunks: list[LLMStreamChunk] = []
                 async for chunk in self._llm.astream(
                     messages,
@@ -260,7 +362,6 @@ class ReActAgent(BaseAgent):
                 ):
                     if chunk.text_delta:
                         yield AgentTextDeltaEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             text=chunk.text_delta,
                         )
@@ -273,26 +374,40 @@ class ReActAgent(BaseAgent):
                     reasoning_parts.append(response.reasoning)
 
                 if not response.message.tool_calls:
+                    if not self._close_or_continue(
+                        messages,
+                        run_control,
+                        steps + 1,
+                    ):
+                        continue
+                    self._checkpoint_history(
+                        messages,
+                        run_control,
+                        task_message_start,
+                    )
                     agent_response = self._build_response(
                         response,
                         messages,
                         reasoning_parts,
                         usage if has_usage else None,
                         steps,
+                        run_control,
+                        task_message_start,
                     )
                     yield AgentCompletedEvent(
-                        correlation_id=correlation_id,
                         step=steps,
                         response=agent_response,
                     )
                     return
 
-                for batch in self._tool_executor.build_batches(
-                    response.message.tool_calls,
-                ):
+                self._raise_if_cancelled(run_control)
+                batches = self._tool_executor.build_batches(
+                    response.message.tool_calls
+                )
+                for batch_index, batch in enumerate(batches):
+                    self._raise_if_cancelled(run_control)
                     for tool_call in batch:
                         yield AgentToolStartedEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             tool_call=tool_call,
                         )
@@ -302,23 +417,28 @@ class ReActAgent(BaseAgent):
                         batch
                     ):
                         results_by_id[tool_call.id] = result
+                        is_last_result = len(results_by_id) == len(batch)
+                        is_last_batch = batch_index == len(batches) - 1
+                        if is_last_result:
+                            self._append_tool_results(
+                                messages,
+                                batch,
+                                results_by_id,
+                            )
+                            if is_last_batch:
+                                self._checkpoint_history(
+                                    messages,
+                                    run_control,
+                                    task_message_start,
+                                )
                         yield AgentToolCompletedEvent(
-                            correlation_id=correlation_id,
                             step=steps,
                             tool_call=tool_call,
                             result=result,
                         )
 
-                    for tool_call in batch:
-                        messages.append(
-                            self._tool_result_message(
-                                tool_call.id,
-                                results_by_id[tool_call.id],
-                            )
-                        )
         except Exception as error:
             yield AgentErrorEvent(
-                correlation_id=correlation_id,
                 step=steps,
                 error_type=type(error).__name__,
                 error_message=str(error),
@@ -359,6 +479,21 @@ class ReActAgent(BaseAgent):
             tool_call_id=tool_call_id,
         )
 
+    @classmethod
+    def _append_tool_results(
+        cls,
+        messages: list[Message],
+        tool_calls: list[ToolCall],
+        results_by_id: dict[str, ToolExecutionResult],
+    ) -> None:
+        for tool_call in tool_calls:
+            messages.append(
+                cls._tool_result_message(
+                    tool_call.id,
+                    results_by_id[tool_call.id],
+                )
+            )
+
     @staticmethod
     def _add_usage(
         current: Usage,
@@ -382,6 +517,8 @@ class ReActAgent(BaseAgent):
         reasoning_parts: list[str],
         usage: Usage | None,
         steps: int,
+        run_control: AgentRunControl | None,
+        task_message_start: int,
     ) -> AgentResponse:
         return AgentResponse(
             message=response.message,
@@ -390,7 +527,56 @@ class ReActAgent(BaseAgent):
             finish_reason=response.finish_reason,
             steps=steps,
             messages=list(messages),
+            task_message_start=task_message_start,
         )
+
+    @staticmethod
+    def _prepare_step(
+        messages: list[Message],
+        run_control: AgentRunControl | None,
+        step: int,
+        task_message_start: int,
+    ) -> None:
+        if run_control is None:
+            return
+        run_control.raise_if_cancelled()
+        batch = run_control.drain_context(applied_before_step=step)
+        if batch is not None:
+            messages.append(batch.message)
+        run_control.checkpoint_history(messages[task_message_start:])
+
+    @staticmethod
+    def _close_or_continue(
+        messages: list[Message],
+        run_control: AgentRunControl | None,
+        next_step: int,
+    ) -> bool:
+        if run_control is None:
+            return True
+        batch = run_control.close_or_drain(applied_before_step=next_step)
+        if batch is None:
+            return True
+        messages.append(batch.message)
+        return False
+
+    @staticmethod
+    def _mark_step(run_control: AgentRunControl | None, step: int) -> None:
+        if run_control is not None:
+            run_control.mark_step(step)
+
+    @staticmethod
+    def _checkpoint_history(
+        messages: list[Message],
+        run_control: AgentRunControl | None,
+        task_message_start: int,
+    ) -> None:
+        if run_control is not None:
+            run_control.checkpoint_history(messages[task_message_start:])
+
+    @staticmethod
+    def _raise_if_cancelled(run_control: AgentRunControl | None) -> None:
+        if run_control is not None:
+            run_control.raise_if_cancelled()
 
     @classmethod
     def _aggregate_stream_chunks(

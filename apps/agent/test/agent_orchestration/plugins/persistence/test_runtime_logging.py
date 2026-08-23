@@ -27,7 +27,7 @@ def test_persistence_runtime_session_scope_写元数据trace和日志(tmp_path):
     runtime.start(registry, logger)
     with runtime.session_scope(
         session_id="session-1",
-        correlation_id="task-1",
+        task_id="task-1",
     ) as identity:
         dispatcher = HookDispatcher(registry)
         dispatcher.trigger(
@@ -43,7 +43,7 @@ def test_persistence_runtime_session_scope_写元数据trace和日志(tmp_path):
         encoding="utf-8"
     ).splitlines()
     record = json.loads(trace_lines[0])
-    assert record["correlation_id"] == "task-1"
+    assert record["task_id"] == "task-1"
     assert record["data"]["authorization"] == "[REDACTED]"
     assert "session log" in runtime.resolver.session_log(identity).read_text(
         encoding="utf-8"
@@ -69,7 +69,7 @@ def test_persistence_runtime_重启不重复注册hook(tmp_path):
     runtime.start(registry, logger)
     with runtime.session_scope(
         session_id="session-1",
-        correlation_id="task-1",
+        task_id="task-1",
     ) as identity:
         HookDispatcher(registry).trigger("custom.event", "after", {"value": 1})
     runtime.stop(logger=logger)

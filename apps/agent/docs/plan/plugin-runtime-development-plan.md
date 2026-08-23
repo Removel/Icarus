@@ -532,7 +532,7 @@ plugin.lifecycle / before / after / error
 
 **验证**
 
-- publish、route、consume 可通过 correlation_id 关联；
+- publish、route、consume 可通过 task_id 关联；
 - Event ID 保持不变；
 - Hook 失败不影响投递；
 - 慢 Hook 不应在初版造成不可控阻塞；如果沿用同步 Hook，则明确由 Handler 自行快速入队。
@@ -575,7 +575,7 @@ plugin.lifecycle / before / after / error
 
 ```python
 @dataclass(frozen=True, kw_only=True)
-class AgentContextReadyEvent(Event):
+class BlackboardContextReadyEvent(Event):
     model_role: LLMRole
     system_prompt: str
     history_messages: list[Message]
@@ -586,7 +586,9 @@ class AgentContextReadyEvent(Event):
 
 如果 Blackboard 需要额外插件上下文，应在 system prompt 或 Message 中完成整合，不把任意 `dict` 直接泄漏给 ReActAgent。
 
-当前实现已调整为固定核心字段 + ContextBlock，并由 BlackboardContextConverter 稳定序列化到当前 User Prompt。动态 Context 不修改 System Prompt。
+当前实现由 BlackboardPlugin 汇聚 ContextBlock，并通过 BlackboardPromptComposer 稳定生成
+最终 User Prompt。BlackboardContextReadyEvent 只携带 Agent 执行所需的固定字段，AgentPlugin
+不再解释动态 Context。
 
 ### 任务九：定义 AgentPlugin Event
 
@@ -600,7 +602,7 @@ class AgentContextReadyEvent(Event):
 
 **开发内容**
 
-- `AgentContextReadyEvent`；
+- `BlackboardContextReadyEvent`；
 - 必要的任务或上下文关联字段；
 - 直接复用当前 Agent Stream Event 作为 AgentPlugin 输出；
 - 不重复定义 TextDelta、ToolStarted、ToolCompleted、Completed、Error。
@@ -619,7 +621,7 @@ class AgentContextReadyEvent(Event):
 **开发内容**
 
 - 继承 BasePlugin；
-- 只处理 BlackboardPlugin 生产的 AgentContextReadyEvent；
+- 只处理 BlackboardPlugin 生产的 BlackboardContextReadyEvent；
 - 忽略其他 Event；
 - 通过 AgentFactory 获取对应 ReActAgent；
 - 调用 `astream()`；
@@ -644,7 +646,7 @@ class AgentContextReadyEvent(Event):
 **场景**
 
 - 使用当前真实 `thinking` 模型；
-- Blackboard 测试 Producer 发布 AgentContextReadyEvent；
+- Blackboard 测试 Producer 发布 BlackboardContextReadyEvent；
 - AgentPlugin 消费后运行 ReActAgent；
 - WebUI 测试 Plugin 接收文字和工具 Event；
 - Producer publish 返回不等待 Agent 完成；
@@ -665,7 +667,7 @@ class AgentContextReadyEvent(Event):
 - UserInput 和全部固定来源都到达后发布一次 Context Ready；
 - `completed + []` 表示空结果但已完成；
 - `failed + error` 表示失败但已完成；
-- correlation_id 隔离多任务；
+- task_id 隔离多任务；
 - History 由 Blackboard 作为当前 Agent 实例上下文维护；
 - AgentCompletedEvent 将成功的 User/Assistant Message 写入 Blackboard；
 - AgentErrorEvent 不写入失败任务；
@@ -681,9 +683,9 @@ class AgentContextReadyEvent(Event):
 - Knowledge Context Event；
 - Memory Context Event；
 - Context Source Completed/Failed 状态；
-- AgentContextReadyEvent 最终版本。
+- BlackboardContextReadyEvent 最终版本。
 
-所有 Context Event 使用 correlation_id 关联同一次任务。
+所有 Context Event 使用 task_id 关联同一次任务。
 
 ### 任务十三：实现 Blackboard 状态
 
@@ -711,7 +713,7 @@ class AgentContextReadyEvent(Event):
 - 订阅 UserInput、Skill、Knowledge、Memory 和 AgentPlugin；
 - 消费 Context Event；
 - 聚合本次任务上下文；
-- 满足就绪条件后生产一次 AgentContextReadyEvent；
+- 满足就绪条件后生产一次 BlackboardContextReadyEvent；
 - 消费 AgentCompletedEvent 和 AgentErrorEvent；
 - 更新跨轮消息上下文；
 - 与 InputFinishedEvent 共同清理单轮状态；
@@ -725,10 +727,10 @@ class AgentContextReadyEvent(Event):
 - Skill、Knowledge、Memory 异步返回；
 - Blackboard 等待必需来源；
 - 空 Context 正确计为完成；
-- 所有要求满足后只发布一次 AgentContextReadyEvent；
+- 所有要求满足后只发布一次 BlackboardContextReadyEvent；
 - AgentPlugin 消费并执行；
 - Agent 结果回到 Blackboard；
-- 多任务 correlation_id 互不污染。
+- 多任务 task_id 互不污染。
 
 当前实现已完成固定来源聚合、空结果、失败来源、Agent 结果回写和真实模型链路验证。
 
@@ -847,7 +849,7 @@ git diff --check
 
 控制：
 
-- Event 保留 correlation_id；
+- Event 保留 task_id；
 - Hook 可以观测事件链；
 - 初版不做启发式循环阻断；
 - 未来编排策略控制 Event TTL 或 hop_count；

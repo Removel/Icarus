@@ -50,7 +50,7 @@ class ShowNotification:
 @dataclass(frozen=True)
 class FinishTurn:
     task_id: str
-    status: Literal["completed", "failed"]
+    status: Literal["completed", "failed", "cancelled"]
 
 
 UiAction: TypeAlias = (

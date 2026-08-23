@@ -14,4 +14,4 @@ class Event:
 
     event_id: str = field(default_factory=lambda: uuid4().hex)
     occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    correlation_id: str | None = None
+    task_id: str | None = None

@@ -54,7 +54,7 @@ def test_turn_state保存原始输入和本轮命中skill快照(tmp_path):
     state = SkillTurnState()
     image = ImagePart(url="https://example.com/image.png")
     input_event = UserInputEvent(
-        correlation_id="turn-1",
+        task_id="turn-1",
         prompt="build a reusable skill",
         input_images=[image],
     )
@@ -66,7 +66,7 @@ def test_turn_state保存原始输入和本轮命中skill快照(tmp_path):
 
     turn = state.pop_completed("turn-1", completed_messages())
     assert turn is not None
-    assert turn.correlation_id == "turn-1"
+    assert turn.task_id == "turn-1"
     assert turn.prompt == input_event.prompt
     assert turn.input_images == (image,)
     assert turn.matched_skills == (
@@ -80,7 +80,7 @@ def test_turn_state保存原始输入和本轮命中skill快照(tmp_path):
 
 def test_turn_state从完整messages恢复当前轮step与成功失败工具结果():
     state = SkillTurnState()
-    state.start(UserInputEvent(correlation_id="turn-1", prompt="run"))
+    state.start(UserInputEvent(task_id="turn-1", prompt="run"))
     first = ToolCall(id="first", name="read", arguments={"path": "a"})
     second = ToolCall(
         id="second", name="bash", arguments={"command": "x"}
@@ -154,6 +154,27 @@ def test完整messages可只统计工具数量而不解析结果正文():
         tool_traces_from_messages(messages)
 
 
+def test显式task起点不会被运行中context截断工具轨迹():
+    first = ToolCall(id="first", name="read", arguments={})
+    second = ToolCall(id="second", name="bash", arguments={})
+    messages = [
+        Message("user", [TextPart("old turn")]),
+        Message("assistant", [TextPart("old answer")]),
+        Message("user", [TextPart("current turn")]),
+        Message("assistant", [], tool_calls=[first]),
+        result_message(first.id, ToolExecutionResult(success=True, output="first")),
+        Message("user", [TextPart("<runtime_context>extra</runtime_context>")]),
+        Message("assistant", [], tool_calls=[second]),
+        result_message(second.id, ToolExecutionResult(success=True, output="second")),
+        Message("assistant", [TextPart("done")]),
+    ]
+
+    traces = tool_traces_from_messages(messages, task_message_start=2)
+
+    assert [trace.tool_call.id for trace in traces] == ["first", "second"]
+    assert tool_call_count_from_messages(messages, task_message_start=2) == 2
+
+
 def test完整messages轨迹快照不受原tool_call后续修改():
     call = ToolCall(
         id="call-1",
@@ -209,11 +230,11 @@ def test完整messages无效工具轨迹fail_closed(messages, message):
 
 def test_turn_state失败清理重复开始与多轮隔离():
     state = SkillTurnState()
-    state.start(UserInputEvent(correlation_id="same", prompt="old"))
-    state.start(UserInputEvent(correlation_id="other", prompt="other"))
+    state.start(UserInputEvent(task_id="same", prompt="old"))
+    state.start(UserInputEvent(task_id="other", prompt="other"))
 
     assert (
-        state.start(UserInputEvent(correlation_id="same", prompt="new"))
+        state.start(UserInputEvent(task_id="same", prompt="new"))
         is False
     )
     same = state.pop_completed("same", completed_messages())
@@ -224,15 +245,15 @@ def test_turn_state失败清理重复开始与多轮隔离():
     assert state.pop_completed("same", completed_messages()) is None
 
 
-@pytest.mark.parametrize("correlation_id", [None, "", "   "])
-def test_turn_state空白correlation_id统一忽略(correlation_id):
+@pytest.mark.parametrize("task_id", [None, "", "   "])
+def test_turn_state空白task_id统一忽略(task_id):
     state = SkillTurnState()
     input_event = UserInputEvent(
-        correlation_id=correlation_id,
+        task_id=task_id,
         prompt="missing id",
     )
 
     assert state.start(input_event) is False
-    assert state.set_matched_skills(correlation_id, []) is False
-    assert state.pop_completed(correlation_id, completed_messages()) is None
-    assert state.discard(correlation_id) is False
+    assert state.set_matched_skills(task_id, []) is False
+    assert state.pop_completed(task_id, completed_messages()) is None
+    assert state.discard(task_id) is False

@@ -33,7 +33,10 @@ class WelcomeMessage(Vertical):
             classes="welcome-workspace",
         )
         yield Static(
-            "Enter submit · Shift+Enter/Ctrl+J newline · Ctrl+C clear/restore/exit",
+            (
+                "Enter submit · Shift+Enter/Ctrl+J newline · "
+                "Ctrl+C clear/restore/cancel/exit"
+            ),
             markup=False,
             classes="welcome-help",
         )
