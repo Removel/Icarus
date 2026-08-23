@@ -8,6 +8,19 @@
   "skill": {
     "minimum_content_score": 0.8
   },
+  "runtime": {
+    "plugin_dirs": [],
+    "plugin_config": {},
+    "required_plugin_ids": [
+      "persistence",
+      "builtin-tools",
+      "agent",
+      "user-input",
+      "skill",
+      "blackboard",
+      "output-bridge"
+    ]
+  },
   "model_settings": {
     "thinking": {
       "model_name": "deepseek-v4-pro",

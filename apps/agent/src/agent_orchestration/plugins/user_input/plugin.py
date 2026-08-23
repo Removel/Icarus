@@ -19,6 +19,7 @@ from apps.agent.src.agent_orchestration.plugins.user_input.events import (
 )
 from apps.agent.src.agent_orchestration.plugins.persistence import PersistenceSession
 from apps.agent.src.agent_orchestration.run_control import (
+    TaskCancelRequestedEvent,
     TaskChannelRegistry,
     TaskChannelStatus,
 )
@@ -59,6 +60,7 @@ class UserInputPlugin(BasePlugin):
         self._active_status: str | None = None
         self._outstanding_count = 0
         self._submit_lock = asyncio.Lock()
+        self._accepting_submissions = False
 
     async def start(self) -> None:
         if self._worker is not None and not self._worker.done():
@@ -67,13 +69,18 @@ class UserInputPlugin(BasePlugin):
             self._run_queue(),
             name=f"user-input:{self.plugin_id}",
         )
+        self._accepting_submissions = True
 
     async def submit(
         self,
         prompt: str,
         input_images: list[ImagePart] | None = None,
     ) -> InputAccepted:
-        if self._worker is None or self._worker.done():
+        if (
+            not self._accepting_submissions
+            or self._worker is None
+            or self._worker.done()
+        ):
             raise RuntimeError("UserInputPlugin is not running")
         async with self._submit_lock:
             task_id = uuid4().hex
@@ -123,7 +130,18 @@ class UserInputPlugin(BasePlugin):
         if self._active_completed is not None:
             await self._active_completed.wait()
 
+    async def quiesce(self) -> None:
+        self._accepting_submissions = False
+        if self._active_task_id is not None:
+            await self.publish(
+                TaskCancelRequestedEvent(
+                    task_id=self._active_task_id,
+                    reason="runtime_stopping",
+                )
+            )
+
     async def stop(self) -> None:
+        self._accepting_submissions = False
         if self._worker is not None:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)

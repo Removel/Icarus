@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "plugin_id": "user-input",
+  "plugin_version": "1.0.0",
+  "entrypoint": "apps.agent.src.agent_orchestration.plugins.user_input.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [
+    {"plugin_id": "persistence", "capability_id": "runtime", "version_spec": ">=1,<2"},
+    {"plugin_id": "persistence", "capability_id": "session", "version_spec": ">=1,<2"},
+    {"plugin_id": "agent", "capability_id": "task_channels", "version_spec": ">=1,<2"}
+  ],
+  "provided_capabilities": [
+    {"capability_id": "input", "version": "1.0.0"}
+  ],
+  "provided_tools": [],
+  "published_events": [
+    "apps.agent.src.agent_orchestration.plugins.user_input.events.InputQueuedEvent",
+    "apps.agent.src.agent_orchestration.plugins.user_input.events.InputStartedEvent",
+    "apps.agent.src.agent_orchestration.plugins.user_input.events.UserInputEvent",
+    "apps.agent.src.agent_orchestration.plugins.user_input.events.InputFinishedEvent",
+    "apps.agent.src.agent_orchestration.run_control.events.TaskCancelRequestedEvent"
+  ],
+  "consumed_events": [
+    "apps.agent.src.agent_orchestration.capability.types.AgentCompletedEvent",
+    "apps.agent.src.agent_orchestration.capability.types.AgentErrorEvent",
+    "apps.agent.src.agent_orchestration.capability.types.AgentCancelledEvent"
+  ],
+  "state_scopes": []
+}

@@ -1,6 +1,7 @@
 """Plugin Runtime 的统一组装与生命周期入口。"""
 
 import asyncio
+from collections.abc import Iterable
 
 from apps.agent.src.agent_orchestration.hooks.hook_dispatcher import HookDispatcher
 from apps.agent.src.agent_orchestration.plugin_runtime.base_plugin import BasePlugin
@@ -56,7 +57,13 @@ class PluginManager:
     def is_running(self) -> bool:
         return self._started
 
-    def register(self, plugin: BasePlugin) -> PluginRuntime:
+    def register(
+        self,
+        plugin: BasePlugin,
+        *,
+        published_event_types: Iterable[type] | None = None,
+        consumed_event_types: Iterable[type] | None = None,
+    ) -> PluginRuntime:
         if self._started:
             raise RuntimeError("Plugins must be registered before manager start")
         self.registry.register(plugin)
@@ -65,6 +72,7 @@ class PluginManager:
                 plugin,
                 self.registry,
                 inbox_maxsize=self.inbox_maxsize,
+                consumed_event_types=consumed_event_types,
             )
         else:
             runtime = ObservablePluginRuntime(
@@ -72,10 +80,23 @@ class PluginManager:
                 self.registry,
                 inbox_maxsize=self.inbox_maxsize,
                 dispatcher=self.hook_dispatcher,
+                consumed_event_types=consumed_event_types,
             )
         self._runtimes[plugin.plugin_id] = runtime
 
+        allowed = (
+            None
+            if published_event_types is None
+            else frozenset(published_event_types)
+        )
+
         async def publish(event) -> None:
+            if allowed is not None and type(event) not in allowed:
+                raise RuntimeError(
+                    "Plugin published an undeclared Event: "
+                    f"plugin_id={plugin.plugin_id} "
+                    f"event={type(event).__module__}.{type(event).__name__}"
+                )
             await self.event_bus.publish(plugin.plugin_id, event)
 
         plugin.bind_publisher(publish)
@@ -95,12 +116,20 @@ class PluginManager:
         subscriber_plugin_id: str,
         source_plugin_id: str,
     ) -> Subscription:
+        if self._started:
+            raise RuntimeError(
+                "Subscriptions must be registered before manager start"
+            )
         return self.registry.subscribe(
             subscriber_plugin_id=subscriber_plugin_id,
             source_plugin_id=source_plugin_id,
         )
 
     def unsubscribe(self, subscription_id: str) -> Subscription:
+        if self._started:
+            raise RuntimeError(
+                "Subscriptions cannot be removed while manager is running"
+            )
         return self.registry.unsubscribe(subscription_id)
 
     def get_runtime(self, plugin_id: str) -> PluginRuntime:
@@ -134,15 +163,55 @@ class PluginManager:
         else:
             self._started = True
 
-    async def stop(self, timeout: float | None = None) -> None:
+    async def start_plugin(self, plugin_id: str) -> None:
+        if self._started:
+            raise RuntimeError("Plugins must start before manager activation")
+        await self.get_runtime(plugin_id).start()
+
+    async def quiesce(self) -> None:
+        if not self._started:
+            return
+        errors: list[BaseException] = []
+        for runtime in reversed(tuple(self._runtimes.values())):
+            try:
+                await runtime.plugin.quiesce()
+            except BaseException as error:
+                errors.append(error)
+        if errors:
+            raise RuntimeError(
+                "Plugin Runtime quiesce failed: "
+                + "; ".join(str(error) for error in errors)
+            )
+
+    async def drain(self) -> None:
+        if not self._started:
+            return
+        await self._drain_until_idle()
+
+    async def stop(
+        self,
+        timeout: float | None = None,
+        *,
+        drain: bool = True,
+    ) -> None:
         if not self._started:
             return
 
         async def drain_and_stop() -> None:
-            await self._drain_until_idle()
+            if drain:
+                await self._drain_until_idle()
             await self.event_bus.stop(drain=False)
-            for runtime in self._runtimes.values():
-                await runtime.stop(drain=False)
+            errors: list[BaseException] = []
+            for runtime in reversed(tuple(self._runtimes.values())):
+                try:
+                    await runtime.stop(drain=False)
+                except BaseException as error:
+                    errors.append(error)
+            if errors:
+                raise RuntimeError(
+                    "Plugin Runtime cleanup failed: "
+                    + "; ".join(str(error) for error in errors)
+                )
 
         try:
             if timeout is None:
@@ -151,8 +220,17 @@ class PluginManager:
                 await asyncio.wait_for(drain_and_stop(), timeout=timeout)
         except TimeoutError:
             await self.event_bus.stop(drain=False)
-            for runtime in self._runtimes.values():
-                await runtime.stop(drain=False)
+            errors: list[BaseException] = []
+            for runtime in reversed(tuple(self._runtimes.values())):
+                try:
+                    await runtime.stop(drain=False)
+                except BaseException as error:
+                    errors.append(error)
+            if errors:
+                raise RuntimeError(
+                    "Plugin Runtime timeout cleanup failed: "
+                    + "; ".join(str(error) for error in errors)
+                )
             raise
         finally:
             self._started = False
@@ -160,9 +238,20 @@ class PluginManager:
     async def _drain_until_idle(self) -> None:
         while True:
             await self.event_bus.drain()
-            await asyncio.gather(
-                *(runtime.drain() for runtime in self._runtimes.values())
+            results = await asyncio.gather(
+                *(runtime.drain() for runtime in self._runtimes.values()),
+                return_exceptions=True,
             )
+            errors = [
+                result
+                for result in results
+                if isinstance(result, BaseException)
+            ]
+            if errors:
+                raise RuntimeError(
+                    "Plugin Runtime drain failed: "
+                    + "; ".join(str(error) for error in errors)
+                )
             if self.event_bus.pending_count == 0 and all(
                 runtime.pending_count == 0
                 for runtime in self._runtimes.values()

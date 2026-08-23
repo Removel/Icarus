@@ -106,6 +106,16 @@ class AgentPlugin(BasePlugin):
                 return_exceptions=True,
             )
 
+    async def quiesce(self) -> None:
+        for task_id in self.task_channels.active_task_ids:
+            self.handle_task_operation(
+                "runtime",
+                TaskCancelRequestedEvent(
+                    task_id=task_id,
+                    reason="runtime_stopping",
+                ),
+            )
+
     async def stop(self) -> None:
         tasks = [run.execution_task for run in self._active_runs.values()]
         for task in tasks:
@@ -113,6 +123,7 @@ class AgentPlugin(BasePlugin):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._active_runs.clear()
+        await self.agent_factory.aclose()
 
     def handle_task_operation(
         self,

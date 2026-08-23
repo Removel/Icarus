@@ -1,6 +1,6 @@
 """汇聚 Agent 上下文的 BlackboardPlugin。"""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
@@ -24,7 +24,12 @@ from apps.agent.src.agent_orchestration.plugins.user_input.events import (
     InputFinishedEvent,
     UserInputEvent,
 )
-from apps.agent.src.model_provider.types import Message, TextPart
+from apps.agent.src.model_provider.types import (
+    ImagePart,
+    Message,
+    TextPart,
+    ToolCall,
+)
 
 
 class BlackboardPlugin(BasePlugin):
@@ -138,6 +143,29 @@ class BlackboardPlugin(BasePlugin):
     def get_messages(self) -> list[Message]:
         return list(self._messages)
 
+    async def restore_workspace_state(
+        self, state: Mapping[str, object], *, state_version: int
+    ) -> None:
+        del state, state_version
+
+    async def restore_session_state(
+        self, state: Mapping[str, object], *, state_version: int
+    ) -> None:
+        if state_version != 1:
+            raise ValueError("Unsupported Blackboard session state version")
+        messages = state.get("messages")
+        if not isinstance(messages, list):
+            raise ValueError("Blackboard session state requires messages")
+        self._messages = [_deserialize_message(item) for item in messages]
+
+    async def snapshot_workspace_state(self) -> Mapping[str, object] | None:
+        return None
+
+    async def snapshot_session_state(self) -> Mapping[str, object] | None:
+        return {
+            "messages": [_serialize_message(item) for item in self._messages]
+        }
+
     async def _publish_if_ready(self, state: BlackboardTaskState) -> None:
         if state.context_published or not state.is_context_ready(
             self.required_context_sources
@@ -213,3 +241,84 @@ class BlackboardPlugin(BasePlugin):
                 f"Blackboard Event requires task_id: {type(event).__name__}"
             )
         return event.task_id
+
+
+def _serialize_message(message: Message) -> dict[str, object]:
+    content = []
+    for part in message.content:
+        if isinstance(part, TextPart):
+            content.append({"type": "text", "text": part.text})
+        elif isinstance(part, ImagePart):
+            content.append(
+                {
+                    "type": "image",
+                    "url": part.url,
+                    "media_type": part.media_type,
+                }
+            )
+        else:
+            raise TypeError(f"Unsupported Message content: {type(part).__name__}")
+    return {
+        "role": message.role,
+        "content": content,
+        "tool_calls": [
+            {
+                "id": call.id,
+                "name": call.name,
+                "arguments": dict(call.arguments),
+            }
+            for call in message.tool_calls
+        ],
+        "tool_call_id": message.tool_call_id,
+    }
+
+
+def _deserialize_message(value: object) -> Message:
+    if not isinstance(value, Mapping):
+        raise ValueError("Blackboard message state must be an object")
+    content_value = value.get("content")
+    calls_value = value.get("tool_calls", [])
+    if not isinstance(content_value, list) or not isinstance(calls_value, list):
+        raise ValueError("Blackboard message state has invalid collections")
+    content = []
+    for part in content_value:
+        if not isinstance(part, Mapping):
+            raise ValueError("Blackboard content part must be an object")
+        if part.get("type") == "text":
+            content.append(TextPart(str(part.get("text", ""))))
+        elif part.get("type") == "image":
+            content.append(
+                ImagePart(
+                    str(part.get("url", "")),
+                    (
+                        str(part["media_type"])
+                        if part.get("media_type") is not None
+                        else None
+                    ),
+                )
+            )
+        else:
+            raise ValueError("Blackboard content part type is invalid")
+    tool_calls = []
+    for call in calls_value:
+        if not isinstance(call, Mapping) or not isinstance(
+            call.get("arguments"), Mapping
+        ):
+            raise ValueError("Blackboard ToolCall state is invalid")
+        tool_calls.append(
+            ToolCall(
+                str(call.get("id", "")),
+                str(call.get("name", "")),
+                dict(call["arguments"]),
+            )
+        )
+    return Message(
+        role=value.get("role"),
+        content=content,
+        tool_calls=tool_calls,
+        tool_call_id=(
+            str(value["tool_call_id"])
+            if value.get("tool_call_id") is not None
+            else None
+        ),
+    )

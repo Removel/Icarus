@@ -52,6 +52,12 @@ class MetadataStore:
         session["status"] = status
         self._write_json(path, session)
 
+    def read_json(self, path: Path) -> dict | None:
+        return self._read_json(path)
+
+    def write_json(self, path: Path, data: dict) -> None:
+        self._write_json(path, data)
+
     @staticmethod
     def _read_json(path: Path) -> dict | None:
         if not path.exists():

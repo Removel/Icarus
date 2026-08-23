@@ -135,7 +135,6 @@ def test_stream_完成多轮工具调用且不流出reasoning():
     )
     assert started.tool_call.arguments == {"value": "hello"}
     assert completed.result.output == {"echo": "hello"}
-
     final = events[-1]
     assert isinstance(final, AgentCompletedEvent)
     assert final.response.message.content == [TextPart("最终回答")]
@@ -158,6 +157,63 @@ def test_stream_完成多轮工具调用且不流出reasoning():
     tool_message = llm.calls[1][0][-1]
     assert json.loads(tool_message.content[0].text)["success"] is True
 
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_stream_tool透传当前task身份和消息快照(async_mode):
+    received = {}
+
+    class ContextTool(EchoTool):
+        def invoke(
+            self,
+            arguments,
+            *,
+            task_id=None,
+            run_id=None,
+            step=None,
+            task_messages=(),
+        ):
+            received.update(
+                task_id=task_id,
+                run_id=run_id,
+                step=step,
+                task_messages=task_messages,
+            )
+            return super().invoke(arguments)
+
+    registry = ToolRegistry()
+    registry.register(ContextTool())
+    channel = active_channel()
+    agent = ReActAgent(
+        "thinking",
+        StreamQueueLLM([tool_stream(), final_stream()]),
+        ToolExecutor(registry),
+    )
+    if async_mode:
+        async def consume():
+            return [
+                event
+                async for event in agent.astream(
+                    "", [], "original", tools=["echo"],
+                    run_control=channel,
+                )
+            ]
+
+        asyncio.run(consume())
+    else:
+        list(
+            agent.stream(
+                "", [], "original", tools=["echo"],
+                run_control=channel,
+            )
+        )
+
+    assert received["task_id"] == "task-1"
+    assert received["run_id"] == "run-1"
+    assert received["step"] == 1
+    assert [message.role for message in received["task_messages"]] == [
+        "user",
+        "assistant",
+    ]
 
 def test_astream_与同步流保持相同事件语义():
     agent, _ = make_agent([tool_stream(), final_stream()])

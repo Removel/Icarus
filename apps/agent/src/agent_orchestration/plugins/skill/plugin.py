@@ -8,6 +8,7 @@ import json
 import logging
 import time
 
+from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
 )
@@ -87,6 +88,7 @@ class SkillPlugin(BasePlugin):
         coordinator: WorkspaceMaintenanceCoordinator | None = None,
         turn_state: SkillTurnState | None = None,
         hook_dispatcher: HookDispatcher | None = None,
+        maintenance_agent_factory: AgentFactory | None = None,
         maintenance_tool_threshold: int = 10,
         retrieval_timeout_seconds: float = 30.0,
         logger: logging.Logger | None = None,
@@ -122,6 +124,7 @@ class SkillPlugin(BasePlugin):
         self.coordinator = coordinator
         self.turn_state = turn_state or SkillTurnState()
         self.hook_dispatcher = hook_dispatcher
+        self.maintenance_agent_factory = maintenance_agent_factory
         self.maintenance_tool_threshold = maintenance_tool_threshold
         self.retrieval_timeout_seconds = retrieval_timeout_seconds
         self.logger = logger or logging.getLogger(__name__)
@@ -260,6 +263,7 @@ class SkillPlugin(BasePlugin):
             )
 
     async def stop(self) -> None:
+        errors: list[BaseException] = []
         for task in tuple(self._maintenance_tasks):
             task.cancel()
         if self._maintenance_tasks:
@@ -275,11 +279,27 @@ class SkillPlugin(BasePlugin):
             )
         try:
             await self.embedding.aclose()
-        finally:
-            usage_store = self.usage_store
-            self.usage_store = None
-            if usage_store is not None:
+        except BaseException as error:
+            errors.append(error)
+        usage_store = self.usage_store
+        self.usage_store = None
+        if usage_store is not None:
+            try:
                 await asyncio.to_thread(usage_store.close)
+            except BaseException as error:
+                errors.append(error)
+        maintenance_agent_factory = self.maintenance_agent_factory
+        self.maintenance_agent_factory = None
+        if maintenance_agent_factory is not None:
+            try:
+                await maintenance_agent_factory.aclose()
+            except BaseException as error:
+                errors.append(error)
+        if errors:
+            raise RuntimeError(
+                "Skill resources failed to close: "
+                + "; ".join(str(error) for error in errors)
+            )
 
     async def _retrieve_and_publish(
         self,

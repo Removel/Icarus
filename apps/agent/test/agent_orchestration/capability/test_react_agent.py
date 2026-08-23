@@ -133,6 +133,56 @@ def test_react_agent_完成toolcall回填并继续对话():
     }
 
 
+def test_react_agent向tool透传当前task身份和消息快照():
+    received = {}
+
+    class ContextAwareTool(EchoTool):
+        def invoke(
+            self,
+            arguments,
+            *,
+            task_id=None,
+            run_id=None,
+            step=None,
+            task_messages=(),
+        ):
+            received.update(
+                task_id=task_id,
+                run_id=run_id,
+                step=step,
+                task_messages=task_messages,
+            )
+            return super().invoke(arguments)
+
+    registry = ToolRegistry()
+    registry.register(ContextAwareTool())
+    channel = active_channel()
+    agent = ReActAgent(
+        "thinking",
+        QueueLLM([tool_response(), final_response()]),
+        ToolExecutor(registry),
+    )
+
+    agent.invoke(
+        "system",
+        [Message("user", [TextPart("session history")])],
+        "current task",
+        tools=["echo"],
+        run_control=channel,
+    )
+
+    assert received["task_id"] == "task-1"
+    assert received["run_id"] == "run-1"
+    assert received["step"] == 1
+    task_messages = received["task_messages"]
+    assert isinstance(task_messages, tuple)
+    assert [message.role for message in task_messages] == [
+        "user",
+        "assistant",
+    ]
+    assert task_messages[0].content == [TextPart("current task")]
+
+
 def test_react_agent_task_messages只包含当前task完整轨迹():
     agent, _ = make_agent([tool_response(), final_response()])
 

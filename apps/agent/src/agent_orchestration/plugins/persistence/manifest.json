@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "plugin_id": "persistence",
+  "plugin_version": "1.0.0",
+  "entrypoint": "apps.agent.src.agent_orchestration.plugins.persistence.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [
+    {"capability_id": "runtime", "version": "1.0.0"},
+    {"capability_id": "session", "version": "1.0.0"},
+    {"capability_id": "state_store", "version": "1.0.0"},
+    {"capability_id": "redactor", "version": "1.0.0"}
+  ],
+  "provided_tools": [],
+  "published_events": [],
+  "consumed_events": [],
+  "state_scopes": []
+}

@@ -1,6 +1,6 @@
 import enum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import pydantic
 
@@ -33,6 +33,24 @@ class SkillSettings(pydantic.BaseModel):
     minimum_content_score: float = pydantic.Field(default=0.8, ge=0, le=1)
 
 
+class RuntimeSettings(pydantic.BaseModel):
+    plugin_dirs: list[Path] = pydantic.Field(default_factory=list)
+    plugin_config: dict[str, dict[str, Any]] = pydantic.Field(
+        default_factory=dict
+    )
+    required_plugin_ids: list[str] = pydantic.Field(
+        default_factory=lambda: [
+            "persistence",
+            "builtin-tools",
+            "agent",
+            "user-input",
+            "skill",
+            "blackboard",
+            "output-bridge",
+        ]
+    )
+
+
 LLMProtocol = Literal["openai", "anthropic"]
 LLMRole = Literal["thinking", "perception"]
 
@@ -45,5 +63,6 @@ class ConfigModel(pydantic.BaseModel):
     icarus_data_dir: Path | None = None
     embedding: EmbeddingSettings
     skill: SkillSettings = pydantic.Field(default_factory=SkillSettings)
+    runtime: RuntimeSettings = pydantic.Field(default_factory=RuntimeSettings)
     model_settings: ModelSettings
     use_protocol: LLMProtocol = "openai"

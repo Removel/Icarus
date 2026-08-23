@@ -6,6 +6,7 @@ from typing import Any
 from apps.agent.src.agent_orchestration.tools.base_tool import BaseTool
 from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolDefinition
+from apps.agent.src.model_provider.types import Message
 
 
 class ReadTool(BaseTool):
@@ -27,7 +28,16 @@ class ReadTool(BaseTool):
             },
         )
 
-    def invoke(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+    def invoke(
+        self,
+        arguments: dict[str, Any],
+        *,
+        task_id: str | None = None,
+        run_id: str | None = None,
+        step: int | None = None,
+        task_messages: tuple[Message, ...] = (),
+    ) -> ToolExecutionResult:
+        del task_id, run_id, step, task_messages
         path = Path(self._required_string(arguments, "path"))
         try:
             content = path.read_text(encoding="utf-8")

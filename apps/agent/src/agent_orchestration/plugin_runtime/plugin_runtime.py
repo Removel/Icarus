@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime
 import logging
+from collections.abc import Iterable
 
 from apps.agent.src.agent_orchestration.hooks.hook_context import hook_context
 from apps.agent.src.agent_orchestration.plugin_runtime.base_plugin import BasePlugin
@@ -27,6 +28,7 @@ class PluginRuntime:
         plugin: BasePlugin,
         registry: PluginRegistry,
         inbox_maxsize: int = 0,
+        consumed_event_types: Iterable[type] | None = None,
     ) -> None:
         self.plugin = plugin
         self.registry = registry
@@ -41,6 +43,11 @@ class PluginRuntime:
         self._failed_count = 0
         self._last_event_at: datetime | None = None
         self._last_error: str | None = None
+        self._consumed_event_types = (
+            None
+            if consumed_event_types is None
+            else frozenset(consumed_event_types)
+        )
 
     @property
     def plugin_id(self) -> str:
@@ -78,6 +85,11 @@ class PluginRuntime:
     async def enqueue(self, published_event: PublishedEvent) -> bool:
         if not self._accepting or self.status != PluginStatus.RUNNING:
             raise RuntimeError(f"Plugin is not accepting events: {self.plugin_id}")
+        if (
+            self._consumed_event_types is not None
+            and type(published_event.event) not in self._consumed_event_types
+        ):
+            return False
         if not self.plugin.accepts_event(
             published_event.source_plugin_id,
             published_event.event,
@@ -95,7 +107,10 @@ class PluginRuntime:
         if self.status == PluginStatus.STOPPED:
             return
         if self.status == PluginStatus.CREATED:
-            self.registry.set_status(self.plugin_id, PluginStatus.STOPPED)
+            try:
+                await self.plugin.stop()
+            finally:
+                self.registry.set_status(self.plugin_id, PluginStatus.STOPPED)
             return
         if self.status not in {
             PluginStatus.RUNNING,

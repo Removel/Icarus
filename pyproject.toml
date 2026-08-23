@@ -36,4 +36,5 @@ namespaces = true
 
 [tool.setuptools.package-data]
 "apps.agent" = ["settings.json"]
+"apps.agent.src.agent_orchestration.plugins" = ["*/manifest.json"]
 "apps.tui.src" = ["styles.tcss"]

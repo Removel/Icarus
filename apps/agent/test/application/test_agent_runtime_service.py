@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -7,8 +8,10 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentResponse,
     AgentTextDeltaEvent,
 )
+from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
 from apps.agent.src.agent_orchestration.run_control import (
     TaskCancelResultEvent,
+    TaskContextInputEvent,
     TaskContextInputResultEvent,
 )
 from apps.agent.src.agent_orchestration.plugins import (
@@ -79,6 +82,23 @@ class AgentStub:
         )
 
 
+class BlockingAgentStub:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def astream(self, **kwargs):
+        del kwargs
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        if False:
+            yield
+
+
 class EmbeddingStub:
     def __init__(self) -> None:
         self.query_calls = []
@@ -129,20 +149,53 @@ async def collect_task_events(
             return events
 
 
+def test_runtime_service由所属plugin创建并持有agent_factory(tmp_path):
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+        )
+        assert not hasattr(service, "agent_factory")
+        assert not hasattr(service, "maintenance_agent_factory")
+
+        await service.start()
+        agent_plugin = service.runtime_host.get_plugin("agent")
+        skill_plugin = service.runtime_host.get_plugin("skill")
+        agent_factory = agent_plugin.agent_factory
+        maintenance_factory = skill_plugin.maintenance_agent_factory
+
+        assert isinstance(agent_factory, AgentFactory)
+        assert agent_factory.tool_registry is service.tool_registry
+        assert isinstance(maintenance_factory, AgentFactory)
+        assert maintenance_factory is not agent_factory
+
+        await service.stop(timeout=1)
+        return skill_plugin
+
+    skill_plugin = asyncio.run(run())
+
+    assert skill_plugin.maintenance_agent_factory is None
+
+
 def test_runtime_service_组装固定session并转发完整任务事件(tmp_path):
     async def run():
         maintenance_factory = MaintenanceFactoryStub()
         coordinator = WorkspaceMaintenanceCoordinator()
+        config = make_config(tmp_path / "data")
+        config.runtime.plugin_config["skill"] = {
+            "maintenance_agent_factory": maintenance_factory,
+            "maintenance_coordinator": coordinator,
+        }
         service = AgentRuntimeService(
             workspace_path=tmp_path,
             session_id="session-1",
-            config=make_config(tmp_path / "data"),
-            maintenance_agent_factory=maintenance_factory,
-            maintenance_coordinator=coordinator,
+            config=config,
         )
         agent = AgentStub()
-        service.agent_factory.get_agent = lambda model_role: agent
         await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
         first_subscription = service.subscribe_events()
         second_subscription = service.subscribe_events()
         accepted = await service.submit("hello")
@@ -208,6 +261,63 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
     assert skill_runtime.processed_count == 2
 
 
+def test_runtime_service由manifest生成冻结运行图并保存退出快照(tmp_path):
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            session_id="graph-session",
+            config=make_config(tmp_path / "data"),
+        )
+        await service.start()
+        graph = service.runtime_host.graph_snapshot
+        diagnostics = tuple(service.runtime_host.diagnostics.items)
+        await service.stop(timeout=1)
+        snapshot_path = (
+            tmp_path
+            / "data"
+            / "workspaces"
+            / service.persistence.workspace_identity.workspace_key
+            / "sessions"
+            / "graph-session"
+            / "runtime-snapshot.json"
+        )
+        return graph, diagnostics, snapshot_path
+
+    graph, diagnostics, snapshot_path = asyncio.run(run())
+
+    assert graph is not None
+    assert {plugin.plugin_id for plugin in graph.plugins} == {
+        "persistence",
+        "builtin-tools",
+        "agent",
+        "user-input",
+        "skill",
+        "blackboard",
+        "output-bridge",
+    }
+    assert {name for name, owner in graph.tools} == {
+        "read",
+        "write",
+        "insert",
+        "bash",
+    }
+    assert all(owner == "builtin-tools" for _, owner in graph.tools)
+    assert ("skill", "agent") in graph.subscriptions
+    assert graph.start_order[0] == "persistence"
+    assert graph.stop_order[-1] == "persistence"
+    blackboard = next(
+        plugin for plugin in graph.plugins if plugin.plugin_id == "blackboard"
+    )
+    assert blackboard.state_scopes == ("session",)
+    assert blackboard.session_state_version == 1
+    assert ("user-input", "agent", "task_channels") in (
+        graph.capability_bindings
+    )
+    assert graph.diagnostics == ()
+    assert not [item for item in diagnostics if item.level == "error"]
+    assert snapshot_path.is_file()
+
+
 def test_runtime_service_未启动时拒绝提交和订阅事件(tmp_path):
     async def run():
         service = AgentRuntimeService(
@@ -243,8 +353,10 @@ def test_runtime_service准备阶段取消task(tmp_path):
             config=make_config(tmp_path / "data"),
         )
         agent = AgentStub()
-        service.agent_factory.get_agent = lambda model_role: agent
         await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
         subscription = service.subscribe_events()
 
         accepted = await service.submit("hello")
@@ -283,6 +395,68 @@ def test_runtime_service_停止后再次启动给出明确生命周期错误(tmp
     asyncio.run(run())
 
 
+def test_runtime_service停止时复用task取消收束活动agent(tmp_path):
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+        )
+        agent = BlockingAgentStub()
+        await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
+        await service.submit("keep running")
+        await asyncio.wait_for(agent.started.wait(), timeout=1)
+        assert service.runtime_host.status == "running"
+
+        await service.stop(timeout=1)
+        return service, agent
+
+    service, agent = asyncio.run(run())
+
+    assert agent.cancelled is True
+    assert service.is_running is False
+    assert service.persistence.is_running is False
+
+
+def test_runtime_service由manifest接通skill运行中介入事件(tmp_path):
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            config=make_config(tmp_path / "data"),
+        )
+        agent = BlockingAgentStub()
+        await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
+        subscription = service.subscribe_events()
+        accepted = await service.submit("keep running")
+        await asyncio.wait_for(agent.started.wait(), timeout=1)
+        request = TaskContextInputEvent(
+            task_id=accepted.task_id,
+            content="skill job completed",
+        )
+        await service.runtime_host.get_plugin("skill").publish(request)
+        while True:
+            source, event = await asyncio.wait_for(
+                subscription.next_event(), timeout=1
+            )
+            if isinstance(event, TaskContextInputResultEvent):
+                result = (source, event)
+                break
+        subscription.close()
+        await service.stop(timeout=1)
+        return request, result
+
+    request, (source, result) = asyncio.run(run())
+
+    assert source == "agent"
+    assert result.request_event_id == request.event_id
+    assert result.status == "accepted"
+
+
 def test_runtime_service_停止时关闭仍存活的输出订阅(tmp_path):
     async def run():
         service = AgentRuntimeService(
@@ -306,11 +480,14 @@ def test_runtime_service_停止时关闭仍存活的输出订阅(tmp_path):
 def test_runtime_service_start被取消时完成全部资源清理(tmp_path):
     async def run():
         maintenance_factory = MaintenanceFactoryStub()
+        config = make_config(tmp_path / "data")
+        config.runtime.plugin_config["skill"] = {
+            "maintenance_agent_factory": maintenance_factory,
+            "maintenance_coordinator": WorkspaceMaintenanceCoordinator(),
+        }
         service = AgentRuntimeService(
             workspace_path=tmp_path,
-            config=make_config(tmp_path / "data"),
-            maintenance_agent_factory=maintenance_factory,
-            maintenance_coordinator=WorkspaceMaintenanceCoordinator(),
+            config=config,
         )
         start_entered = asyncio.Event()
 
@@ -359,19 +536,22 @@ def test_runtime_service_usage_store初始化线程中取消仍关闭临时资�
         return store
 
     monkeypatch.setattr(
-        "apps.agent.src.application.agent_runtime_service.SkillUsageStore",
+        "apps.agent.src.agent_orchestration.plugins.skill.factory.SkillUsageStore",
         blocking_store,
     )
 
     async def run():
         embedding = EmbeddingStub()
         maintenance_factory = MaintenanceFactoryStub()
+        config = make_config(tmp_path / "data")
+        config.runtime.plugin_config["skill"] = {
+            "embedding": embedding,
+            "maintenance_agent_factory": maintenance_factory,
+            "maintenance_coordinator": WorkspaceMaintenanceCoordinator(),
+        }
         service = AgentRuntimeService(
             workspace_path=tmp_path,
-            config=make_config(tmp_path / "data"),
-            embedding=embedding,
-            maintenance_agent_factory=maintenance_factory,
-            maintenance_coordinator=WorkspaceMaintenanceCoordinator(),
+            config=config,
         )
         task = asyncio.create_task(service.start())
         assert await asyncio.to_thread(started.wait, 1) is True
@@ -392,21 +572,24 @@ def test_runtime_service_usage_store初始化线程中取消仍关闭临时资�
 
 def test_runtime_service_stop被取消时等待plugin清理后再报告取消(tmp_path):
     async def run():
+        config = make_config(tmp_path / "data")
+        config.runtime.plugin_config["skill"] = {
+            "maintenance_agent_factory": MaintenanceFactoryStub(),
+            "maintenance_coordinator": WorkspaceMaintenanceCoordinator(),
+        }
         service = AgentRuntimeService(
             workspace_path=tmp_path,
-            config=make_config(tmp_path / "data"),
-            maintenance_agent_factory=MaintenanceFactoryStub(),
-            maintenance_coordinator=WorkspaceMaintenanceCoordinator(),
+            config=config,
         )
         await service.start()
         entered = asyncio.Event()
         release = asyncio.Event()
         original_stop = service.plugin_manager.stop
 
-        async def blocking_stop(timeout=None):
+        async def blocking_stop(timeout=None, **kwargs):
             entered.set()
             await release.wait()
-            await original_stop(timeout=timeout)
+            await original_stop(timeout=timeout, **kwargs)
 
         service.plugin_manager.stop = blocking_stop
         stop_task = asyncio.create_task(service.stop(timeout=1))
@@ -439,7 +622,10 @@ def test_runtime_service_llm关闭失败时仍清理session和持久化(tmp_path
         async def fail_to_close():
             raise RuntimeError("close failed")
 
-        service.agent_factory.aclose = fail_to_close
+        agent_factory = service.runtime_host.get_plugin(
+            "agent"
+        ).agent_factory
+        agent_factory.aclose = fail_to_close
         with pytest.raises(RuntimeError, match="close failed"):
             await service.stop(timeout=1)
         return service
@@ -463,8 +649,10 @@ def test_runtime_service_由blackboard维护跨轮history并支持初始化消�
             initial_messages=restored,
         )
         agent = AgentStub()
-        service.agent_factory.get_agent = lambda model_role: agent
         await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
         subscription = service.subscribe_events()
 
         first = await service.submit("first")
@@ -495,6 +683,111 @@ def test_runtime_service_由blackboard维护跨轮history并支持初始化消�
     ]
 
 
+def test_runtime_service重启后从session快照恢复blackboard历史(tmp_path):
+    async def run_first(config):
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            session_id="restored-session",
+            config=config,
+        )
+        agent = AgentStub()
+        await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
+        subscription = service.subscribe_events()
+        accepted = await service.submit("first")
+        await collect_task_events(subscription, accepted.task_id)
+        subscription.close()
+        await service.stop(timeout=1)
+
+    async def run_second(config):
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            session_id="restored-session",
+            config=config,
+        )
+        agent = AgentStub()
+        await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
+        subscription = service.subscribe_events()
+        accepted = await service.submit("second")
+        await collect_task_events(subscription, accepted.task_id)
+        subscription.close()
+        await service.stop(timeout=1)
+        return agent.calls[0]["history_messages"]
+
+    config = make_config(tmp_path / "data")
+    asyncio.run(run_first(config))
+    restored = asyncio.run(run_second(config))
+
+    assert restored == [
+        Message("user", [TextPart("<user_request>\nfirst\n</user_request>")]),
+        Message("assistant", [TextPart("answer:<user_request>\nfirst\n</user_request>")]),
+    ]
+
+
+def test_runtime_service核心plugin状态版本不兼容时拒绝ready(tmp_path):
+    async def prepare(config):
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            session_id="invalid-state-session",
+            config=config,
+        )
+        await service.start()
+        await service.stop(timeout=1)
+        return service.persistence.workspace_identity.workspace_key
+
+    config = make_config(tmp_path / "data")
+    workspace_key = asyncio.run(prepare(config))
+    state_path = (
+        tmp_path
+        / "data"
+        / "workspaces"
+        / workspace_key
+        / "sessions"
+        / "invalid-state-session"
+        / "plugin-state"
+        / "blackboard.json"
+    )
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["state_version"] = 999
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    async def restart():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            session_id="invalid-state-session",
+            config=config,
+        )
+        with pytest.raises(RuntimeError, match="Invalid session state"):
+            await service.start()
+        return service
+
+    service = asyncio.run(restart())
+    assert service.is_running is False
+    assert service.persistence.is_running is False
+
+
+def test_runtime_service配置指定的核心plugin缺失时拒绝ready(tmp_path):
+    config = make_config(tmp_path / "data")
+    config.runtime.required_plugin_ids.append("required-external")
+
+    async def run():
+        service = AgentRuntimeService(
+            workspace_path=tmp_path, config=config
+        )
+        with pytest.raises(RuntimeError, match="required-external"):
+            await service.start()
+        return service
+
+    service = asyncio.run(run())
+    assert service.is_running is False
+    assert service.persistence.is_running is False
+
+
 def test_runtime_service_检索skill并注入blackboard_prompt(tmp_path):
     async def run():
         data_dir = tmp_path / "data"
@@ -509,14 +802,17 @@ def test_runtime_service_检索skill并注入blackboard_prompt(tmp_path):
             encoding="utf-8",
         )
         embedding = EmbeddingStub()
+        config = make_config(data_dir)
+        config.runtime.plugin_config["skill"] = {"embedding": embedding}
         service = AgentRuntimeService(
             workspace_path=tmp_path,
-            config=make_config(data_dir),
-            embedding=embedding,
+            config=config,
         )
         agent = AgentStub()
-        service.agent_factory.get_agent = lambda model_role: agent
         await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
         subscription = service.subscribe_events()
         accepted = await service.submit("create a reusable skill")
         await collect_task_events(subscription, accepted.task_id)
