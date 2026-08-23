@@ -1,6 +1,7 @@
 """无状态 ReAct Agent。"""
 
 from collections.abc import AsyncIterator, Iterator
+from copy import deepcopy
 import json
 
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
@@ -63,7 +64,8 @@ class ReActAgent(BaseAgent):
             input_images,
         )
         task_message_start = len(messages) - 1
-        tool_definitions = self._tool_executor.definitions(tools)
+        tool_executor = self._tool_executor.snapshot(tools)
+        tool_definitions = tool_executor.definitions()
         usage = Usage(input_tokens=0, output_tokens=0)
         has_usage = False
         reasoning_parts: list[str] = []
@@ -102,13 +104,18 @@ class ReActAgent(BaseAgent):
                     task_message_start,
                 )
 
-            for batch in self._tool_executor.build_batches(
+            for batch in tool_executor.build_batches(
                 response.message.tool_calls
             ):
                 self._raise_if_cancelled(run_control)
+                execution = self._tool_execution(
+                    messages, run_control, steps, task_message_start
+                )
                 results_by_id = {
                     tool_call.id: result
-                    for tool_call, result in self._tool_executor.iter_completed(batch)
+                    for tool_call, result in tool_executor.iter_completed(
+                        batch, **execution
+                    )
                 }
                 for tool_call in batch:
                     messages.append(
@@ -139,7 +146,8 @@ class ReActAgent(BaseAgent):
             input_images,
         )
         task_message_start = len(messages) - 1
-        tool_definitions = self._tool_executor.definitions(tools)
+        tool_executor = self._tool_executor.snapshot(tools)
+        tool_definitions = tool_executor.definitions()
         usage = Usage(input_tokens=0, output_tokens=0)
         has_usage = False
         reasoning_parts: list[str] = []
@@ -181,13 +189,16 @@ class ReActAgent(BaseAgent):
                     task_message_start,
                 )
 
-            for batch in self._tool_executor.build_batches(
+            for batch in tool_executor.build_batches(
                 response.message.tool_calls
             ):
                 self._raise_if_cancelled(run_control)
+                execution = self._tool_execution(
+                    messages, run_control, steps, task_message_start
+                )
                 results_by_id: dict[str, ToolExecutionResult] = {}
-                async for tool_call, result in self._tool_executor.aiter_completed(
-                    batch
+                async for tool_call, result in tool_executor.aiter_completed(
+                    batch, **execution
                 ):
                     results_by_id[tool_call.id] = result
                 for tool_call in batch:
@@ -219,7 +230,8 @@ class ReActAgent(BaseAgent):
             input_images,
         )
         task_message_start = len(messages) - 1
-        tool_definitions = self._tool_executor.definitions(tools)
+        tool_executor = self._tool_executor.snapshot(tools)
+        tool_definitions = tool_executor.definitions()
         usage = Usage(input_tokens=0, output_tokens=0)
         has_usage = False
         reasoning_parts: list[str] = []
@@ -281,7 +293,7 @@ class ReActAgent(BaseAgent):
                     return
 
                 self._raise_if_cancelled(run_control)
-                batches = self._tool_executor.build_batches(
+                batches = tool_executor.build_batches(
                     response.message.tool_calls
                 )
                 for batch_index, batch in enumerate(batches):
@@ -293,7 +305,12 @@ class ReActAgent(BaseAgent):
                         )
 
                     results_by_id: dict[str, ToolExecutionResult] = {}
-                    for tool_call, result in self._tool_executor.iter_completed(batch):
+                    execution = self._tool_execution(
+                        messages, run_control, steps, task_message_start
+                    )
+                    for tool_call, result in tool_executor.iter_completed(
+                        batch, **execution
+                    ):
                         results_by_id[tool_call.id] = result
                         is_last_result = len(results_by_id) == len(batch)
                         is_last_batch = batch_index == len(batches) - 1
@@ -339,7 +356,8 @@ class ReActAgent(BaseAgent):
             input_images,
         )
         task_message_start = len(messages) - 1
-        tool_definitions = self._tool_executor.definitions(tools)
+        tool_executor = self._tool_executor.snapshot(tools)
+        tool_definitions = tool_executor.definitions()
         usage = Usage(input_tokens=0, output_tokens=0)
         has_usage = False
         reasoning_parts: list[str] = []
@@ -401,7 +419,7 @@ class ReActAgent(BaseAgent):
                     return
 
                 self._raise_if_cancelled(run_control)
-                batches = self._tool_executor.build_batches(
+                batches = tool_executor.build_batches(
                     response.message.tool_calls
                 )
                 for batch_index, batch in enumerate(batches):
@@ -413,8 +431,11 @@ class ReActAgent(BaseAgent):
                         )
 
                     results_by_id: dict[str, ToolExecutionResult] = {}
-                    async for tool_call, result in self._tool_executor.aiter_completed(
-                        batch
+                    execution = self._tool_execution(
+                        messages, run_control, steps, task_message_start
+                    )
+                    async for tool_call, result in tool_executor.aiter_completed(
+                        batch, **execution
                     ):
                         results_by_id[tool_call.id] = result
                         is_last_result = len(results_by_id) == len(batch)
@@ -459,6 +480,26 @@ class ReActAgent(BaseAgent):
         content = [TextPart(input_prompt), *(input_images or [])]
         messages.append(Message("user", content))
         return messages
+
+    @staticmethod
+    def _tool_execution(
+        messages: list[Message],
+        run_control: AgentRunControl | None,
+        step: int,
+        task_message_start: int,
+    ) -> dict[str, object]:
+        return {
+            "task_id": (
+                run_control.task_id if run_control is not None else None
+            ),
+            "run_id": (
+                run_control.run_id if run_control is not None else None
+            ),
+            "step": step,
+            "task_messages": tuple(
+                deepcopy(messages[task_message_start:])
+            ),
+        }
 
     @staticmethod
     def _tool_result_message(

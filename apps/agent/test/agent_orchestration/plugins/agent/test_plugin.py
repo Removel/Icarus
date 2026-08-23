@@ -80,10 +80,14 @@ class StubAgentFactory:
     def __init__(self) -> None:
         self.agent = StubAgent()
         self.roles = []
+        self.closed = False
 
     def get_agent(self, model_role):
         self.roles.append(model_role)
         return self.agent
+
+    async def aclose(self):
+        self.closed = True
 
 
 class SinkPlugin(BasePlugin):
@@ -141,6 +145,7 @@ def test_agent_plugin_只消费context并原样发布stream_event():
     factory, sources, events = asyncio.run(run())
 
     assert factory.roles == ["thinking"]
+    assert factory.closed is True
     assert sources == ["agent", "agent"]
     assert factory.agent.calls[0]["system_prompt"] == "system"
     assert "<plugin_context>" in factory.agent.calls[0]["input_prompt"]

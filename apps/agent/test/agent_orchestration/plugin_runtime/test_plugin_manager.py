@@ -49,6 +49,26 @@ def test_plugin_manager_运行后拒绝注册():
     asyncio.run(run())
 
 
+def test_plugin_manager_运行中冻结订阅图():
+    async def run():
+        manager = PluginManager()
+        manager.register(RecordingPlugin("producer"))
+        manager.register(RecordingPlugin("consumer"))
+        subscription = manager.subscribe("consumer", "producer")
+        await manager.start()
+        try:
+            with pytest.raises(RuntimeError, match="before manager start"):
+                manager.subscribe("producer", "consumer")
+            with pytest.raises(RuntimeError, match="while manager is running"):
+                manager.unsubscribe(subscription.subscription_id)
+        finally:
+            await manager.stop(timeout=1)
+
+        manager.unsubscribe(subscription.subscription_id)
+
+    asyncio.run(run())
+
+
 def test_plugin_manager_启动失败时回滚已启动runtime():
     class FailingStartPlugin(RecordingPlugin):
         async def start(self) -> None:

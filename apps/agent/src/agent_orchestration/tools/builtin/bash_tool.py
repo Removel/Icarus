@@ -7,6 +7,7 @@ from typing import Any
 from apps.agent.src.agent_orchestration.tools.base_tool import BaseTool
 from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolDefinition
+from apps.agent.src.model_provider.types import Message
 
 
 class BashTool(BaseTool):
@@ -44,7 +45,16 @@ class BashTool(BaseTool):
             },
         )
 
-    def invoke(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+    def invoke(
+        self,
+        arguments: dict[str, Any],
+        *,
+        task_id: str | None = None,
+        run_id: str | None = None,
+        step: int | None = None,
+        task_messages: tuple[Message, ...] = (),
+    ) -> ToolExecutionResult:
+        del task_id, run_id, step, task_messages
         command, workdir, timeout = self._validate_arguments(arguments)
 
         try:
@@ -65,7 +75,16 @@ class BashTool(BaseTool):
             completed.stderr,
         )
 
-    async def ainvoke(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+    async def ainvoke(
+        self,
+        arguments: dict[str, Any],
+        *,
+        task_id: str | None = None,
+        run_id: str | None = None,
+        step: int | None = None,
+        task_messages: tuple[Message, ...] = (),
+    ) -> ToolExecutionResult:
+        del task_id, run_id, step, task_messages
         command, workdir, timeout = self._validate_arguments(arguments)
         process = await asyncio.create_subprocess_exec(
             "bash",

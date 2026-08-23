@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "plugin_id": "builtin-tools",
+  "plugin_version": "1.0.0",
+  "entrypoint": "apps.agent.src.agent_orchestration.plugins.builtin_tools.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [],
+  "provided_tools": ["read", "write", "insert", "bash"],
+  "published_events": [],
+  "consumed_events": [],
+  "state_scopes": []
+}

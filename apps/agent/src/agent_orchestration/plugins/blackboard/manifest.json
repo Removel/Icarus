@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "plugin_id": "blackboard",
+  "plugin_version": "1.0.0",
+  "entrypoint": "apps.agent.src.agent_orchestration.plugins.blackboard.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [
+    {"plugin_id": "persistence", "capability_id": "state_store", "version_spec": ">=1,<2"}
+  ],
+  "provided_capabilities": [
+    {"capability_id": "conversation", "version": "1.0.0"}
+  ],
+  "provided_tools": [],
+  "published_events": [
+    "apps.agent.src.agent_orchestration.plugins.blackboard.events.BlackboardContextReadyEvent"
+  ],
+  "consumed_events": [
+    "apps.agent.src.agent_orchestration.plugins.user_input.events.UserInputEvent",
+    "apps.agent.src.agent_orchestration.plugins.user_input.events.InputFinishedEvent",
+    "apps.agent.src.agent_orchestration.plugins.blackboard.events.ContextContributionEvent",
+    "apps.agent.src.agent_orchestration.capability.types.AgentCompletedEvent",
+    "apps.agent.src.agent_orchestration.capability.types.AgentErrorEvent",
+    "apps.agent.src.agent_orchestration.capability.types.AgentCancelledEvent"
+  ],
+  "state_scopes": ["session"],
+  "session_state_version": 1
+}

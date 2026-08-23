@@ -40,6 +40,11 @@ class BasePlugin(ABC):
     async def drain(self) -> None:
         pass
 
+    async def quiesce(self) -> None:
+        """Stop accepting new domain work while allowing cleanup events."""
+
+        pass
+
     def accepts_event(
         self,
         source_plugin_id: PluginId,

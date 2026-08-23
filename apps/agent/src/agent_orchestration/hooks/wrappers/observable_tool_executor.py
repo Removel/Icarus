@@ -29,10 +29,20 @@ class ObservableToolExecutor(BaseToolExecutor):
     ) -> list[ToolDefinition]:
         return self._executor.definitions(names)
 
+    def snapshot(self, names: list[str] | None = None) -> BaseToolExecutor:
+        return ObservableToolExecutor(
+            self._executor.snapshot(names),
+            self._dispatcher,
+        )
+
     def can_run_parallel(self, tool_call: ToolCall) -> bool:
         return self._executor.can_run_parallel(tool_call)
 
-    def execute(self, tool_call: ToolCall) -> ToolExecutionResult:
+    def execute(
+        self,
+        tool_call: ToolCall,
+        **execution: object,
+    ) -> ToolExecutionResult:
         tool_execution_id = uuid4().hex
         self._dispatcher.trigger(
             "tool.execute",
@@ -43,7 +53,7 @@ class ObservableToolExecutor(BaseToolExecutor):
             },
         )
         try:
-            result = self._executor.execute(tool_call)
+            result = self._executor.execute(tool_call, **execution)
         except Exception as error:
             self._dispatcher.trigger(
                 "tool.execute",
@@ -62,7 +72,11 @@ class ObservableToolExecutor(BaseToolExecutor):
         )
         return result
 
-    async def aexecute(self, tool_call: ToolCall) -> ToolExecutionResult:
+    async def aexecute(
+        self,
+        tool_call: ToolCall,
+        **execution: object,
+    ) -> ToolExecutionResult:
         tool_execution_id = uuid4().hex
         await self._dispatcher.atrigger(
             "tool.execute",
@@ -73,7 +87,7 @@ class ObservableToolExecutor(BaseToolExecutor):
             },
         )
         try:
-            result = await self._executor.aexecute(tool_call)
+            result = await self._executor.aexecute(tool_call, **execution)
         except Exception as error:
             await self._dispatcher.atrigger(
                 "tool.execute",

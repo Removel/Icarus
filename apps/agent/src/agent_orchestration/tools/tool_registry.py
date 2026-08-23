@@ -17,8 +17,11 @@ class ToolRegistry:
     def __init__(self, checker: ToolChecker | None = None) -> None:
         self._checker = checker or ToolChecker()
         self._tools: dict[str, BaseTool] = {}
+        self._frozen = False
 
     def register(self, tool: BaseTool) -> bool:
+        if self._frozen:
+            raise RuntimeError("ToolRegistry is frozen")
         check_result = self._checker.check(tool)
         if not check_result.valid:
             logger.error(
@@ -35,6 +38,24 @@ class ToolRegistry:
 
         self._tools[name] = tool
         return True
+
+    def unregister(self, name: str) -> BaseTool:
+        if self._frozen:
+            raise RuntimeError("ToolRegistry is frozen")
+        try:
+            return self._tools.pop(name)
+        except KeyError as error:
+            raise KeyError(f"Tool is not registered: {name}") from error
+
+    def freeze(self) -> None:
+        self._frozen = True
+
+    def unfreeze(self) -> None:
+        self._frozen = False
+
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
 
     def register_many(self, tools: Iterable[BaseTool]) -> list[str]:
         registered: list[str] = []

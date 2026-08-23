@@ -54,6 +54,10 @@ class AppliedContextBatch:
 
 class AgentRunControl(Protocol):
     @property
+    def task_id(self) -> str:
+        ...
+
+    @property
     def run_id(self) -> str | None:
         ...
 

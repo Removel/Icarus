@@ -24,6 +24,10 @@ class TaskChannelRegistry:
     def get(self, task_id: str) -> TaskChannel | None:
         return self._channels.get(task_id)
 
+    @property
+    def active_task_ids(self) -> tuple[str, ...]:
+        return tuple(self._channels)
+
     def finish(self, task_id: str) -> TaskChannel | None:
         channel = self._channels.pop(task_id, None)
         if channel is not None:

@@ -5,11 +5,14 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
+from copy import deepcopy
 import logging
+import inspect
 
+from apps.agent.src.agent_orchestration.tools.base_tool import BaseTool
 from apps.agent.src.agent_orchestration.tools.tool_registry import ToolRegistry
 from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
-from apps.agent.src.model_provider.types import ToolCall, ToolDefinition
+from apps.agent.src.model_provider.types import Message, ToolCall, ToolDefinition
 
 
 logger = logging.getLogger(__name__)
@@ -27,12 +30,23 @@ class BaseToolExecutor(ABC):
         ...
 
     @abstractmethod
-    def execute(self, tool_call: ToolCall) -> ToolExecutionResult:
+    def execute(
+        self,
+        tool_call: ToolCall,
+        **execution: object,
+    ) -> ToolExecutionResult:
         ...
 
     @abstractmethod
-    async def aexecute(self, tool_call: ToolCall) -> ToolExecutionResult:
+    async def aexecute(
+        self,
+        tool_call: ToolCall,
+        **execution: object,
+    ) -> ToolExecutionResult:
         ...
+
+    def snapshot(self, names: list[str] | None = None) -> "BaseToolExecutor":
+        return self
 
     @abstractmethod
     def can_run_parallel(self, tool_call: ToolCall) -> bool:
@@ -59,15 +73,21 @@ class BaseToolExecutor(ABC):
     def iter_completed(
         self,
         tool_calls: list[ToolCall],
+        **execution: object,
     ) -> Iterator[ToolResultPair]:
         if len(tool_calls) <= 1:
             for tool_call in tool_calls:
-                yield tool_call, self.execute(tool_call)
+                yield tool_call, self.execute(tool_call, **execution)
             return
 
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
             futures = {
-                executor.submit(copy_context().run, self.execute, tool_call): tool_call
+                executor.submit(
+                    copy_context().run,
+                    self.execute,
+                    tool_call,
+                    **execution,
+                ): tool_call
                 for tool_call in tool_calls
             }
             for future in as_completed(futures):
@@ -76,9 +96,10 @@ class BaseToolExecutor(ABC):
     async def aiter_completed(
         self,
         tool_calls: list[ToolCall],
+        **execution: object,
     ) -> AsyncIterator[ToolResultPair]:
         async def execute_pair(tool_call: ToolCall) -> ToolResultPair:
-            return tool_call, await self.aexecute(tool_call)
+            return tool_call, await self.aexecute(tool_call, **execution)
 
         tasks = [
             asyncio.create_task(execute_pair(tool_call))
@@ -93,12 +114,18 @@ class BaseToolExecutor(ABC):
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    def execute_many(self, tool_calls: list[ToolCall]) -> list[ToolResultPair]:
+    def execute_many(
+        self,
+        tool_calls: list[ToolCall],
+        **execution: object,
+    ) -> list[ToolResultPair]:
         ordered_results: list[ToolResultPair] = []
         for batch in self.build_batches(tool_calls):
             results_by_id = {
                 tool_call.id: result
-                for tool_call, result in self.iter_completed(batch)
+                for tool_call, result in self.iter_completed(
+                    batch, **execution
+                )
             }
             ordered_results.extend(
                 (tool_call, results_by_id[tool_call.id])
@@ -109,11 +136,14 @@ class BaseToolExecutor(ABC):
     async def aexecute_many(
         self,
         tool_calls: list[ToolCall],
+        **execution: object,
     ) -> list[ToolResultPair]:
         ordered_results: list[ToolResultPair] = []
         for batch in self.build_batches(tool_calls):
             results_by_id: dict[str, ToolExecutionResult] = {}
-            async for tool_call, result in self.aiter_completed(batch):
+            async for tool_call, result in self.aiter_completed(
+                batch, **execution
+            ):
                 results_by_id[tool_call.id] = result
             ordered_results.extend(
                 (tool_call, results_by_id[tool_call.id])
@@ -134,7 +164,21 @@ class ToolExecutor(BaseToolExecutor):
     ) -> list[ToolDefinition]:
         return self.registry.definitions(names)
 
-    def execute(self, tool_call: ToolCall) -> ToolExecutionResult:
+    def snapshot(self, names: list[str] | None = None) -> BaseToolExecutor:
+        registry = ToolRegistry()
+        registry.register_many(self.registry.select(names))
+        registry.freeze()
+        return ToolExecutor(registry)
+
+    def execute(
+        self,
+        tool_call: ToolCall,
+        *,
+        task_id: str | None = None,
+        run_id: str | None = None,
+        step: int | None = None,
+        task_messages: tuple[Message, ...] = (),
+    ) -> ToolExecutionResult:
         tool = self.registry.get(tool_call.name)
         if tool is None:
             return ToolExecutionResult(
@@ -143,7 +187,14 @@ class ToolExecutor(BaseToolExecutor):
             )
 
         try:
-            result = tool.invoke(tool_call.arguments)
+            execution = _supported_execution_arguments(
+                tool.invoke,
+                task_id=task_id,
+                run_id=run_id,
+                step=step,
+                task_messages=_copy_messages(task_messages),
+            )
+            result = tool.invoke(tool_call.arguments, **execution)
         except Exception as error:
             logger.exception(
                 "Tool execution failed: name=%s call_id=%s",
@@ -154,7 +205,15 @@ class ToolExecutor(BaseToolExecutor):
 
         return self._normalize_result(tool_call, result)
 
-    async def aexecute(self, tool_call: ToolCall) -> ToolExecutionResult:
+    async def aexecute(
+        self,
+        tool_call: ToolCall,
+        *,
+        task_id: str | None = None,
+        run_id: str | None = None,
+        step: int | None = None,
+        task_messages: tuple[Message, ...] = (),
+    ) -> ToolExecutionResult:
         tool = self.registry.get(tool_call.name)
         if tool is None:
             return ToolExecutionResult(
@@ -163,7 +222,23 @@ class ToolExecutor(BaseToolExecutor):
             )
 
         try:
-            result = await tool.ainvoke(tool_call.arguments)
+            use_sync_implementation = type(tool).ainvoke is BaseTool.ainvoke
+            target = tool.invoke if use_sync_implementation else tool.ainvoke
+            execution = _supported_execution_arguments(
+                target,
+                task_id=task_id,
+                run_id=run_id,
+                step=step,
+                task_messages=_copy_messages(task_messages),
+            )
+            if use_sync_implementation:
+                result = await asyncio.to_thread(
+                    tool.invoke, tool_call.arguments, **execution
+                )
+            else:
+                result = await tool.ainvoke(
+                    tool_call.arguments, **execution
+                )
         except Exception as error:
             logger.exception(
                 "Async tool execution failed: name=%s call_id=%s",
@@ -194,3 +269,22 @@ class ToolExecutor(BaseToolExecutor):
                 f"type={type(result).__name__}"
             ),
         )
+
+
+def _copy_messages(messages: tuple[Message, ...]) -> tuple[Message, ...]:
+    return tuple(deepcopy(messages))
+
+
+def _supported_execution_arguments(callable_, **execution: object) -> dict:
+    parameters = inspect.signature(callable_).parameters
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    if accepts_kwargs:
+        return execution
+    return {
+        name: value
+        for name, value in execution.items()
+        if name in parameters
+    }
