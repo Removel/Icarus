@@ -2,14 +2,16 @@
 
 ## 文档定位
 
-本文是当前 `AgentRuntimeService` Plugin 组装、订阅关系、事件流和状态所有权的事实快照，帮助读者快速判断：
+本文是当前 Manifest Runtime Plugin 组装、订阅关系、事件流和状态所有权的事实快照，帮助读者快速判断：
 
 - 当前有哪些 Plugin 已注册并参与运行；
 - Plugin 之间通过哪些来源 Event 通信；
 - 哪些能力只是 Plugin 内部组件，不是独立 Plugin；
 - 哪些 Plugin 仍处于规划阶段，尚未接入当前 Runtime。
 
-长期架构原则见 `plugin-eventbus-blackboard-design.md`；具体 Skill 检索与维护设计见 `skill-plugin-design.md`。本文以当前代码和 `AgentRuntimeService` 的实际订阅关系为准。
+长期架构原则见 `plugin-eventbus-blackboard-design.md`；Manifest 与生命周期契约见
+`plugin-runtime-manifest-lifecycle-design.md`；具体 Skill 检索与维护设计见
+`skill-plugin-design.md`。本文以当前内置 Manifest 和 Runtime Host 生成的冻结运行图为准。
 
 ## 当前状态总览
 
@@ -21,8 +23,10 @@
 | `EventBus` | 已实现、已使用 | 接收 Plugin 发布的 Event，只按来源异步路由 |
 | `PluginRuntime` | 已实现、已使用 | 为每个 Plugin 提供独立 inbox 和顺序消费 Worker |
 | `PluginManager` | 已实现、已使用 | 统一注册、订阅、启动、Drain 和停止 Plugin Runtime |
+| `PluginRuntimeHost` | 已实现、已使用 | 发现 Manifest，校验并原子装配 Capability、Tool、Event 拓扑与状态接口 |
+| `PluginManifestDiscovery` | 已实现、已使用 | 发现内置目录和配置显式目录中的 `manifest.json` |
 | Runtime Hook Wrapper | 已实现、已使用 | 观测 Event 发布、路由、Plugin 消费和生命周期 |
-| `PersistenceRuntime` | 已实现、已使用，但不是 Plugin | 通过 Hook 和 Logging 持久化 Trace、日志和 Session 元数据 |
+| `PersistencePlugin` | 已实现、已接入 | 适配 PersistenceRuntime，并提供统一 Plugin State Store |
 
 EventBus 不检查 Event 类型，不解析 Payload，也不执行 Plugin 业务逻辑。每个订阅 Plugin 在自己的统一入口中判断是否处理：
 
@@ -44,6 +48,8 @@ async def consume(
 | `blackboard` | `BlackboardPlugin` | 已实现、已接入 | 汇聚必需 Context，维护含 ToolCall/ToolResult 的跨轮历史，发布主 Agent 完整调用快照 |
 | `agent` | `AgentPlugin` | 已实现、已接入 | 适配无状态 ReActAgent，处理 Task Context / Cancel，并发布原始 Agent Stream / Terminal Event |
 | `output-bridge` | `OutputBridgePlugin` | 已实现、应用内部接入 | 将 UserInput 和 Agent Event 广播到 `AgentRuntimeService.subscribe_events()` 创建的实时订阅，供 TUI/Transport 独立消费 |
+| `persistence` | `PersistencePlugin` | 已实现、已接入 | 管理 Trace、日志、Session 元数据和 Plugin Workspace/Session 状态文件 |
+| `builtin-tools` | `BuiltinToolsPlugin` | 已实现、已接入 | 通过 PluginRegistration 提供 read/write/insert/bash |
 
 ### 当前不是独立 Plugin 的组件
 
@@ -53,7 +59,8 @@ async def consume(
 | `BlackboardPromptComposer` | BlackboardPlugin 内部组件 | 组合动态 Context 和用户请求，生成最终 User Prompt |
 | `FastEmbedEmbedding` | `model_provider` | 生成 Skill 检索向量，不感知 Plugin 业务 |
 | `SkillMaintainer` | SkillPlugin 内部组件 | 调用独立、无工具的维护 Agent，只生成结构化计划 |
-| Maintenance Agent | 应用组装的独立 AgentFactory | 无 Plugin 身份，不发布业务 Event，不获得文件工具 |
+| Main AgentFactory | AgentPlugin 内部组件 | 由 AgentPlugin Factory 创建，组装并缓存主 ReActAgent；随 AgentPlugin 生命周期关闭 |
+| Maintenance AgentFactory | SkillPlugin 内部组件 | 由 SkillPlugin Factory 创建并随其关闭；不发布业务 Event，不获得文件工具 |
 | `SkillRepository` | SkillPlugin 内部文件边界 | 校验并执行 Workspace Skill CRUD，全局 Skill 只读 |
 | `SkillUsageStore` | SkillPlugin 内部状态存储 | 按 Workspace 保存发现、使用和维护激活时间 |
 | `WorkspaceMaintenanceCoordinator` | 进程级内部组件 | 使用所有权 Token 保证同进程同 Workspace 同时最多一个维护任务 |
@@ -131,6 +138,9 @@ flowchart LR
 
 ## 来源订阅关系
 
+以下关系不再由 `AgentRuntimeService` 手写。每个内置 Plugin 的 Manifest 声明
+`published_events` 和 `consumed_events`，Runtime Host 在 READY 前生成同等的来源订阅并冻结。
+
 | 来源 Plugin | 订阅 Plugin | 订阅者实际处理的主要 Event |
 |---|---|---|
 | `user-input` | `skill` | `UserInputEvent`：启动本轮 Skill 检索并建立轮状态；失败或取消的 `InputFinishedEvent`：清理轮状态 |
@@ -147,7 +157,7 @@ flowchart LR
 订阅者；每个 Plugin Runtime 在入队前调用订阅者的 `accepts_event`。SkillPlugin 拒绝文本
 和工具增量，因此这些事件不进入其 inbox，也不触发其 `plugin.consume` Hook。
 
-当前代码中的订阅关系：
+当前 Manifest 生成的主要订阅关系：
 
 ```text
 skill        <- user-input
