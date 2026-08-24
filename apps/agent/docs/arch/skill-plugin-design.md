@@ -1,762 +1,506 @@
-# SkillPlugin Design｜Skill 动态注入与维护设计
+# SkillPlugin 主动召回、生产与演化设计
 
 ## 文档定位
 
-本文描述 Icarus Agent 编排层中的 `SkillPlugin`。该插件负责发现、检索、注入和维护 Skill，并在高复杂度对话成功结束后尝试自动沉淀 Skill。
+本文描述 Icarus Agent 编排层中 `SkillPlugin` 的工具化重构。重构后的核心语义是：
 
-本文遵循现有 Plugin Runtime、EventBus、Blackboard 和 AgentPlugin 边界：
+- 停止每轮自动检索和 Skill Context 注入；
+- 停止复杂轮次完成后的隐式自动维护；
+- Agent 通过 `skills_list` 和 `skill_search` 主动发现 Skill；
+- Agent 使用现有通用 `read` Tool 按需读取完整 `SKILL.md`；
+- Agent 通过 `skill_produce` 和 `skill_evolve` 显式发起生产与演化；
+- 生产和演化作为后台 Job 执行，通过 `skill_job_status` 查询状态；
+- 生产和演化分别由显式权限开关控制，默认关闭。
 
-- `SkillPlugin` 是普通领域 Plugin；
-- EventBus 仍然只按来源 Plugin 路由，不理解 Skill Event；
-- `SkillPlugin` 不侵入无状态的 `ReActAgent`；
-- 动态 Skill 信息进入当前 User Prompt，不修改稳定 System Prompt；
-- Blackboard 汇聚各插件上下文并维护实际发送给 Agent 的对话历史；
-- Skill 自动维护失败不能阻塞主 Agent 对话。
+本文替代旧版“每轮 RAG 检索、Blackboard 注入、会话累计 Skill、轮后自动维护”方案，并落实 `plugin-runtime-manifest-lifecycle-design.md` 已确定的五个 Skill Tool。
 
-功能分阶段交付。第一阶段只实现 Skill 动态检索和注入闭环；第二阶段实现轮后自动生成、更新、合并和清理。
+## 架构边界
+
+- `ReActAgent` 保持无状态，只依赖统一 Tool 接口；
+- Plugin Runtime 只负责发现、校验和注册 Plugin、Capability、Tool、Event 与状态提供者；
+- EventBus 仍然只按来源 Plugin 路由，不解释 Skill 或 Job 业务；
+- Tool 集合可以在不同 Agent Run 之间变化，但单次 Run 使用冻结快照；
+- 动态 Skill 内容通过通用 `read` 的 Tool Result 进入当前消息轨迹，不修改稳定 System Prompt；
+- SkillPlugin 内部的 Catalog、JobManager、Producer、Evolver 和 Repository 都是普通组件，不注册为子 Plugin；
+- Hook 只观测，不参与权限判定、Job 调度或文件提交。
 
 ## 目标与非目标
 
 ### 目标
 
-- 从 Icarus 全局目录和当前 Workspace 目录动态发现 Skill；
-- 从 `SKILL.md` YAML 头读取渐进式披露所需的元信息；
-- 根据当前用户输入动态选择最相关的 Skill；
-- 在一个会话中维护累计 Skill 注入列表；
-- 减少重复 Token，同时定期刷新长上下文中的 Skill 信息；
-- 记录各 Workspace 对 Skill 的使用时间和次数；
-- 让生命周期状态参与 Skill 排名；
-- 在复杂对话成功结束后，异步尝试生成或整理 Skill；
-- 支持多个 AgentRuntime 共享 Skill 文件和使用状态，同时隔离会话状态。
+- 让 Agent 自主判断何时发现和使用 Skill；
+- 支持多步骤任务根据中间信息再次搜索；
+- 通过渐进式披露控制上下文开销；
+- 让 Agent 显式生产新 Skill 或演化已有 Skill；
+- 让耗时的生产和演化不阻塞单次 Tool 调用；
+- 使用现有运行中 Context 事件把 Job 结果通知仍活跃的 Agent；
+- 保存可查询的 Job 终态，并在 Runtime 退出时确定性收束；
+- 复用现有目录、覆盖规则、脱敏和安全仓库能力；
+- 对所有 Skill 写入实行默认禁止、失败关闭的权限策略。
 
 ### 非目标
 
-- 不把完整 `SKILL.md` 默认注入 User Prompt；
-- 不在 SkillPlugin 中实现关键词路由或特殊 Skill 强制注入；
-- 不向主 Agent 暴露 SkillPlugin 内部 CRUD 接口；
-- 不在 ReAct 的每个 step 中启动 Skill 总结；
-- 不持久化 Embedding 向量；
-- 不恢复 Runtime 重建前的会话 Skill 列表和七轮计数；
-- 第一阶段不实现自动生成、合并、删除或跨进程写协调。
+- 不向每轮 Prompt 注入完整 Skill 列表或自动匹配结果；
+- 不新增 `skill_read`，完整文件读取继续复用通用 `read`；
+- 不在 Agent Kernel 或 Plugin Runtime 中增加 Skill 专用分支；
+- 不恢复运行到一半的 Agent、ToolCall 或 asyncio Task；
+- 不自动生成、更新、合并或删除 Skill；
+- 不向 Agent 暴露任意 Skill 删除操作；
+- 不在首期实现分页、标签表达式或复杂查询 DSL；
+- 不在一次 Agent Run 中热注册、热卸载或替换 Tool。
+
+## 方案结论
+
+### 不再采用：每轮自动 RAG 注入
+
+旧实现只根据初始用户输入检索，无法利用多步骤任务中的新信息；误召回会直接进入上下文；Blackboard 还必须等待检索完成。被检索到的 Skill 也不等于真正被 Agent 采用。
+
+### 不再采用：每轮注入完整目录
+
+Skill 数量会随生产和演化持续增长。每轮暴露完整目录会形成固定 Token 成本，并降低大目录下的选择质量。
+
+### 采用：主动发现、渐进读取、显式写入
+
+Agent 按需调用轻量目录或关键词搜索，再用通用 `read` 读取完整 Skill。需要沉淀经验时，Agent 显式调用 `skill_produce` 或 `skill_evolve` 创建后台 Job。该方案让召回、上下文和写入成本都按需发生。
 
 ## 整体架构
 
 ```mermaid
 flowchart LR
     U["UserInputPlugin"]
-    S["SkillPlugin"]
     B["BlackboardPlugin"]
-    A["AgentPlugin"]
-    O["OutputBridge / TUI"]
-    R["ReActAgent"]
-    DB["SkillUsageStore\nSQLite"]
+    A["AgentPlugin / ReActAgent"]
+    L["skills_list"]
+    S["skill_search"]
+    R["read
+通用 Tool"]
+    P["skill_produce"]
+    E["skill_evolve"]
+    Q["skill_job_status"]
+    C["SkillCatalog"]
+    J["SkillJobManager"]
+    W["Producer / Evolver
+隔离 Agent"]
     FS["Global / Workspace Skills"]
-    E["FastEmbedEmbedding\nmodel_provider"]
-    M["SkillMaintainer\n第二阶段"]
 
-    U -- "UserInputEvent" --> S
-    U -- "UserInputEvent" --> B
-    FS --> S
-    S <--> DB
-    S --> E
-    S -- "ContextContributionEvent" --> B
-    B -- "BlackboardContextReadyEvent" --> A
-    A --> R
-    R -- "原始执行流" --> A
-    A -- "文本与工具增量" --> O
-    A -- "AgentCompletedEvent" --> S
-    U -- "失败的 InputFinishedEvent" --> S
-    S -. "轮后触发" .-> M
-    M -. "内部 CRUD" .-> FS
+    U --> B --> A
+    A --> L --> C
+    A --> S --> C
+    C --> FS
+    A --> R --> FS
+    A --> P --> J
+    A --> E --> J
+    A --> Q --> J
+    B -. "conversation Capability" .-> J
+    J --> W
+    W --> FS
+    J -. "TaskContextInputEvent" .-> A
 ```
 
-`SkillPlugin` 同时订阅：
+`SkillCatalog` 负责扫描、名称解析、列表、搜索和路径识别。`SkillJobManager` 负责生产与演化 Job 的状态、执行、通知和恢复。五个 Skill Tool 只负责扁平参数校验和领域调用。
 
-- `UserInputPlugin`：收到 `UserInputEvent` 时执行 Skill 检索；收到失败的
-  `InputFinishedEvent` 时清理该轮临时状态；
-- `AgentPlugin`：只接收 `AgentCompletedEvent`，从完整响应中恢复本轮工具轨迹，
-  并在终态判断是否启动自动维护。
+## Agent 可见 Tool 协议
 
-AgentPlugin 发布的文本增量、工具开始和工具完成事件继续由 OutputBridge 交给 TUI，
-但不进入 SkillPlugin 的 Runtime inbox。
+SkillPlugin 固定注册以下五个 Tool：
 
-BlackboardPlugin 订阅 `SkillPlugin`，把 Skill 上下文与用户输入及其他 Context Plugin 的结果一起组合。AgentPlugin 只消费 Blackboard 发布的完整调用快照。
+```text
+skills_list
+skill_search
+skill_produce
+skill_evolve
+skill_job_status
+```
 
-## Plugin 事件流
+默认 Agent Run 可以看到它们；调用方显式设置 Tool allowlist 时，仍以该 Run 的 allowlist 为准。权限关闭不改变 Manifest 的静态 Tool 集合，对应写 Tool 在执行时返回明确的 `disabled_by_policy` 错误。
 
-当前运行时已注册 Plugin、来源订阅关系、对话主链路、轮后自动维护链路和状态所有权统一维护在：
+### `skills_list`
 
-- `plugin-event-flow-current-state.md`
+用途：Agent 想浏览当前可见 Skill 时，按需获取轻量目录。
 
-本文只描述 SkillPlugin 自身设计，不重复维护全局 Plugin 总图。
+输入：
 
-## 目录与作用域
+```json
+{
+  "scope": "all"
+}
+```
 
-Skill 文件统一位于 `ICARUS_DATA_DIR`：
+`scope` 可选，只允许 `all`、`global` 或 `workspace`，默认 `all`。输出按规范化名称稳定排序，每项只包含：
+
+```json
+{
+  "name": "unit-test-generator",
+  "description": "Use when ...",
+  "scope": "global",
+  "path": "/resolved/skill/unit-test-generator/SKILL.md"
+}
+```
+
+调用是按需的，不把目录预先注入 Prompt。Workspace Skill 继续覆盖同名全局 Skill。
+
+### `skill_search`
+
+用途：Agent 不知道准确 Skill 名称时，按当前目标搜索少量候选。
+
+输入：
+
+```json
+{
+  "keywords": ["python", "unit test", "async"]
+}
+```
+
+规则：
+
+- `keywords` 必须包含 1 至 8 个非空字符串；
+- 每次调用重新扫描当前可见 Skill；
+- 搜索字段为 Skill 的 `name`、`description` 和 YAML 中可选的 `keywords` 字符串列表；
+- 输入和字段统一执行 Unicode `casefold`，并把连续空格、`-` 和 `_` 归一化为单个空格；
+- 每个关键词转义后生成安全正则，只做归一化后的包含匹配，不接受 Agent 提供正则表达式；
+- 任一关键词命中即可返回，命中关键词数量越多越靠前；同分时按名称命中、`keywords` 命中、description 命中的顺序比较，最后按规范化名称稳定排序；
+- 不做编辑距离、拼写纠错、分词、词干化、BM25 或向量相似度；
+- 首期固定最多返回 10 项；
+- Agent 可以在同一 Run 中根据中间结果调整关键词并再次搜索；
+- 无合格候选时成功返回空数组；
+- 输出项与 `skills_list` 一致，不返回正文和内部评分。
+
+Agent 选定候选后，通过返回的 `path` 调用通用 `read`。`skill_search` 本身不算使用 Skill。
+
+### `skill_produce`
+
+用途：Agent 判断当前任务形成了可复用方法时，显式生产新的 Skill。目标写入当前
+Workspace 还是全局目录，由主 Agent 明确选择。
+
+输入保持扁平：
+
+```json
+{
+  "name": "python-unit-test-workflow",
+  "scope": "workspace",
+  "instructions": "沉淀本次 Python 单元测试生成与验证流程"
+}
+```
+
+规则：
+
+- `name` 和 `instructions` 必须是非空字符串；
+- `scope` 必填，只允许 `workspace` 或 `global`；
+- ToolExecutor 透传的只读 `task_messages` 是当前任务证据，不作为 JSON 参数重复传入；
+- 没有 `task_id` 或没有有效当前任务消息时拒绝创建 Job；
+- `allow_produce=False` 时返回 `disabled_by_policy`；
+- 创建 Job 前分别扫描 Workspace 和全局两个物理作用域；任一作用域存在同规范化名称时，
+  立即返回 Tool 失败，不创建 Job、不启动 Producer、不写文件，并提示使用 `skill_evolve`；
+- Tool 只创建后台 Job，立即返回 `job_id` 和 `queued`，不等待模型生成或文件写入；
+- Producer 使用独立、无文件 Tool 的 Agent 生成一个完整 `SKILL.md`；
+- 输出经过脱敏、严格结构解析和 Repository 校验后，只能写入 `scope` 指定的目标目录；
+- 提交前再次扫描两个物理作用域；若生成期间出现同名 Skill，Job 以冲突失败，不覆盖文件。
+
+### `skill_evolve`
+
+用途：Agent 判断已有 Skill 应根据当前任务经验改进时，显式演化该 Skill。
+
+输入：
+
+```json
+{
+  "name": "python-unit-test-workflow",
+  "instructions": "补充异步测试与失败重试规则"
+}
+```
+
+规则：
+
+- `name` 和 `instructions` 必须是非空字符串；
+- `allow_evolve=False` 时返回 `disabled_by_policy`；
+- 目标必须是 Catalog 当前可见的有效 Skill；
+- Workspace Skill 演化为原路径的原子更新；
+- 全局 Skill 不被直接修改，演化结果写成当前 Workspace 的同名覆盖；
+- Job 捕获目标 Skill 快照和只读 `task_messages`；
+- 提交前重新校验目标快照，发生并发变化时 Job 失败，不覆盖新内容；
+- Tool 立即返回 `job_id` 和 `queued`。
+
+### `skill_job_status`
+
+用途：查询 produce/evolve Job 的当前或最终状态。
+
+输入：
+
+```json
+{
+  "job_id": "skill-job-..."
+}
+```
+
+输出包含：
+
+- `job_id`；
+- `operation`：`produce` 或 `evolve`；
+- `status`：`queued`、`running`、`succeeded`、`failed` 或 `interrupted`；
+- `target_name`；
+- 成功时的 `path`；
+- 失败或中断时的安全错误摘要；
+- 创建、开始和结束时间。
+
+该 Tool 不返回生产 Agent 的内部 Prompt、推理内容或未脱敏证据。未知 `job_id` 返回失败。
+
+## Tool 提示与执行语义
+
+- `skills_list` 的描述说明它只在需要浏览目录时调用；
+- `skill_search` 的描述说明任务可能受益于专用流程或领域规范时应主动搜索；
+- 搜索结果明确提示先用通用 `read` 阅读完整 Skill，再遵循其中流程；
+- `skill_produce` 和 `skill_evolve` 的描述说明它们只在确有可复用增量时调用，不能每轮默认调用；
+- 所有行为提示放在 `ToolDefinition`，不新增 Skill 专用 System Prompt。
+
+`skills_list`、`skill_search` 和 `skill_job_status` 是只读操作，可以并行。`skill_produce` 和 `skill_evolve` 会创建写入 Job，作为顺序屏障。同步和异步入口必须共享同一领域实现，不能复制两套权限、扫描或 Job 规则。
+
+## Skill 目录与搜索
+
+目录布局保持不变：
 
 ```text
 $ICARUS_DATA_DIR/
 ├── skills/
-│   ├── skill-a/
-│   │   └── SKILL.md
-│   └── skill-state.sqlite3
+│   └── <skill-name>/SKILL.md
 └── workspaces/
     └── <workspace_key>/
         └── skills/
-            └── skill-b/
-                └── SKILL.md
+            └── <skill-name>/SKILL.md
 ```
 
-作用域规则：
+Skill 仍至少要求 YAML 头包含非空 `name` 和 `description`。可选 `keywords` 必须是字符串列表；字段无效时记录日志并按空列表处理，不让附加元数据导致整个 Skill 不可用。缺少必填字段、无效 YAML 或同作用域重名仍跳过。扫描器解析后的路径必须位于对应 Skill 根目录，符号链接不能把 Catalog 路径指向目录外。
 
-- `$ICARUS_DATA_DIR/skills/<skill-name>/SKILL.md` 是全局 Skill；
-- `$ICARUS_DATA_DIR/workspaces/<workspace_key>/skills/<skill-name>/SKILL.md` 是 Workspace Skill；
-- 全局 Skill 对所有 Workspace 可见，SkillPlugin 自动维护流程只读；
-- Workspace Skill 只对当前 Workspace 可见，可以自动创建、更新、合并或删除；
-- 全局与 Workspace Skill 的规范化 `name` 相同时，Workspace Skill 覆盖全局 Skill；
-- 主 Agent 根据用户明确请求使用文件工具创建或安装 Skill 时，不受内部自动维护的只读接口限制，但仍需遵循被注入 Skill 中的规则。
+搜索只依赖扫描结果和上述确定性包含规则，不创建模型、不下载向量资源，也不维护按 Workspace 的使用次数或生命周期权重。旧的 `SessionSkillState`、`SkillTurnState`、累计列表、七轮刷新和使用状态数据库全部删除。
 
-目录解析由持久化层的路径解析组件扩展提供，SkillPlugin 不自行拼接数据根目录。
+## 生产与演化权限
 
-## Skill 模型与渐进式披露
-
-### YAML 头
-
-一个可检索 Skill 至少包含：
-
-```yaml
----
-name: skill-product
-description: Use when the user asks to create, summarize, update, or improve a reusable Skill.
----
-```
-
-第一阶段只要求：
-
-- `name`：非空字符串；
-- `description`：非空字符串。
-
-其他 YAML 字段由具体 Skill 自己维护，SkillPlugin 扫描器保留但不解释。无效 YAML 头、缺少必填字段或重复的同作用域名称只记录错误并跳过，不阻塞 Runtime 启动或主 Agent。
-
-### 注入内容
-
-SkillPlugin 只向 Agent 提供：
-
-- `name`；
-- `description`；
-- `SKILL.md` 的规范化绝对路径。
-
-不默认注入 Skill 正文。主 Agent 判断需要使用某个 Skill 后，通过现有 `read` 工具读取完整文件。这是 Skill 的渐进式披露边界。
-
-### 不设置特殊 Skill 分支
-
-`skill-product`、`skill-installer` 与其他 Skill 使用相同的扫描、Embedding 和排名流程。
-
-当用户提出“把本次过程总结成 Skill”或“安装 Skill”时，相关 Skill 应依赖准确的 `description` 自然进入 Top 3。SkillPlugin 不通过关键词规则识别意图，也不额外追加或强制注入 Skill。若匹配效果不足，优先改进 Skill 描述或通用检索策略。
-
-## 动态检索
-
-### 检索时机
-
-每轮 `UserInputEvent` 到达时执行一次检索。ReActAgent 后续产生多少个 step 或工具调用都不会再次触发本轮检索。
-
-### EmbeddingProvider
-
-Embedding 能力属于 `model_provider` 层。SkillPlugin 依赖供应商无关的 `BaseEmbedding` 接口，不直接导入 FastEmbed：
+`SkillSettings` 增加两个独立开关：
 
 ```python
-class BaseEmbedding(ABC):
-    @abstractmethod
-    async def embed_query(self, text: str) -> list[float]:
-        ...
-
-    @abstractmethod
-    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        ...
+allow_produce: bool = False
+allow_evolve: bool = False
 ```
 
-第一阶段使用 `fastembed` 提供本地实现，不调用 OpenAI、Anthropic 或其他远端 Embedding API，也不需要 API Key。默认模型为 FastEmbed 支持的多语言模型：
+权限语义：
+
+- 缺失时使用默认值 `False`；
+- 非布尔配置由 Pydantic 拒绝，不能被宽松转换为开启；
+- `allow_produce` 只授权按 Tool 的必填 `scope` 创建新的 Workspace 或全局 Skill；
+- `allow_evolve` 只授权更新 Workspace Skill或为全局 Skill 创建 Workspace 覆盖；
+- 关闭权限时 Tool 仍按 Manifest 注册，但调用不会创建 Agent、Job 或文件副作用；
+- 没有单独的自动维护总开关，因为自动维护被删除；
+- 不提供 Agent 可见的 delete 或 merge Tool。
+
+这两个开关控制 SkillPlugin 的领域写操作，不是操作系统级文件沙箱。用户明确要求通用文件 Tool 修改文件时，仍由通用 Tool 自身的权限体系负责，SkillPlugin 不跨层拦截。
+
+## Skill Job
+
+### 创建与执行
+
+`skill_produce` 或 `skill_evolve` 在校验权限和参数后执行前置检查。Produce 必须先检查
+Workspace 和全局两个物理作用域，冲突时在创建 Job 前结束；Evolve 必须先解析当前可见目标并
+保存原始快照。通过前置检查后：
+
+1. 从 Tool 执行上下文捕获 `task_id`、`run_id`、`step` 和只读 `task_messages`；
+2. 直接通过 `blackboard/conversation` Capability 调用 `get_messages()`，取得此前已提交的
+   Session 对话；
+3. 使用 `context = tuple(history) + task_messages` 组成截至本次 Tool 调用的完整对话证据；
+4. 生成唯一 `job_id`，保存 `queued` 状态；
+5. 创建由 SkillPlugin 所有的后台 Task；
+6. Job 进入 `running`，调用隔离、无文件 Tool 的 Producer 或 Evolver Agent；
+7. 对输入证据执行现有结构化脱敏；
+8. 严格解析一个目标 Skill 的完整内容；
+9. Repository 校验名称、YAML 头、路径、作用域和并发快照后原子提交；
+10. 保存 `succeeded` 或 `failed` 终态。
+
+`BlackboardPlugin.get_messages()` 已返回新的外层列表，ToolExecutor 也已为当前任务提供消息快照；
+SkillPlugin 只把二者组合成 tuple 并按只读数据使用，不再做一层无意义的深拷贝。当前
+`task_messages` 的末尾可能是尚未产生 Tool Result 的 `skill_produce` 或 `skill_evolve` ToolCall，
+因此不能原样作为另一个模型的协议历史。Prompt Builder 会把完整 `context` 脱敏并序列化成
+结构化对话证据，放入 Producer/Evolver 的当前 User Prompt；内部 Agent 的 `history_messages` 保持空。
+最后一条任务指令同时明确传入 `name`、`scope`（仅 Produce）、`instructions`、输出格式和约束。
+它们因此可以理解“结合前面确定的内容”具体指什么，同时不依赖从自然语言历史中猜测目标参数。
+若未来允许组件修改 Message 内部对象，应统一收紧 Message 的不可变性，而不是在 SkillPlugin 中
+散落深拷贝。
+
+Produce Job 只允许创建一个新 Skill。提交临界区内再次扫描 Workspace 与全局两个作用域，任一
+同规范化名称都使 Job 失败。Evolve Job 只允许更新一个明确目标：Workspace 目标比较原文件快照，
+全局目标还要确认原全局快照未变且未出现同名 Workspace 覆盖。旧 Maintainer 一次返回多项
+create/update/merge/delete 的宽泛计划不再使用。
+
+### 通知当前 Agent
+
+Job 到达终态后，SkillPlugin 发布 `TaskContextInputEvent`，内容只包含 Job ID、操作、终态、目标名称以及成功路径或安全错误摘要。AgentPlugin 通过已有 RunControl 在下一个安全检查点把结果加入仍活跃的 Agent Run。
+
+SkillPlugin 消费对应的 `TaskContextInputResultEvent`，按 `request_event_id` 关联通知，并记录
+`accepted`、`not_found`、`not_running`、`already_cancelling`、`already_finished` 或
+`invalid_content`。通知失败不改变 Job 终态；Agent 或后续会话仍可用 `skill_job_status` 查询。
+
+### 状态与恢复
+
+Job 状态是 JSON 可序列化数据，不保存 asyncio Task、模型连接或运行栈：
+
+- Workspace 状态保存有界的 Job 终态记录；
+- Session 状态保存本 Session 创建的 Job ID 和通知投递状态；
+- Runtime 恢复时，持久化为 `queued` 或 `running` 的 Job 统一转成 `interrupted`，不自动重放；
+- Job 历史采用固定数量上限，优先淘汰最旧终态，避免无限增长。
+
+### 退出收束
+
+- `quiesce()` 后拒绝新 produce/evolve Job；
+- `drain()` 允许已经进入 Repository 提交阶段的 Job 完成，并取消仍在生成阶段的后台 Task，
+  将其标记为 `interrupted`；
+- `drain()` 返回时所有 Job 必须处于稳定终态，保证随后状态快照不会保存活动运行栈；
+- `stop()` 只做幂等资源释放，关闭内部 AgentFactory 和 Job 资源；
+- Runtime 在 `drain()` 后调用状态快照。
+
+## Plugin、Capability、Event 与 Blackboard
+
+### Manifest 与注册
+
+Skill Manifest 声明：
 
 ```text
-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+required_capabilities = [
+  "persistence/runtime@>=1,<2",
+  "persistence/session@>=1,<2",
+  "persistence/state_store@>=1,<2",
+  "persistence/redactor@>=1,<2",
+  "blackboard/conversation@>=1,<2",
+]
+provided_capabilities = ["skill_management@1.0.0"]
+provided_tools = [
+  "skills_list",
+  "skill_search",
+  "skill_produce",
+  "skill_evolve",
+  "skill_job_status",
+]
+published_events = ["TaskContextInputEvent"]
+consumed_events = ["TaskContextInputResultEvent"]
+state_scopes = ["workspace", "session"]
+workspace_state_version = 1
+session_state_version = 1
 ```
 
-用户输入作为查询向量，Skill `description` 作为文档向量。`FastEmbedEmbedding` 直接调用 FastEmbed 的模型专用查询与文档接口，SkillPlugin 和 Ranker 不处理模型专用前缀。所有 Skill 描述使用一次批量调用生成向量。
-
-`FastEmbedEmbedding` 位于 `model_provider/impl/fastembed_embedding.py`，直接复用包提供的 `TextEmbedding` 和 `embed`，不实现模型推理或网络客户端：
-
-```python
-from fastembed import TextEmbedding
-
-model = TextEmbedding(
-    model_name=settings.model_name,
-    cache_dir=str(fastembed_cache_dir),
-)
-query_vector = list(model.query_embed(user_input))[0]
-skill_vectors = list(model.passage_embed(skill_descriptions))
-```
-
-`TextEmbedding` 实例在适配器生命周期内只创建一次并跨轮复用，不在每次用户输入时重复加载模型。`embed` 是同步 CPU 调用，适配器通过 `asyncio.to_thread` 执行，避免阻塞 EventBus 所在事件循环。
-
-对应源码边界：
-
-```text
-model_provider/
-├── base_embedding.py
-├── embedding_factory.py
-└── impl/
-    └── fastembed_embedding.py
-```
-
-`EmbeddingFactory` 是唯一判断 `embedding.provider` 的位置；应用层创建 `BaseEmbedding` 实例后注入 SkillPlugin。具体模型库差异不进入 `agent_orchestration/plugins/skill/`。
-
-Embedding 配置独立于主 Chat 模型配置，并从 `settings.json` 读取：
-
-```json
-{
-  "embedding": {
-    "provider": "fastembed",
-    "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-  }
-}
-```
-
-对应配置类型由 `model_config` 统一加载，例如：
-
-```python
-class EmbeddingSettings(BaseModel):
-    provider: Literal["fastembed"]
-    model_name: str
-```
-
-Skill 检索参数独立配置：
-
-```json
-{
-  "skill": {
-    "minimum_content_score": 0.8
-  }
-}
-```
-
-`minimum_content_score` 限制在 `[0, 1]`，默认值为 `0.80`。它属于 Skill
-检索配置，不属于 Embedding Provider 配置；旧配置未提供 `skill` 段时使用默认值。
-
-主模型继续由 `use_protocol`、`model_settings` 和对应 Chat Provider 配置决定。Embedding 不复用 `openai_base_url`、`OPENAI_API_KEY` 或主模型名称，也不根据主模型当前选择 OpenAI-compatible 或 Anthropic 协议而变化。
-
-FastEmbed 模型缓存目录由路径解析组件固定为：
-
-```text
-$ICARUS_DATA_DIR/models/fastembed/
-```
-
-首次运行时 FastEmbed 需要联网下载模型；下载完成后从本地缓存加载。缓存不存在且下载失败时，按 Embedding 不可用降级，不阻塞主 Agent。模型缓存不是 Skill 状态，不写入 SQLite。
-
-Embedding 每轮实时计算，不持久化向量。Embedding 失败时，SkillPlugin 发布失败贡献，Blackboard 视为该来源本轮已完成并允许主 Agent 继续。
-
-YAML 头使用 `PyYAML` 解析；Embedding 使用 `fastembed`；向量归一化和余弦相似度使用 `numpy`。不自行实现 YAML、模型推理或向量算法。
-
-### 排名
-
-内容相似度和生命周期共同决定最终排名：
-
-```text
-final_score = normalized_content_score * 0.8 + lifecycle_score * 0.2
-```
-
-生命周期分值：
-
-| 状态 | 未使用时间 | lifecycle_score |
-|---|---:|---:|
-| `active` | 0～14 天 | 1.00 |
-| `normal` | 15～29 天 | 0.67 |
-| `archived` | 30～59 天 | 0.33 |
-| `deletion_candidate` | 60 天及以上 | 0.00 |
-
-内容相似度归一化到 `[0, 1]`。候选必须先满足：
-
-```text
-normalized_content_score >= minimum_content_score
-```
-
-合格候选再按最终分数降序选择 Top 3；候选少于三个时返回全部合格候选。门槛只
-作用于纯内容相似度，生命周期权重只能调整相关 Skill 之间的顺序，不能把经常使用但
-语义无关的 Skill 重新带回结果。相同分数使用规范化 Skill 名称和路径稳定排序，保证
-结果可复现。
-
-默认多语言模型对当前 `skill-plugin-phase-one` 描述的本地校准结果为：普通问候
-`0.533`、TUI 多行输入设计 `0.751`、总结 SkillPlugin 第一阶段 `0.895`、验证 Skill
-动态检索链路 `0.813`、天气问题 `0.471`、创建可复用 Skill `0.835`。因此默认
-`0.80` 会过滤普通问候和无关开发请求，同时保留明确的 Skill 需求。
-
-新发现且从未使用的 Skill 使用 `discovered_at` 计算状态。排名使用本轮检索开始前的状态；Top 3 确定后再更新使用记录。
-
-### 使用定义
-
-只要 Skill 通过最低内容门槛并进入本轮检索 Top 3，就视为本轮可能被使用：
-
-- 更新 `last_used_at`；
-- `use_count + 1`；
-- 即使该 Skill 已存在于会话累计列表，也更新本轮使用记录。
-
-以下情况本身不算新的使用：
-
-- Skill 内容分低于最低门槛；
-- Skill 只因为会话列表不主动移除而继续存在；
-- 七轮倒计时到期，仅重新发送累计列表；
-- Blackboard 从历史中携带此前注入的 Skill 信息。
-
-## 使用状态存储
-
-所有 Workspace 共用一个 Icarus 级 SQLite 文件：
-
-```text
-$ICARUS_DATA_DIR/skills/skill-state.sqlite3
-```
-
-第一阶段只有一张表：
-
-```sql
-CREATE TABLE skill_usage (
-    workspace_key TEXT NOT NULL,
-    skill_key     TEXT NOT NULL,
-    discovered_at TEXT NOT NULL,
-    last_used_at  TEXT,
-    use_count     INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (workspace_key, skill_key)
-);
-```
-
-其中：
-
-- `workspace_key` 区分不同 Workspace 对同一 Skill 的独立使用状态；
-- `skill_key` 由作用域和规范化名称构成，例如 `global:skill-product` 或 `workspace:code-review`；
-- `discovered_at` 是当前 Workspace 首次发现该 Skill 的时间；
-- `last_used_at` 是最近一次进入 Top 3 的时间；
-- `use_count` 是进入 Top 3 的累计次数。
-
-SQLite 不保存：
-
-- Skill 正文；
-- YAML 元信息或路径；
-- Embedding；
-- Provider 和 Model；
-- 派生生命周期状态；
-- 会话累计注入列表；
-- 七轮计数；
-- 自动 CRUD 的过程记录。
-
-数据库是使用状态记录，不是 Skill 的主存储或检索索引。Skill 文件始终是定义来源。SQLite 丢失后可以重新扫描并建立记录，但历史使用时间和次数无法恢复。
-
-## 会话注入状态
-
-每个 SkillPlugin 实例维护独立的 `SessionSkillState`：
-
-```text
-selected_skills       当前会话累计 Skill，保持稳定插入顺序
-unchanged_turns       自上次完整注入后连续无新增的轮数
-```
-
-Skill 列表只增加，不因某轮未命中而主动删除。每轮 Top 3 与累计列表合并后：
-
-同一规范化名称视为同一个会话 Skill。如果同名 Skill 的描述、路径或作用域发生变化，累计列表原位替换为新定义并立即完整注入；典型场景是 Workspace Skill 覆盖此前的全局同名 Skill。其他未命中的旧 Skill 仍不主动退出。
-
-### 有新 Skill
-
-- 将新 Skill 追加到累计列表；
-- 发布累计列表的完整元信息；
-- `unchanged_turns = 0`。
-
-### 没有新 Skill且未达到七轮
-
-- `unchanged_turns + 1`；
-- 发布轻量的 `unchanged` 上下文；
-- 不重复发送完整 Skill 元信息。
-
-### 连续七轮没有新 Skill
-
-- 发布当前累计列表的完整元信息；
-- `unchanged_turns = 0`。
-
-因此一次完整发送后的第 1～6 个无新增轮次发送 `unchanged`，第 7 个无新增轮次重新完整发送。Runtime 重建后直接从空状态重新开始。
-
-如果扫描结果为空，或者所有候选内容分都低于最低门槛：
-
-- 会话尚未注入过 Skill 时，SkillPlugin 发布 `completed + []`，满足 Blackboard 的固定
-  上下文来源协议，但不向 User Prompt 注入空列表或 `unchanged` 文案；
-- 会话已经注入过 Skill 时，本轮空召回不主动删除旧 Skill，继续推进现有
-  `unchanged` 与七轮刷新机制；
-- 空召回不调用 `mark_used`，不更新 `last_used_at` 和 `use_count`。
-
-## Skill Context 协议
-
-SkillPlugin 复用现有 `ContextContributionEvent`，不增加 EventBus 路由规则。完整注入使用一个 `ContextBlock`：
-
-```text
-source_plugin_id = "skill"
-context_type     = "skills"
-content          = 稳定序列化后的 Skill 元信息列表
-metadata.mode    = "full"
-```
-
-无变化时：
-
-```text
-source_plugin_id = "skill"
-context_type     = "skills"
-content          = "The available skill context is unchanged from the previous full injection."
-metadata.mode    = "unchanged"
-```
-
-`unchanged` 表示无需重复注入完整列表，不表示 Skill 列表为空。完整列表使用确定性顺序和序列化格式，避免相同状态产生不必要的 Prompt 差异。
-
-## Blackboard 调整
-
-早期实现曾由 AgentPlugin 侧组合 `ContextBlock` 与原始用户输入，导致 Blackboard 保存的历史
-与 Agent 实际输入不一致。当前由 BlackboardPlugin 统一生成最终 `input_prompt`。
-
-设计调整为：
-
-```text
-Blackboard 收齐 UserInput 和必需 ContextContribution
-→ BlackboardPromptComposer 生成最终 input_prompt
-→ Blackboard 保存本轮 final_input_prompt
-→ BlackboardContextReadyEvent 携带 final_input_prompt
-→ AgentPlugin 原样传给 ReActAgent
-→ AgentCompletedEvent 到达后
-→ Blackboard 将当前 Task 的完整 Message 链写入历史
-```
-
-完整 Message 链包括 final_input_prompt、运行中实际应用的 Plugin Context、Assistant ToolCall、
-对应 ToolResult 和最终 Assistant Message。AgentCancelledEvent 到达时只提交最近的协议完整消息
-前缀；部分 Assistant 和不完整 Tool Batch 不提交。
-
-最终 User Prompt 仍保持：
-
-```text
-<plugin_context>
-...
-</plugin_context>
-
-<plugin_context_errors>
-...
-</plugin_context_errors>
-
-<user_request>
-...
-</user_request>
-```
-
-这样第一轮完整 Skill 信息会进入历史，后续 `unchanged` 轮次可以复用此前上下文；每七轮重新完整注入一次，刷新长上下文中的模型注意力。System Prompt 保持稳定。
-
-Prompt Composer 是 Blackboard 的普通组件对象，不注册为子 Plugin。AgentPlugin 不再解释 Skill、Memory 或 Knowledge 内容。
-
-## 用户显式创建或安装 Skill
-
-用户显式要求主 Agent 创建、总结、更新或安装 Skill 时，仍走普通动态检索：
-
-```text
-用户输入
-→ Embedding + 通用排名
-→ skill-product / skill-installer 自然进入 Top 3
-→ Blackboard 注入元信息
-→ 主 Agent 按需读取完整 SKILL.md
-→ 主 Agent 使用现有文件工具完成用户请求
-→ 主 Agent 直接向用户反馈
-```
-
-SkillPlugin 不实现关键词分支，不强制注入管理 Skill，也不让内部维护 Agent 接管用户显式请求。管理 Skill 的 `description` 是其检索契约。
-
-## 轮后自动生成与维护
-
-本节属于第二阶段。
-
-### 事件消费边界
-
-SkillPlugin 订阅 AgentPlugin，按 `task_id` 维护本轮临时状态。
-
-Plugin Runtime 在事件进入 inbox 前调用消费者的通用 `accepts_event(source, event)`；
-默认 Plugin 接收来源订阅送达的全部事件。SkillPlugin 声明：
-
-- 从 `user-input` 接收 `UserInputEvent` 和状态为 `failed / cancelled` 的 `InputFinishedEvent`；
-- 从 `agent` 只接收 `AgentCompletedEvent`；
-- 拒绝其他来源和其他事件。
-
-被拒绝的事件不进入 SkillPlugin inbox，不计入 Runtime 已接收或已处理数量，也不触发
-`plugin.consume` Hook。EventBus 仍然只按来源 Plugin 找订阅者，不导入或识别领域事件
-类型。
-
-### 检查时机
-
-- 收到 `UserInputEvent`：创建本轮临时状态并记录用户输入、图片和匹配 Skill；
-- 收到 `AgentCompletedEvent`：在整轮对话结束点，从完整响应恢复工具轨迹并判断一次；
-- 收到 `InputFinishedEvent(status="failed" / "cancelled")`：清理未完成轮次的临时状态；
-- 文字、工具开始、工具完成和 Agent Error 流事件不进入 SkillPlugin。
-
-唯一自动触发条件是：
-
-```text
-AgentCompletedEvent AND tool_call_count > 10
-```
-
-即至少发生 11 次工具调用。Agent step 数不参与触发。
-
-### 完整工具轨迹
-
-`AgentCompletedEvent.response.messages` 已包含该次 Agent 调用的完整消息序列。
-SkillPlugin 从最后一条 User Message 之后恢复当前轮 ReAct 轨迹：
-
-1. 先只统计 Assistant Message 中的完整 `tool_calls`；不超过 10 次时直接结束，不解析
-   可能很大的工具结果；
-2. 超过门槛后在工作线程中按 Assistant Message 顺序生成 Step 编号；
-3. 读取 Assistant Message 中的完整 `tool_calls`；
-4. 通过后续 Tool Message 的 `tool_call_id`，关联最早尚未完成的同 ID ToolCall；
-5. 从 Tool Message 解析统一的 `ToolExecutionResult`，成功和失败的工具都计数。
-
-完整 messages 的防御性复制同样在工作线程中执行，避免大工具输出阻塞 Plugin Runtime
-事件循环。
-
-如果 ToolCall 与 Tool Result 不能形成完整轨迹，自动维护 fail closed：记录聚合错误并
-跳过本轮维护，不影响主 Agent 已完成的响应。`finish_reason` 不是 `stop` 时同样不触发
-维护。
-
-### 维护 Agent 输入
-
-内部维护 Agent 获得：
-
-- 当前会话截至本轮结束的完整多轮消息；
-- 当前轮完整 Agent step、工具调用和工具结果；
-- 本轮匹配及累计注入的 Skill；
-- 轮后重新扫描得到的可用 Skill 元信息；
-- 各 Skill 的 Workspace 生命周期状态；
-- 自动创建、更新、合并、删除和 `no_op` 规则。
-
-`AgentCompletedEvent.response.messages` 已包含传给主 Agent 的历史、本轮完整 User Prompt、Assistant 中间消息、工具调用和工具结果，是完整多轮上下文和本轮轨迹的唯一 Agent 事件来源。
-
-维护 Agent 必须先判断主 Agent 是否已经根据用户请求完成 Skill 创建、更新或安装。它结合完整工具轨迹和轮后 Skill 目录重新扫描确认实际结果；已经完成的操作不能重复执行，没有额外维护价值时输出 `no_op`。
-
-### 结构化计划与 CRUD
-
-维护 Agent 不直接操作文件，只输出结构化计划：
-
-```text
-create
-update
-merge
-delete
-no_op
-```
-
-SkillPlugin 校验计划后通过内部 CRUD 执行。内部 CRUD 不注册为 Tool，不向 AgentPlugin 暴露。
-
-权限边界：
-
-- 全局 Skill 只允许读取和作为参考，不允许自动更新、合并后删除或清理；
-- Workspace Skill 可以自动创建、更新、合并和删除；
-- 进入 `deletion_candidate` 的 Workspace Skill 可以由维护 Agent 判断后直接删除，无需用户确认；
-- merge 始终可以写入新的 Workspace 目标，但只清理 `deletion_candidate` 的 Workspace 来源；其他 Workspace 来源和所有全局来源保留；
-- `active / normal / archived / deletion_candidate` 都是时间派生状态，不是 CRUD 动作，也不要求移动文件；
-- 更新、生成或合并后的目标 Skill 更新使用时间并回到 `active`。
-
-轮后自动维护属于后台操作，不向用户展示。失败只写入现有 Session 日志和 Trace，不改变已经成功的主对话结果。
-
-## 日志与 Trace
-
-日志以完整业务边界为单位，不记录逐 Token 或逐事件流细节。Event 基类提供通用的
-`trace_event_flow` 策略，默认开启；以下增量事件关闭 EventBus 和 Plugin Runtime 级
-Trace：
-
-- `AgentTextDeltaEvent`；
-- `AgentToolStartedEvent`；
-- `AgentToolCompletedEvent`。
-
-Observable EventBus 和 Observable Plugin Runtime 只读取通用策略，不判断领域事件类型。
-关闭 Trace 不改变事件发布、路由或消费，因此 OutputBridge 与 TUI 仍能收到完整的文本
-和工具状态流。
-
-保留的完整记录包括：
-
-- `agent.stream` 的开始、完整结束或错误；
-- `llm.stream` 的开始、聚合结果或错误；
-- Tool Executor 的单次完整工具执行结果；
-- `AgentCompletedEvent`、`AgentErrorEvent`、User Input、Blackboard Context 和 Plugin
-  生命周期等非增量事件的 EventBus / Runtime Trace；
-- 每轮一次的 `skill.retrieval` 聚合记录；
-- 实际启动自动维护时的 `skill.maintenance` 开始、结果或错误。
-
-`skill.retrieval` 成功记录包含：
-
-- `task_id`；
-- 扫描候选数量、通过门槛数量和 `minimum_content_score`；
-- 最多三个命中项的 `name`、`scope`、`content_score`、`lifecycle_status` 和
-  `final_score`；
-- 本轮注入模式：`full`、`unchanged` 或 `empty`；
-- 当前累计 Skill 数量；
-- 检索耗时。
-
-空召回是正常结果，写一条 `selected=[]`、`mode=empty` 的聚合记录，不写错误。检索
-失败或超时只写一条聚合错误，包含 `task_id`、错误类型、错误信息和耗时。
-
-`skill.maintenance` 记录沿用完整轮次边界：开始时记录 `task_id`、工具调用数量和
-父 Run；结束时记录结构化操作的 action、target、status 和清理结果；失败时记录错误类型
-与错误信息。不记录维护 Agent 的流式输出。
-
-Skill 日志和 Trace 不新增以下内容：
-
-- 原始用户 Prompt 或完整会话正文；
-- Embedding 向量；
-- `SKILL.md` 正文；
-- 工具输出正文；
-- API Key、Token 或其他凭据。
-
-现有完整 Agent/LLM 观测数据仍经过统一 Redactor；Skill 聚合记录只保存诊断检索与维护
-决策所需的最小字段。
-
-## 多 AgentRuntime 与并发
-
-多个 AgentRuntime 共享：
-
-- 全局 Skill 文件；
-- 同一 Workspace 的 Workspace Skill 文件；
-- Icarus 级 `skill-state.sqlite3`；
-- 当前 Workspace 对 Skill 的使用状态。
-
-每个 AgentRuntime 独立维护：
-
-- Blackboard 对话历史；
-- 会话累计 Skill 列表；
-- 七轮计数；
-- 本轮工具调用计数和维护触发状态；
-- Session 日志和 Trace。
-
-第一阶段只有并发扫描和 SQLite 短事务 UPSERT。SQLite 启用 WAL、1 秒 busy timeout，并由线程安全锁保护单连接；扫描、排名和数据库操作均通过工作线程执行，不阻塞 Plugin Runtime 的事件循环。SQLite 负责使用状态写入的原子性，不增加应用级协调器。
-
-第二阶段开始修改 Skill 文件时采用简单的同进程协调规则：
-
-- 同一 Workspace 同时最多运行一个自动维护任务；
-- 已有维护任务运行时，新的自动触发直接跳过，不排队；
-- LLM 分析期间不持有文件写锁；
-- 执行计划前重新扫描 Skill，并比较分析前后的内容 Hash；
-- 当前进程内的 Repository writer 共享 Workspace 写锁，并在锁内执行最终 Hash 校验与 mutation；
-- 被同进程 Repository writer 修改过的目标跳过并记录冲突；
-- 文件更新使用同目录临时文件加原子替换；
-- 单项失败不回滚此前成功项，也不影响主 Agent。
-
-跨进程 Skill 文件写协调不属于前两个阶段；外部进程、编辑器或不使用 Repository 的 writer 在最终校验后的并发修改不具备原子 CAS 保证。明确多进程部署后再增加 lock-file 或外部协调机制。
-
-## 故障降级
-
-| 故障 | 行为 |
-|---|---|
-| 单个 Skill YAML 无效 | 记录错误并跳过该 Skill |
-| Skill 目录不存在 | 视为空目录，主 Agent 继续 |
-| SQLite 初始化或写入失败 | 记录错误；本轮可使用中性生命周期分继续检索 |
-| Embedding 失败 | 发布失败贡献；Blackboard 继续组装主 Agent 上下文 |
-| 所有 Skill 内容分低于门槛 | 正常空召回；不注入、不更新使用状态 |
-| Skill 检索超过 30 秒 | 发布失败贡献并在当前 Runtime 熔断后续检索，避免重复遗留模型任务 |
-| ContextContribution 发布失败 | 交给现有 Plugin Runtime 记录，不侵入 EventBus |
-| 维护 Agent 失败 | 记录日志和 Trace，不影响已完成对话 |
-| CRUD 校验失败 | 跳过对应操作并记录原因 |
-| 文件 Hash 冲突 | 跳过冲突操作，不覆盖新版本 |
-
-Skill 是增强上下文，不应因为检索或后台维护失败使主 Agent 不可用。
-
-## 分阶段实施
-
-### 第一阶段：动态检索与注入闭环
-
-实现：
-
-- Skill 路径解析；
-- 全局与 Workspace 扫描、YAML 头解析和同名覆盖；
-- Embedding 独立配置，以及 `PyYAML`、`fastembed`、`numpy` 依赖；
-- 单表 `SkillUsageStore`；
-- 供应商无关 Embedding 接口和 FastEmbed 实现；
-- 80/20 排名、Top 3 和稳定排序；
-- `0.80` 最低内容匹配门槛和空召回；
-- 会话累计列表、`full / unchanged` 和七轮刷新；
-- `ContextContributionEvent` 发布；
-- AgentRuntimeService 注册与订阅 SkillPlugin；
-- Blackboard 构造并保存实际发送给 Agent 的完整 User Prompt；
-- 扫描、状态存储和 Embedding 的降级行为。
-
-验收标准：
-
-- 明确相关的用户输入能选出预期 Top 3，无关输入可以不召回任何 Skill；
-- Workspace Skill 可以覆盖同名全局 Skill；
-- 新 Skill 出现时完整注入且不移除旧 Skill；
-- 连续六轮无新增发送 `unchanged`，第七轮重新完整注入；
-- Top 3 命中正确更新 Workspace 使用状态；
-- 历史 User Message 与实际 Agent 输入一致并包含插件上下文；
-- Embedding 或 Skill 扫描失败时主 Agent 仍可执行。
-
-### 第二阶段：轮后自动维护
-
-实现：
-
-- 从 `AgentCompletedEvent.response.messages` 恢复本轮完整工具轨迹；
-- 仅在成功终态且工具调用数大于十时触发；
-- 内部维护 Agent 及其规则 Prompt；
-- 完整多轮上下文和本轮工具轨迹输入；
-- 结构化维护计划；
-- SkillPlugin 内部 CRUD；
-- 重复操作识别、同名检查和可合并判断；
-- Workspace Skill 自动清理；
-- 同进程 Workspace 维护任务去重和写前 Hash 检查。
-
-验收标准：
-
-- 十次工具调用不触发，十一次触发；
-- 失败工具计数，失败对话不触发；
-- 每轮只在结束后判断一次；
-- 维护 Agent 能看到完整多轮上下文；
-- 主 Agent 已完成的显式 Skill 操作不会被重复执行；
-- 全局 Skill 不被自动修改或删除；
-- 自动维护失败不影响主对话。
+Factory 返回同一注册单元中的 Plugin、`skill_management` Capability、五个 Tool 和状态提供者。Runtime 继续负责原子校验、名称冲突处理、来源订阅和 ToolRegistry 冻结。
+
+`skill_management` Capability 暴露与五个 Tool 相同的 list、search、produce、evolve 和
+job-status 领域入口，所有调用共享权限、前置检查和 Job 规则。Capability 不暴露内部 Agent、
+Repository 或可绕过权限的写接口。
+
+### Blackboard
+
+SkillPlugin 不再发布 `ContextContributionEvent`，Blackboard 的 `required_context_sources` 不再包含 `skill`。没有其他 Context 来源时，Blackboard 收到 `UserInputEvent` 后即可发布 `BlackboardContextReadyEvent`。
+
+Skill 检索延迟由每轮固定关键路径移到 Agent 主动 Tool 调用路径。完整 Skill 内容由通用 `read` 的 Tool Result 自然进入当前 ReAct 轨迹。
+
+`blackboard/conversation` 是 SkillPlugin 的直接只读依赖，只用于 Produce/Evolve Job 拼接已提交
+历史。Blackboard 不反向依赖 `skill_management`，也不再等待 Skill 的 Context Contribution，避免
+启动依赖或用户输入就绪条件形成环。
+
+## 日志与 Hook
+
+在统一 Tool 执行 Hook 之外补充 Skill 领域指标：
+
+- `skill.list`：数量、scope、耗时和错误；
+- `skill.search`：候选数量、返回名称、耗时和错误；
+- `skill.produce` / `skill.evolve`：Job ID、目标、状态迁移和错误；
+- `skill.job_status`：Job ID、当前状态和错误；
+
+Hook 不记录完整 Skill 正文、用户消息、内部生成 Prompt 或未脱敏证据。Hook 失败不能改变 Tool、Job 或 Repository 结果。旧 `skill.retrieval` 和 `skill.maintenance` Hook 删除。
+
+## 故障处理
+
+- 无效 Skill：记录路径和原因，跳过；
+- 搜索无结果：成功返回空数组；
+- produce/evolve 权限关闭：返回 `disabled_by_policy`，无副作用；
+- 目标冲突或不存在：在创建 Job 前返回明确失败；
+- Producer/Evolver Agent 失败：Job 进入 `failed`；
+- 输出解析、脱敏或 Repository 校验失败：Job 进入 `failed`，不写部分结果；
+- Produce 前置冲突：立即返回 Tool 失败，不创建 Job；
+- Produce 提交前冲突：Job 失败，不覆盖任一作用域中的同名 Skill；
+- Evolve 并发快照冲突：Job 失败，不覆盖新内容；
+- 运行中 Context 投递失败：只更新通知状态，不改变 Job 结果；
+- Runtime 退出时仍在生成：Job 进入 `interrupted`。
+
+## 迁移范围
+
+### 保留并调整
+
+- `SkillScanner`：保留发现与 Workspace 覆盖规则，增加根目录约束；
+- `SkillRepository`：保留安全快照和原子提交，收窄为单目标 produce/evolve；
+- 脱敏和严格解析逻辑：复用安全能力，改成单目标 Job 输入输出；
+- `WorkspaceMaintenanceCoordinator`：改为 Job 写入协调，不再驱动自动维护。
+
+### 新增
+
+- `SkillCatalog`；
+- `SkillJob` 与 `SkillJobManager`；
+- `SkillsListTool`；
+- `SkillSearchTool`；
+- `SkillProduceTool`；
+- `SkillEvolveTool`；
+- `SkillJobStatusTool`；
+- SkillPlugin Workspace / Session 状态提供者。
+
+### 删除
+
+- 每轮 `_consume_user_input()` 自动检索；
+- Skill `ContextContributionEvent` 与注入序列化；
+- `SessionSkillState`、累计列表和七轮刷新；
+- `SkillTurnState` 与轮后复杂度阈值；
+- `SkillRanker`、`SkillUsageStore` 和 `skill-state.sqlite3`；
+- `BaseEmbedding`、`EmbeddingFactory`、FastEmbed 实现与 embedding 配置；
+- `fastembed` 和 `numpy` 依赖；
+- `AgentCompletedEvent` 触发的自动维护；
+- 多操作 `SkillMaintenancePlan` 的隐式 create/update/merge/delete；
+- 自动检索超时后永久禁用整个 Runtime 的状态。
 
 ## 测试策略
 
-测试目录镜像源码目录，使用 pytest 和原生 `assert`。
+### Catalog 与发现 Tool
 
-第一阶段重点测试：
+- list 的 scope、排序、路径与 Workspace 覆盖；
+- search 的参数、归一化、字段优先级、最多 10 项和空结果；
+- 空格、`-`、`_` 和大小写差异能够命中；
+- 多关键词命中数量决定排序，结果稳定；
+- 不把 Agent 输入解释为原始正则；
+- 无效 YAML、重复名称和越界符号链接被跳过。
 
-- Scanner：合法、非法、缺字段、同名覆盖、稳定顺序；
-- Usage Store：首次发现、重复命中、Workspace 隔离、生命周期边界；
-- Ranker：最低内容门槛、80/20 计算、Top 3、少于三个候选、稳定 tie-break；
-- Session State：新增、无变化、七轮刷新、Runtime 新实例重置；
-- SkillPlugin：Runtime 入队前的来源与完整事件过滤、空召回、task_id 透传、
-  成功与失败贡献；
-- Blackboard：等待 Skill、完整 Prompt 发布、成功历史提交、失败不提交；
-- 应用集成：UserInput → Skill → Blackboard → Agent；
-- 降级：Embedding、SQLite 和单个 Skill 解析失败。
+### Produce、Evolve 与 Job
 
-第二阶段重点测试：
+- 两个权限默认关闭且相互独立；
+- 关闭时没有 Agent、Job 或文件副作用；
+- produce 要求显式 scope，并拒绝 Workspace 或全局任一作用域已存在的同名目标；
+- produce 在提交前重复执行双作用域冲突检查，覆盖竞态；
+- evolve 拒绝未知目标，并正确创建全局 Skill 的 Workspace 覆盖；
+- Tool 返回 queued Job，状态按合法顺序迁移；
+- Job 输入使用扁平执行身份、Blackboard 已提交历史和只读 `task_messages`；
+- 脱敏、严格解析、单目标提交和并发冲突保护；
+- Job 成功、失败、中断、通知投递与状态查询；
+- Runtime 恢复把未完成 Job 标记为 interrupted；
+- 历史上限和退出资源收束。
 
-- 从完整 `AgentCompletedEvent` 恢复工具调用计数、结果和终态触发；
-- 多轮上下文传递；
-- `no_op` 与重复操作识别；
-- CRUD 权限和全局只读；
-- 同 Workspace 任务去重；
-- Hash 冲突和原子替换；
-- 自动维护异常隔离。
+### Runtime 集成
 
-观测重点测试：
+- Manifest、PluginRegistration、Capability、五个 Tool 和状态声明完全一致；
+- Blackboard 不再等待 Skill Context；
+- Agent 可以完成 `skill_search -> read -> 执行 Skill`；
+- Agent 可以完成 `skill_produce/evolve -> job_id -> 通知或 job_status`；
+- Job 完成通过现有 `TaskContextInputEvent` 通知活跃 Agent；
+- Agent Run 仍使用稳定 Tool 快照；
+- `ReActAgent`、Plugin Runtime 和 EventBus 不出现 Skill 专用逻辑。
 
-- 文本与工具增量仍到达 OutputBridge / TUI；
-- 增量事件不产生 `event.publish`、`event.route` 和 `plugin.consume` Trace；
-- SkillPlugin 不接收增量事件；
-- `AgentCompletedEvent`、Agent/LLM 聚合终态、完整工具执行和 Skill 聚合摘要仍被记录；
-- Skill 聚合记录不包含原始 Prompt、Embedding、Skill 正文和工具输出正文。
+## 验收标准
 
-验证顺序：
-
-```bash
-apps/agent/.venv/bin/python -m pytest apps/agent/test/agent_orchestration/plugins/skill -q
-apps/agent/.venv/bin/python -m pytest apps/agent/test/agent_orchestration/plugins/blackboard -q
-apps/agent/.venv/bin/python -m pytest apps/agent/test/application -q
-apps/agent/.venv/bin/python -m pytest apps/agent/test -q
-apps/agent/.venv/bin/python -m compileall -q apps/agent/src apps/agent/test
-git diff --check
-```
-
-增加一个使用缓存模型的小规模真实检索 Smoke Test。常规单元测试使用 Stub BaseEmbedding，不依赖网络或模型下载；真实 Smoke Test 只有在 FastEmbed 模型已经缓存或允许下载时才运行。
+- 普通用户输入不触发 Skill 扫描或 Prompt 注入；
+- Agent 只有主动调用 list/search 时才发现 Skill；
+- 完整 Skill 只有通过通用 `read` 才进入 ReAct 轨迹；
+- 不存在自动轮后生产或演化；
+- `allow_produce=False` 时不能通过 `skill_produce` 写入；
+- `allow_evolve=False` 时不能通过 `skill_evolve` 写入；
+- Produce 只能写入主 Agent 显式选择的 `workspace` 或 `global`，且两个作用域任一同名时均不创建；
+- Producer/Evolver 能看到此前 Session 历史和当前任务截至 Tool 调用时的消息；
+- produce/evolve 以可查询、可通知、可持久化终态的后台 Job 执行；
+- SkillPlugin 通过 Manifest 提供 `skill_management` Capability 和五个 Tool；
+- Blackboard、Agent Kernel、Plugin Runtime 与 EventBus 保持通用。

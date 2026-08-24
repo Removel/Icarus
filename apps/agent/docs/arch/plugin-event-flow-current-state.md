@@ -2,373 +2,211 @@
 
 ## 文档定位
 
-本文是当前 Manifest Runtime Plugin 组装、订阅关系、事件流和状态所有权的事实快照，帮助读者快速判断：
+本文记录当前 Manifest Runtime 的 Plugin 装配、来源订阅、Tool 注入、事件流和状态所有权。
+长期架构原则见 `plugin-eventbus-blackboard-design.md`，Manifest 与生命周期契约见
+`plugin-runtime-manifest-lifecycle-design.md`，SkillPlugin 细节见 `skill-plugin-design.md`。
+本文以当前 Manifest、Factory 和测试生成的冻结运行图为准。
 
-- 当前有哪些 Plugin 已注册并参与运行；
-- Plugin 之间通过哪些来源 Event 通信；
-- 哪些能力只是 Plugin 内部组件，不是独立 Plugin；
-- 哪些 Plugin 仍处于规划阶段，尚未接入当前 Runtime。
+## 当前 Runtime 组件
 
-长期架构原则见 `plugin-eventbus-blackboard-design.md`；Manifest 与生命周期契约见
-`plugin-runtime-manifest-lifecycle-design.md`；具体 Skill 检索与维护设计见
-`skill-plugin-design.md`。本文以当前内置 Manifest 和 Runtime Host 生成的冻结运行图为准。
+| 组件 | 当前职责 |
+|---|---|
+| `PluginRuntimeHost` | 发现 Manifest，校验依赖，并原子装配 Capability、Tool、Event 订阅和状态提供者 |
+| `PluginManager` | 注册 Plugin，启动独立 inbox Worker，执行 quiesce、drain、snapshot 和 stop |
+| `EventBus` | 只按来源 `source_plugin_id` 路由 Event，不解释事件类型和业务 Payload |
+| `ToolRegistry` | 汇总内置 Tool 与 Plugin Tool，在 Runtime READY 后冻结 |
+| Runtime Hook Wrapper | 观测 Event、Plugin、Agent、LLM 和 Tool 生命周期，不干预主流程 |
+| `PersistencePlugin` | 提供 Runtime、Session、State Store 和 Redactor Capability |
 
-## 当前状态总览
+当前注册的 Plugin：
 
-### Runtime Infrastructure
+| Plugin ID | 主要职责 |
+|---|---|
+| `persistence` | Trace、日志、Session 元数据，以及 Workspace / Session Plugin 状态 |
+| `builtin-tools` | 注册 `read`、`write`、`insert`、`bash` |
+| `user-input` | FIFO 接收输入，发布排队、开始、输入和结束 Event |
+| `blackboard` | 维护跨轮对话和当前任务状态，发布主 Agent 调用快照 |
+| `agent` | 适配无状态 ReActAgent，执行 Run，处理运行中 Context 与取消请求 |
+| `skill` | 提供显式 Skill 发现、搜索、生产、演化和 Job 查询 |
+| `output-bridge` | 把用户输入状态、Agent Stream 和控制结果广播给应用订阅者 |
 
-| 组件 | 当前状态 | 职责 |
-|---|---|---|
-| `PluginRegistry` | 已实现、已使用 | 注册 Plugin，并维护 `source_plugin_id → subscriber_plugin_ids` |
-| `EventBus` | 已实现、已使用 | 接收 Plugin 发布的 Event，只按来源异步路由 |
-| `PluginRuntime` | 已实现、已使用 | 为每个 Plugin 提供独立 inbox 和顺序消费 Worker |
-| `PluginManager` | 已实现、已使用 | 统一注册、订阅、启动、Drain 和停止 Plugin Runtime |
-| `PluginRuntimeHost` | 已实现、已使用 | 发现 Manifest，校验并原子装配 Capability、Tool、Event 拓扑与状态接口 |
-| `PluginManifestDiscovery` | 已实现、已使用 | 发现内置目录和配置显式目录中的 `manifest.json` |
-| Runtime Hook Wrapper | 已实现、已使用 | 观测 Event 发布、路由、Plugin 消费和生命周期 |
-| `PersistencePlugin` | 已实现、已接入 | 适配 PersistenceRuntime，并提供统一 Plugin State Store |
+`ReActAgent`、Skill Catalog、Producer、Evolver、JobManager、Repository 和 WriteCoordinator
+都是所属 Plugin 内的普通组件，不注册为子 Plugin。
 
-EventBus 不检查 Event 类型，不解析 Payload，也不执行 Plugin 业务逻辑。每个订阅 Plugin 在自己的统一入口中判断是否处理：
-
-```python
-async def consume(
-    self,
-    source_plugin_id: str,
-    event: Event,
-) -> None:
-    ...
-```
-
-### 当前已注册 Plugin
-
-| Plugin ID | 实现 | 当前状态 | 主要职责 |
-|---|---|---|---|
-| `user-input` | `UserInputPlugin` | 已实现、已接入 | FIFO 接收用户输入，发布队列/开始/输入/结束 Event |
-| `skill` | `SkillPlugin` | 第一、二阶段已实现并接入 | 对话前动态检索和注入 Skill；对话后从完整 Agent 终态恢复工具轨迹并尝试后台维护 Skill |
-| `blackboard` | `BlackboardPlugin` | 已实现、已接入 | 汇聚必需 Context，维护含 ToolCall/ToolResult 的跨轮历史，发布主 Agent 完整调用快照 |
-| `agent` | `AgentPlugin` | 已实现、已接入 | 适配无状态 ReActAgent，处理 Task Context / Cancel，并发布原始 Agent Stream / Terminal Event |
-| `output-bridge` | `OutputBridgePlugin` | 已实现、应用内部接入 | 将 UserInput 和 Agent Event 广播到 `AgentRuntimeService.subscribe_events()` 创建的实时订阅，供 TUI/Transport 独立消费 |
-| `persistence` | `PersistencePlugin` | 已实现、已接入 | 管理 Trace、日志、Session 元数据和 Plugin Workspace/Session 状态文件 |
-| `builtin-tools` | `BuiltinToolsPlugin` | 已实现、已接入 | 通过 PluginRegistration 提供 read/write/insert/bash |
-
-### 当前不是独立 Plugin 的组件
-
-| 组件 | 所属边界 | 说明 |
-|---|---|---|
-| `ReActAgent` | Agent 能力内核 | 无状态，不注册到 PluginRegistry；由 AgentPlugin 适配 |
-| `BlackboardPromptComposer` | BlackboardPlugin 内部组件 | 组合动态 Context 和用户请求，生成最终 User Prompt |
-| `FastEmbedEmbedding` | `model_provider` | 生成 Skill 检索向量，不感知 Plugin 业务 |
-| `SkillMaintainer` | SkillPlugin 内部组件 | 调用独立、无工具的维护 Agent，只生成结构化计划 |
-| Main AgentFactory | AgentPlugin 内部组件 | 由 AgentPlugin Factory 创建，组装并缓存主 ReActAgent；随 AgentPlugin 生命周期关闭 |
-| Maintenance AgentFactory | SkillPlugin 内部组件 | 由 SkillPlugin Factory 创建并随其关闭；不发布业务 Event，不获得文件工具 |
-| `SkillRepository` | SkillPlugin 内部文件边界 | 校验并执行 Workspace Skill CRUD，全局 Skill 只读 |
-| `SkillUsageStore` | SkillPlugin 内部状态存储 | 按 Workspace 保存发现、使用和维护激活时间 |
-| `WorkspaceMaintenanceCoordinator` | 进程级内部组件 | 使用所有权 Token 保证同进程同 Workspace 同时最多一个维护任务 |
-| `SkillTurnState` | SkillPlugin 会话内状态 | 按 task_id 保存当前轮输入和命中 Skill；终态时从完整 Agent messages 恢复工具轨迹 |
-| `TaskChannelRegistry` | Agent Runtime 会话内控制状态 | 保存活动 TaskChannel 和有界已结束 Task 墓碑，供 UserInputPlugin、AgentPlugin 和 Service 共享 |
-
-这些组件是普通对象，不注册为子 Plugin，也不通过 EventBus 互相通信。
-
-### 尚未接入当前 Runtime 的规划 Plugin
-
-| 规划能力 | 当前状态 | 备注 |
-|---|---|---|
-| `MemoryPlugin` | 未实现/未接入 | 未来提供记忆检索和轮后沉淀 |
-| `KnowledgePlugin` | 未实现/未接入 | 未来提供知识检索 Context |
-| `StylePlugin` | 未实现/未接入 | 未来消费 Agent 原始文本流并输出风格化文本 |
-| `CharacterPlugin` | 未实现/未接入 | 未来提供角色风格配置 |
-| `TTSPlugin` | 未实现/未接入 | 未来消费文本流并生成语音 |
-| `Emotion / L2D Plugin` | 未实现/未接入 | 未来生成情绪、动作或表现层参数 |
-| 正式 WebUI/TUI Plugin | 未实现 | 当前只有应用内部 `OutputBridgePlugin`，TUI 本身不注册到 PluginRuntime |
-
-## 当前总图
-
-为突出 Plugin 的生产/消费关系，本图隐藏 EventBus。每条实线表示 `Producer Plugin → Consumer Plugin`，实际实现仍由 EventBus 按来源异步路由；虚线表示 Plugin 内部或应用组装组件调用。
+## 当前运行图
 
 ```mermaid
 flowchart LR
     User["User / TUI"]
     Service["AgentRuntimeService"]
-
-    U["UserInputPlugin\nuser-input"]
-    S["SkillPlugin\nskill"]
-    B["BlackboardPlugin\nblackboard"]
-    A["AgentPlugin\nagent"]
-    O["OutputBridgePlugin\noutput-bridge"]
-
-    ReAct["ReActAgent\n无状态能力内核"]
-    Embed["FastEmbedEmbedding"]
-    Maintainer["SkillMaintainer + Maintenance Agent\n无工具、非 Plugin"]
-    Repo["SkillRepository"]
-    Usage["SkillUsageStore"]
-    Coord["WorkspaceMaintenanceCoordinator"]
+    U["UserInputPlugin"]
+    B["BlackboardPlugin"]
+    A["AgentPlugin / ReActAgent"]
+    S["SkillPlugin"]
+    O["OutputBridgePlugin"]
+    Registry["共享 ToolRegistry\n基础 Tool + 五个 Skill Tool"]
+    Catalog["SkillCatalog"]
+    Jobs["SkillJobManager"]
+    Generator["Producer / Evolver\n独立无工具 Agent"]
     Files["Global / Workspace SKILL.md"]
-    History["Blackboard Context\n跨轮 User / Assistant"]
 
     User --> Service
-    Service -. "submit" .-> U
-    Service -. "cancel_task" .-> A
-
-    U -- "UserInputEvent" --> S
-    U -- "UserInputEvent / InputFinishedEvent" --> B
-    U -- "Input State / UserInput Event" --> O
-
-    S -- "ContextContributionEvent" --> B
-    B -- "BlackboardContextReadyEvent" --> A
-
-    A -- "AgentCompleted / AgentError / AgentCancelled" --> U
-    A -- "AgentCompleted / AgentError / AgentCancelled" --> B
-    A -- "AgentCompletedEvent" --> S
-    A -- "Agent Stream / Terminal Event" --> O
-
-    O -. "per-subscription queue" .-> Service
+    Service -. submit .-> U
+    U -- UserInputEvent --> B
+    B -- BlackboardContextReadyEvent --> A
+    A -- Stream / Terminal --> U
+    A -- Stream / Terminal --> B
+    U -- Input State --> O
+    A -- Stream / Terminal --> O
+    O -. subscription .-> Service
     Service --> User
 
-    A -. "invoke / stream" .-> ReAct
-    B -. "维护" .-> History
-    S -. "检索向量" .-> Embed
-    S -. "读取 / 更新" .-> Usage
-    S -. "claim / release" .-> Coord
-    S -. "轮后计划" .-> Maintainer
-    S -. "安全 CRUD" .-> Repo
-    Repo -. "读写" .-> Files
+    Registry -. Run 开始时快照 .-> A
+    A -. skills_list / skill_search .-> S
+    S --> Catalog --> Files
+    A -. read path .-> Files
+    A -. skill_produce / skill_evolve / skill_job_status .-> S
+    S --> Jobs --> Generator
+    Jobs --> Files
+    Jobs -- TaskContextInputEvent --> A
+    A -- TaskContextInputResultEvent --> S
+    A -- TaskContextInputResultEvent --> O
+    B -. conversation Capability .-> S
 ```
 
-图中没有画出 EventBus 节点，但实线并非 Plugin 之间的直接方法调用。生产方仍调用 `publish(event)`，EventBus 根据生产方 `source_plugin_id` 将同一 Event 投递到订阅者各自的 inbox，最终由订阅者统一 `consume(source_plugin_id, event)` 处理。
+图中的 Plugin 实线通信都经过 EventBus；点线表示同一进程内的 Capability 或普通组件调用。
+EventBus 仍只按来源路由，订阅者在入队前通过 `accepts_event` 判断具体 Event。
 
-## 来源订阅关系
+## Manifest 生成的来源订阅
 
-以下关系不再由 `AgentRuntimeService` 手写。每个内置 Plugin 的 Manifest 声明
-`published_events` 和 `consumed_events`，Runtime Host 在 READY 前生成同等的来源订阅并冻结。
-
-| 来源 Plugin | 订阅 Plugin | 订阅者实际处理的主要 Event |
+| 来源 Plugin | 订阅 Plugin | 当前处理内容 |
 |---|---|---|
-| `user-input` | `skill` | `UserInputEvent`：启动本轮 Skill 检索并建立轮状态；失败或取消的 `InputFinishedEvent`：清理轮状态 |
-| `user-input` | `blackboard` | `UserInputEvent`、`InputFinishedEvent`：保存本轮输入和终态 |
-| `user-input` | `output-bridge` | 用户输入队列及任务状态 Event，广播给 TUI / 上层应用的独立实时订阅 |
-| `skill` | `blackboard` | `ContextContributionEvent`：本轮 Skill 上下文或降级错误 |
-| `blackboard` | `agent` | `BlackboardContextReadyEvent`：完整历史、最终 User Prompt、模型角色和工具配置 |
-| `agent` | `user-input` | `AgentCompletedEvent`、`AgentErrorEvent`、`AgentCancelledEvent`：结束当前 FIFO 任务 |
-| `agent` | `blackboard` | 三种 Agent 终态：成功提交完整 Task 消息，取消提交安全前缀，失败只清理任务 |
-| `agent` | `output-bridge` | 原始 Agent Stream Event，广播给 TUI / 上层应用的独立实时订阅 |
-| `agent` | `skill` | 只接收 `AgentCompletedEvent`：从完整 messages 恢复轮轨迹并判断轮后维护 |
+| `user-input` | `blackboard` | `UserInputEvent`、`InputFinishedEvent` |
+| `user-input` | `output-bridge` | 输入队列、开始、输入和结束状态 |
+| `blackboard` | `agent` | `BlackboardContextReadyEvent` |
+| `agent` | `user-input` | Agent 完成、失败或取消终态 |
+| `agent` | `blackboard` | 提交成功或安全取消前缀，清理失败任务 |
+| `agent` | `output-bridge` | 原始 Agent Stream、终态和运行中操作结果 |
+| `agent` | `skill` | `TaskContextInputResultEvent`，记录 Job 通知是否被接受 |
+| `skill` | `agent` | Job 完成后发布的 `TaskContextInputEvent` |
 
-同一个来源可能发布其他 Event，例如 `AgentTextDeltaEvent`。EventBus 仍只按来源找到
-订阅者；每个 Plugin Runtime 在入队前调用订阅者的 `accepts_event`。SkillPlugin 拒绝文本
-和工具增量，因此这些事件不进入其 inbox，也不触发其 `plugin.consume` Hook。
+SkillPlugin 不再订阅 UserInput 或 AgentCompleted，不再发布
+`ContextContributionEvent`。Blackboard 默认没有必需 Context 来源，所以普通用户请求不等待
+Skill 检索，也不会被自动注入 Skill 内容。Blackboard 仍保留通用 ContextContribution 实现，
+未来有真实上下文 Plugin 接入时再由对应 Manifest 声明发布与消费关系。
 
-当前 Manifest 生成的主要订阅关系：
-
-```text
-skill        <- user-input
-skill        <- agent
-blackboard   <- user-input
-blackboard   <- skill
-output-bridge<- user-input
-agent        <- blackboard
-user-input   <- agent
-blackboard   <- agent
-output-bridge<- agent
-```
-
-## 对话前检索与主 Agent 执行
+## 主 Agent 与 Skill 发现流程
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as User / TUI
+    actor User
     participant U as UserInputPlugin
-    participant Bus as EventBus
-    participant S as SkillPlugin
     participant B as BlackboardPlugin
-    participant A as AgentPlugin
-    participant R as ReActAgent
-    participant O as OutputBridgePlugin
+    participant A as AgentPlugin / ReActAgent
+    participant S as SkillPlugin
+    participant C as SkillCatalog
+    participant R as read Tool
 
     User->>U: submit(prompt, images)
-    U->>Bus: InputQueuedEvent
-    Bus-->>O: source=user-input
-
-    U->>Bus: InputStartedEvent
-    Bus-->>O: source=user-input
-    U->>Bus: UserInputEvent
-    par 路由到 SkillPlugin
-        Bus-->>S: UserInputEvent
-        S->>S: 扫描 Skill / FastEmbed / 0.80 门槛 / Top 3 / 更新 SessionSkillState
-        S->>Bus: ContextContributionEvent(full / unchanged / failed)
-        Bus-->>B: source=skill
-    and 路由到 BlackboardPlugin
-        Bus-->>B: UserInputEvent
-    and 路由到输出桥
-        Bus-->>O: UserInputEvent
+    U->>B: UserInputEvent
+    B->>A: BlackboardContextReadyEvent
+    Note over A: tools=None 时从冻结 ToolRegistry 取得全部 Tool
+    opt Agent 判断需要浏览目录
+        A->>S: skills_list(scope)
+        S->>C: list(scope)
+        C-->>A: name / description / scope / path
     end
-
-    B->>B: 等待 UserInput + 必需 Context 来源
-    B->>B: 组合最终 input_prompt 和 history_messages
-    B->>Bus: BlackboardContextReadyEvent
-    Bus-->>A: source=blackboard
-    A->>R: astream(system, history, input_prompt, tools, run_control)
-
-    loop 当前轮 ReAct Step
-        R-->>A: AgentTextDeltaEvent / AgentToolStartedEvent / AgentToolCompletedEvent
-        A->>Bus: 发布原始 Agent Stream Event
-        Bus-->>O: 展示文本和工具状态
-        Note over Bus,S: SkillPlugin 入队前拒绝文本与工具增量
+    opt Agent 判断需要搜索专用流程
+        A->>S: skill_search(keywords)
+        S->>C: 归一化后的简单关键词包含匹配
+        C-->>A: 最多 10 个轻量候选
     end
-
-    R-->>A: AgentCompletedEvent / AgentErrorEvent，或抛出取消
-    A->>Bus: 发布 Completed / Error / Cancelled 终态 Event
-    par 结束 FIFO 输入任务
-        Bus-->>U: AgentCompletedEvent / AgentErrorEvent / AgentCancelledEvent
-    and 更新 Blackboard
-        Bus-->>B: AgentCompletedEvent / AgentErrorEvent / AgentCancelledEvent
-    and 输出给用户
-        Bus-->>O: AgentCompletedEvent / AgentErrorEvent / AgentCancelledEvent
-    and 判断轮后维护
-        Bus-->>S: AgentCompletedEvent
+    opt Agent 采用候选 Skill
+        A->>R: read(candidate.path)
+        R-->>A: 完整 SKILL.md 作为当前 Tool Result
     end
-
-    U->>Bus: InputFinishedEvent
-    Bus-->>B: 标记 input_finished，满足双终态后清理轮状态
-    opt status=failed / cancelled
-        Bus-->>S: 清理失败或取消轮状态
-    end
-    Bus-->>O: 结束当前 TUI 轮次
+    A-->>User: Agent Stream / Terminal
 ```
 
-Blackboard 是主会话跨轮状态的权威所有者。正常完成时，它保存本 Task 的 User、已应用
-Plugin Context、Assistant ToolCall、对应 ToolResult 和最终 Assistant；取消时只保存最近一个
-协议完整的安全消息前缀。SkillPlugin 不直接读取 Blackboard；它通过订阅 `agent` 来源，在
-`AgentCompletedEvent.response.messages` 中取得主 Agent 本轮真实使用的多轮消息快照。
+Catalog 每次调用重新扫描全局和 Workspace 目录。Workspace 同名 Skill 覆盖全局 Skill。
+搜索只对 `name`、`description` 和可选 `keywords` 做 casefold、分隔符归一化和转义后的
+包含匹配；不使用 Embedding、BM25、编辑距离、拼写纠错或自动分词。
 
-## 运行中介入
+五个 Skill Tool 由 Skill Manifest 声明，由 Factory 作为 `PluginRegistration.tools` 返回，
+Runtime Host 注册到与 AgentFactory 共享的 `ToolRegistry`。Registry 在 READY 后冻结；
+ReActAgent 在每次 Run 开始时取得允许 Tool 的执行快照，因此 Kernel 不包含 Skill 专用分支。
 
-`AgentRuntimeService` 在当前 Session 内共享一个 `TaskChannelRegistry`。用户侧只通过
-`cancel_task(task_id, reason)` 请求确定性取消，不提供运行中 Context API。Memory、Knowledge
-或 Supervisor 等内部 Plugin 通过明确订阅向 AgentPlugin 发布 `TaskContextInputEvent`；Plugin
-也可以发布 `TaskCancelRequestedEvent`。EventBus 请求会异步收到带原请求 event_id 的结果 Event。
+## Produce 与 Evolve Job
 
-ReActAgent 只通过每次调用传入的 `run_control` 在稳定边界读取控制状态：每次 LLM 前注入 FIFO
-Context Batch、每个 Tool Batch 前检查取消、Completed 前原子关闭或继续一轮。AgentPlugin 负责
-取消活动执行协程；BashTool 的异步路径负责 `terminate → kill → wait`。取消只阻止后续执行，
-不回滚已经发生的 Tool 副作用。
-
-## 对话后自动维护
+`allow_produce` 和 `allow_evolve` 是独立严格布尔配置，默认都是 `false`。权限关闭时 Tool
+仍存在，但执行返回 `disabled_by_policy`。
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as AgentPlugin
-    participant U as UserInputPlugin
-    participant Bus as EventBus
+    participant A as Main Agent
     participant S as SkillPlugin
-    participant C as WorkspaceMaintenanceCoordinator
-    participant M as SkillMaintainer
-    participant MA as Maintenance Agent
-    participant Repo as SkillRepository
-    participant DB as SkillUsageStore
+    participant B as Blackboard conversation
+    participant J as SkillJobManager
+    participant G as Producer / Evolver Agent
+    participant C as SkillWriteCoordinator
+    participant R as SkillRepository
 
-    Note over A,S: 文本、工具开始、工具完成和 AgentError 不进入 SkillPlugin
-
-    alt 失败 InputFinishedEvent
-        Bus-->>S: source=user-input
-        S->>S: 清理 TurnRecord，不触发维护
-    else finish_reason != stop
-        A->>Bus: 非正常 AgentCompletedEvent
-        Bus-->>S: source=agent
-        S->>S: 清理 TurnRecord，不触发维护
-    else AgentCompletedEvent 且 tool_call_count <= 10
-        A->>Bus: AgentCompletedEvent
-        Bus-->>S: source=agent
-        S->>S: 只统计 response.messages 中的 ToolCall；清理 TurnRecord
-    else AgentCompletedEvent 且 tool_call_count > 10
-        A->>Bus: AgentCompletedEvent
-        Bus-->>S: source=agent
-        S->>S: 工作线程恢复完整轨迹并复制 messages；拍摄 Session Skill 快照
-        S->>C: claim(workspace_key)
-        alt Workspace 已有维护任务
-            C-->>S: None
-            S->>S: 跳过，不排队
-        else 成功取得所有权 Token
-            C-->>S: claim_token
-            S->>S: create_task(background maintenance)
-            Note over S: consume() 返回；不阻塞主任务完成和 TUI 回复
-
-            S->>Repo: snapshot(Skill 正文、Hash、生命周期、usage)
-            S->>M: plan(messages, tool_trace, matched/session skills, snapshots)
-            M->>M: 稳定序列化并脱敏；强凭证时 fail-closed
-            M->>MA: ainvoke(system_prompt, history=[], input_prompt, tools=[])
-            MA-->>M: JSON create / update / merge / delete / no_op
-            M->>M: Pydantic + Parser 严格校验
-            M-->>S: SkillMaintenancePlan
-
-            S->>Repo: apply(plan.operations, analysis_snapshots)
-            Repo->>Repo: Workspace 边界 / YAML / Hash / dir_fd / 原子写校验
-            Repo-->>S: RepositoryBatchResult
-            S->>DB: 写入目标 activate_after_maintenance / 删除来源 usage remove
-            S->>C: Maintenance Task 与 Repository Task 均结束后 release(token)
-        end
+    A->>S: skill_produce(...) 或 skill_evolve(...)
+    S->>S: 权限、参数、task/run/step 与 task_messages 校验
+    alt produce
+        S->>S: 同时预检 global 与 workspace 同名冲突
+    else evolve
+        S->>R: capture 当前可见 Skill 快照
     end
+    S->>B: get_messages()
+    S->>J: submit(Blackboard 历史 + 当前 task_messages)
+    J-->>A: job_id + queued
+    J->>G: 后台生成完整 SKILL.md
+    Note over G: 独立 Agent，history=[]，tools=[]
+    G-->>J: 严格 JSON 中的 content
+    J->>C: 按规范化 Skill 名串行提交
+    C->>R: produce 或 evolve
+    Note over R: YAML、路径、符号链接、快照 Hash、原子写校验
+    R-->>J: path 或失败
+    J->>A: TaskContextInputEvent(Job 终态摘要)
+    A-->>S: TaskContextInputResultEvent
 ```
 
-`SkillMaintainer`、Maintenance Agent、`SkillRepository`、`SkillUsageStore` 和 Coordinator 都是 SkillPlugin 内部或应用组装组件，不注册为子 Plugin，也不通过 EventBus 互相通信。后台维护只通过 Hook 记录 `skill.maintenance` 的 before / after / error，不发布新的用户可见业务 Event。
+Produce 必须显式选择 `workspace` 或 `global`。预检失败不创建 Job；提交时再次检查两个
+物理作用域，生成期间出现同名 Skill 时失败且不覆盖。Evolve 对 Workspace Skill 原子更新；
+对全局 Skill 只在当前 Workspace 创建同名覆盖，不修改全局文件。分析后目标内容或路径发生
+变化时，Hash 校验失败并拒绝提交。
 
-Agent 文本、工具开始和工具完成增量继续交给 OutputBridge / TUI，但关闭 EventBus 和
-Plugin Runtime 级 Trace。每轮 Skill 检索只记录一条 `skill.retrieval` 聚合结果；完整
-Agent、LLM 和 Tool Executor 边界记录保持不变。
+Producer/Evolver 的输入证据是 Blackboard 已提交历史与当前只读 `task_messages` 的顺序拼接。
+完整 Message、ToolCall 和图片元数据被稳定序列化；URL 凭据被移除，嵌套秘密被脱敏，强凭据
+标记触发 fail-closed。生成 Agent 不获得文件 Tool，Repository 是唯一写入边界。
 
-## Event 与状态所有权
+Job 状态为 `queued → running → succeeded|failed|interrupted`。终态保存在 Workspace 状态，
+每个 Workspace 最多保留 100 个；Session 状态保存本 Session 关联 Job 和通知结果。未知 Job
+通过 `skill_job_status` 返回失败。Runtime 退出时先停止接收新 Job，取消仍在生成的任务，等待
+已经进入提交阶段的线程完成，再保存状态；不会恢复 asyncio Task 或 Agent 运行栈。
 
-```mermaid
-flowchart TB
-    subgraph Events["EventBus：发生了什么"]
-        UIE["UserInputEvent"]
-        CCE["ContextContributionEvent"]
-        BCE["BlackboardContextReadyEvent"]
-        ASE["Agent Stream / Terminal Event"]
-    end
+通知是尽力而为的业务 Event：若原 Task 仍活跃，Agent 在稳定边界接收终态摘要；若 Task 已结束
+或拒绝通知，Job 本身的成功或失败结果不被改写，之后仍可通过 `skill_job_status` 查询。
 
-    subgraph Plugins["Plugin：消费来源 Event 并维护状态"]
-        SP["SkillPlugin"]
-        BP["BlackboardPlugin"]
-        AP["AgentPlugin"]
-    end
-
-    subgraph State["状态所有者：当前是什么"]
-        BB["Blackboard Context\n跨轮 User / Assistant 历史"]
-        SS["SessionSkillState\n累计注入 Skill + 七轮计数"]
-        TS["SkillTurnState\n当前轮输入与命中 Skill"]
-        US["SkillUsageStore\nWorkspace 使用时间与次数"]
-        FS["SkillRepository / SKILL.md\nSkill 定义事实来源"]
-    end
-
-    UIE --> SP
-    UIE --> BP
-    SP --> CCE
-    CCE --> BP
-    BP --> BCE
-    BCE --> AP
-    AP --> ASE
-    ASE --> BP
-    ASE -- "仅 AgentCompletedEvent" --> SP
-
-    BP -. "维护" .-> BB
-    SP -. "维护" .-> SS
-    SP -. "维护" .-> TS
-    SP -. "读取 / 更新" .-> US
-    SP -. "通过内部 Repository 读写" .-> FS
-```
-
-状态职责：
+## 状态所有权
 
 | 状态 | 所有者 | 生命周期 |
 |---|---|---|
-| 跨轮 User / Assistant 历史 | BlackboardPlugin | 当前 Agent Runtime / Session |
-| 本轮 UserInput 和 Context 汇聚状态 | BlackboardPlugin | task_id 双终态结束后清理 |
-| 当前会话累计 Skill 与七轮刷新计数 | SessionSkillState | 当前 Agent Runtime |
-| 当前轮输入与命中 Skill；由完整 messages 恢复出的工具轨迹 | SkillTurnState | Agent 终态到达后 pop/discard |
-| Skill 使用时间与次数 | SkillUsageStore | Icarus 级 SQLite，按 Workspace 隔离 |
-| Skill 定义正文 | `SKILL.md` / SkillRepository | 全局或 Workspace 文件 |
-| 自动维护 Workspace claim | WorkspaceMaintenanceCoordinator | 后台维护与 Repository Task 均结束后释放 |
+| 跨轮完整对话 | `BlackboardPlugin` | 当前 Session，保存到 Session Plugin State |
+| 当前任务输入与汇聚状态 | `BlackboardPlugin` | `task_id` 双终态结束后清理 |
+| 活动 Run、Context 队列与取消墓碑 | `TaskChannelRegistry` | 当前 Runtime Session |
+| Skill 目录事实 | Global / Workspace `SKILL.md` | 文件持久化 |
+| Skill Job 终态 | `SkillJobManager` Workspace State | 有界保留 100 个 |
+| Session Job 关联和通知状态 | `SkillJobManager` Session State | 当前 Session |
 
-Event 是不可变的通信事实，状态所有者负责把 Event 投影为当前可查询状态。Hook 只负责持久化、观测和监督，不替代 EventBus，也不改变主流程。
+已删除的旧状态包括 Embedding 缓存、Skill usage SQLite、会话累计注入列表、轮级检索状态和
+自动维护 Workspace claim。Event 是通信事实，状态由明确所有者投影；Hook 只负责持久化、
+观测与监督，不替代 EventBus，也不改变主流程。
+
+## 当前未接入能力
+
+Memory、Knowledge、Style、Character、TTS、Emotion / L2D 等 Plugin 尚未接入当前 Runtime。
+正式 WebUI/TUI 也不是 Runtime Plugin；当前由应用内部 `OutputBridgePlugin` 提供实时订阅边界。

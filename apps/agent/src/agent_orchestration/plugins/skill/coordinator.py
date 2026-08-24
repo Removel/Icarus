@@ -1,66 +1,39 @@
-"""Process-local coordination for background Workspace maintenance."""
+"""Process-local coordination for explicit Skill writes."""
 
-from threading import Lock
-from uuid import uuid4
+from collections.abc import Callable
+from threading import Lock, RLock
+from typing import TypeVar
+
+from apps.agent.src.agent_orchestration.plugins.skill.models import (
+    normalize_skill_name,
+)
 
 
-class WorkspaceMaintenanceCoordinator:
-    """Provide non-blocking, thread-safe Workspace claims.
+_T = TypeVar("_T")
 
-    The coordinator deliberately stores only Workspace keys. Async tasks remain
-    owned by the Plugin and by the event loop that created them.
-    """
+
+class SkillWriteCoordinator:
+    """Serialize commits that can affect the same Workspace Skill name."""
 
     def __init__(self) -> None:
-        self._lock = Lock()
-        self._claims: dict[str, str] = {}
+        self._guard = Lock()
+        self._locks: dict[str, RLock] = {}
 
-    def claim(self, workspace_key: str) -> str | None:
-        """Return an ownership token, or ``None`` when Workspace is busy."""
-
-        workspace_key = self._normalize_workspace_key(workspace_key)
-        with self._lock:
-            if workspace_key in self._claims:
-                return None
-            token = uuid4().hex
-            self._claims[workspace_key] = token
-            return token
-
-    def release(self, workspace_key: str, token: str | None = None) -> bool:
-        """Release only when *token* still owns the Workspace claim."""
-
-        workspace_key = self._normalize_workspace_key(workspace_key)
-        with self._lock:
-            current = self._claims.get(workspace_key)
-            if current is None:
-                return False
-            if token is not None and token != current:
-                return False
-            del self._claims[workspace_key]
-            return True
-
-    def is_claimed(self, workspace_key: str) -> bool:
-        """Return whether the Workspace currently has an active claim."""
-
-        workspace_key = self._normalize_workspace_key(workspace_key)
-        with self._lock:
-            return workspace_key in self._claims
-
-    @property
-    def active_workspace_keys(self) -> frozenset[str]:
-        """Return a stable snapshot of all current claims."""
-
-        with self._lock:
-            return frozenset(self._claims)
+    def run(
+        self,
+        skill_name: str,
+        operation: Callable[[], _T],
+    ) -> _T:
+        key = self._normalize_name(skill_name)
+        with self._guard:
+            lock = self._locks.setdefault(key, RLock())
+        with lock:
+            return operation()
 
     @staticmethod
-    def _normalize_workspace_key(workspace_key: str) -> str:
-        if not isinstance(workspace_key, str):
-            raise ValueError("workspace_key cannot be empty")
-        normalized = workspace_key.strip()
-        if not normalized:
-            raise ValueError("workspace_key cannot be empty")
-        return normalized
+    def _normalize_name(skill_name: str) -> str:
+        if not isinstance(skill_name, str) or not skill_name.strip():
+            raise ValueError("skill_name cannot be empty")
+        return normalize_skill_name(skill_name)
 
-
-PROCESS_WORKSPACE_MAINTENANCE_COORDINATOR = WorkspaceMaintenanceCoordinator()
+PROCESS_SKILL_WRITE_COORDINATOR = SkillWriteCoordinator()

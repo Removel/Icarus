@@ -20,13 +20,12 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputStartedEvent,
     UserInputEvent,
 )
-from apps.agent.src.agent_orchestration.plugins.skill import (
-    WorkspaceMaintenanceCoordinator,
+from apps.agent.src.agent_orchestration.plugins.skill.coordinator import (
+    SkillWriteCoordinator,
 )
 from apps.agent.src.application.agent_runtime_service import AgentRuntimeService
 from apps.agent.src.model_config import (
     ConfigModel,
-    EmbeddingSettings,
     LLMConfig,
     ModelSettings,
     ThinkMode,
@@ -45,13 +44,6 @@ def make_config(data_dir) -> ConfigModel:
         openai_base_url="https://openai.example.com/v1",
         anthropic_base_url="https://anthropic.example.com",
         icarus_data_dir=data_dir,
-        embedding=EmbeddingSettings(
-            provider="fastembed",
-            model_name=(
-                "sentence-transformers/"
-                "paraphrase-multilingual-MiniLM-L12-v2"
-            ),
-        ),
         model_settings=ModelSettings(
             thinking=model,
             perception=model,
@@ -99,25 +91,7 @@ class BlockingAgentStub:
             yield
 
 
-class EmbeddingStub:
-    def __init__(self) -> None:
-        self.query_calls = []
-        self.document_calls = []
-        self.closed = False
-
-    async def embed_query(self, text):
-        self.query_calls.append(text)
-        return [1.0, 0.0]
-
-    async def embed_documents(self, texts):
-        self.document_calls.append(list(texts))
-        return [[1.0, 0.0] for _ in texts]
-
-    async def aclose(self):
-        self.closed = True
-
-
-class MaintenanceFactoryStub:
+class GenerationFactoryStub:
     def __init__(self) -> None:
         self.roles = []
         self.closed = False
@@ -125,7 +99,7 @@ class MaintenanceFactoryStub:
     def get_agent(self, role):
         self.roles.append(role)
         raise AssertionError(
-            "maintenance Agent must stay lazy below the tool threshold"
+            "generation Agent must stay lazy without a write Job"
         )
 
     async def aclose(self):
@@ -149,42 +123,47 @@ async def collect_task_events(
             return events
 
 
-def test_runtime_service由所属plugin创建并持有agent_factory(tmp_path):
+def test_runtime_service注册agent与skill工具并持有生成factory(tmp_path):
     async def run():
         service = AgentRuntimeService(
             workspace_path=tmp_path,
             config=make_config(tmp_path / "data"),
         )
         assert not hasattr(service, "agent_factory")
-        assert not hasattr(service, "maintenance_agent_factory")
-
         await service.start()
         agent_plugin = service.runtime_host.get_plugin("agent")
         skill_plugin = service.runtime_host.get_plugin("skill")
         agent_factory = agent_plugin.agent_factory
-        maintenance_factory = skill_plugin.maintenance_agent_factory
+        close_resource = skill_plugin.job_manager._close_resource
 
         assert isinstance(agent_factory, AgentFactory)
         assert agent_factory.tool_registry is service.tool_registry
-        assert isinstance(maintenance_factory, AgentFactory)
-        assert maintenance_factory is not agent_factory
+        assert isinstance(close_resource.__self__, AgentFactory)
+        assert close_resource.__self__ is not agent_factory
+        assert set(service.tool_registry.names()) >= {
+            "skills_list",
+            "skill_search",
+            "skill_produce",
+            "skill_evolve",
+            "skill_job_status",
+        }
 
         await service.stop(timeout=1)
         return skill_plugin
 
     skill_plugin = asyncio.run(run())
 
-    assert skill_plugin.maintenance_agent_factory is None
+    assert skill_plugin.job_manager._stopped is True
 
 
 def test_runtime_service_组装固定session并转发完整任务事件(tmp_path):
     async def run():
-        maintenance_factory = MaintenanceFactoryStub()
-        coordinator = WorkspaceMaintenanceCoordinator()
+        generation_factory = GenerationFactoryStub()
+        coordinator = SkillWriteCoordinator()
         config = make_config(tmp_path / "data")
         config.runtime.plugin_config["skill"] = {
-            "maintenance_agent_factory": maintenance_factory,
-            "maintenance_coordinator": coordinator,
+            "generation_agent_factory": generation_factory,
+            "skill_write_coordinator": coordinator,
         }
         service = AgentRuntimeService(
             workspace_path=tmp_path,
@@ -214,7 +193,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
             second_events,
             running_session_id,
             service.persistence.trace_hook.skipped_count,
-            maintenance_factory,
+            generation_factory,
             coordinator,
             service.plugin_manager.registry.get_subscriber_ids("agent"),
             service.plugin_manager.get_runtime_snapshot("skill"),
@@ -227,7 +206,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
         second_events,
         running_session_id,
         skipped_count,
-        maintenance_factory,
+        generation_factory,
         coordinator,
         agent_subscribers,
         skill_runtime,
@@ -254,11 +233,10 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
     assert service.is_running is False
     assert service.session_id is None
     assert skipped_count == 0
-    assert maintenance_factory.roles == []
-    assert maintenance_factory.closed is True
-    assert coordinator.active_workspace_keys == frozenset()
+    assert generation_factory.roles == []
+    assert generation_factory.closed is True
     assert "skill" in agent_subscribers
-    assert skill_runtime.processed_count == 2
+    assert skill_runtime.processed_count == 0
 
 
 def test_runtime_service由manifest生成冻结运行图并保存退出快照(tmp_path):
@@ -300,8 +278,14 @@ def test_runtime_service由manifest生成冻结运行图并保存退出快照(tm
         "write",
         "insert",
         "bash",
+        "skills_list",
+        "skill_search",
+        "skill_produce",
+        "skill_evolve",
+        "skill_job_status",
     }
-    assert all(owner == "builtin-tools" for _, owner in graph.tools)
+    assert {owner for name, owner in graph.tools if name.startswith("skill")} == {"skill"}
+    assert {owner for name, owner in graph.tools if not name.startswith("skill")} == {"builtin-tools"}
     assert ("skill", "agent") in graph.subscriptions
     assert graph.start_order[0] == "persistence"
     assert graph.stop_order[-1] == "persistence"
@@ -310,7 +294,12 @@ def test_runtime_service由manifest生成冻结运行图并保存退出快照(tm
     )
     assert blackboard.state_scopes == ("session",)
     assert blackboard.session_state_version == 1
+    skill = next(plugin for plugin in graph.plugins if plugin.plugin_id == "skill")
+    assert skill.state_scopes == ("workspace", "session")
     assert ("user-input", "agent", "task_channels") in (
+        graph.capability_bindings
+    )
+    assert ("skill", "blackboard", "conversation") in (
         graph.capability_bindings
     )
     assert graph.diagnostics == ()
@@ -479,11 +468,11 @@ def test_runtime_service_停止时关闭仍存活的输出订阅(tmp_path):
 
 def test_runtime_service_start被取消时完成全部资源清理(tmp_path):
     async def run():
-        maintenance_factory = MaintenanceFactoryStub()
+        generation_factory = GenerationFactoryStub()
         config = make_config(tmp_path / "data")
         config.runtime.plugin_config["skill"] = {
-            "maintenance_agent_factory": maintenance_factory,
-            "maintenance_coordinator": WorkspaceMaintenanceCoordinator(),
+            "generation_agent_factory": generation_factory,
+            "skill_write_coordinator": SkillWriteCoordinator(),
         }
         service = AgentRuntimeService(
             workspace_path=tmp_path,
@@ -501,81 +490,23 @@ def test_runtime_service_start被取消时完成全部资源清理(tmp_path):
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        return service, maintenance_factory
+        return service, generation_factory
 
-    service, maintenance_factory = asyncio.run(run())
+    service, generation_factory = asyncio.run(run())
 
     assert service.is_running is False
     assert service.session_id is None
     assert service.persistence.is_running is False
-    assert maintenance_factory.closed is True
-
-
-def test_runtime_service_usage_store初始化线程中取消仍关闭临时资源(
-    tmp_path,
-    monkeypatch,
-):
-    import threading
-
-    started = threading.Event()
-    release = threading.Event()
-    stores = []
-
-    class StoreStub:
-        def __init__(self):
-            self.closed = False
-
-        def close(self):
-            self.closed = True
-
-    def blocking_store(path):
-        started.set()
-        release.wait()
-        store = StoreStub()
-        stores.append(store)
-        return store
-
-    monkeypatch.setattr(
-        "apps.agent.src.agent_orchestration.plugins.skill.factory.SkillUsageStore",
-        blocking_store,
-    )
-
-    async def run():
-        embedding = EmbeddingStub()
-        maintenance_factory = MaintenanceFactoryStub()
-        config = make_config(tmp_path / "data")
-        config.runtime.plugin_config["skill"] = {
-            "embedding": embedding,
-            "maintenance_agent_factory": maintenance_factory,
-            "maintenance_coordinator": WorkspaceMaintenanceCoordinator(),
-        }
-        service = AgentRuntimeService(
-            workspace_path=tmp_path,
-            config=config,
-        )
-        task = asyncio.create_task(service.start())
-        assert await asyncio.to_thread(started.wait, 1) is True
-        task.cancel()
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        return service, embedding, maintenance_factory
-
-    service, embedding, maintenance_factory = asyncio.run(run())
-
-    assert stores and stores[0].closed is True
-    assert embedding.closed is True
-    assert maintenance_factory.closed is True
-    assert service.persistence.is_running is False
-    assert service.session_id is None
+    assert generation_factory.closed is True
 
 
 def test_runtime_service_stop被取消时等待plugin清理后再报告取消(tmp_path):
     async def run():
+        generation_factory = GenerationFactoryStub()
         config = make_config(tmp_path / "data")
         config.runtime.plugin_config["skill"] = {
-            "maintenance_agent_factory": MaintenanceFactoryStub(),
-            "maintenance_coordinator": WorkspaceMaintenanceCoordinator(),
+            "generation_agent_factory": generation_factory,
+            "skill_write_coordinator": SkillWriteCoordinator(),
         }
         service = AgentRuntimeService(
             workspace_path=tmp_path,
@@ -788,7 +719,7 @@ def test_runtime_service配置指定的核心plugin缺失时拒绝ready(tmp_path
     assert service.persistence.is_running is False
 
 
-def test_runtime_service_检索skill并注入blackboard_prompt(tmp_path):
+def test_runtime_service不自动注入skill并通过注册工具显式检索(tmp_path):
     async def run():
         data_dir = tmp_path / "data"
         skill_dir = data_dir / "skills" / "skill-product"
@@ -797,41 +728,70 @@ def test_runtime_service_检索skill并注入blackboard_prompt(tmp_path):
             "---\n"
             "name: skill-product\n"
             "description: Create reusable skills from completed work.\n"
+            "keywords:\n"
+            "  - reusable workflow\n"
             "---\n"
             "# Skill Product\n",
             encoding="utf-8",
         )
-        embedding = EmbeddingStub()
         config = make_config(data_dir)
-        config.runtime.plugin_config["skill"] = {"embedding": embedding}
         service = AgentRuntimeService(
             workspace_path=tmp_path,
             config=config,
         )
         agent = AgentStub()
         await service.start()
-        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
-            lambda model_role: agent
-        )
+        agent_plugin = service.runtime_host.get_plugin("agent")
+        agent_plugin.agent_factory.get_agent = lambda model_role: agent
         subscription = service.subscribe_events()
         accepted = await service.submit("create a reusable skill")
         await collect_task_events(subscription, accepted.task_id)
         skill_plugin = service.plugin_manager.registry.get("skill")
         blackboard = service.plugin_manager.registry.get("blackboard")
+        search_tool = service.tool_registry.get("skill_search")
+        assert search_tool is not None
+        search_result = search_tool.invoke({"keywords": ["reusable"]})
+        tool_names = {
+            definition.name
+            for definition in agent_plugin.agent_factory.tool_registry.definitions()
+        }
         subscription.close()
         await service.stop(timeout=1)
-        return agent.calls, embedding, skill_plugin, blackboard
+        return (
+            agent.calls,
+            skill_plugin,
+            blackboard,
+            search_result,
+            tool_names,
+        )
 
-    calls, embedding, skill_plugin, blackboard = asyncio.run(run())
-
-    assert embedding.query_calls == ["create a reusable skill"]
-    assert embedding.document_calls == [
-        ["Create reusable skills from completed work."]
-    ]
-    assert skill_plugin.session_state.selected_skills[0].name == "skill-product"
-    assert blackboard.required_context_sources == frozenset({"skill"})
-    assert "<plugin_context>" in calls[0]["input_prompt"]
-    assert "skill-product" in calls[0]["input_prompt"]
-    assert "<user_request>\ncreate a reusable skill\n</user_request>" in (
-        calls[0]["input_prompt"]
+    calls, skill_plugin, blackboard, search_result, tool_names = asyncio.run(
+        run()
     )
+
+    assert blackboard.required_context_sources == frozenset()
+    assert calls[0]["tools"] is None
+    assert "<plugin_context>" not in calls[0]["input_prompt"]
+    assert calls[0]["input_prompt"] == (
+        "<user_request>\ncreate a reusable skill\n</user_request>"
+    )
+    assert {
+        "skills_list",
+        "skill_search",
+        "skill_produce",
+        "skill_evolve",
+        "skill_job_status",
+    }.issubset(tool_names)
+    assert search_result.success is True
+    assert search_result.output == {
+        "skills": [
+            {
+                "name": "skill-product",
+                "description": (
+                    "Create reusable skills from completed work."
+                ),
+                "path": str(skill_plugin.catalog.find_visible("skill-product").path),
+                "scope": "global",
+            }
+        ]
+    }

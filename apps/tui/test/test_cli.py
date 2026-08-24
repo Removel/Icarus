@@ -76,8 +76,6 @@ def test_import_main首帧模块边界不加载agent与provider重依赖():
         "apps.agent.src.agent_orchestration.agent_factory",
         "openai",
         "anthropic",
-        "numpy",
-        "fastembed",
         "onnxruntime",
     ]
     code = (

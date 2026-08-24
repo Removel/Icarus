@@ -1,792 +1,336 @@
-"""Plugin adapter for per-turn Skill retrieval and context publication."""
+"""Agent-visible Skill management Plugin."""
 
-import asyncio
-from copy import deepcopy
-from dataclasses import dataclass
-from datetime import UTC, datetime
-import json
-import logging
+from collections.abc import Mapping, Sequence
 import time
 
-from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
-from apps.agent.src.agent_orchestration.capability import (
-    AgentCompletedEvent,
-)
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
-from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
-    ContextBlock,
-    ContextContributionEvent,
+from apps.agent.src.agent_orchestration.plugins.skill.catalog import (
+    CatalogScope,
+    SkillCatalog,
 )
-from apps.agent.src.agent_orchestration.plugins.skill.coordinator import (
-    WorkspaceMaintenanceCoordinator,
+from apps.agent.src.agent_orchestration.plugins.skill.job_manager import (
+    SkillJobManager,
 )
-from apps.agent.src.agent_orchestration.plugins.skill.maintainer import (
-    SkillMaintainer,
+from apps.agent.src.agent_orchestration.plugins.skill.jobs import SkillJob
+from apps.agent.src.agent_orchestration.plugins.skill.models import SkillScope
+from apps.agent.src.agent_orchestration.plugins.skill.repository import SkillRepository
+from apps.agent.src.agent_orchestration.run_control import (
+    TaskContextInputResultEvent,
 )
-from apps.agent.src.agent_orchestration.plugins.skill.ranker import SkillRanker
-from apps.agent.src.agent_orchestration.plugins.skill.ranker import (
-    lifecycle_for_usage,
-)
-from apps.agent.src.agent_orchestration.plugins.skill.repository import (
-    RepositoryBatchResult,
-    SkillRepository,
-)
-from apps.agent.src.agent_orchestration.plugins.skill.scanner import SkillScanner
-from apps.agent.src.agent_orchestration.plugins.skill.session_state import (
-    SessionSkillState,
-)
-from apps.agent.src.agent_orchestration.plugins.skill.turn_state import (
-    SkillTurnState,
-    ToolTrajectoryError,
-    TurnRecord,
-    tool_call_count_from_messages,
-    tool_traces_from_messages,
-)
-from apps.agent.src.agent_orchestration.plugins.skill.usage_store import (
-    SkillUsageStore,
-)
-from apps.agent.src.agent_orchestration.plugins.user_input.events import (
-    InputFinishedEvent,
-    UserInputEvent,
-)
-from apps.agent.src.model_provider.base_embedding import BaseEmbedding
+from apps.agent.src.model_provider.types import Message
 
 
-_UNCHANGED_CONTEXT = (
-    "The available skill context is unchanged from the previous full injection."
-)
-
-
-@dataclass(frozen=True)
-class _RetrievalOutcome:
-    candidate_count: int
-    qualified_count: int
-    ranked: tuple
-    mode: str
-    cumulative_skill_count: int
+class SkillOperationError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class SkillPlugin(BasePlugin):
-    """Retrieve relevant Skills once for each accepted user input."""
+    """Expose explicit Skill discovery and background write operations."""
 
     def __init__(
         self,
         plugin_id: str,
         *,
-        workspace_key: str,
-        user_input_plugin_id: str,
-        scanner: SkillScanner,
-        usage_store: SkillUsageStore | None,
-        embedding: BaseEmbedding,
-        ranker: SkillRanker,
-        session_state: SessionSkillState,
+        catalog: SkillCatalog,
+        repository: SkillRepository,
+        job_manager: SkillJobManager,
+        conversation: object,
+        allow_produce: bool = False,
+        allow_evolve: bool = False,
         agent_plugin_id: str = "agent",
-        maintainer: SkillMaintainer | None = None,
-        repository: SkillRepository | None = None,
-        coordinator: WorkspaceMaintenanceCoordinator | None = None,
-        turn_state: SkillTurnState | None = None,
         hook_dispatcher: HookDispatcher | None = None,
-        maintenance_agent_factory: AgentFactory | None = None,
-        maintenance_tool_threshold: int = 10,
-        retrieval_timeout_seconds: float = 30.0,
-        logger: logging.Logger | None = None,
     ) -> None:
         super().__init__(plugin_id)
-        if not workspace_key.strip():
-            raise ValueError("workspace_key cannot be empty")
-        if not user_input_plugin_id.strip():
-            raise ValueError("user_input_plugin_id cannot be empty")
-        if not agent_plugin_id.strip():
-            raise ValueError("agent_plugin_id cannot be empty")
-        if maintenance_tool_threshold < 0:
-            raise ValueError("maintenance_tool_threshold cannot be negative")
-        if retrieval_timeout_seconds <= 0:
-            raise ValueError("retrieval_timeout_seconds must be positive")
-        maintenance_dependencies = (maintainer, repository, coordinator)
-        if any(item is not None for item in maintenance_dependencies) and not all(
-            item is not None for item in maintenance_dependencies
-        ):
-            raise ValueError(
-                "maintainer, repository, and coordinator must be provided together"
+        get_messages = getattr(conversation, "get_messages", None)
+        if not callable(get_messages):
+            raise TypeError(
+                "conversation capability must expose get_messages()"
             )
-        self.workspace_key = workspace_key
-        self.user_input_plugin_id = user_input_plugin_id
-        self.agent_plugin_id = agent_plugin_id
-        self.scanner = scanner
-        self.usage_store = usage_store
-        self.embedding = embedding
-        self.ranker = ranker
-        self.session_state = session_state
-        self.maintainer = maintainer
+        if not isinstance(allow_produce, bool) or not isinstance(
+            allow_evolve, bool
+        ):
+            raise TypeError("Skill write permissions must be booleans")
+        self.catalog = catalog
         self.repository = repository
-        self.coordinator = coordinator
-        self.turn_state = turn_state or SkillTurnState()
+        self.job_manager = job_manager
+        self.conversation = conversation
+        self.allow_produce = allow_produce
+        self.allow_evolve = allow_evolve
+        self.agent_plugin_id = agent_plugin_id
         self.hook_dispatcher = hook_dispatcher
-        self.maintenance_agent_factory = maintenance_agent_factory
-        self.maintenance_tool_threshold = maintenance_tool_threshold
-        self.retrieval_timeout_seconds = retrieval_timeout_seconds
-        self.logger = logger or logging.getLogger(__name__)
-        self._disabled_reason: str | None = None
-        self._maintenance_tasks: set[asyncio.Task[None]] = set()
-        self._repository_tasks: set[asyncio.Task[RepositoryBatchResult]] = set()
-        self._maintenance_repository_tasks: dict[
-            asyncio.Task[None],
-            asyncio.Task[RepositoryBatchResult],
-        ] = {}
-        self._repository_maintenance_tasks: dict[
-            asyncio.Task[RepositoryBatchResult],
-            asyncio.Task[None],
-        ] = {}
-        self._maintenance_claim_token: str | None = None
+        self.job_manager.bind_publisher(self.publish)
+
+    async def start(self) -> None:
+        await self.job_manager.start()
 
     def accepts_event(self, source_plugin_id: str, event: Event) -> bool:
-        if source_plugin_id == self.user_input_plugin_id:
-            return isinstance(event, UserInputEvent) or (
-                isinstance(event, InputFinishedEvent)
-                and event.status in {"failed", "cancelled"}
-            )
-        if source_plugin_id == self.agent_plugin_id:
-            return isinstance(event, AgentCompletedEvent)
-        return False
+        return source_plugin_id == self.agent_plugin_id and isinstance(
+            event, TaskContextInputResultEvent
+        )
 
     async def consume(self, source_plugin_id: str, event: Event) -> None:
-        if source_plugin_id == self.user_input_plugin_id and isinstance(
-            event, UserInputEvent
-        ):
-            self.turn_state.start(event)
-            await self._consume_user_input(event)
-            return
-        if source_plugin_id == self.user_input_plugin_id and isinstance(
-            event, InputFinishedEvent
-        ):
-            if event.status in {"failed", "cancelled"}:
-                self.turn_state.discard(event.task_id)
-            return
-        if source_plugin_id == self.agent_plugin_id and isinstance(
-            event, AgentCompletedEvent
-        ):
-            await self._consume_agent_event(event)
+        del source_plugin_id
+        if isinstance(event, TaskContextInputResultEvent):
+            self.job_manager.record_notification_result(event)
 
-    async def _consume_user_input(self, event: UserInputEvent) -> None:
+    def list_skills(
+        self, scope: CatalogScope = "all"
+    ) -> list[dict[str, str]]:
         started_at = time.monotonic()
-        if self._disabled_reason is not None:
-            await self._publish_failure(event, self._disabled_reason)
-            await self._trigger_retrieval_hook(
-                "error",
-                self._retrieval_error_data(
-                    event,
-                    "SkillRetrievalDisabled",
-                    self._disabled_reason,
-                    started_at,
-                ),
-            )
-            return
         try:
-            outcome = await asyncio.wait_for(
-                self._retrieve_and_publish(event),
-                timeout=self.retrieval_timeout_seconds,
-            )
-        except TimeoutError:
-            self._disabled_reason = (
-                "Skill retrieval timed out after "
-                f"{self.retrieval_timeout_seconds:g} seconds; "
-                "disabled for this runtime"
-            )
-            self.logger.error(
-                "%s: task_id=%s",
-                self._disabled_reason,
-                event.task_id,
-            )
-            await self._publish_failure(event, self._disabled_reason)
-            await self._trigger_retrieval_hook(
-                "error",
-                self._retrieval_error_data(
-                    event,
-                    "TimeoutError",
-                    self._disabled_reason,
-                    started_at,
-                ),
-            )
+            items = [
+                self._skill_item(skill)
+                for skill in self.catalog.list_skills(scope)
+            ]
         except Exception as error:
-            self.logger.exception(
-                "Skill retrieval failed: task_id=%s",
-                event.task_id,
-            )
-            await self._publish_failure(
-                event,
-                str(error) or type(error).__name__,
-            )
-            await self._trigger_retrieval_hook(
+            self._hook(
+                "skill.list",
                 "error",
-                self._retrieval_error_data(
-                    event,
-                    type(error).__name__,
-                    "Skill retrieval failed",
-                    started_at,
-                ),
-            )
-        else:
-            await self._trigger_retrieval_hook(
-                "after",
                 {
-                    "task_id": event.task_id,
-                    "candidate_count": outcome.candidate_count,
-                    "qualified_count": outcome.qualified_count,
-                    "minimum_content_score": (
-                        self.ranker.minimum_content_score
-                    ),
-                    "selected": [
-                        {
-                            "name": item.skill.name,
-                            "scope": item.skill.scope,
-                            "content_score": item.content_score,
-                            "lifecycle_status": item.lifecycle_status,
-                            "final_score": item.final_score,
-                        }
-                        for item in outcome.ranked
-                    ],
-                    "mode": outcome.mode,
-                    "cumulative_skill_count": (
-                        outcome.cumulative_skill_count
+                    "scope": scope,
+                    "duration_ms": self._elapsed_ms(started_at),
+                    "error_type": type(error).__name__,
+                },
+            )
+            raise
+        self._hook(
+            "skill.list",
+            "after",
+            {
+                "scope": scope,
+                "count": len(items),
+                "duration_ms": self._elapsed_ms(started_at),
+            },
+        )
+        return items
+
+    def search(self, keywords: Sequence[str]) -> list[dict[str, str]]:
+        started_at = time.monotonic()
+        try:
+            items = [
+                self._skill_item(skill) for skill in self.catalog.search(keywords)
+            ]
+        except Exception as error:
+            self._hook(
+                "skill.search",
+                "error",
+                {
+                    "keyword_count": (
+                        len(keywords) if not isinstance(keywords, str) else 0
                     ),
                     "duration_ms": self._elapsed_ms(started_at),
+                    "error_type": type(error).__name__,
                 },
             )
+            raise
+        self._hook(
+            "skill.search",
+            "after",
+            {
+                "keyword_count": len(keywords),
+                "result_names": [item["name"] for item in items],
+                "duration_ms": self._elapsed_ms(started_at),
+            },
+        )
+        return items
+
+    def produce(
+        self,
+        *,
+        name: str,
+        scope: SkillScope,
+        instructions: str,
+        task_id: str | None,
+        run_id: str | None,
+        step: int | None,
+        task_messages: tuple[Message, ...],
+    ) -> dict[str, object]:
+        if not self.allow_produce:
+            raise SkillOperationError(
+                "disabled_by_policy", "Skill production is disabled by policy"
+            )
+        self._validate_write_context(task_id, run_id, step, task_messages)
+        conflicts = self.repository.find_conflicts(name)
+        if conflicts:
+            raise SkillOperationError(
+                "target_conflict",
+                f"Skill {name.strip()!r} already exists in "
+                f"{', '.join(conflicts)}; use skill_evolve",
+            )
+        job = self.job_manager.submit_produce(
+            name=name.strip(),
+            scope=scope,
+            instructions=instructions,
+            conversation=self._conversation_evidence(task_messages),
+            task_id=task_id,
+            run_id=run_id,
+            step=step,
+        )
+        self._hook_job_created(job)
+        return {"job_id": job.job_id, "status": job.status}
+
+    def evolve(
+        self,
+        *,
+        name: str,
+        instructions: str,
+        task_id: str | None,
+        run_id: str | None,
+        step: int | None,
+        task_messages: tuple[Message, ...],
+    ) -> dict[str, object]:
+        if not self.allow_evolve:
+            raise SkillOperationError(
+                "disabled_by_policy", "Skill evolution is disabled by policy"
+            )
+        self._validate_write_context(task_id, run_id, step, task_messages)
+        visible = self.catalog.find_visible(name)
+        if visible is None:
+            raise SkillOperationError(
+                "target_not_found", f"Skill {name.strip()!r} is not found"
+            )
+        snapshot = self.repository.capture(visible.normalized_name)
+        if snapshot is None:
+            raise SkillOperationError(
+                "target_not_found",
+                f"Skill {name.strip()!r} changed during precheck",
+            )
+        job = self.job_manager.submit_evolve(
+            name=visible.normalized_name,
+            instructions=instructions,
+            conversation=self._conversation_evidence(task_messages),
+            task_id=task_id,
+            run_id=run_id,
+            step=step,
+            snapshot=snapshot,
+        )
+        self._hook_job_created(job)
+        return {"job_id": job.job_id, "status": job.status}
+
+    def job_status(self, job_id: str) -> dict[str, object]:
+        job = self.job_manager.get(job_id)
+        if job is None:
+            raise SkillOperationError(
+                "job_not_found", f"Skill Job is not found: {job_id}"
+            )
+        value = self._job_item(job)
+        self._hook(
+            "skill.job_status",
+            "after",
+            {"job_id": job.job_id, "status": job.status},
+        )
+        return value
+
+    async def quiesce(self) -> None:
+        await self.job_manager.quiesce()
 
     async def drain(self) -> None:
-        if self._maintenance_tasks:
-            await asyncio.gather(
-                *tuple(self._maintenance_tasks),
-                return_exceptions=True,
-            )
+        await self.job_manager.drain()
 
     async def stop(self) -> None:
-        errors: list[BaseException] = []
-        for task in tuple(self._maintenance_tasks):
-            task.cancel()
-        if self._maintenance_tasks:
-            await asyncio.gather(
-                *tuple(self._maintenance_tasks),
-                return_exceptions=True,
-            )
-        self._maintenance_tasks.clear()
-        if self._repository_tasks:
-            await asyncio.gather(
-                *tuple(self._repository_tasks),
-                return_exceptions=True,
-            )
-        try:
-            await self.embedding.aclose()
-        except BaseException as error:
-            errors.append(error)
-        usage_store = self.usage_store
-        self.usage_store = None
-        if usage_store is not None:
-            try:
-                await asyncio.to_thread(usage_store.close)
-            except BaseException as error:
-                errors.append(error)
-        maintenance_agent_factory = self.maintenance_agent_factory
-        self.maintenance_agent_factory = None
-        if maintenance_agent_factory is not None:
-            try:
-                await maintenance_agent_factory.aclose()
-            except BaseException as error:
-                errors.append(error)
-        if errors:
-            raise RuntimeError(
-                "Skill resources failed to close: "
-                + "; ".join(str(error) for error in errors)
-            )
+        await self.job_manager.stop()
 
-    async def _retrieve_and_publish(
-        self,
-        event: UserInputEvent,
-    ) -> _RetrievalOutcome:
-        skills = await asyncio.to_thread(self.scanner.scan)
-        usages = {}
-        if skills and self.usage_store is not None:
-            try:
-                usages = await asyncio.to_thread(
-                    self.usage_store.ensure_discovered,
-                    self.workspace_key,
-                    skills,
-                )
-            except Exception:
-                self.logger.exception(
-                    "Skill usage discovery failed; continuing without usage state"
-                )
-        ranked = []
-        qualified_count = 0
-        if skills:
-            query_vector = await self.embedding.embed_query(event.prompt)
-            document_vectors = await self.embedding.embed_documents(
-                [skill.description for skill in skills]
-            )
-            ranked, qualified_count = await asyncio.to_thread(
-                self.ranker.rank_with_summary,
-                skills,
-                query_vector,
-                document_vectors,
-                usages,
-            )
-        selected = [item.skill for item in ranked]
-        self.turn_state.set_matched_skills(event.task_id, selected)
-        if selected and self.usage_store is not None:
-            try:
-                await asyncio.to_thread(
-                    self.usage_store.mark_used,
-                    self.workspace_key,
-                    selected,
-                )
-            except Exception:
-                self.logger.exception(
-                    "Skill usage update failed; continuing without persisted usage"
-                )
-        available_by_name = {
-            skill.normalized_name: skill for skill in skills
-        }
-        reconciled = [
-            available_by_name.get(existing.normalized_name, existing)
-            for existing in self.session_state.selected_skills
-        ]
-        update = self.session_state.update([*reconciled, *selected])
-        if update.skills:
-            await self._publish_update(event, update)
-            mode = update.mode
-        else:
-            await self.publish(
-                ContextContributionEvent(
-                    task_id=event.task_id,
-                    status="completed",
-                )
-            )
-            mode = "empty"
-        return _RetrievalOutcome(
-            candidate_count=len(skills),
-            qualified_count=qualified_count,
-            ranked=tuple(ranked),
-            mode=mode,
-            cumulative_skill_count=len(self.session_state.selected_skills),
-        )
-
-    async def _consume_agent_event(self, event: AgentCompletedEvent) -> None:
-        if event.response.finish_reason != "stop":
-            self.turn_state.discard(event.task_id)
-            return
-        if not self._maintenance_enabled:
-            self.turn_state.discard(event.task_id)
-            return
-        try:
-            tool_call_count = tool_call_count_from_messages(
-                event.response.messages,
-                task_message_start=event.response.task_message_start,
-            )
-            if tool_call_count <= self.maintenance_tool_threshold:
-                self.turn_state.discard(event.task_id)
-                return
-            tool_traces = await asyncio.to_thread(
-                tool_traces_from_messages,
-                event.response.messages,
-                task_message_start=event.response.task_message_start,
-            )
-            turn = self.turn_state.pop_with_tool_traces(
-                event.task_id,
-                tool_traces,
-            )
-        except ToolTrajectoryError as error:
-            self.turn_state.discard(event.task_id)
-            self.logger.error(
-                "Skill maintenance trajectory is invalid: task_id=%s: %s",
-                event.task_id,
-                error,
-            )
-            await self._trigger_maintenance_hook(
-                "error",
-                {
-                    "task_id": event.task_id,
-                    "stage": "trajectory",
-                    "error_type": type(error).__name__,
-                    "error_message": str(error),
-                },
-            )
-            return
-        if turn is None:
-            return
-        coordinator = self.coordinator
-        claim_token = (
-            coordinator.claim(self.workspace_key)
-            if coordinator is not None
-            else None
-        )
-        if coordinator is None or claim_token is None:
-            self.logger.info(
-                "Skipping Skill maintenance because Workspace is busy: %s",
-                self.workspace_key,
-            )
-            return
-        self._maintenance_claim_token = claim_token
-
-        try:
-            messages = await asyncio.to_thread(
-                deepcopy,
-                event.response.messages,
-            )
-            session_skills = self.session_state.selected_skills
-            parent_run_id = self._current_run_id()
-            task = asyncio.create_task(
-                self._run_maintenance(
-                    turn,
-                    messages,
-                    session_skills,
-                    parent_run_id,
-                ),
-                name=(
-                    f"skill-maintenance:{self.workspace_key}:"
-                    f"{event.task_id}"
-                ),
-            )
-        except BaseException:
-            coordinator.release(self.workspace_key, claim_token)
-            self._maintenance_claim_token = None
-            raise
-        self._maintenance_tasks.add(task)
-        task.add_done_callback(self._maintenance_task_completed)
-
-    @property
-    def _maintenance_enabled(self) -> bool:
-        return (
-            self.maintainer is not None
-            and self.repository is not None
-            and self.coordinator is not None
-        )
-
-    async def _run_maintenance(
-        self,
-        turn: TurnRecord,
-        messages,
-        session_skills,
-        parent_run_id: str | None,
+    async def restore_workspace_state(
+        self, state: Mapping[str, object], *, state_version: int
     ) -> None:
-        from apps.agent.src.agent_orchestration.hooks import hook_context
+        await self.job_manager.restore_workspace_state(
+            state, state_version=state_version
+        )
 
-        with hook_context(
-            {
-                "plugin_id": self.plugin_id,
-                "workspace_key": self.workspace_key,
-                "task_id": turn.task_id,
-                "parent_run_id": parent_run_id,
-                "maintenance": True,
-            },
-            new_run=True,
+    async def restore_session_state(
+        self, state: Mapping[str, object], *, state_version: int
+    ) -> None:
+        await self.job_manager.restore_session_state(
+            state, state_version=state_version
+        )
+
+    async def snapshot_workspace_state(self) -> Mapping[str, object]:
+        return await self.job_manager.snapshot_workspace_state()
+
+    async def snapshot_session_state(self) -> Mapping[str, object]:
+        return await self.job_manager.snapshot_session_state()
+
+    def _conversation_evidence(
+        self, task_messages: tuple[Message, ...]
+    ) -> tuple[Message, ...]:
+        return tuple(self.conversation.get_messages()) + task_messages
+
+    @staticmethod
+    def _validate_write_context(
+        task_id: str | None,
+        run_id: str | None,
+        step: int | None,
+        task_messages: tuple[Message, ...],
+    ) -> None:
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise SkillOperationError(
+                "invalid_task_context", "Skill writes require task_id"
+            )
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise SkillOperationError(
+                "invalid_task_context", "Skill writes require run_id"
+            )
+        if not isinstance(step, int) or isinstance(step, bool) or step < 0:
+            raise SkillOperationError(
+                "invalid_task_context", "Skill writes require a valid step"
+            )
+        if not task_messages or any(
+            not isinstance(message, Message) for message in task_messages
         ):
-            try:
-                await self._trigger_maintenance_hook(
-                    "before",
-                    {
-                        "task_id": turn.task_id,
-                        "tool_call_count": turn.tool_call_count,
-                        "parent_run_id": parent_run_id,
-                    },
-                )
-                snapshots = await self._build_maintenance_snapshots()
-                maintainer = self.maintainer
-                repository = self.repository
-                assert maintainer is not None
-                assert repository is not None
-                plan = await maintainer.plan(
-                    messages=messages,
-                    tool_trace=turn.tool_calls,
-                    matched_skills=turn.matched_skills,
-                    session_skills=session_skills,
-                    skill_snapshots=snapshots,
-                )
-                result = await self._apply_repository_plan(
-                    repository,
-                    plan.operations,
-                    snapshots,
-                )
-                await self._reconcile_maintenance_result(result)
-                await self._trigger_maintenance_hook(
-                    "after",
-                    {
-                        "task_id": turn.task_id,
-                        "operations": [
-                            {
-                                "action": item.action,
-                                "target_name": item.target_name,
-                                "status": item.status,
-                                "target_written": item.target_written,
-                                "file_deleted": item.file_deleted,
-                                "deleted_sources": item.deleted_sources,
-                                "cleanup_errors": item.cleanup_errors,
-                            }
-                            for item in result.results
-                        ],
-                    },
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                self.logger.exception(
-                    "Skill maintenance failed: task_id=%s",
-                    turn.task_id,
-                )
-                await self._trigger_maintenance_hook(
-                    "error",
-                    {
-                        "task_id": turn.task_id,
-                        "error_type": type(error).__name__,
-                        "error_message": str(error),
-                    },
-                )
+            raise SkillOperationError(
+                "invalid_task_context",
+                "Skill writes require current task messages",
+            )
 
-    async def _apply_repository_plan(
-        self,
-        repository: SkillRepository,
-        operations,
-        snapshots,
-    ) -> RepositoryBatchResult:
-        task = asyncio.create_task(
-            asyncio.to_thread(
-                repository.apply,
-                operations,
-                snapshots,
+    @staticmethod
+    def _skill_item(skill) -> dict[str, str]:
+        return {
+            "name": skill.name,
+            "description": skill.description,
+            "scope": skill.scope,
+            "path": str(skill.path),
+        }
+
+    @staticmethod
+    def _job_item(job: SkillJob) -> dict[str, object]:
+        return {
+            "job_id": job.job_id,
+            "operation": job.operation,
+            "status": job.status,
+            "target_name": job.target_name,
+            "scope": job.scope,
+            "path": job.path,
+            "error": job.error,
+            "created_at": job.created_at.isoformat(),
+            "started_at": (
+                job.started_at.isoformat() if job.started_at is not None else None
             ),
-            name=f"skill-repository:{self.workspace_key}",
-        )
-        maintenance_task = asyncio.current_task()
-        if maintenance_task is None:
-            task.cancel()
-            raise RuntimeError("repository apply requires a maintenance task")
-        self._repository_tasks.add(task)
-        self._maintenance_repository_tasks[maintenance_task] = task
-        self._repository_maintenance_tasks[task] = maintenance_task
-        task.add_done_callback(self._repository_task_completed)
-        return await asyncio.shield(task)
-
-    async def _build_maintenance_snapshots(self):
-        repository = self.repository
-        assert repository is not None
-        skills = await asyncio.to_thread(self.scanner.scan)
-        usages = {}
-        if self.usage_store is not None:
-            try:
-                usages = await asyncio.to_thread(
-                    self.usage_store.ensure_discovered,
-                    self.workspace_key,
-                    skills,
-                )
-            except Exception:
-                self.logger.exception(
-                    "Skill usage snapshot failed; using active lifecycle defaults"
-                )
-        now = datetime.now(UTC)
-        lifecycle = {
-            skill.skill_key: lifecycle_for_usage(
-                usages.get(skill.skill_key),
-                now,
-            )[0]
-            for skill in skills
+            "finished_at": (
+                job.finished_at.isoformat() if job.finished_at is not None else None
+            ),
+            "notification_status": job.notification_status,
         }
-        return await asyncio.to_thread(
-            repository.snapshot,
-            lifecycle_by_skill_key=lifecycle,
-            usage_by_skill_key=usages,
+
+    def _hook_job_created(self, job: SkillJob) -> None:
+        self._hook(
+            f"skill.{job.operation}",
+            "queued",
+            {
+                "job_id": job.job_id,
+                "target_name": job.target_name,
+                "scope": job.scope,
+                "status": job.status,
+            },
         )
 
-    async def _reconcile_maintenance_result(
-        self,
-        result: RepositoryBatchResult,
-    ) -> None:
-        usage_store = self.usage_store
-        if usage_store is None:
-            return
-        written_names = {
-            item.target_name
-            for item in result.results
-            if item.target_written
-        }
-        deleted_names = {
-            source
-            for item in result.results
-            for source in item.deleted_sources
-        }
-        if written_names:
-            current = await asyncio.to_thread(self.scanner.scan)
-            written = [
-                skill
-                for skill in current
-                if skill.normalized_name in written_names
-            ]
-            if written:
-                try:
-                    await asyncio.to_thread(
-                        usage_store.activate_after_maintenance,
-                        self.workspace_key,
-                        written,
-                    )
-                except Exception:
-                    self.logger.exception(
-                        "Failed to activate maintained Skill usage state"
-                    )
-        removed_keys = [
-            f"workspace:{name}"
-            for name in deleted_names - written_names
-        ]
-        if removed_keys:
-            try:
-                await asyncio.to_thread(
-                    usage_store.remove,
-                    self.workspace_key,
-                    removed_keys,
-                )
-            except Exception:
-                self.logger.exception(
-                    "Failed to remove deleted Skill usage state"
-                )
-
-    async def _trigger_maintenance_hook(
-        self,
-        phase: str,
-        data: dict,
-    ) -> None:
+    def _hook(self, name: str, phase: str, data: dict[str, object]) -> None:
         if self.hook_dispatcher is not None:
-            await self.hook_dispatcher.atrigger(
-                "skill.maintenance",
-                phase,
-                data,
-            )
-
-    async def _trigger_retrieval_hook(
-        self,
-        phase: str,
-        data: dict,
-    ) -> None:
-        if self.hook_dispatcher is not None:
-            await self.hook_dispatcher.atrigger(
-                "skill.retrieval",
-                phase,
-                data,
-            )
+            self.hook_dispatcher.trigger(name, phase, data)
 
     @staticmethod
     def _elapsed_ms(started_at: float) -> int:
         return max(0, round((time.monotonic() - started_at) * 1000))
-
-    def _retrieval_error_data(
-        self,
-        event: UserInputEvent,
-        error_type: str,
-        error_message: str,
-        started_at: float,
-    ) -> dict:
-        return {
-            "task_id": event.task_id,
-            "error_type": error_type,
-            "error_message": error_message,
-            "duration_ms": self._elapsed_ms(started_at),
-        }
-
-    def _maintenance_task_completed(
-        self,
-        task: asyncio.Task[None],
-    ) -> None:
-        self._maintenance_tasks.discard(task)
-        repository_task = self._maintenance_repository_tasks.pop(task, None)
-        if repository_task is None:
-            self._release_maintenance_claim()
-            return
-        if repository_task.done():
-            self._release_maintenance_claim()
-            self._repository_maintenance_tasks.pop(repository_task, None)
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            self.logger.error(
-                "Unexpected Skill maintenance task failure",
-                exc_info=(type(error), error, error.__traceback__),
-            )
-
-    def _repository_task_completed(
-        self,
-        task: asyncio.Task[RepositoryBatchResult],
-    ) -> None:
-        self._repository_tasks.discard(task)
-        maintenance_task = self._repository_maintenance_tasks.pop(task, None)
-        if maintenance_task is None:
-            self._release_maintenance_claim()
-            return
-        if maintenance_task.done():
-            self._release_maintenance_claim()
-            self._maintenance_repository_tasks.pop(maintenance_task, None)
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            self.logger.error(
-                "Unexpected Skill repository task failure",
-                exc_info=(type(error), error, error.__traceback__),
-            )
-
-    def _release_maintenance_claim(self) -> None:
-        token = self._maintenance_claim_token
-        self._maintenance_claim_token = None
-        if self.coordinator is not None and token is not None:
-            self.coordinator.release(self.workspace_key, token)
-
-    @staticmethod
-    def _current_run_id() -> str | None:
-        from apps.agent.src.agent_orchestration.hooks import get_hook_context
-
-        context = get_hook_context()
-        return context.run_id if context is not None else None
-
-    async def _publish_update(self, event, update) -> None:
-        if update.mode == "full":
-            content = json.dumps(
-                [
-                    {
-                        "description": skill.description,
-                        "name": skill.name,
-                        "path": str(skill.path),
-                    }
-                    for skill in update.skills
-                ],
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        else:
-            content = _UNCHANGED_CONTEXT
-
-        await self.publish(
-            ContextContributionEvent(
-                task_id=event.task_id,
-                status="completed",
-                context_blocks=[
-                    ContextBlock(
-                        source_plugin_id=self.plugin_id,
-                        context_type="skills",
-                        content=content,
-                        metadata={"mode": update.mode},
-                    )
-                ],
-            )
-        )
-
-    async def _publish_failure(
-        self,
-        event: UserInputEvent,
-        error: str,
-    ) -> None:
-        await self.publish(
-            ContextContributionEvent(
-                task_id=event.task_id,
-                status="failed",
-                error=error,
-            )
-        )

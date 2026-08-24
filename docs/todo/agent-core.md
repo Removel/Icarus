@@ -15,7 +15,7 @@
 
 - 完善 Agent Core 的多模态输入能力。
 - 改造 Blackboard 的上下文组织与动态上下文收集能力。
-- 重构 SkillPlugin 的召回、使用与生成交互。
+- 已完成 SkillPlugin 的主动发现、渐进读取、显式生产与演化重构；后续根据真实使用结果优化。
 - 实现角色卡片风格化输出插件。
 - 实现情感响应插件。
 - 已完成 AgentPlugin 首期运行中补充信息与任务取消控制；后续安全能力按真实场景扩展。
@@ -58,7 +58,7 @@
   重建整个 Runtime。
 - [x] 让 `UserInputPlugin`、`AgentPlugin`、模型流和工具调用真实传播取消信号，并提供
   `InputFinishedEvent(status="cancelled")` 终态。
-- [x] 取消轮次由 Skill 清理临时状态，Blackboard 提交最近的协议完整消息前缀；部分
+- [x] 取消轮次由 Blackboard 提交最近的协议完整消息前缀；部分
   Assistant 和不完整 Tool Batch 不进入 Session History，已发生的文件修改和外部副作用不回滚。
 - [x] 为重复取消、已结束任务、错误 task ID、工具执行中取消和资源清理增加测试。
 
@@ -106,16 +106,19 @@
 
 ## SkillPlugin 重构
 
-- [ ] 重新设计 SkillPlugin 与 Agent Kernel 的交互：由 Agent 在执行过程中像使用工具一样
-  主动回忆相关 Skill 信息，并自行判断是否采用，而不是默认把检索结果或完整 Skill 列表
-  注入上下文。这里先记录交互方向，不提前确定最终接口形态。
-- [ ] 为 Agent 是否允许生成或维护 Skill 提供显式开关；关闭时只允许召回和使用，不能
-  隐式创建、扩充或修改 Skill。
-- [ ] 在进入该阶段后，对比并评估“RAG 自动匹配后注入”与“向 Agent 暴露 Skill 列表后
-  自主选择”两类现有方案。重点验证多步骤任务中的召回充分性、相关性、上下文开销，
-  以及 Skill 持续生成造成的列表膨胀问题。
-- [ ] 基于实际评估结果再设计 Skill 的发现、召回、选择、生成、反馈和维护边界，并迁移
-  当前实现；现阶段不把任何一种既有方案确认为最终架构。
+- [x] 停止每轮自动 RAG 检索和 Blackboard Skill Context 注入，由 Agent 通过
+  `skills_list`、`skill_search` 和通用 `read` 主动发现、选择并读取 Skill。
+- [x] 搜索采用确定性的简单关键词包含匹配；不使用 Embedding、BM25、编辑距离、拼写纠错
+  或自动分词。
+- [x] 提供 `skill_produce`、`skill_evolve` 和 `skill_job_status`，生产与演化作为后台 Job
+  执行，并通过运行中 Context Event 尝试通知仍活跃的主 Agent。
+- [x] `allow_produce` 与 `allow_evolve` 独立、严格且默认关闭；关闭时只允许发现、读取和使用。
+- [x] Producer/Evolver 获取 Blackboard 对话历史与当前 `task_messages`，使用独立无工具 Agent，
+  经过脱敏、严格解析和 Repository 安全校验后写入。
+- [x] Produce 在预检和提交时检查全局与 Workspace 两个作用域；Evolve 对全局 Skill 只创建
+  Workspace override，并使用快照 Hash 防止并发覆盖。
+- [x] 删除 Embedding、usage SQLite、会话累计注入、轮状态和隐式自动维护链路。
+- [ ] 使用真实模型和逐渐增长的 Skill 集合评估搜索词选择、召回质量、Job 生成质量与交互体验。
 
 ## 系统性代码重构
 

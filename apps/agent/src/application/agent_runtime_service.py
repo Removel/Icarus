@@ -109,7 +109,6 @@ class AgentRuntimeService:
                     **self.config.runtime.plugin_config.get(
                         "blackboard", {}
                     ),
-                    "required_context_sources": ["skill"],
                     "model_role": "thinking",
                     "system_prompt": self.system_prompt,
                     "tools": self.tools,

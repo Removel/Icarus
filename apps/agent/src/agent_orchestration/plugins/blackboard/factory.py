@@ -16,7 +16,7 @@ def create_plugin(
     plugin = BlackboardPlugin(
         plugin_id,
         required_context_sources=set(
-            config.get("required_context_sources", ["skill"])
+            config.get("required_context_sources", [])
         ),
         model_role=config.get("model_role", "thinking"),
         system_prompt=str(config.get("system_prompt", "")),

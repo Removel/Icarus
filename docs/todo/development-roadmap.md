@@ -63,9 +63,8 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
 - 领域 Plugin 可以额外贡献 Tool；Kernel 使用统一 Tool 能力，不依赖 Tool 的来源。
 - Tool 集合可以在不同 Agent Run 之间变化，但单次 Run 内使用稳定快照；当前不实现 Run
   执行过程中的 Tool 热加载、热卸载或替换。
-- SkillPlugin 放到后续阶段重新设计。已确认的产品方向是让 Agent 主动回忆相关 Skill，并
-  通过显式开关决定是否允许生成或维护 Skill；当前不提前确定最终接口，也不选择 RAG
-  自动注入或完整列表自主选择作为最终方案。
+- SkillPlugin 已完成工具化重构：Agent 通过五个 Skill Tool 主动发现、搜索、生产、演化和
+  查询 Job，并用通用 `read` 渐进读取正文；不再自动 RAG 注入或隐式维护。
 
 ## 阶段路线
 
@@ -123,7 +122,7 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
 
 - 完成 Tool 由默认基础能力和 Plugin 贡献能力共同装配的生产机制，包括 Plugin 生命周期与
   注册集成；
-- 重构 SkillPlugin 的召回、使用、生成和维护交互；
+- 已完成 SkillPlugin 的召回、使用、生产和演化交互重构；
 - 整理 ReAct 执行流程以及同步、异步、流式接口的一致性；
 - 完善 Tool 的注册、选择、校验、权限、安全、并发、取消和资源清理；
 - 精简 Agent Runtime 的组装职责，拆分体积过大或职责混合的模块；
@@ -161,7 +160,7 @@ Agent Core 系统性重构
   用户反馈、关联证据与验收口径；
 - 当前 Run 内的 Memory、Knowledge 补充依赖通用“陷入内核”，不依赖 Run 内 Tool 热加载；
 - Plugin 贡献 Tool 是 Core 重构目标，但不阻塞“陷入内核”的首期设计；
-- SkillPlugin 重构需要独立评估，不能用当前实现反向限制通用 Kernel 机制；
+- SkillPlugin 已通过通用 Tool、Capability 和 Event 边界接入，没有向 Kernel 增加领域分支；
 - 系统性重构以真实场景暴露的问题为输入，不要求在新能力开发前一次完成。
 
 ## 当前暂不决定
@@ -169,7 +168,21 @@ Agent Core 系统性重构
 - 内核操作在代码中的具体类型、接口和调度结构；
 - 业务信息最终如何转换为模型可理解的上下文；
 - 各类内核操作的完整集合和固定枚举；
-- Skill 召回、选择、生成与维护的最终协议；
+- Skill 在大规模真实目录下的搜索词选择与召回体验；
 - Run 内动态变更 Tool 集合。
+
+## SkillPlugin 工具化验收记录
+
+- [x] 发现：`skills_list` 支持 `all|global|workspace`，Workspace 同名覆盖全局，结果只返回
+  `name`、`description`、`scope` 和 `path`。
+- [x] 召回：`skill_search` 对名称、描述和可选关键词做简单归一化包含匹配，稳定排序并限制
+  10 项；普通用户输入不再触发自动检索或 Prompt 注入。
+- [x] 生产：`skill_produce` 受独立权限控制，显式选择写入作用域，预检和提交均检查双作用域
+  冲突，并通过后台 Job、严格生成解析和原子写入完成。
+- [x] 演化：`skill_evolve` 受独立权限控制，捕获目标快照；Workspace Skill 原位更新，全局
+  Skill 生成 Workspace override，并在并发变化时失败关闭。
+- [x] Job 与通知：状态可查询并按 Workspace / Session 持久化；终态通过
+  `TaskContextInputEvent` 尝试通知活动 Agent，通知失败不改变 Job 结果；退出阶段确定性收束。
+- [ ] 真实模型与大目录体验验证：在凭据和代表性 Skill 集合可用后执行，不以单元测试替代。
 
 这些问题在进入对应阶段后，基于当前代码、测试与真实使用场景单独设计。
