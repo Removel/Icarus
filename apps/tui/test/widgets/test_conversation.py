@@ -1,6 +1,8 @@
 import asyncio
 
+from textual import events
 from textual.app import App, ComposeResult
+from textual.geometry import Offset
 
 from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
@@ -19,15 +21,23 @@ from apps.tui.src.widgets.messages import (
     TurnStatusMessage,
     UserMessage,
     WelcomeMessage,
+    StreamingMarkdown,
+    render_icarus_logo,
 )
 
 
-def test_icarus_logo保持八行且包含完整品牌名():
+def test_icarus_logo保持九行且渲染源稿渐变():
     lines = ICARUS_LOGO.splitlines()
 
-    assert len(lines) == 8
+    assert len(lines) == 9
     assert all(line.strip() for line in lines)
-    assert max(len(line) for line in lines) <= 72
+    assert max(len(line) for line in lines) == 79
+    assert set(ICARUS_LOGO) <= {"█", "▓", "▒", "░", " ", "\n"}
+
+    rendered = render_icarus_logo()
+    assert rendered.plain == ICARUS_LOGO
+    assert rendered.spans[0].style == "rgb(184,183,190)"
+    assert rendered.spans[-1].style == "rgb(217,119,131)"
 
 
 class ConversationTestApp(App):
@@ -116,6 +126,50 @@ def test_conversation分割文本工具文本并更新工具状态(tmp_path):
     assert assistant_texts == ["before", "after"]
     assert tool_success is True
     assert status_count == 0
+
+
+def test_streaming_markdown替换后旧节点不会触发鼠标选择崩溃(
+    monkeypatch, tmp_path
+):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                AppendAssistantDelta(task_id="task-1", text="before")
+            )
+            markdown = app.query_one(StreamingMarkdown)
+            old_block = markdown.children[0]
+
+            await view.apply_action(
+                AppendAssistantDelta(task_id="task-1", text=" after")
+            )
+            await pilot.pause()
+            monkeypatch.setattr(
+                app.screen,
+                "get_widget_and_offset_at",
+                lambda x, y: (old_block, Offset(0, 0)),
+            )
+            app.screen._forward_event(
+                events.MouseDown(
+                    None,
+                    x=1,
+                    y=1,
+                    delta_x=0,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                )
+            )
+            return old_block, markdown.children[0]
+
+    old_block, current_block = asyncio.run(run())
+
+    assert old_block.parent is None
+    assert old_block.allow_select is False
+    assert current_block.allow_select is True
 
 
 def test_conversation对缺失start的失败工具降级并显示错误终态(tmp_path):

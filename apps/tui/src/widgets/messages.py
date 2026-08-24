@@ -4,19 +4,71 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Label, Markdown, Static
 
 
-ICARUS_LOGO = """▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄▄    ▄▄▄▄▄    ▄▄▄▄▄▄▄▄▄   ▄▄▄▄▄ ▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄▄▄
-█▒░░█ █▒░░░░░░░█  ▄▀░░░░░ ▄  █▒░░░░░░░█▄ █▒░░█ █░░░█ █▒░░░░░▒░░█
-█▓▒▒█ █▓▒▒█▀▀▀▀▀ █▓▒▒▄▀▄▓▒▒█ █▓▒▒█▀▄▒▒▒█ █▓▒▒█ █▒▒▒█ █▓▒▒█▀▀▀▀▀▀
-██▓▓█ ██▓▓█      ██▓▓▄▄██▓▓█ ██▓▓▄▄▓▓▓▄▀ ██▓▓█ █▓▓▓█ ██▓▓▄███▓▓█
-█▄▄▄█ █▄▄▄█      █▄▄▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄▄█  █▄▄▄█ █▄▄▄█ ▀▄▄▄▄▄▄▄▄▄█
-█▒░░█ █▒░░▀▄▄▄▄▄ █▒░░█ █▒░░█ █▒░░█ █▒░░█ █▓░░▀▄▄▒░░█ ▄▄▄▄▄▄█▒░░█
-█░░░█ █░░░░░░░░█ █░░░█ █░░░█ █░░░█ █░░░█ █░░░░░░░░░█ █░░░░░░░░░█
-▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀▀▀"""
+ICARUS_LOGO = """ ░▒▒░     ░▒▓▓▓▓▒░         ▒▒▒░      ░▒▒▒▒▒▒▒▒░    ░▒▒░      ░▒▒░    ░▒▓▓▓▒▒
+ ▒██▒   ▒███▓▓▓▓███▒      ▓████      ▒██▓▓▓▓▓███▒  ▒██▒      ▒██▒  ▒███▓▒▓▓██▓
+ ▒██▒  ▓██▓      ▓██▒    ▒██░██▓     ▒██▒     ███  ▒██▒      ▒██▒  ███     ░▓▓░
+ ▒██▒ ░███              ░██▓ ░██▒    ▒██▒     ███  ▒██▒      ▒██▒  ▓██▓▒░░
+ ▒██▒ ░██▓              ███   ▓██    ▒███▓▓▓████░  ▒██▒      ▒██▒   ░▒▓██████▒
+ ▒██▒  ███        ░░░  ▓██████████   ▒██▓▒▒▓██▓    ▒██▒      ▒██▒         ░▓██▓
+ ▒██▒  ▒██▓░     ▓██░ ░██▓░░░░░▒██▒  ▒██▒   ▒██▓   ░███░    ░███░ ░██▒     ░███
+ ▒██▒   ░▓████████▓░  ███       ▓██░ ▒██▒    ▒██▓   ░▓████████▓░   ▒████▓▓███▓
+  ░░       ░▒▒▒▒░     ░░░        ░░░  ░░      ░░░░     ░▒▒▒▒░        ░░▒▒▒▒░"""
+
+_LOGO_TOP_LEFT = (184, 184, 191)
+_LOGO_TOP_RIGHT = (218, 117, 129)
+_LOGO_BOTTOM_LEFT = (185, 182, 189)
+_LOGO_BOTTOM_RIGHT = (219, 115, 127)
+_LOGO_CANVAS_WIDTH = 80
+_LOGO_CANVAS_HEIGHT = 15
+_LOGO_FIRST_VISIBLE_ROW = 1
+
+
+def _mix_color(
+    start: tuple[int, int, int],
+    end: tuple[int, int, int],
+    ratio: float,
+) -> tuple[int, int, int]:
+    return tuple(
+        round(left + (right - left) * ratio)
+        for left, right in zip(start, end)
+    )
+
+
+def render_icarus_logo() -> Text:
+    """Render the art.txt logo with its silver-to-pink true-color gradient."""
+
+    lines = ICARUS_LOGO.splitlines()
+    rendered = Text(no_wrap=True)
+    for row_index, line in enumerate(lines):
+        source_row = row_index + _LOGO_FIRST_VISIBLE_ROW
+        vertical_ratio = source_row / (_LOGO_CANVAS_HEIGHT - 1)
+        left = _mix_color(_LOGO_TOP_LEFT, _LOGO_BOTTOM_LEFT, vertical_ratio)
+        right = _mix_color(_LOGO_TOP_RIGHT, _LOGO_BOTTOM_RIGHT, vertical_ratio)
+        for column, character in enumerate(line):
+            if character == " ":
+                rendered.append(character)
+                continue
+            horizontal_ratio = column / (_LOGO_CANVAS_WIDTH - 1)
+            red, green, blue = _mix_color(left, right, horizontal_ratio)
+            rendered.append(character, style=f"rgb({red},{green},{blue})")
+        if row_index < len(lines) - 1:
+            rendered.append("\n")
+    return rendered
+
+
+class StreamingMarkdown(Markdown):
+    """Keep stale blocks out of Textual's mouse-selection path."""
+
+    def update(self, markdown: str):
+        for child in self.walk_children():
+            child.ALLOW_SELECT = False
+        return super().update(markdown)
 
 
 class WelcomeMessage(Vertical):
@@ -25,7 +77,7 @@ class WelcomeMessage(Vertical):
         self.workspace_path = Path(workspace_path).expanduser().resolve()
 
     def compose(self) -> ComposeResult:
-        yield Static(ICARUS_LOGO, markup=False, classes="welcome-logo")
+        yield Static(render_icarus_logo(), classes="welcome-logo")
         yield Label("Icarus", classes="welcome-title")
         yield Static(
             f"Workspace  {self.workspace_path}",
@@ -64,7 +116,7 @@ class AssistantMessage(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Label("Icarus", classes="message-label")
-        yield Markdown("", classes="assistant-markdown")
+        yield StreamingMarkdown("", classes="assistant-markdown")
 
     async def append_delta(self, text: str) -> None:
         if self._segment_finished:
@@ -72,7 +124,7 @@ class AssistantMessage(Vertical):
         if not text:
             return
         self._markdown_parts.append(text)
-        await self.query_one(Markdown).update(self.markdown_text)
+        await self.query_one(StreamingMarkdown).update(self.markdown_text)
 
     async def finish(self) -> None:
         if self._segment_finished:
