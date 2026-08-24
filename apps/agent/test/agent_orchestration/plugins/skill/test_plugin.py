@@ -1,622 +1,254 @@
 import asyncio
-import json
+from dataclasses import replace
+import inspect
+from pathlib import Path
 
-from apps.agent.src.agent_orchestration.capability import (
-    AgentCompletedEvent,
-    AgentErrorEvent,
-    AgentResponse,
-    AgentTextDeltaEvent,
-    AgentToolCompletedEvent,
-    AgentToolStartedEvent,
+import pytest
+
+from apps.agent.src.agent_orchestration.plugins.skill.catalog import SkillCatalog
+from apps.agent.src.agent_orchestration.plugins.skill.jobs import SkillJob
+from apps.agent.src.agent_orchestration.plugins.skill.models import SkillDefinition
+from apps.agent.src.agent_orchestration.plugins.skill.plugin import (
+    SkillOperationError,
+    SkillPlugin,
 )
-from apps.agent.src.agent_orchestration.hooks import (
-    BaseHook,
-    HookDispatcher,
-    HookRegistry,
+from apps.agent.src.agent_orchestration.plugins.skill.repository import (
+    SkillRepository,
 )
-from apps.agent.src.agent_orchestration.events import Event
-from apps.agent.src.agent_orchestration.plugins.skill.models import (
-    RankedSkill,
-    SkillDefinition,
+from apps.agent.src.agent_orchestration.plugins.skill.scanner import SkillScanner
+from apps.agent.src.agent_orchestration.run_control import (
+    TaskContextInputResultEvent,
 )
-from apps.agent.src.agent_orchestration.plugins.skill.plugin import SkillPlugin
-from apps.agent.src.agent_orchestration.plugins.skill.session_state import (
-    SessionSkillState,
-)
-from apps.agent.src.agent_orchestration.plugins.user_input.events import (
-    InputFinishedEvent,
-    UserInputEvent,
-)
-from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
-from apps.agent.src.model_provider.types import Message, TextPart, ToolCall
+from apps.agent.src.model_provider.types import Message, TextPart
 
 
-class ScannerStub:
-    def __init__(self, skills):
-        self.skills = skills
-        self.calls = 0
+class CatalogStub:
+    def __init__(self, skills=()):
+        self.skills = list(skills)
 
-    def scan(self):
-        self.calls += 1
+    def list_skills(self, scope="all"):
+        return [skill for skill in self.skills if scope == "all" or skill.scope == scope]
+
+    def search(self, keywords):
         return list(self.skills)
 
+    def find_visible(self, name):
+        normalized = name.strip().casefold()
+        return next((skill for skill in self.skills if skill.normalized_name == normalized), None)
 
-class UsageStoreStub:
+
+class RepositoryStub:
+    def __init__(self, snapshot=None, conflicts=()):
+        self.snapshot = snapshot
+        self.conflicts = tuple(conflicts)
+
+    def find_conflicts(self, name):
+        return self.conflicts
+
+    def capture(self, name):
+        return self.snapshot
+
+
+class ConversationStub:
+    def __init__(self, messages=()):
+        self.messages = list(messages)
+
+    def get_messages(self):
+        return list(self.messages)
+
+
+class JobManagerStub:
     def __init__(self):
-        self.ensure_calls = []
-        self.mark_calls = []
-        self.closed = False
+        self.produce_calls = []
+        self.evolve_calls = []
+        self.notification_events = []
+        self.jobs = {}
+        self.lifecycle = []
 
-    def ensure_discovered(self, workspace_key, skills):
-        self.ensure_calls.append((workspace_key, list(skills)))
-        return {}
+    def bind_publisher(self, publisher):
+        self.publisher = publisher
 
-    def mark_used(self, workspace_key, skills):
-        self.mark_calls.append((workspace_key, list(skills)))
-        return {}
+    async def start(self): self.lifecycle.append("start")
+    async def quiesce(self): self.lifecycle.append("quiesce")
+    async def drain(self): self.lifecycle.append("drain")
+    async def stop(self): self.lifecycle.append("stop")
 
-    def close(self):
-        self.closed = True
+    def submit_produce(self, **kwargs):
+        self.produce_calls.append(kwargs)
+        job = make_job(operation="produce", scope=kwargs["scope"])
+        self.jobs[job.job_id] = job
+        return job
 
+    def submit_evolve(self, **kwargs):
+        self.evolve_calls.append(kwargs)
+        job = make_job(operation="evolve", scope=None)
+        self.jobs[job.job_id] = job
+        return job
 
-class EmbeddingStub:
-    def __init__(self):
-        self.query_calls = []
-        self.document_calls = []
-        self.closed = False
-
-    async def embed_query(self, text):
-        self.query_calls.append(text)
-        return [1.0, 0.0]
-
-    async def embed_documents(self, texts):
-        self.document_calls.append(list(texts))
-        return [[1.0, 0.0] for _ in texts]
-
-    async def aclose(self):
-        self.closed = True
-
-
-class RankerStub:
-    def __init__(self):
-        self.calls = []
-        self.minimum_content_score = 0.8
-
-    def rank_with_summary(self, skills, query_vector, document_vectors, usages):
-        self.calls.append((skills, query_vector, document_vectors, usages))
-        ranked = [
-            RankedSkill(
-                skill=skill,
-                content_score=1.0,
-                lifecycle_status="active",
-                lifecycle_score=1.0,
-                final_score=1.0,
-            )
-            for skill in skills[:3]
-        ]
-        return ranked, len(ranked)
+    def get(self, job_id): return self.jobs.get(job_id)
+    def record_notification_result(self, event):
+        self.notification_events.append(event)
+    async def restore_workspace_state(self, state, *, state_version):
+        self.workspace_restore = (state, state_version)
+    async def restore_session_state(self, state, *, state_version):
+        self.session_restore = (state, state_version)
+    async def snapshot_workspace_state(self): return {"jobs": []}
+    async def snapshot_session_state(self): return {"job_ids": []}
 
 
-class RecordingHook(BaseHook):
-    def __init__(self):
-        self.events = []
+def make_job(operation="produce", scope="workspace"):
+    return SkillJob.create(
+        job_id=f"job-{operation}", operation=operation, target_name="sample", scope=scope,
+        task_id="task", run_id="run", step=1
+    )
 
-    def handle(self, event):
-        self.events.append(event)
 
-
-def make_skill(tmp_path, name):
+def skill(tmp_path, name="sample", scope="workspace"):
     return SkillDefinition(
-        name=name,
-        description=f"description {name}",
-        path=tmp_path / name / "SKILL.md",
-        scope="global",
+        name=name, description="description", scope=scope, path=tmp_path / name / "SKILL.md"
     )
 
 
-def make_plugin(tmp_path, skills, **overrides):
-    dependencies = {
-        "scanner": ScannerStub(skills),
-        "usage_store": UsageStoreStub(),
-        "embedding": EmbeddingStub(),
-        "ranker": RankerStub(),
-        "session_state": SessionSkillState(),
+def plugin(tmp_path, *, allow_produce=True, allow_evolve=True, skills=(), conflicts=(), snapshot=None):
+    jobs = JobManagerStub()
+    instance = SkillPlugin(
+        "skill", catalog=CatalogStub(skills),
+        repository=RepositoryStub(snapshot, conflicts),
+        job_manager=jobs, conversation=ConversationStub([Message("user", [TextPart("history")])]),
+        allow_produce=allow_produce, allow_evolve=allow_evolve,
+    )
+    return instance, jobs
+
+
+def execution():
+    return {
+        "task_id": "task", "run_id": "run", "step": 2,
+        "task_messages": (Message("assistant", [TextPart("current")]),),
     }
-    dependencies.update(overrides)
-    plugin = SkillPlugin(
+
+
+def test_list_search_and_job_status_return_public_fields_only(tmp_path):
+    item = skill(tmp_path)
+    instance, jobs = plugin(tmp_path, skills=[item])
+    finished = make_job().transition("running").transition("succeeded", path=tmp_path / "SKILL.md")
+    jobs.jobs[finished.job_id] = finished
+
+    assert instance.list_skills() == [{
+        "name": "sample", "description": "description", "scope": "workspace",
+        "path": str(item.path),
+    }]
+    assert instance.search(["sample"])[0]["name"] == "sample"
+    status = instance.job_status(finished.job_id)
+    assert status["status"] == "succeeded"
+    assert "conversation" not in status
+    assert "instructions" not in status
+    with pytest.raises(SkillOperationError, match="not found"):
+        instance.job_status("missing")
+
+
+def test_plugin_method_annotations_can_be_evaluated():
+    assert inspect.signature(SkillPlugin.search).return_annotation == list[
+        dict[str, str]
+    ]
+
+
+def test_produce_precheck_and_context_assembly(tmp_path):
+    instance, jobs = plugin(tmp_path)
+
+    result = instance.produce(name="sample", scope="global", instructions="make it", **execution())
+
+    assert result == {"job_id": "job-produce", "status": "queued"}
+    call = jobs.produce_calls[0]
+    assert [message.content[0].text for message in call["conversation"]] == ["history", "current"]
+    assert call["scope"] == "global"
+
+    conflict, conflict_jobs = plugin(tmp_path, conflicts=["workspace"])
+    with pytest.raises(SkillOperationError) as error:
+        conflict.produce(name="sample", scope="workspace", instructions="x", **execution())
+    assert error.value.code == "target_conflict"
+    assert conflict_jobs.produce_calls == []
+
+
+def test_produce_physical_conflict_fails_before_job_even_if_skill_is_invalid(
+    tmp_path,
+):
+    global_dir = tmp_path / "global"
+    workspace_dir = tmp_path / "workspace"
+    occupied = workspace_dir / "occupied"
+    occupied.mkdir(parents=True)
+    (occupied / "SKILL.md").write_text("invalid", encoding="utf-8")
+    jobs = JobManagerStub()
+    instance = SkillPlugin(
         "skill",
-        workspace_key="workspace-a",
-        user_input_plugin_id="user-input",
-        **dependencies,
-    )
-    published = []
-
-    async def publish(event):
-        published.append(event)
-
-    plugin.bind_publisher(publish)
-    return plugin, dependencies, published
-
-
-def test_skill_plugin只处理指定来源的UserInputEvent(tmp_path):
-    async def run():
-        plugin, dependencies, published = make_plugin(
-            tmp_path, [make_skill(tmp_path, "one")]
-        )
-        await plugin.consume("other", UserInputEvent(prompt="ignored"))
-        await plugin.consume("user-input", Event())
-        return dependencies, published
-
-    dependencies, published = asyncio.run(run())
-    assert dependencies["scanner"].calls == 0
-    assert published == []
-
-
-def test_skill_plugin只接受完整agent事件和失败input终态(tmp_path):
-    plugin, _, _ = make_plugin(tmp_path, [])
-    call = ToolCall(id="call-1", name="read", arguments={})
-    completed = AgentCompletedEvent(
-        step=1,
-        response=AgentResponse(
-            message=Message("assistant", [TextPart("done")]),
-            finish_reason="stop",
-            messages=[
-                Message("user", [TextPart("hello")]),
-                Message("assistant", [TextPart("done")]),
-            ],
-        ),
+        catalog=SkillCatalog(SkillScanner(global_dir, workspace_dir)),
+        repository=SkillRepository(global_dir, workspace_dir),
+        job_manager=jobs,
+        conversation=ConversationStub(),
+        allow_produce=True,
     )
 
-    assert plugin.accepts_event("agent", completed) is True
-    assert (
-        plugin.accepts_event(
-            "agent", AgentTextDeltaEvent(step=1, text="delta")
+    with pytest.raises(SkillOperationError) as error:
+        instance.produce(
+            name="occupied",
+            scope="global",
+            instructions="create it",
+            **execution(),
         )
-        is False
-    )
-    assert (
-        plugin.accepts_event(
-            "agent", AgentToolStartedEvent(step=1, tool_call=call)
-        )
-        is False
-    )
-    assert (
-        plugin.accepts_event(
-            "agent",
-            AgentToolCompletedEvent(
-                step=1,
-                tool_call=call,
-                result=ToolExecutionResult(success=True),
-            ),
-        )
-        is False
-    )
-    assert (
-        plugin.accepts_event(
-            "agent",
-            AgentErrorEvent(
-                step=1,
-                error_type="RuntimeError",
-                error_message="failed",
-            ),
-        )
-        is False
-    )
-    assert (
-        plugin.accepts_event(
-            "user-input",
-            InputFinishedEvent(
-                task_id="task",
-                status="failed",
-            ),
-        )
-        is True
-    )
-    assert (
-        plugin.accepts_event(
-            "user-input",
-            InputFinishedEvent(
-                task_id="task",
-                status="completed",
-            ),
-        )
-        is False
+
+    assert error.value.code == "target_conflict"
+    assert jobs.produce_calls == []
+
+
+def test_evolve_captures_visible_skill_and_context(tmp_path):
+    visible = skill(tmp_path, scope="global")
+    snapshot = object()
+    instance, jobs = plugin(tmp_path, skills=[visible], snapshot=snapshot)
+
+    result = instance.evolve(name="SAMPLE", instructions="improve", **execution())
+
+    assert result["status"] == "queued"
+    assert jobs.evolve_calls[0]["snapshot"] is snapshot
+    assert len(jobs.evolve_calls[0]["conversation"]) == 2
+
+
+def test_write_permissions_and_task_context_fail_before_job_creation(tmp_path):
+    disabled, jobs = plugin(tmp_path, allow_produce=False, allow_evolve=False)
+    with pytest.raises(SkillOperationError) as error:
+        disabled.produce(name="x", scope="workspace", instructions="x", **execution())
+    assert error.value.code == "disabled_by_policy"
+
+    enabled, enabled_jobs = plugin(tmp_path)
+    invalid = execution() | {"task_messages": ()}
+    with pytest.raises(SkillOperationError) as error:
+        enabled.produce(name="x", scope="workspace", instructions="x", **invalid)
+    assert error.value.code == "invalid_task_context"
+    assert jobs.produce_calls == enabled_jobs.produce_calls == []
+
+
+def test_plugin_only_consumes_agent_notification_results(tmp_path):
+    instance, jobs = plugin(tmp_path)
+    event = TaskContextInputResultEvent(
+        task_id="task", request_event_id="event", status="accepted"
     )
 
+    assert instance.accepts_event("agent", event) is True
+    assert instance.accepts_event("other", event) is False
+    asyncio.run(instance.consume("agent", event))
+    assert jobs.notification_events == [event]
 
-def test_skill_plugin空扫描直接发布completed且不调用embedding(tmp_path):
+
+def test_plugin_delegates_lifecycle_and_state(tmp_path):
     async def run():
-        plugin, dependencies, published = make_plugin(tmp_path, [])
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-empty", prompt="hello"),
-        )
-        return dependencies, published
-
-    dependencies, published = asyncio.run(run())
-    assert dependencies["embedding"].query_calls == []
-    assert dependencies["embedding"].document_calls == []
-    assert dependencies["usage_store"].ensure_calls == []
-    assert len(published) == 1
-    assert published[0].task_id == "task-empty"
-    assert published[0].status == "completed"
-    assert published[0].context_blocks == []
-
-
-def test_skill_plugin已有累计skill后空扫描仍保留上下文并推进刷新计数(
-    tmp_path,
-):
-    definition = make_skill(tmp_path, "one")
-
-    async def run():
-        scanner = ScannerStub([definition])
-        plugin, _, published = make_plugin(
-            tmp_path,
-            [definition],
-            scanner=scanner,
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-1", prompt="first"),
-        )
-        scanner.skills = []
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-2", prompt="second"),
-        )
-        return plugin, published
-
-    plugin, published = asyncio.run(run())
-
-    block = published[1].context_blocks[0]
-    assert block.metadata == {"mode": "unchanged"}
-    assert "unchanged" in block.content
-    assert plugin.session_state.selected_skills == (definition,)
-    assert plugin.session_state.unchanged_turns == 1
-
-
-def test_skill_plugin正常检索并发布确定性full上下文(tmp_path):
-    skills = [make_skill(tmp_path, name) for name in ["one", "two", "three", "four"]]
-
-    async def run():
-        plugin, dependencies, published = make_plugin(tmp_path, skills)
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-1", prompt="find skill"),
-        )
-        return dependencies, published
-
-    dependencies, published = asyncio.run(run())
-    assert dependencies["usage_store"].ensure_calls == [
-        ("workspace-a", skills)
-    ]
-    assert dependencies["embedding"].query_calls == ["find skill"]
-    assert dependencies["embedding"].document_calls == [
-        [skill.description for skill in skills]
-    ]
-    assert dependencies["usage_store"].mark_calls == [
-        ("workspace-a", skills[:3])
-    ]
-    event = published[0]
-    assert event.status == "completed"
-    block = event.context_blocks[0]
-    assert block.source_plugin_id == "skill"
-    assert block.context_type == "skills"
-    assert block.metadata == {"mode": "full"}
-    assert json.loads(block.content) == [
-        {
-            "description": skill.description,
-            "name": skill.name,
-            "path": str(skill.path),
-        }
-        for skill in skills[:3]
-    ]
-    assert block.content == json.dumps(
-        json.loads(block.content),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def test_skill_plugin无新增发布unchanged但仍记录top3使用(tmp_path):
-    skills = [make_skill(tmp_path, "one")]
-
-    async def run():
-        plugin, dependencies, published = make_plugin(tmp_path, skills)
-        event = UserInputEvent(task_id="task-1", prompt="same")
-        await plugin.consume("user-input", event)
-        await plugin.consume("user-input", event)
-        return dependencies, published
-
-    dependencies, published = asyncio.run(run())
-    assert len(dependencies["usage_store"].mark_calls) == 2
-    block = published[1].context_blocks[0]
-    assert block.metadata == {"mode": "unchanged"}
-    assert block.content == (
-        "The available skill context is unchanged from the previous full injection."
-    )
-
-
-def test_skill_plugin空召回不注入且不更新使用状态(tmp_path):
-    class EmptyRanker(RankerStub):
-        def rank_with_summary(
-            self, skills, query_vector, document_vectors, usages
-        ):
-            return [], 0
-
-    async def run():
-        plugin, dependencies, published = make_plugin(
-            tmp_path,
-            [make_skill(tmp_path, "one")],
-            ranker=EmptyRanker(),
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-empty", prompt="hello"),
-        )
-        return plugin, dependencies, published
-
-    plugin, dependencies, published = asyncio.run(run())
-
-    assert dependencies["usage_store"].mark_calls == []
-    assert plugin.session_state.selected_skills == ()
-    assert published[0].status == "completed"
-    assert published[0].context_blocks == []
-
-
-def test_skill_plugin聚合检索hook不记录prompt向量或skill正文(tmp_path):
-    registry = HookRegistry()
-    hook = RecordingHook()
-    registry.register("skill.retrieval", hook)
-
-    async def run():
-        plugin, _, _ = make_plugin(
-            tmp_path,
-            [make_skill(tmp_path, "one")],
-            hook_dispatcher=HookDispatcher(registry),
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(
-                task_id="task-hook",
-                prompt="SECRET PROMPT MUST NOT APPEAR",
-            ),
-        )
-
-    asyncio.run(run())
-
-    assert len(hook.events) == 1
-    event = hook.events[0]
-    assert event.name == "skill.retrieval"
-    assert event.phase == "after"
-    assert event.data["candidate_count"] == 1
-    assert event.data["qualified_count"] == 1
-    assert event.data["minimum_content_score"] == 0.8
-    assert event.data["mode"] == "full"
-    assert event.data["selected"][0]["name"] == "one"
-    serialized = json.dumps(dict(event.data))
-    assert "SECRET PROMPT MUST NOT APPEAR" not in serialized
-    assert "description one" not in serialized
-
-
-def test_skill_plugin同名workspace覆盖即使未进本轮top3也替换累计定义(
-    tmp_path,
-):
-    global_skill = make_skill(tmp_path, "same")
-    workspace_skill = SkillDefinition(
-        name="same",
-        description="workspace replacement",
-        path=tmp_path / "workspace" / "same" / "SKILL.md",
-        scope="workspace",
-    )
-    other = make_skill(tmp_path, "other")
-
-    class SequencedRanker:
-        def __init__(self):
-            self.calls = 0
-            self.minimum_content_score = 0.8
-
-        def rank_with_summary(
-            self, skills, query_vector, document_vectors, usages
-        ):
-            self.calls += 1
-            selected = global_skill if self.calls == 1 else other
-            return [
-                RankedSkill(
-                    skill=selected,
-                    content_score=1.0,
-                    lifecycle_status="active",
-                    lifecycle_score=1.0,
-                    final_score=1.0,
-                )
-            ], 1
-
-    async def run():
-        scanner = ScannerStub([global_skill])
-        plugin, _, published = make_plugin(
-            tmp_path,
-            [global_skill],
-            scanner=scanner,
-            ranker=SequencedRanker(),
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-1", prompt="first"),
-        )
-        scanner.skills = [other, workspace_skill]
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-2", prompt="second"),
-        )
-        return plugin, published
-
-    plugin, published = asyncio.run(run())
-
-    selected = plugin.session_state.selected_skills
-    assert [skill.name for skill in selected] == ["same", "other"]
-    assert selected[0] == workspace_skill
-    assert published[1].context_blocks[0].metadata == {"mode": "full"}
-
-
-def test_skill_plugin异常发布failed防止blackboard卡住(tmp_path):
-    class FailingScanner:
-        def scan(self):
-            raise RuntimeError("scan failed")
-
-    async def run():
-        plugin, _, published = make_plugin(
-            tmp_path, [], scanner=FailingScanner()
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-fail", prompt="hello"),
-        )
-        return published
-
-    published = asyncio.run(run())
-    assert len(published) == 1
-    assert published[0].task_id == "task-fail"
-    assert published[0].status == "failed"
-    assert published[0].error == "scan failed"
-    assert published[0].context_blocks == []
-
-
-def test_skill_plugin聚合错误hook不透传可能包含prompt的底层异常(tmp_path):
-    class LeakyScanner:
-        def scan(self):
-            raise RuntimeError("provider failed for SECRET USER PROMPT")
-
-    registry = HookRegistry()
-    hook = RecordingHook()
-    registry.register("skill.retrieval", hook)
-
-    async def run():
-        plugin, _, _ = make_plugin(
-            tmp_path,
-            [],
-            scanner=LeakyScanner(),
-            hook_dispatcher=HookDispatcher(registry),
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(
-                task_id="task-error-hook",
-                prompt="SECRET USER PROMPT",
-            ),
-        )
-
-    asyncio.run(run())
-
-    assert len(hook.events) == 1
-    assert hook.events[0].phase == "error"
-    assert hook.events[0].data["error_type"] == "RuntimeError"
-    assert hook.events[0].data["error_message"] == "Skill retrieval failed"
-    assert "SECRET USER PROMPT" not in json.dumps(dict(hook.events[0].data))
-
-
-def test_skill_plugin检索超时后熔断并持续发布failed(tmp_path):
-    class SlowEmbedding:
-        def __init__(self):
-            self.calls = 0
-
-        async def embed_query(self, text):
-            self.calls += 1
-            await asyncio.Event().wait()
-
-        async def embed_documents(self, texts):
-            raise AssertionError("documents should not run")
-
-    embedding = SlowEmbedding()
-
-    async def run():
-        plugin, _, published = make_plugin(
-            tmp_path,
-            [make_skill(tmp_path, "one")],
-            embedding=embedding,
-        )
-        plugin.retrieval_timeout_seconds = 0.01
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-1", prompt="first"),
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-2", prompt="second"),
-        )
-        return published
-
-    published = asyncio.run(run())
-
-    assert embedding.calls == 1
-    assert [event.status for event in published] == ["failed", "failed"]
-    assert all("timed out" in event.error for event in published)
-
-
-def test_skill_plugin无usage_store仍正常检索发布(tmp_path):
-    skills = [make_skill(tmp_path, "one")]
-
-    async def run():
-        plugin, dependencies, published = make_plugin(
-            tmp_path, skills, usage_store=None
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-1", prompt="hello"),
-        )
-        return dependencies, published
-
-    dependencies, published = asyncio.run(run())
-    assert dependencies["ranker"].calls[0][3] == {}
-    assert published[0].status == "completed"
-    assert published[0].context_blocks[0].metadata == {"mode": "full"}
-
-
-def test_skill_plugin_usage_store中途异常降级但仍发布completed(tmp_path):
-    class FailingUsageStore:
-        def ensure_discovered(self, workspace_key, skills):
-            raise RuntimeError("ensure failed")
-
-        def mark_used(self, workspace_key, skills):
-            raise RuntimeError("mark failed")
-
-        def close(self):
-            pass
-
-    skills = [make_skill(tmp_path, "one")]
-
-    async def run():
-        plugin, dependencies, published = make_plugin(
-            tmp_path, skills, usage_store=FailingUsageStore()
-        )
-        await plugin.consume(
-            "user-input",
-            UserInputEvent(task_id="task-1", prompt="hello"),
-        )
-        return dependencies, published
-
-    dependencies, published = asyncio.run(run())
-    assert dependencies["ranker"].calls[0][3] == {}
-    assert published[0].status == "completed"
-    assert len(published[0].context_blocks) == 1
-
-
-def test_skill_plugin_stop关闭usage_store(tmp_path):
-    async def run():
-        plugin, dependencies, _ = make_plugin(tmp_path, [])
-        await plugin.stop()
-        return (
-            dependencies["usage_store"].closed,
-            dependencies["embedding"].closed,
-        )
-
-    assert asyncio.run(run()) == (True, True)
-
-
-def test_skill_plugin_stop允许usage_store为空(tmp_path):
-    async def run():
-        plugin, _, _ = make_plugin(tmp_path, [], usage_store=None)
-        await plugin.stop()
-        return plugin.embedding.closed
-
-    assert asyncio.run(run()) is True
+        instance, jobs = plugin(tmp_path)
+        await instance.start()
+        await instance.restore_workspace_state({"jobs": []}, state_version=1)
+        await instance.restore_session_state({"job_ids": []}, state_version=1)
+        assert await instance.snapshot_workspace_state() == {"jobs": []}
+        assert await instance.snapshot_session_state() == {"job_ids": []}
+        await instance.quiesce()
+        await instance.drain()
+        await instance.stop()
+        return jobs
+
+    jobs = asyncio.run(run())
+    assert jobs.lifecycle == ["start", "quiesce", "drain", "stop"]

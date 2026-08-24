@@ -63,7 +63,7 @@ Factory 校验、Capability/Tool/Event 图和外部模块生命周期；`PluginS
 Workspace/Session 状态恢复与快照。它们都是 Host 内部普通组件，不注册为 Plugin。
 
 持久化、输入、Blackboard、Agent、Skill、Tool 和输出桥接等可替换业务或基础能力均由 Plugin
-提供。AgentFactory 是 AgentPlugin 的内部组件，维护 AgentFactory 是 SkillPlugin 的内部组件；
+提供。AgentFactory 是 AgentPlugin 的内部组件，Producer/Evolver AgentFactory 是 SkillPlugin 的内部组件；
 它们不作为独立 Plugin 注册。Host 不理解具体领域状态、Event 业务语义或 Tool 行为。
 
 Host 不做成 Plugin，避免出现“由谁发现、构造和启动 Runtime Plugin”的自举循环。
@@ -82,7 +82,7 @@ Host 不做成 Plugin，避免出现“由谁发现、构造和启动 Runtime Pl
 这些内部组件不注册为子 Plugin。Runtime Host 不介入模型 Step、ToolCall 或 Agent 终态竞争。
 `agent/factory.py` 创建主 AgentFactory，并把 Host 管理的同一个 ToolRegistry 传入；
 AgentRuntimeService 不创建、持有或关闭 AgentFactory。SkillPlugin 的 Factory 同样创建并持有独立的
-维护 AgentFactory。两类 AgentFactory 都由所属 Plugin 在 `stop()` 中关闭。
+Producer/Evolver AgentFactory。两类 AgentFactory 都由所属 Plugin 在 `stop()` 中关闭。
 
 ### 声明与实现分离
 
@@ -185,14 +185,33 @@ Runtime 启动配置持有 `required_plugin_ids`。核心或可选属性不写�
   "entrypoint": "apps.agent.src.agent_orchestration.plugins.skill.factory:create_plugin",
 
   "python_requires": [
-    "fastembed>=0.7,<1",
-    "numpy>=2,<3"
+    "PyYAML>=6,<7"
   ],
 
   "required_capabilities": [
     {
       "plugin_id": "persistence",
+      "capability_id": "runtime",
+      "version_spec": ">=1.0,<2.0"
+    },
+    {
+      "plugin_id": "persistence",
+      "capability_id": "session",
+      "version_spec": ">=1.0,<2.0"
+    },
+    {
+      "plugin_id": "persistence",
       "capability_id": "state_store",
+      "version_spec": ">=1.0,<2.0"
+    },
+    {
+      "plugin_id": "persistence",
+      "capability_id": "redactor",
+      "version_spec": ">=1.0,<2.0"
+    },
+    {
+      "plugin_id": "blackboard",
+      "capability_id": "conversation",
       "version_spec": ">=1.0,<2.0"
     }
   ],
@@ -288,9 +307,9 @@ Capability 依赖。第一阶段不提供仅用于排序、但没有实际接口
 
 ### Plugin 内部组件
 
-Plugin 内部专用能力不是公共 Capability。例如 Embedding 当前只服务 SkillPlugin，应继续作为
-SkillPlugin 内部组件；Scanner、Ranker、Repository 和维护 Agent 同样不注册为子 Plugin。只有
-出现真实跨 Plugin 调用者时，才把某项能力提升为公共 Capability。
+Plugin 内部专用能力不是公共 Capability。例如 SkillPlugin 的 Catalog、JobManager、Producer、
+Evolver 和 Repository 都是 Plugin 内部组件，不注册为子 Plugin。只有出现真实跨 Plugin 调用者时，
+才把某项能力提升为公共 Capability。
 
 ## Factory 与原子注册
 
@@ -364,6 +383,9 @@ PluginRegistration(
     tools=(
         SkillsListTool(skill_plugin),
         SkillSearchTool(skill_plugin),
+        SkillProduceTool(skill_plugin),
+        SkillEvolveTool(skill_plugin),
+        SkillJobStatusTool(skill_plugin),
     ),
     state_provider=skill_plugin,
 )

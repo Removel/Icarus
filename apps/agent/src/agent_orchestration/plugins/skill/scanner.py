@@ -28,15 +28,12 @@ class SkillScanner:
         """Return definitions sorted by normalized name, Workspace overriding global."""
         discovered = {
             skill.normalized_name: skill
-            for skill in self._scan_scope(self.global_skills_dir, "global")
+            for skill in self.scan_scope("global")
         }
         discovered.update(
             {
                 skill.normalized_name: skill
-                for skill in self._scan_scope(
-                    self.workspace_skills_dir,
-                    "workspace",
-                )
+                for skill in self.scan_scope("workspace")
             }
         )
         return sorted(
@@ -44,17 +41,28 @@ class SkillScanner:
             key=lambda skill: (skill.normalized_name, str(skill.path)),
         )
 
-    def _scan_scope(
-        self,
-        directory: Path,
-        scope: SkillScope,
-    ) -> list[SkillDefinition]:
+    def scan_scope(self, scope: SkillScope) -> list[SkillDefinition]:
+        """Return definitions physically present in one scope without overrides."""
+        if scope == "global":
+            directory = self.global_skills_dir
+        elif scope == "workspace":
+            directory = self.workspace_skills_dir
+        else:
+            raise ValueError(f"Unsupported Skill scope: {scope}")
         if not directory.is_dir():
             return []
         definitions: dict[str, SkillDefinition] = {}
         for skill_file in sorted(directory.glob("*/SKILL.md"), key=str):
             try:
-                definition = self._parse(skill_file, scope)
+                resolved_file = skill_file.resolve(strict=True)
+                if not resolved_file.is_relative_to(directory):
+                    self.logger.warning(
+                        "Skipping Skill file outside %s root: %s",
+                        scope,
+                        skill_file,
+                    )
+                    continue
+                definition = self._parse(resolved_file, scope)
             except (OSError, UnicodeError, ValueError, yaml.YAMLError) as error:
                 self.logger.warning(
                     "Skipping invalid Skill file %s: %s",
@@ -71,10 +79,12 @@ class SkillScanner:
                 )
                 continue
             definitions[definition.normalized_name] = definition
-        return list(definitions.values())
+        return sorted(
+            definitions.values(),
+            key=lambda skill: (skill.normalized_name, str(skill.path)),
+        )
 
-    @staticmethod
-    def _parse(skill_file: Path, scope: SkillScope) -> SkillDefinition:
+    def _parse(self, skill_file: Path, scope: SkillScope) -> SkillDefinition:
         text = skill_file.read_text(encoding="utf-8")
         if not text.startswith("---"):
             raise ValueError("missing YAML front matter")
@@ -98,10 +108,31 @@ class SkillScanner:
             raise ValueError("Skill name must be a non-empty string")
         if not isinstance(description, str) or not description.strip():
             raise ValueError("Skill description must be a non-empty string")
+        keywords = self._parse_keywords(metadata.get("keywords"), skill_file)
         return SkillDefinition(
             name=name,
             description=description,
             path=skill_file,
             scope=scope,
-            metadata=dict(metadata),
+            keywords=keywords,
         )
+
+    def _parse_keywords(
+        self,
+        value: Any,
+        skill_file: Path,
+    ) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if (
+            not isinstance(value, list)
+            or not 1 <= len(value) <= 8
+            or any(not isinstance(item, str) or not item.strip() for item in value)
+        ):
+            self.logger.warning(
+                "Ignoring invalid Skill keywords in %s; expected 1 to 8 "
+                "non-empty strings",
+                skill_file,
+            )
+            return ()
+        return tuple(item.strip() for item in value)

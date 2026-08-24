@@ -17,7 +17,6 @@
   "consumed_events": [
     "apps.agent.src.agent_orchestration.plugins.user_input.events.UserInputEvent",
     "apps.agent.src.agent_orchestration.plugins.user_input.events.InputFinishedEvent",
-    "apps.agent.src.agent_orchestration.plugins.blackboard.events.ContextContributionEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCompletedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentErrorEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCancelledEvent"

@@ -3,23 +3,31 @@
   "plugin_id": "skill",
   "plugin_version": "1.0.0",
   "entrypoint": "apps.agent.src.agent_orchestration.plugins.skill.factory:create_plugin",
-  "python_requires": ["fastembed>=0.7,<1", "numpy>=2,<3", "PyYAML>=6,<7"],
+  "python_requires": ["PyYAML>=6,<7"],
   "required_capabilities": [
     {"plugin_id": "persistence", "capability_id": "runtime", "version_spec": ">=1,<2"},
     {"plugin_id": "persistence", "capability_id": "session", "version_spec": ">=1,<2"},
-    {"plugin_id": "persistence", "capability_id": "redactor", "version_spec": ">=1,<2"}
+    {"plugin_id": "persistence", "capability_id": "state_store", "version_spec": ">=1,<2"},
+    {"plugin_id": "persistence", "capability_id": "redactor", "version_spec": ">=1,<2"},
+    {"plugin_id": "blackboard", "capability_id": "conversation", "version_spec": ">=1,<2"}
   ],
-  "provided_capabilities": [],
-  "provided_tools": [],
+  "provided_capabilities": [
+    {"capability_id": "skill_management", "version": "1.0.0"}
+  ],
+  "provided_tools": [
+    "skills_list",
+    "skill_search",
+    "skill_produce",
+    "skill_evolve",
+    "skill_job_status"
+  ],
   "published_events": [
-    "apps.agent.src.agent_orchestration.plugins.blackboard.events.ContextContributionEvent",
     "apps.agent.src.agent_orchestration.run_control.events.TaskContextInputEvent"
   ],
   "consumed_events": [
-    "apps.agent.src.agent_orchestration.plugins.user_input.events.UserInputEvent",
-    "apps.agent.src.agent_orchestration.plugins.user_input.events.InputFinishedEvent",
-    "apps.agent.src.agent_orchestration.capability.types.AgentCompletedEvent",
     "apps.agent.src.agent_orchestration.run_control.events.TaskContextInputResultEvent"
   ],
-  "state_scopes": []
+  "state_scopes": ["workspace", "session"],
+  "workspace_state_version": 1,
+  "session_state_version": 1
 }

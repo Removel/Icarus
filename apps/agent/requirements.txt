@@ -2,8 +2,6 @@ anthropic
 openai
 pydantic
 python-dotenv
-fastembed
-numpy
 PyYAML
 rich>=14.2,<15
 textual>=8.2.8,<9
