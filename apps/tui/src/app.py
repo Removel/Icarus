@@ -193,6 +193,10 @@ class IcarusTextualApp(App[int]):
 
     def _update_responsive_classes(self, width: int, height: int) -> None:
         self.screen.set_class(width <= 70, "-narrow")
+        self.screen.set_class(
+            width <= 88,
+            "-compact-logo",
+        )
         self.screen.set_class(height <= 12, "-short")
 
     async def _start_runtime(self) -> None:

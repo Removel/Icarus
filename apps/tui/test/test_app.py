@@ -1043,6 +1043,41 @@ def test_shell区域在宽窄窗口和多行composer下不重叠或越界(
     assert status.bottom <= screen.bottom
 
 
+@pytest.mark.parametrize(
+    ("size", "compact_logo", "expected_logo_visible"),
+    [
+        ((89, 21), False, True),
+        ((88, 21), True, False),
+        ((100, 20), False, True),
+        ((100, 12), False, False),
+    ],
+)
+def test_art_logo仅在宽度不足或极短窗口切换为紧凑标题(
+    tmp_path, size, compact_logo, expected_logo_visible
+):
+    async def run():
+        service = ControlledService(block_start=True)
+        app = make_app(service, tmp_path)
+        async with app.run_test(size=size) as pilot:
+            await service.start_entered.wait()
+            await pilot.pause()
+            result = (
+                app.screen.has_class("-compact-logo"),
+                app.query_one(".welcome-logo").display,
+                app.query_one(".welcome-title").display,
+            )
+            app.request_shutdown(return_code=0)
+            service.start_release.set()
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    class_enabled, logo_visible, title_visible = asyncio.run(run())
+
+    assert class_enabled is compact_logo
+    assert logo_visible is expected_logo_visible
+    assert title_visible is not expected_logo_visible
+
+
 def test_short窗口同时有队列和八行composer时status仍可见(tmp_path):
     async def run():
         service = ControlledService(block_start=True)
