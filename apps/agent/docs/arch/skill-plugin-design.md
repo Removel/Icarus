@@ -32,6 +32,7 @@
 - 支持多步骤任务根据中间信息再次搜索；
 - 通过渐进式披露控制上下文开销；
 - 让 Agent 显式生产新 Skill 或演化已有 Skill；
+- 让 Producer/Evolver 能创建、修改和验证包含脚本、参考资料、模板与二进制资源的完整 Skill 目录；
 - 让耗时的生产和演化不阻塞单次 Tool 调用；
 - 使用现有运行中 Context 事件把 Job 结果通知仍活跃的 Agent；
 - 保存可查询的 Job 终态，并在 Runtime 退出时确定性收束；
@@ -48,6 +49,8 @@
 - 不向 Agent 暴露任意 Skill 删除操作；
 - 不在首期实现分页、标签表达式或复杂查询 DSL；
 - 不在一次 Agent Run 中热注册、热卸载或替换 Tool。
+- 不把生成 Agent 的内部消息和 Tool 轨迹写入 Blackboard 对话历史；
+- 不以绝对安全沙箱为目标，但必须限制生成过程的写入范围、网络访问、依赖安装和明显危险命令。
 
 ## 方案结论
 
@@ -81,6 +84,10 @@ flowchart LR
     J["SkillJobManager"]
     W["Producer / Evolver
 隔离 Agent"]
+    D["Job Draft
+完整 Skill 目录"]
+    RP["SkillRepository
+校验与事务式发布"]
     FS["Global / Workspace Skills"]
 
     U --> B --> A
@@ -93,11 +100,12 @@ flowchart LR
     A --> Q --> J
     B -. "conversation Capability" .-> J
     J --> W
-    W --> FS
+    W --> D
+    D --> RP --> FS
     J -. "TaskContextInputEvent" .-> A
 ```
 
-`SkillCatalog` 负责扫描、名称解析、列表、搜索和路径识别。`SkillJobManager` 负责生产与演化 Job 的状态、执行、通知和恢复。五个 Skill Tool 只负责扁平参数校验和领域调用。
+`SkillCatalog` 负责扫描、名称解析、列表、搜索和路径识别。`SkillJobManager` 负责生产与演化 Job 的状态、Draft 生命周期、执行、通知和恢复。Producer/Evolver 在 Job 专属 Draft 中完成整个 Skill，`SkillRepository` 只校验成品并事务式发布。五个 Skill Tool 只负责扁平参数校验和领域调用。
 
 ## Agent 可见 Tool 协议
 
@@ -191,8 +199,9 @@ Workspace 还是全局目录，由主 Agent 明确选择。
 - 创建 Job 前分别扫描 Workspace 和全局两个物理作用域；任一作用域存在同规范化名称时，
   立即返回 Tool 失败，不创建 Job、不启动 Producer、不写文件，并提示使用 `skill_evolve`；
 - Tool 只创建后台 Job，立即返回 `job_id` 和 `queued`，不等待模型生成或文件写入；
-- Producer 使用独立、无文件 Tool 的 Agent 生成一个完整 `SKILL.md`；
-- 输出经过脱敏、严格结构解析和 Repository 校验后，只能写入 `scope` 指定的目标目录；
+- Producer 使用独立生成 Agent，在 Job 专属 Draft 中创建完整 Skill 目录；
+- 生成 Agent 能读取任务相关材料、编辑 Draft 并受限执行验证命令，但不能直接写入正式 Skill 根目录；
+- Repository 验证整个 Draft 后，只能发布到 `scope` 指定的目标目录；
 - 提交前再次扫描两个物理作用域；若生成期间出现同名 Skill，Job 以冲突失败，不覆盖文件。
 
 ### `skill_evolve`
@@ -213,9 +222,10 @@ Workspace 还是全局目录，由主 Agent 明确选择。
 - `name` 和 `instructions` 必须是非空字符串；
 - `allow_evolve=False` 时返回 `disabled_by_policy`；
 - 目标必须是 Catalog 当前可见的有效 Skill；
-- Workspace Skill 演化为原路径的原子更新；
+- Workspace Skill 演化为原路径的事务式更新；
 - 全局 Skill 不被直接修改，演化结果写成当前 Workspace 的同名覆盖；
 - Job 捕获目标 Skill 快照和只读 `task_messages`；
+- Job 把目标的完整目录复制到 Draft，Evolver 在副本上增删改文件，未修改内容自然保留；
 - 提交前重新校验目标快照，发生并发变化时 Job 失败，不覆盖新内容；
 - Tool 立即返回 `job_id` 和 `queued`。
 
@@ -255,19 +265,28 @@ Workspace 还是全局目录，由主 Agent 明确选择。
 
 ## Skill 目录与搜索
 
-目录布局保持不变：
+正式 Skill 目录分为当前 Workspace 和全局两个作用域：
 
 ```text
+<current-workspace>/
+└── skills/
+    └── <skill-name>/
+        ├── SKILL.md
+        ├── scripts/
+        ├── references/
+        ├── templates/
+        └── assets/
+
 $ICARUS_DATA_DIR/
-├── skills/
-│   └── <skill-name>/SKILL.md
-└── workspaces/
-    └── <workspace_key>/
-        └── skills/
-            └── <skill-name>/SKILL.md
+└── skills/
+    └── <skill-name>/
+        ├── SKILL.md
+        └── ...
 ```
 
-Skill 仍至少要求 YAML 头包含非空 `name` 和 `description`。可选 `keywords` 必须是字符串列表；字段无效时记录日志并按空列表处理，不让附加元数据导致整个 Skill 不可用。缺少必填字段、无效 YAML 或同作用域重名仍跳过。扫描器解析后的路径必须位于对应 Skill 根目录，符号链接不能把 Catalog 路径指向目录外。
+Workspace Skill 源文件属于当前 Workspace，不放在 `$ICARUS_DATA_DIR/workspaces/<workspace_key>`；后者只保存 Workspace 元数据、Session、日志和 Job 状态。Skill 仍至少要求根目录存在 `SKILL.md`，其 YAML 头包含非空 `name` 和 `description`。可选 `keywords` 必须是字符串列表；字段无效时记录日志并按空列表处理，不让附加元数据导致整个 Skill 不可用。缺少必填字段、无效 YAML 或同作用域重名仍跳过。扫描器解析后的路径必须位于对应 Skill 根目录，符号链接不能把 Catalog 路径指向目录外。
+
+除 `SKILL.md` 外，Skill 可包含任意层级的普通文件，包括 `scripts/`、`references/`、`templates/` 和二进制 `assets/`。目录名不是固定协议；这些名称只是常见约定。Repository 按字节保存普通文件，只对需要理解的文本文件执行文本格式校验。
 
 搜索只依赖扫描结果和上述确定性包含规则，不创建模型、不下载向量资源，也不维护按 Workspace 的使用次数或生命周期权重。旧的 `SessionSkillState`、`SkillTurnState`、累计列表、七轮刷新和使用状态数据库全部删除。
 
@@ -306,18 +325,19 @@ Workspace 和全局两个物理作用域，冲突时在创建 Job 前结束；Ev
 3. 使用 `context = tuple(history) + task_messages` 组成截至本次 Tool 调用的完整对话证据；
 4. 生成唯一 `job_id`，保存 `queued` 状态；
 5. 创建由 SkillPlugin 所有的后台 Task；
-6. Job 进入 `running`，调用隔离、无文件 Tool 的 Producer 或 Evolver Agent；
-7. 对输入证据执行现有结构化脱敏；
-8. 严格解析一个目标 Skill 的完整内容；
-9. Repository 校验名称、YAML 头、路径、作用域和并发快照后原子提交；
-10. 保存 `succeeded` 或 `failed` 终态。
+6. Job 创建专属临时 Draft；Produce 从空目录开始，Evolve 从目标 Skill 完整目录的快照副本开始；
+7. Job 进入 `running`，调用隔离的 Producer 或 Evolver Agent；
+8. 对输入证据执行现有结构化脱敏；
+9. 生成 Agent 通过受控文件与执行能力在 Draft 中完成整个 Skill，并以明确的完成响应结束；
+10. Repository 校验 Draft 的目录边界、`SKILL.md`、文件类型、容量、作用域和并发快照后事务式提交；
+11. 保存 `succeeded` 或 `failed` 终态并清理 Draft。
 
 `BlackboardPlugin.get_messages()` 已返回新的外层列表，ToolExecutor 也已为当前任务提供消息快照；
 SkillPlugin 只把二者组合成 tuple 并按只读数据使用，不再做一层无意义的深拷贝。当前
 `task_messages` 的末尾可能是尚未产生 Tool Result 的 `skill_produce` 或 `skill_evolve` ToolCall，
 因此不能原样作为另一个模型的协议历史。Prompt Builder 会把完整 `context` 脱敏并序列化成
 结构化对话证据，放入 Producer/Evolver 的当前 User Prompt；内部 Agent 的 `history_messages` 保持空。
-最后一条任务指令同时明确传入 `name`、`scope`（仅 Produce）、`instructions`、输出格式和约束。
+最后一条任务指令同时明确传入 `name`、`scope`（仅 Produce）、`instructions`、Draft 路径、完成条件和约束。
 它们因此可以理解“结合前面确定的内容”具体指什么，同时不依赖从自然语言历史中猜测目标参数。
 若未来允许组件修改 Message 内部对象，应统一收紧 Message 的不可变性，而不是在 SkillPlugin 中
 散落深拷贝。
@@ -326,6 +346,43 @@ Produce Job 只允许创建一个新 Skill。提交临界区内再次扫描 Work
 同规范化名称都使 Job 失败。Evolve Job 只允许更新一个明确目标：Workspace 目标比较原文件快照，
 全局目标还要确认原全局快照未变且未出现同名 Workspace 覆盖。旧 Maintainer 一次返回多项
 create/update/merge/delete 的宽泛计划不再使用。
+
+### Draft 与生成 Agent 能力
+
+Draft 是一个 Job 私有的临时目录，只承担生成过程和提交前成品交接，不是新的持久化领域模型。生成 Agent 负责 Draft 中所有内容决策，Repository 不替它补写或改写 Skill。
+
+生成 Agent 应具备完成真实 Skill 所需的能力：
+
+- 浏览和读取当前 Workspace、Workspace Skills、全局 Skills 与当前 Draft；
+- 通过文件 Tool 只在当前 Draft 内创建、覆盖、移动和删除文件；
+- 从允许读取的位置复制文本或二进制资源到 Draft；
+- 在 Draft 中执行必要的检查或试跑命令。
+
+具体 Tool 名称、数量和注册方式属于内部实现，不进入 SkillPlugin 的 Manifest 或公共 Capability 契约。实现应优先复用现有 Agent/Tool 基础设施，并保持 Producer、Evolver 和 Repository 不依赖 `ToolRegistry`。无论选择包装 Tool、执行策略还是其他简单实现，都必须满足以下行为约束：
+
+- 文件 Tool 不能直接写 Workspace 或全局正式 Skill 根目录；
+- 命令执行 Tool 把工作目录固定为 Draft，并在执行前拒绝明显危险、越界、联网和依赖安装行为；
+- 执行环境不暴露凭据、Token、代理等敏感环境变量；
+- 命令具有单次执行超时和输出上限；
+- 安全检查拒绝时向 Agent 返回原因，允许它调整验证方式；
+- 文件 Tool 的路径边界必须强制执行；命令检查用于降低误操作风险，不宣称能够阻止子进程绕过或构成操作系统安全沙箱。
+
+默认实现复用一个私有的生成 Agent 与其 ToolRegistry，不为每个 Job 重建 Agent、Registry 或模型连接。当前 Draft 和读写根目录通过本次生成调用的执行上下文绑定，不能由模型参数选择；同一 Agent 的并发 Job 必须各自看到自己的 Draft。该执行上下文只服务内部 Tool，不扩展 `BaseAgent` 的公共参数，也不引入全局 Job-to-Draft 领域状态。
+
+生成 Job 不设置固定总时限。模型 Provider 的单次请求超时、受控执行 Tool 的单次命令超时以及 Runtime 退出时的取消机制仍然生效。
+
+### Repository 发布边界
+
+Repository 是正式 Skill 目录的唯一发布入口。提交前至少验证：
+
+- Draft 根目录存在合法 `SKILL.md`，且 YAML `name` 与目标名称一致；
+- 所有成员均为 Draft 内的安全相对路径，不包含越界路径或符号链接；
+- 文件数量不超过 256，单文件不超过 20 MiB，目录总大小不超过 100 MiB；
+- 文本文件满足对应文本约束，二进制文件保持原始字节；
+- Produce 的双作用域名称仍无冲突；
+- Evolve 的原目录快照仍一致。
+
+校验成功后，Repository 先在目标文件系统准备完整的新目录，再在写协调锁内替换目标。Produce 使用一次目录重命名发布；Evolve 使用旧目录备份、新目录替换和失败回滚实现事务式发布。跨平台实现不承诺对进程外读者提供不可观察的目录交换瞬间，但不会把半写入的文件树作为成功结果保留。
 
 ### 通知当前 Agent
 
@@ -400,6 +457,10 @@ Skill 检索延迟由每轮固定关键路径移到 Agent 主动 Tool 调用路�
 
 ## 日志与 Hook
 
+生成或进化过程属于当前 Session 中由 Skill Job 发起的内部子 Agent Run，不属于主 Agent 的正式对话。它沿用触发 Job 的 `task_id`，生成新的 `run_id`，并在 Hook Context 中记录 `parent_run_id`、`skill_job_id`、`agent_kind=skill_generation`、`operation` 和 `skill_name`。LLM 与内部 Tool 的 Hook 继续写入当前 Session 的 `trace.jsonl`，无需新增轨迹存储。
+
+生成 Agent 的中间消息、ToolCall、Tool Result 和推理不写入 Blackboard。Job 终态仍通过 `TaskContextInputEvent` 向原任务发送简短通知；详细过程通过 Trace 按 `skill_job_id` 或子 `run_id` 查询。
+
 在统一 Tool 执行 Hook 之外补充 Skill 领域指标：
 
 - `skill.list`：数量、scope、耗时和错误；
@@ -407,7 +468,10 @@ Skill 检索延迟由每轮固定关键路径移到 Agent 主动 Tool 调用路�
 - `skill.produce` / `skill.evolve`：Job ID、目标、状态迁移和错误；
 - `skill.job_status`：Job ID、当前状态和错误；
 
-Hook 不记录完整 Skill 正文、用户消息、内部生成 Prompt 或未脱敏证据。Hook 失败不能改变 Tool、Job 或 Repository 结果。旧 `skill.retrieval` 和 `skill.maintenance` Hook 删除。
+内部生成 Prompt 在进入 Agent 前已完成结构化脱敏，Trace 仍通过统一 Redactor 处理 Hook 数据。
+生成 Agent 的 Prompt、ToolCall 和 Tool Result 可出现在技术 Trace 中，包括 `write` 的生成内容，
+但不会进入 Blackboard 对话历史。Hook 失败不能改变 Tool、Job 或 Repository 结果。旧
+`skill.retrieval` 和 `skill.maintenance` Hook 删除。
 
 ## 故障处理
 
@@ -415,8 +479,9 @@ Hook 不记录完整 Skill 正文、用户消息、内部生成 Prompt 或未脱
 - 搜索无结果：成功返回空数组；
 - produce/evolve 权限关闭：返回 `disabled_by_policy`，无副作用；
 - 目标冲突或不存在：在创建 Job 前返回明确失败；
-- Producer/Evolver Agent 失败：Job 进入 `failed`；
-- 输出解析、脱敏或 Repository 校验失败：Job 进入 `failed`，不写部分结果；
+- Producer/Evolver Agent 或受控 Tool 失败：若 Agent 无法恢复，Job 进入 `failed`；
+- Draft 不完整、脱敏或 Repository 校验失败：Job 进入 `failed`，不写部分结果；
+- Draft 清理失败：记录日志，不把已成功发布的 Job 改为失败；
 - Produce 前置冲突：立即返回 Tool 失败，不创建 Job；
 - Produce 提交前冲突：Job 失败，不覆盖任一作用域中的同名 Skill；
 - Evolve 并发快照冲突：Job 失败，不覆盖新内容；
@@ -428,14 +493,16 @@ Hook 不记录完整 Skill 正文、用户消息、内部生成 Prompt 或未脱
 ### 保留并调整
 
 - `SkillScanner`：保留发现与 Workspace 覆盖规则，增加根目录约束；
-- `SkillRepository`：保留安全快照和原子提交，收窄为单目标 produce/evolve；
-- 脱敏和严格解析逻辑：复用安全能力，改成单目标 Job 输入输出；
+- `SkillRepository`：把安全快照和原子提交从单文件扩展为完整目录，仍收窄为单目标 produce/evolve；
+- 脱敏逻辑：继续用于生成输入和 Trace；单文件 JSON 输出 Parser 不再是 Draft 交接边界；
 - `WorkspaceMaintenanceCoordinator`：改为 Job 写入协调，不再驱动自动维护。
 
 ### 新增
 
 - `SkillCatalog`；
 - `SkillJob` 与 `SkillJobManager`；
+- Job 专属 Draft 的创建、清理和完整目录校验；
+- 生成 Agent 所需的受控文件与命令执行能力；
 - `SkillsListTool`；
 - `SkillSearchTool`；
 - `SkillProduceTool`；
@@ -455,6 +522,8 @@ Hook 不记录完整 Skill 正文、用户消息、内部生成 Prompt 或未脱
 - `AgentCompletedEvent` 触发的自动维护；
 - 多操作 `SkillMaintenancePlan` 的隐式 create/update/merge/delete；
 - 自动检索超时后永久禁用整个 Runtime 的状态。
+- Producer/Evolver 固定 120 秒总超时；
+- 只允许返回一个 `SKILL.md` 字符串的 `GeneratedSkill` 交接协议。
 
 ## 测试策略
 
@@ -474,9 +543,14 @@ Hook 不记录完整 Skill 正文、用户消息、内部生成 Prompt 或未脱
 - produce 要求显式 scope，并拒绝 Workspace 或全局任一作用域已存在的同名目标；
 - produce 在提交前重复执行双作用域冲突检查，覆盖竞态；
 - evolve 拒绝未知目标，并正确创建全局 Skill 的 Workspace 覆盖；
+- produce 可以生成包含多个文本文件和二进制资源的完整 Skill 目录；
+- evolve 从完整目录副本开始，能够保留、增加、修改和删除文件；
 - Tool 返回 queued Job，状态按合法顺序迁移；
 - Job 输入使用扁平执行身份、Blackboard 已提交历史和只读 `task_messages`；
-- 脱敏、严格解析、单目标提交和并发冲突保护；
+- Draft 写入边界、受限命令执行、敏感环境清理和安全拒绝反馈；
+- Repository 的目录校验、二进制保真、单目标事务式提交和并发冲突保护；
+- 生成 Agent 使用独立子 `run_id`，Trace 保留父 Run 与 Skill Job 关联，Blackboard 不接收内部轨迹；
+- 生成过程没有固定总超时，单次模型请求、命令执行和 Runtime 退出仍受控制；
 - Job 成功、失败、中断、通知投递与状态查询；
 - Runtime 恢复把未完成 Job 标记为 interrupted；
 - 历史上限和退出资源收束。
@@ -501,6 +575,11 @@ Hook 不记录完整 Skill 正文、用户消息、内部生成 Prompt 或未脱
 - `allow_evolve=False` 时不能通过 `skill_evolve` 写入；
 - Produce 只能写入主 Agent 显式选择的 `workspace` 或 `global`，且两个作用域任一同名时均不创建；
 - Producer/Evolver 能看到此前 Session 历史和当前任务截至 Tool 调用时的消息；
+- Producer/Evolver 能在独立 Draft 中完成、检查并交付完整 Skill 目录，且不能直接写正式目录；
+- Workspace Skill 写入 `<current-workspace>/skills`，全局 Skill 写入 `$ICARUS_DATA_DIR/skills`；
+- Skill 可包含二进制资源，Repository 发布时保持其原始字节；
+- 生成 Agent 的内部轨迹可由当前 Session Trace 关联到原任务和 Job，但不会污染 Blackboard；
+- Skill Job 没有固定 120 秒总时限；
 - produce/evolve 以可查询、可通知、可持久化终态的后台 Job 执行；
 - SkillPlugin 通过 Manifest 提供 `skill_management` Capability 和五个 Tool；
 - Blackboard、Agent Kernel、Plugin Runtime 与 EventBus 保持通用。

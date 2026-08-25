@@ -9,6 +9,24 @@
 - `read`、`write`、`insert`、`bash` 是默认通用基础 Tool；领域 Plugin 可以额外贡献 Tool。
 - Tool 集合在不同 Agent Run 之间可以变化，但单次 Run 内保持稳定，不实现 Run 内热更新。
 
+## 下一步开发顺序
+
+下一阶段不是重新设计 Agent Kernel，而是在现有边界上分两段增量完善：
+
+1. Agent Kernel 增量整理与运行保护：
+   - [ ] 先整理 `invoke`、`ainvoke`、`stream`、`astream` 的重复内部实现，保留四个公开入口
+     及现有同步、异步、流式和非流式语义；
+   - [ ] 再基于共享的 ReAct 状态转换补齐最大步骤、总超时、Token/成本预算和循环检测，
+     确定性限制继续由 Harness 执行。
+2. 对话与上下文基础能力：
+   - [ ] 建立从 Model Usage、Agent Run 汇总、Session 持久化到应用展示的 Token 统计链路；
+   - [ ] 在可靠 Token 统计基础上实现自动 Compact，并明确压缩前后历史、上下文窗口和失败回退；
+   - [ ] 完善对话索引、持久化和恢复，使进程重启后可以恢复已有对话；
+   - [ ] 提供对话列表与切换能力，明确切换时当前任务、Runtime、Blackboard 和 UI 投影的处理。
+
+依赖顺序为：ReAct 内部去重 → 运行保护 → Token 统计 → 自动 Compact；对话持久化与索引
+是恢复和切换的前置条件。两条后续能力链可以在边界明确后并行推进。
+
 ## 后续能力池
 
 以下内容不代表近期实施优先级，按路线图进入对应阶段后再设计和拆分：
@@ -78,8 +96,10 @@
   Plugin 卸载或重启，名称冲突在 READY 前处理，资源由所属 Plugin 在退出阶段清理。
 - [x] 当前不实现同一个 Run 内的 Tool 热加载、热卸载和替换；未来只有在出现明确场景后
   才重新评估。
-- [ ] Tool 名称冲突和基础形式校验已在 READY 前处理；后续继续完善作用域、权限、安全策略、
-  并发上限、取消与资源清理。
+- [x] 完成 Tool 名称冲突和基础形式校验、Runtime READY 前冻结、单次 Run Tool 快照与显式
+  allowlist，并支持按 Tool 声明组织并发批次、保持结果顺序、传播异步取消和清理 Bash 子进程。
+- [ ] 根据真实调用方继续补齐通用 Tool 权限与安全策略、全局并发/资源上限，以及无法强制终止的
+  同步副作用 Tool 契约；不把各具体 Tool 已有的局部限制误当成统一沙箱。
 
 ## Runtime Host 与 Plugin Manifest
 
@@ -113,10 +133,12 @@
 - [x] 提供 `skill_produce`、`skill_evolve` 和 `skill_job_status`，生产与演化作为后台 Job
   执行，并通过运行中 Context Event 尝试通知仍活跃的主 Agent。
 - [x] `allow_produce` 与 `allow_evolve` 独立、严格且默认关闭；关闭时只允许发现、读取和使用。
-- [x] Producer/Evolver 获取 Blackboard 对话历史与当前 `task_messages`，使用独立无工具 Agent，
-  经过脱敏、严格解析和 Repository 安全校验后写入。
+- [x] Producer/Evolver 获取 Blackboard 对话历史与当前 `task_messages`，使用独立受控工具 Agent
+  在 Job Draft 中生成完整 Skill 目录；Repository 校验成品后事务式发布。
 - [x] Produce 在预检和提交时检查全局与 Workspace 两个作用域；Evolve 对全局 Skill 只创建
-  Workspace override，并使用快照 Hash 防止并发覆盖。
+  Workspace override，并使用完整目录快照 Hash 防止并发覆盖。
+- [x] Workspace Skill 位于 `<current-workspace>/skills`；生成 Job 没有固定总超时，内部子 Run
+  记录在 Session Trace 中但不进入 Blackboard。
 - [x] 删除 Embedding、usage SQLite、会话累计注入、轮状态和隐式自动维护链路。
 - [ ] 使用真实模型和逐渐增长的 Skill 集合评估搜索词选择、召回质量、Job 生成质量与交互体验。
 
@@ -124,12 +146,31 @@
 
 - [ ] 整理当前 `invoke`、`ainvoke`、`stream`、`astream` 中重复的 ReAct 状态转换与 Tool
   回填逻辑，保持四种入口行为一致。
-- [ ] 完善 Agent 执行的步骤、超时、预算、循环和取消等安全控制，同时保持 ReActAgent
-  无状态且不反向依赖 Plugin Runtime 或具体业务 Plugin。
-- [ ] 精简 `AgentRuntimeService` 的组装职责，分离具体 Plugin 构建、依赖装配、订阅拓扑与
-  Runtime 生命周期管理。
-- [ ] 拆分体积过大或职责混合的 Skill 模块；优先按真实职责拆分，不为目录整齐制造抽象。
-- [ ] 统一公共接口、类型、状态、异常、日志和配置规范，删除重复模型与隐式约定。
-- [ ] 补齐模块级功能测试、跨层集成测试、取消与并发竞态测试，以及必要的真实模型冒烟验证。
-- [ ] 每项重构先核对当前代码和测试，再同步更新 `apps/agent/docs/arch/` 与
-  `apps/agent/docs/plan/`，不让文档描述超前于实现事实。
+- [x] 完成首期 Run Control：记录当前 Step，在稳定边界注入异步 Context，阻止取消后的新模型
+  Step 或 Tool Batch，保留协议完整的历史检查点，并确定性处理完成、取消和迟到操作竞争。
+- [ ] 在现有 Run Control 上继续补齐 Agent 级最大步骤、总超时、Token/成本预算和循环检测；
+  保持 ReActAgent 无状态且不反向依赖 Plugin Runtime 或具体业务 Plugin。
+- [x] 精简 `AgentRuntimeService` 的组装职责：具体 Plugin 构建、Capability 依赖装配、Tool 注册、
+  Event 订阅拓扑、状态恢复与 Runtime 生命周期已下沉到 Manifest Factory 和 Runtime Host。
+- [x] SkillPlugin 已按 Catalog、Scanner、Tool、Job、Producer/Evolver、Generation Tool 和
+  Repository 等真实职责拆分，并删除旧维护链路的重复模型与隐式状态。
+- [x] 已在 Plugin Runtime、Run Control 和 SkillPlugin 范围内统一公开类型、状态与显式调用上下文，
+  删除这些链路中的重复模型和隐式约定。
+- [ ] 继续统一尚未覆盖模块的异常、日志和配置规范；只在具体改造中收敛，不做一次性全局抽象。
+- [x] 已为 Plugin Runtime、Tool、Run Control 和 SkillPlugin 补齐模块级功能测试、跨层集成测试、
+  取消与并发竞态测试。
+- [ ] 补充真实模型冒烟和逐渐增长的 Skill 目录体验验证，并随新增能力继续补齐回归测试。
+- [x] 已完成的 Runtime Manifest、运行中介入和 SkillPlugin 重构均同步更新了对应架构设计、
+  实施计划与当前状态文档。
+
+## 对话与上下文基础能力
+
+- [ ] 定义 Token 统计口径，区分单次模型调用、Agent Run、当前对话累计和当前上下文窗口，
+  不把缺失 Usage 的模型响应误计为零消耗。
+- [ ] 持久化对话元数据和消息历史，支持枚举、选择和恢复；Blackboard 继续拥有当前 Session
+  的对话历史，不把历史状态放入无状态 ReActAgent。
+- [ ] 设计并实现自动 Compact 的触发阈值、压缩输入、产物格式、失败回退和可观测记录；压缩
+  只改变后续模型使用的上下文表示，不静默删除原始持久化消息。
+- [ ] 提供对话切换的应用层契约，处理运行中任务、状态保存、订阅/UI 投影切换和目标对话恢复；
+  不把多对话管理职责塞进 Agent Kernel。
+- [ ] 为新建、恢复、切换、Compact 前后 Token 统计、压缩失败和进程异常退出补齐功能与端到端测试。

@@ -47,8 +47,10 @@ flowchart LR
     Registry["共享 ToolRegistry\n基础 Tool + 五个 Skill Tool"]
     Catalog["SkillCatalog"]
     Jobs["SkillJobManager"]
-    Generator["Producer / Evolver\n独立无工具 Agent"]
-    Files["Global / Workspace SKILL.md"]
+    Generator["Producer / Evolver\n独立受控工具 Agent"]
+    Draft["Job Draft\n完整 Skill 目录"]
+    Repository["SkillRepository\n校验与事务式发布"]
+    Files["Global / Workspace Skills"]
 
     User --> Service
     Service -. submit .-> U
@@ -66,8 +68,7 @@ flowchart LR
     S --> Catalog --> Files
     A -. read path .-> Files
     A -. skill_produce / skill_evolve / skill_job_status .-> S
-    S --> Jobs --> Generator
-    Jobs --> Files
+    S --> Jobs --> Generator --> Draft --> Repository --> Files
     Jobs -- TaskContextInputEvent --> A
     A -- TaskContextInputResultEvent --> S
     A -- TaskContextInputResultEvent --> O
@@ -150,6 +151,7 @@ sequenceDiagram
     participant B as Blackboard conversation
     participant J as SkillJobManager
     participant G as Producer / Evolver Agent
+    participant D as Job Draft
     participant C as SkillWriteCoordinator
     participant R as SkillRepository
 
@@ -163,25 +165,36 @@ sequenceDiagram
     S->>B: get_messages()
     S->>J: submit(Blackboard 历史 + 当前 task_messages)
     J-->>A: job_id + queued
-    J->>G: 后台生成完整 SKILL.md
-    Note over G: 独立 Agent，history=[]，tools=[]
-    G-->>J: 严格 JSON 中的 content
+    J->>D: 创建空 Draft 或复制目标完整目录
+    J->>G: 后台生成或演化完整 Skill
+    Note over G: 独立 Agent，history=[]；完整脱敏上下文在 input_prompt
+    G->>D: read / write / copy / remove / bash
+    G-->>J: Draft 完成摘要
     J->>C: 按规范化 Skill 名串行提交
-    C->>R: produce 或 evolve
-    Note over R: YAML、路径、符号链接、快照 Hash、原子写校验
+    C->>R: 校验并发布完整 Draft
+    Note over R: YAML、目录边界、文件类型/容量、符号链接、目录快照 Hash
     R-->>J: path 或失败
     J->>A: TaskContextInputEvent(Job 终态摘要)
     A-->>S: TaskContextInputResultEvent
 ```
 
 Produce 必须显式选择 `workspace` 或 `global`。预检失败不创建 Job；提交时再次检查两个
-物理作用域，生成期间出现同名 Skill 时失败且不覆盖。Evolve 对 Workspace Skill 原子更新；
+物理作用域，生成期间出现同名 Skill 时失败且不覆盖。Evolve 对 Workspace Skill 事务式更新；
 对全局 Skill 只在当前 Workspace 创建同名覆盖，不修改全局文件。分析后目标内容或路径发生
 变化时，Hash 校验失败并拒绝提交。
 
 Producer/Evolver 的输入证据是 Blackboard 已提交历史与当前只读 `task_messages` 的顺序拼接。
 完整 Message、ToolCall 和图片元数据被稳定序列化；URL 凭据被移除，嵌套秘密被脱敏，强凭据
-标记触发 fail-closed。生成 Agent 不获得文件 Tool，Repository 是唯一写入边界。
+标记触发 fail-closed。未配对的当前 ToolCall 因此不进入模型历史，而是作为当前 User Prompt
+中的数据。生成 Agent 使用长期复用的私有 ToolRegistry，只能通过 `read`、`write`、`copy`、
+`remove` 和受限 `bash` 在 Job Draft 内工作；Repository 仍是正式 Skill 目录的唯一发布边界。
+文件 Tool 强制 Draft 写边界。`bash` 固定工作目录、清理敏感环境，并限制直接网络/安装命令、
+单次时长与输出，但它是实用型防护，不是不可绕过的操作系统沙箱。Job 本身不再设置固定
+120 秒总超时。
+
+Workspace Skill 位于 `<current-workspace>/skills/<name>/...`，全局 Skill 位于
+`$ICARUS_DATA_DIR/skills/<name>/...`。Skill 可包含脚本、参考资料、模板和二进制资源；Evolve
+按完整目录快照检测并发变化。Workspace 运行状态目录不保存 Workspace Skill 源文件。
 
 Job 状态为 `queued → running → succeeded|failed|interrupted`。终态保存在 Workspace 状态，
 每个 Workspace 最多保留 100 个；Session 状态保存本 Session 关联 Job 和通知结果。未知 Job
@@ -198,7 +211,8 @@ Job 状态为 `queued → running → succeeded|failed|interrupted`。终态保�
 | 跨轮完整对话 | `BlackboardPlugin` | 当前 Session，保存到 Session Plugin State |
 | 当前任务输入与汇聚状态 | `BlackboardPlugin` | `task_id` 双终态结束后清理 |
 | 活动 Run、Context 队列与取消墓碑 | `TaskChannelRegistry` | 当前 Runtime Session |
-| Skill 目录事实 | Global / Workspace `SKILL.md` | 文件持久化 |
+| Skill 目录事实 | Global / Workspace Skill 完整目录 | 文件持久化 |
+| 生成 Agent 的内部 Run 与 Tool 轨迹 | Session `trace.jsonl` | 当前 Session；按 `skill_job_id`、子 `run_id` 关联 |
 | Skill Job 终态 | `SkillJobManager` Workspace State | 有界保留 100 个 |
 | Session Job 关联和通知状态 | `SkillJobManager` Session State | 当前 Session |
 
