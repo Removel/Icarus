@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 from pathlib import Path
 from threading import Event
 
@@ -16,6 +15,7 @@ from apps.agent.src.agent_orchestration.plugins.skill.repository import (
     SkillRepository,
     SkillSnapshot,
 )
+from apps.agent.src.agent_orchestration.hooks import get_hook_context
 from apps.agent.src.agent_orchestration.run_control import (
     TaskContextInputEvent,
     TaskContextInputResultEvent,
@@ -40,7 +40,12 @@ class ProducerStub:
             await self.gate.wait()
         if self.error is not None:
             raise self.error
-        return self.content
+        if self.content is not None:
+            Path(kwargs["draft_dir"], "SKILL.md").write_text(
+                self.content, encoding="utf-8"
+            )
+        context = get_hook_context()
+        self.hook_context = context
 
 
 class EvolverStub:
@@ -50,7 +55,11 @@ class EvolverStub:
 
     async def evolve(self, **kwargs):
         self.calls.append(kwargs)
-        return self.content
+        if self.content is not None:
+            Path(kwargs["draft_dir"], "SKILL.md").write_text(
+                self.content, encoding="utf-8"
+            )
+        self.hook_context = get_hook_context()
 
 
 def manager(tmp_path, producer, evolver=None, publisher=None, terminal_limit=100):
@@ -59,6 +68,7 @@ def manager(tmp_path, producer, evolver=None, publisher=None, terminal_limit=100
         evolver=evolver or EvolverStub(),
         repository=SkillRepository(tmp_path / "global", tmp_path / "workspace"),
         coordinator=SkillWriteCoordinator(),
+        workspace_dir=tmp_path,
         publish_event=publisher,
         terminal_limit=terminal_limit,
     )
@@ -109,6 +119,9 @@ def test_submit_returns_queued_then_background_job_succeeds_and_notifies(tmp_pat
     assert completed.job_id in events[0].content
     stored = job_manager.require(completed.job_id)
     assert stored.notification_event_id == events[0].event_id
+    assert job_manager._producer.hook_context.run_id is None
+    assert job_manager._producer.hook_context.data["parent_run_id"] == "run-1"
+    assert job_manager._producer.hook_context.data["skill_job_id"] == completed.job_id
 
 
 def test_job_failure_is_safe_and_notification_failure_does_not_change_status(tmp_path):
@@ -199,9 +212,8 @@ def test_evolve_job_uses_snapshot_and_updates_workspace(tmp_path):
     job, evolver = asyncio.run(run())
     assert job.status == "succeeded"
     assert source.read_text(encoding="utf-8") == skill_content("existing", "new")
-    assert evolver.calls[0]["snapshot"].content_hash == hashlib.sha256(
-        skill_content("existing", "old").encode()
-    ).hexdigest()
+    assert evolver.calls[0]["snapshot"].directory_hash
+    assert evolver.calls[0]["draft_dir"].parent.name == ".drafts"
 
 
 def test_quiesce_rejects_new_job_and_drain_interrupts_generation(tmp_path):
@@ -229,20 +241,68 @@ def test_quiesce_rejects_new_job_and_drain_interrupts_generation(tmp_path):
     assert job.status == "interrupted"
 
 
+def test_immediate_drain_does_not_leave_accepted_job_queued(tmp_path):
+    async def run():
+        job_manager = manager(tmp_path, ProducerStub(skill_content("new")))
+        await job_manager.start()
+        queued = job_manager.submit_produce(
+            name="new", scope="workspace", instructions="x", conversation=(),
+            task_id="task", run_id="run", step=0
+        )
+        await job_manager.quiesce()
+        await job_manager.drain()
+        return job_manager.require(queued.job_id)
+
+    assert asyncio.run(run()).is_terminal
+
+
+def test_drain_waits_for_prepare_then_cleans_orphan_draft(tmp_path):
+    async def run():
+        job_manager = manager(tmp_path, ProducerStub(skill_content("new")))
+        await job_manager.start()
+        entered = Event()
+        release = Event()
+        real_prepare = job_manager._repository.prepare_produce
+
+        def blocking_prepare(*args):
+            draft = real_prepare(*args)
+            entered.set()
+            release.wait(timeout=2)
+            return draft
+
+        job_manager._repository.prepare_produce = blocking_prepare
+        queued = job_manager.submit_produce(
+            name="new", scope="workspace", instructions="x", conversation=(),
+            task_id="task", run_id="run", step=0
+        )
+        await asyncio.to_thread(entered.wait, 2)
+        drain_task = asyncio.create_task(job_manager.drain())
+        await asyncio.sleep(0.02)
+        assert not drain_task.done()
+        release.set()
+        await drain_task
+        return job_manager.require(queued.job_id)
+
+    job = asyncio.run(run())
+
+    assert job.status == "interrupted"
+    assert list((tmp_path / "workspace" / ".drafts").iterdir()) == []
+
+
 def test_drain_waits_for_commit_stage(tmp_path):
     async def run():
         job_manager = manager(tmp_path, ProducerStub(skill_content("new")))
         await job_manager.start()
         entered = Event()
         release = Event()
-        real_produce = job_manager._repository.produce
+        real_produce = job_manager._repository.publish_produce
 
         def blocking_produce(*args):
             entered.set()
             release.wait(timeout=2)
             return real_produce(*args)
 
-        job_manager._repository.produce = blocking_produce
+        job_manager._repository.publish_produce = blocking_produce
         queued = job_manager.submit_produce(
             name="new", scope="workspace", instructions="x", conversation=(),
             task_id="task", run_id="run", step=0

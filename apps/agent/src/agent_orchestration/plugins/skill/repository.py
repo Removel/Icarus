@@ -1,4 +1,4 @@
-"""Safe filesystem persistence for explicit Skill produce/evolve Jobs."""
+"""Safe directory persistence for explicit Skill produce/evolve Jobs."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import stat
+import tempfile
 import threading
 from typing import Any
 
@@ -27,18 +29,21 @@ _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _WRITE_LOCKS_GUARD = threading.Lock()
 _WRITE_LOCKS: dict[Path, threading.RLock] = {}
+MAX_FILES = 256
+MAX_FILE_BYTES = 20 * 1024 * 1024
+MAX_TOTAL_BYTES = 100 * 1024 * 1024
 
 
 @dataclass(frozen=True)
 class SkillSnapshot:
-    """Exact source state used for optimistic evolve conflict checks."""
+    """Exact source directory state used for evolve conflict checks."""
 
     name: str
     description: str
     scope: SkillScope
     path: Path
-    content: str
-    content_hash: str
+    directory_hash: str
+
 
 @dataclass(frozen=True)
 class _ParsedSkill:
@@ -46,8 +51,7 @@ class _ParsedSkill:
     description: str
     scope: SkillScope
     path: Path
-    content: str
-    content_hash: str
+    directory_hash: str
 
 
 class SkillRepositoryError(Exception):
@@ -66,12 +70,8 @@ class SkillConflictError(SkillRepositoryError):
     pass
 
 
-class _CommittedWriteError(SkillRepositoryError):
-    """The atomic replace succeeded but final durability checking failed."""
-
-
 class SkillRepository:
-    """Read visible Skills and safely commit explicit write Jobs."""
+    """Prepare Drafts and transactionally publish complete Skill trees."""
 
     def __init__(
         self,
@@ -85,17 +85,13 @@ class SkillRepository:
             Path(workspace_skills_dir).expanduser().absolute()
         )
         self.logger = logger or logging.getLogger(__name__)
-        if _paths_overlap(
-            self.global_skills_dir,
-            self.workspace_skills_dir,
-        ):
+        if _paths_overlap(self.global_skills_dir, self.workspace_skills_dir):
             raise ValueError(
                 "Global and Workspace Skill directories must not overlap"
             )
         self._write_lock = _write_lock_for(self.global_skills_dir)
 
     def capture(self, name: str) -> SkillSnapshot | None:
-        """Capture the exact currently visible Skill for a later evolve."""
         safe_name = _safe_name(name)
         parsed = self._read_visible(safe_name)
         if parsed is None:
@@ -105,79 +101,216 @@ class SkillRepository:
             description=parsed.description,
             scope=parsed.scope,
             path=parsed.path,
-            content=parsed.content,
-            content_hash=parsed.content_hash,
+            directory_hash=parsed.directory_hash,
         )
 
-    def produce(
-        self,
-        name: str,
-        scope: SkillScope,
-        content: str,
-    ) -> Path:
-        """Create one new Skill after checking both physical scopes."""
+    def prepare_produce(self, name: str, scope: SkillScope) -> Path:
         safe_name = _safe_name(name)
-        if scope not in ("global", "workspace"):
-            raise SkillValidationError(f"unsupported Skill scope: {scope}")
-        encoded, _ = _parse_content(content, safe_name)
-        with self._write_lock:
-            found_scopes = self._find_conflict_scopes(safe_name)
-            if found_scopes:
-                raise SkillConflictError(
-                    f"Skill {safe_name!r} already exists in: "
-                    + ", ".join(found_scopes)
-                )
-            return self._atomic_write(
-                safe_name,
-                encoded,
-                scope=scope,
-                require_absent=True,
+        root = self._root(scope)
+        self._ensure_root(root)
+        draft_root = self._ensure_draft_root(root)
+        return Path(
+            tempfile.mkdtemp(
+                prefix=f".{safe_name}.",
+                suffix=".draft",
+                dir=draft_root,
             )
+        ).absolute()
 
-    def find_conflicts(self, name: str) -> tuple[SkillScope, ...]:
-        """Return scopes occupied by a valid Skill or same-name entry."""
-        safe_name = _safe_name(name)
-        with self._write_lock:
-            return self._find_conflict_scopes(safe_name)
-
-    def evolve(self, snapshot: SkillSnapshot, content: str) -> Path:
-        """Update a Workspace Skill or override a global Skill in Workspace."""
+    def prepare_evolve(self, snapshot: SkillSnapshot) -> Path:
         safe_name = _safe_name(snapshot.name)
         if snapshot.scope not in ("global", "workspace"):
             raise SkillValidationError(
                 f"snapshot {safe_name!r} has an invalid scope"
             )
-        encoded, _ = _parse_content(content, safe_name)
-        with self._write_lock:
+        target_root = self.workspace_skills_dir
+        self._ensure_root(target_root)
+        draft_root = self._ensure_draft_root(target_root)
+        draft = Path(
+            tempfile.mkdtemp(
+                prefix=f".{safe_name}.",
+                suffix=".draft",
+                dir=draft_root,
+            )
+        ).absolute()
+        try:
             current = self._read_scope(snapshot.scope, safe_name)
-            if current is None:
-                raise SkillConflictError(
-                    f"evolve target {safe_name!r} disappeared after analysis"
-                )
-            if (
-                current.content_hash != snapshot.content_hash
-                or current.path != snapshot.path.absolute()
-            ):
+            if current is None or not self._snapshot_matches(snapshot, current):
                 raise SkillConflictError(
                     f"evolve target {safe_name!r} changed after analysis"
                 )
-            require_absent = snapshot.scope == "global"
-            if require_absent and self._scope_entry_exists(
-                "workspace", safe_name
-            ):
+            _copy_skill_tree(snapshot.path.parent, draft)
+            _, copied_hash = _validate_skill_tree(draft, safe_name)
+            if copied_hash != snapshot.directory_hash:
                 raise SkillConflictError(
-                    f"Workspace override for {safe_name!r} appeared after analysis"
+                    f"evolve target {safe_name!r} changed while preparing Draft"
                 )
-            return self._atomic_write(
-                safe_name,
-                encoded,
-                scope="workspace",
-                require_absent=require_absent,
-            )
+            current = self._read_scope(snapshot.scope, safe_name)
+            if current is None or not self._snapshot_matches(snapshot, current):
+                raise SkillConflictError(
+                    f"evolve target {safe_name!r} changed while preparing Draft"
+                )
+            return draft
+        except BaseException:
+            self.cleanup_draft(draft)
+            raise
 
-    def _find_conflict_scopes(
-        self, name: str
-    ) -> tuple[SkillScope, ...]:
+    def publish_produce(
+        self,
+        name: str,
+        scope: SkillScope,
+        draft: str | Path,
+    ) -> Path:
+        safe_name = _safe_name(name)
+        root = self._root(scope)
+        draft_path = self._validate_draft(draft, root, safe_name)
+        with self._write_lock:
+            conflicts = self._find_conflict_scopes(safe_name)
+            if conflicts:
+                raise SkillConflictError(
+                    f"Skill {safe_name!r} already exists in: "
+                    + ", ".join(conflicts)
+                )
+            target = root / safe_name
+            try:
+                os.rename(draft_path, target)
+            except FileExistsError as error:
+                raise SkillConflictError(
+                    f"Skill {safe_name!r} appeared before commit"
+                ) from error
+            self._fsync_directory(root)
+        return (target / "SKILL.md").absolute()
+
+    def publish_evolve(
+        self,
+        snapshot: SkillSnapshot,
+        draft: str | Path,
+    ) -> Path:
+        safe_name = _safe_name(snapshot.name)
+        root = self.workspace_skills_dir
+        draft_path = self._validate_draft(draft, root, safe_name)
+        with self._write_lock:
+            current = self._read_scope(snapshot.scope, safe_name)
+            if current is None or not self._snapshot_matches(snapshot, current):
+                raise SkillConflictError(
+                    f"evolve target {safe_name!r} changed after analysis"
+                )
+            target = root / safe_name
+            if snapshot.scope == "global":
+                if self._scope_entry_exists("workspace", safe_name):
+                    raise SkillConflictError(
+                        f"Workspace override for {safe_name!r} appeared after analysis"
+                    )
+                try:
+                    os.rename(draft_path, target)
+                except FileExistsError as error:
+                    raise SkillConflictError(
+                        f"Workspace override for {safe_name!r} appeared after analysis"
+                    ) from error
+            else:
+                self._replace_directory(target, draft_path)
+            self._fsync_directory(root)
+        return (target / "SKILL.md").absolute()
+
+    def cleanup_draft(self, draft: str | Path) -> None:
+        path = Path(draft).absolute()
+        if not path.exists():
+            return
+        if not any(
+            _is_direct_draft(path, root)
+            for root in (self.global_skills_dir, self.workspace_skills_dir)
+        ):
+            raise SkillSecurityError(f"Refusing to clean unsafe Draft: {path}")
+        if path.is_symlink():
+            raise SkillSecurityError(f"Draft is a symlink: {path}")
+        shutil.rmtree(path)
+
+    def find_conflicts(self, name: str) -> tuple[SkillScope, ...]:
+        safe_name = _safe_name(name)
+        with self._write_lock:
+            return self._find_conflict_scopes(safe_name)
+
+    def _root(self, scope: SkillScope) -> Path:
+        if scope == "global":
+            return self.global_skills_dir
+        if scope == "workspace":
+            return self.workspace_skills_dir
+        raise SkillValidationError(f"unsupported Skill scope: {scope}")
+
+    def _ensure_root(self, root: Path) -> None:
+        descriptor, _ = _open_directory_path(
+            root, create=True, tighten_final=True
+        )
+        assert descriptor is not None
+        os.close(descriptor)
+
+    @staticmethod
+    def _ensure_draft_root(root: Path) -> Path:
+        draft_root = root / ".drafts"
+        draft_root.mkdir(mode=0o700, exist_ok=True)
+        if draft_root.is_symlink() or not draft_root.is_dir():
+            raise SkillSecurityError(
+                f"Skill Draft root is not a safe directory: {draft_root}"
+            )
+        draft_root.chmod(0o700)
+        return draft_root
+
+    def _validate_draft(
+        self, draft: str | Path, root: Path, name: str
+    ) -> Path:
+        path = Path(draft).expanduser().absolute()
+        if not _is_direct_draft(path, root):
+            raise SkillSecurityError(
+                f"Draft must be a direct temporary child of {root}"
+            )
+        if path.is_symlink() or not path.is_dir():
+            raise SkillSecurityError(f"Draft is not a safe directory: {path}")
+        _validate_skill_tree(path, name)
+        return path
+
+    @staticmethod
+    def _snapshot_matches(
+        snapshot: SkillSnapshot, current: _ParsedSkill
+    ) -> bool:
+        return (
+            current.directory_hash == snapshot.directory_hash
+            and current.path == snapshot.path.absolute()
+        )
+
+    def _replace_directory(self, target: Path, draft: Path) -> None:
+        backup = target.parent / ".drafts" / (
+            f".{target.name}.{secrets.token_hex(8)}.backup"
+        )
+        moved_old = False
+        moved_new = False
+        try:
+            os.rename(target, backup)
+            moved_old = True
+            os.rename(draft, target)
+            moved_new = True
+        except BaseException:
+            if moved_new and target.exists():
+                failed = target.with_name(
+                    f".{target.name}.{secrets.token_hex(8)}.failed"
+                )
+                try:
+                    os.rename(target, failed)
+                    shutil.rmtree(failed, ignore_errors=True)
+                except OSError:
+                    pass
+            if moved_old and backup.exists() and not target.exists():
+                os.rename(backup, target)
+            raise
+        else:
+            try:
+                shutil.rmtree(backup)
+            except OSError:
+                self.logger.warning(
+                    "Unable to remove committed Skill backup: %s", backup,
+                    exc_info=True,
+                )
+
+    def _find_conflict_scopes(self, name: str) -> tuple[SkillScope, ...]:
         scanner = SkillScanner(
             self.global_skills_dir,
             self.workspace_skills_dir,
@@ -195,15 +328,13 @@ class SkillRepository:
             if self._scope_entry_exists(scope, name)
         )
         return tuple(
-            scope for scope in ("global", "workspace") if scope in conflicts
+            scope
+            for scope in ("global", "workspace")
+            if scope in conflicts
         )
 
     def _scope_entry_exists(self, scope: SkillScope, name: str) -> bool:
-        root = (
-            self.global_skills_dir
-            if scope == "global"
-            else self.workspace_skills_dir
-        )
+        root = self._root(scope)
         root_fd, _ = _open_directory_path(root, create=False)
         if root_fd is None:
             return False
@@ -217,174 +348,47 @@ class SkillRepository:
             os.close(root_fd)
 
     def _read_visible(self, name: str) -> _ParsedSkill | None:
-        workspace = self._read_scope("workspace", name)
-        if workspace is not None:
-            return workspace
-        return self._read_scope("global", name)
+        return self._read_scope("workspace", name) or self._read_scope(
+            "global", name
+        )
 
     def _read_scope(
-        self,
-        scope: SkillScope,
-        name: str,
+        self, scope: SkillScope, name: str
     ) -> _ParsedSkill | None:
-        root = (
-            self.workspace_skills_dir
-            if scope == "workspace"
-            else self.global_skills_dir
-        )
+        root = self._root(scope)
         root_fd, _ = _open_directory_path(root, create=False)
         if root_fd is None:
             return None
         try:
-            return self._read_scope_from_root_fd(
-                root_fd,
-                root,
-                scope,
-                name,
-            )
+            skill_fd = _open_skill_directory(root_fd, name)
+            if skill_fd is None:
+                return None
+            try:
+                _ensure_directory_attached(root_fd, name, skill_fd)
+                directory = root / name
+                description, directory_hash = _validate_skill_tree(
+                    directory, name
+                )
+                _ensure_directory_attached(root_fd, name, skill_fd)
+                return _ParsedSkill(
+                    name=name,
+                    description=description,
+                    scope=scope,
+                    path=(directory / "SKILL.md").absolute(),
+                    directory_hash=directory_hash,
+                )
+            finally:
+                os.close(skill_fd)
         finally:
             os.close(root_fd)
 
-    def _read_scope_from_root_fd(
-        self,
-        root_fd: int,
-        root: Path,
-        scope: SkillScope,
-        name: str,
-    ) -> _ParsedSkill | None:
-        skill_fd = _open_skill_directory(root_fd, name, create=False)
-        if skill_fd is None:
-            return None
-        file_fd = -1
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        descriptor = os.open(path, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
         try:
-            _ensure_skill_directory_attached(root_fd, name, skill_fd)
-            try:
-                file_fd = os.open(
-                    "SKILL.md",
-                    os.O_RDONLY | _NOFOLLOW,
-                    dir_fd=skill_fd,
-                )
-            except FileNotFoundError:
-                return None
-            except OSError as error:
-                raise SkillSecurityError(
-                    "Unable to open SKILL.md without following links: "
-                    f"{root / name / 'SKILL.md'}"
-                ) from error
-            file_status = os.fstat(file_fd)
-            if not stat.S_ISREG(file_status.st_mode):
-                raise SkillValidationError(
-                    f"SKILL.md is not a regular file: {root / name / 'SKILL.md'}"
-                )
-            with os.fdopen(file_fd, "rb") as skill_file:
-                file_fd = -1
-                raw_content = skill_file.read()
-            _ensure_skill_directory_attached(root_fd, name, skill_fd)
-            content = raw_content.decode("utf-8")
-            _, description = _parse_content(content, name)
-            return _ParsedSkill(
-                name=name,
-                description=description,
-                scope=scope,
-                path=(root / name / "SKILL.md").absolute(),
-                content=content,
-                content_hash=hashlib.sha256(raw_content).hexdigest(),
-            )
+            os.fsync(descriptor)
         finally:
-            if file_fd >= 0:
-                os.close(file_fd)
-            os.close(skill_fd)
-
-    def _atomic_write(
-        self,
-        name: str,
-        content: bytes,
-        *,
-        scope: SkillScope,
-        require_absent: bool,
-    ) -> Path:
-        root = (
-            self.global_skills_dir
-            if scope == "global"
-            else self.workspace_skills_dir
-        )
-        root_fd, _ = _open_directory_path(
-            root,
-            create=True,
-            tighten_final=True,
-        )
-        assert root_fd is not None
-        skill_fd = -1
-        descriptor = -1
-        temporary_name: str | None = None
-        committed = False
-        path = (root / name / "SKILL.md").absolute()
-        try:
-            opened_skill_fd = _open_skill_directory(root_fd, name, create=True)
-            assert opened_skill_fd is not None
-            skill_fd = opened_skill_fd
-            _ensure_skill_directory_attached(root_fd, name, skill_fd)
-            try:
-                current_status = os.stat(
-                    "SKILL.md",
-                    dir_fd=skill_fd,
-                    follow_symlinks=False,
-                )
-            except FileNotFoundError:
-                pass
-            else:
-                if stat.S_ISLNK(current_status.st_mode):
-                    raise SkillSecurityError(
-                        f"SKILL.md is a symlink: {root / name / 'SKILL.md'}"
-                    )
-                if not stat.S_ISREG(current_status.st_mode):
-                    raise SkillValidationError(
-                        f"SKILL.md is not a regular file: {root / name / 'SKILL.md'}"
-                    )
-                if require_absent:
-                    raise SkillConflictError(
-                        f"Skill {name!r} appeared before commit"
-                    )
-            descriptor, temporary_name = _create_temporary_file(skill_fd)
-            os.fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "wb") as temporary_file:
-                descriptor = -1
-                temporary_file.write(content)
-                temporary_file.flush()
-                os.fsync(temporary_file.fileno())
-            _ensure_skill_directory_attached(root_fd, name, skill_fd)
-            os.replace(
-                temporary_name,
-                "SKILL.md",
-                src_dir_fd=skill_fd,
-                dst_dir_fd=skill_fd,
-            )
-            committed = True
-            temporary_name = None
-            try:
-                os.fsync(skill_fd)
-                _ensure_skill_directory_attached(root_fd, name, skill_fd)
-            except Exception as error:
-                raise _CommittedWriteError(
-                    "SKILL.md was atomically replaced, but final directory "
-                    "durability or attachment verification failed"
-                ) from error
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-            if temporary_name is not None and skill_fd >= 0:
-                try:
-                    os.unlink(temporary_name, dir_fd=skill_fd)
-                except FileNotFoundError:
-                    pass
-            try:
-                if skill_fd >= 0:
-                    os.close(skill_fd)
-            finally:
-                os.close(root_fd)
-        if not committed:
-            raise AssertionError("atomic write returned without committing")
-        return path
+            os.close(descriptor)
 
 
 def _safe_name(value: Any) -> str:
@@ -399,15 +403,82 @@ def _safe_name(value: Any) -> str:
     return normalized
 
 
-def _parse_content(content: Any, target_name: str) -> tuple[bytes, str]:
-    if not isinstance(content, str):
-        raise SkillValidationError("SKILL.md content must be UTF-8 text")
-    try:
-        encoded = content.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise SkillValidationError(
-            "SKILL.md content must be UTF-8 text"
-        ) from error
+def _validate_skill_tree(root: Path, target_name: str) -> tuple[str, str]:
+    if root.is_symlink() or not root.is_dir():
+        raise SkillSecurityError(f"Skill Draft is not a safe directory: {root}")
+    digest = hashlib.sha256()
+    count = 0
+    total = 0
+    skill_content: str | None = None
+    stack = [root]
+    while stack:
+        directory = stack.pop()
+        try:
+            entries = sorted(os.scandir(directory), key=lambda item: item.name)
+        except OSError as error:
+            raise SkillSecurityError(
+                f"Unable to inspect Skill directory: {directory}"
+            ) from error
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(root)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise SkillSecurityError(
+                    f"Unable to inspect Skill entry: {relative}"
+                ) from error
+            if stat.S_ISLNK(info.st_mode):
+                raise SkillSecurityError(f"Skill entry is a symlink: {relative}")
+            if stat.S_ISDIR(info.st_mode):
+                digest.update(b"D\0" + relative.as_posix().encode() + b"\0")
+                stack.append(path)
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise SkillSecurityError(
+                    f"Skill entry is not a regular file: {relative}"
+                )
+            count += 1
+            if count > MAX_FILES:
+                raise SkillValidationError(
+                    f"Skill contains more than {MAX_FILES} files"
+                )
+            if info.st_size > MAX_FILE_BYTES:
+                raise SkillValidationError(
+                    f"Skill file exceeds {MAX_FILE_BYTES} bytes: {relative}"
+                )
+            try:
+                data = path.read_bytes()
+            except OSError as error:
+                raise SkillSecurityError(
+                    f"Unable to read Skill entry: {relative}"
+                ) from error
+            if len(data) > MAX_FILE_BYTES:
+                raise SkillValidationError(
+                    f"Skill file exceeds {MAX_FILE_BYTES} bytes: {relative}"
+                )
+            total += len(data)
+            if total > MAX_TOTAL_BYTES:
+                raise SkillValidationError(
+                    f"Skill exceeds {MAX_TOTAL_BYTES} total bytes"
+                )
+            digest.update(b"F\0" + relative.as_posix().encode() + b"\0")
+            digest.update(len(data).to_bytes(8, "big"))
+            digest.update(data)
+            if relative.as_posix() == "SKILL.md":
+                try:
+                    skill_content = data.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise SkillValidationError(
+                        "SKILL.md content must be UTF-8 text"
+                    ) from error
+    if skill_content is None:
+        raise SkillValidationError("Skill directory must contain SKILL.md")
+    description = _parse_skill_content(skill_content, target_name)
+    return description, digest.hexdigest()
+
+
+def _parse_skill_content(content: str, target_name: str) -> str:
     lines = content.splitlines()
     if not lines or lines[0].strip() != "---":
         raise SkillValidationError(
@@ -423,7 +494,10 @@ def _parse_content(content: Any, target_name: str) -> tuple[bytes, str]:
         raise SkillValidationError(
             "SKILL.md YAML front matter is missing its closing delimiter"
         ) from error
-    metadata = yaml.safe_load("\n".join(lines[1:closing_index]))
+    try:
+        metadata = yaml.safe_load("\n".join(lines[1:closing_index]))
+    except yaml.YAMLError as error:
+        raise SkillValidationError("SKILL.md YAML front matter is invalid") from error
     if not isinstance(metadata, dict):
         raise SkillValidationError(
             "SKILL.md YAML front matter must be a mapping"
@@ -431,9 +505,7 @@ def _parse_content(content: Any, target_name: str) -> tuple[bytes, str]:
     metadata_name = metadata.get("name")
     description = metadata.get("description")
     if not isinstance(metadata_name, str) or not metadata_name.strip():
-        raise SkillValidationError(
-            "SKILL.md name must be a non-empty string"
-        )
+        raise SkillValidationError("SKILL.md name must be a non-empty string")
     if _safe_name(metadata_name) != target_name:
         raise SkillValidationError(
             "SKILL.md YAML name must match the repository target name"
@@ -442,29 +514,44 @@ def _parse_content(content: Any, target_name: str) -> tuple[bytes, str]:
         raise SkillValidationError(
             "SKILL.md description must be a non-empty string"
         )
-    return encoded, description.strip()
+    return description.strip()
+
+
+def _copy_skill_tree(source: Path, destination: Path) -> None:
+    _validate_skill_tree(source, _safe_name(source.name))
+    for source_path in sorted(source.rglob("*")):
+        relative = source_path.relative_to(source)
+        target = destination / relative
+        info = source_path.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise SkillSecurityError(f"Skill entry is a symlink: {relative}")
+        if stat.S_ISDIR(info.st_mode):
+            target.mkdir(mode=0o700, parents=True, exist_ok=True)
+        elif stat.S_ISREG(info.st_mode):
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            target.write_bytes(source_path.read_bytes())
+            target.chmod(0o600)
+        else:
+            raise SkillSecurityError(
+                f"Skill entry is not a regular file: {relative}"
+            )
+
+
+def _is_direct_draft(path: Path, root: Path) -> bool:
+    return (
+        path.parent == (root.absolute() / ".drafts")
+        and path.name.startswith(".")
+        and path.name.endswith(".draft")
+    )
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
     first = first.resolve()
     second = second.resolve()
-    return (
-        first == second
-        or _is_relative_to(first, second)
-        or _is_relative_to(second, first)
-    )
-
-
-def _is_relative_to(candidate: Path, root: Path) -> bool:
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return False
-    return True
+    return first == second or first.is_relative_to(second) or second.is_relative_to(first)
 
 
 def _write_lock_for(global_root: Path) -> threading.RLock:
-    """Share a lock across Workspaces that can write one global root."""
     key = global_root.resolve(strict=False)
     with _WRITE_LOCKS_GUARD:
         lock = _WRITE_LOCKS.get(key)
@@ -475,12 +562,8 @@ def _write_lock_for(global_root: Path) -> threading.RLock:
 
 
 def _open_directory_path(
-    path: Path,
-    *,
-    create: bool,
-    tighten_final: bool = False,
+    path: Path, *, create: bool, tighten_final: bool = False
 ) -> tuple[int | None, bool]:
-    """Open a directory hierarchy without following symlinks."""
     absolute = path.absolute()
     parts = absolute.parts
     if not parts:
@@ -516,9 +599,7 @@ def _open_directory_path(
             os.close(current_fd)
             current_fd = next_fd
         if not stat.S_ISDIR(os.fstat(current_fd).st_mode):
-            raise SkillValidationError(
-                f"Skill root is not a directory: {path}"
-            )
+            raise SkillValidationError(f"Skill root is not a directory: {path}")
         if tighten_final:
             os.fchmod(current_fd, 0o700)
         return current_fd, final_created
@@ -527,61 +608,33 @@ def _open_directory_path(
         raise
 
 
-def _open_skill_directory(
-    root_fd: int,
-    name: str,
-    *,
-    create: bool,
-) -> int | None:
-    safe_name = _safe_name(name)
-    created = False
+def _open_skill_directory(root_fd: int, name: str) -> int | None:
     try:
-        skill_fd = os.open(
-            safe_name,
+        descriptor = os.open(
+            _safe_name(name),
             os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
             dir_fd=root_fd,
         )
     except FileNotFoundError:
-        if not create:
-            return None
-        os.mkdir(safe_name, mode=0o700, dir_fd=root_fd)
-        os.fsync(root_fd)
-        created = True
-        skill_fd = os.open(
-            safe_name,
-            os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
-            dir_fd=root_fd,
-        )
+        return None
     except OSError as error:
         raise SkillSecurityError(
-            f"Skill directory is a symlink or unsafe entry: {safe_name}"
+            f"Skill directory is a symlink or unsafe entry: {name}"
         ) from error
-    try:
-        if not stat.S_ISDIR(os.fstat(skill_fd).st_mode):
-            raise SkillValidationError(
-                f"Skill path is not a directory: {safe_name}"
-            )
-        if create:
-            os.fchmod(skill_fd, 0o700)
-        return skill_fd
-    except Exception:
-        os.close(skill_fd)
-        if created:
-            try:
-                os.rmdir(safe_name, dir_fd=root_fd)
-            except OSError:
-                pass
-        raise
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise SkillValidationError(f"Skill path is not a directory: {name}")
+    return descriptor
 
 
-def _ensure_skill_directory_attached(
+def _ensure_directory_attached(
     root_fd: int,
     name: str,
-    skill_fd: int,
+    directory_fd: int,
 ) -> None:
-    """Reject a directory exchanged after its descriptor was opened."""
+    """Reject a Skill directory exchanged after its descriptor was opened."""
     try:
-        attached_status = os.stat(
+        attached = os.stat(
             _safe_name(name),
             dir_fd=root_fd,
             follow_symlinks=False,
@@ -590,27 +643,11 @@ def _ensure_skill_directory_attached(
         raise SkillConflictError(
             f"Skill directory was detached during operation: {name}"
         ) from error
-    open_status = os.fstat(skill_fd)
-    if stat.S_ISLNK(attached_status.st_mode) or (
-        attached_status.st_dev,
-        attached_status.st_ino,
-    ) != (open_status.st_dev, open_status.st_ino):
+    opened = os.fstat(directory_fd)
+    if stat.S_ISLNK(attached.st_mode) or (
+        attached.st_dev,
+        attached.st_ino,
+    ) != (opened.st_dev, opened.st_ino):
         raise SkillConflictError(
             f"Skill directory was exchanged during operation: {name}"
         )
-
-
-def _create_temporary_file(skill_fd: int) -> tuple[int, str]:
-    for _ in range(128):
-        name = f".SKILL.md.{secrets.token_hex(8)}.tmp"
-        try:
-            descriptor = os.open(
-                name,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
-                0o600,
-                dir_fd=skill_fd,
-            )
-        except FileExistsError:
-            continue
-        return descriptor, name
-    raise OSError("unable to allocate a unique SKILL.md temporary file")

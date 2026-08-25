@@ -1,4 +1,3 @@
-import hashlib
 import json
 
 import pytest
@@ -12,14 +11,12 @@ from apps.agent.src.model_provider.types import ImagePart, Message, TextPart, To
 
 
 def snapshot(tmp_path):
-    content = "---\nname: existing\ndescription: existing\n---\nbody"
     return SkillSnapshot(
         name="existing",
         description="existing",
         scope="global",
         path=tmp_path / "existing" / "SKILL.md",
-        content=content,
-        content_hash=hashlib.sha256(content.encode()).hexdigest(),
+        directory_hash="abc123",
     )
 
 
@@ -61,6 +58,13 @@ def test_prompt_preserves_full_conversation_including_unpaired_tool_call(tmp_pat
     assert result["name"] == "new-skill"
     assert result["scope"] == "workspace"
     assert result["instructions"] == "capture the workflow"
+    assert result["draft_dir"] == "."
+    assert result["read_roots"] == [
+        "draft",
+        "workspace",
+        "workspace_skills",
+        "global_skills",
+    ]
 
 
 def test_evolve_prompt_includes_source_snapshot_and_image_metadata(tmp_path):
@@ -84,7 +88,8 @@ def test_evolve_prompt_includes_source_snapshot_and_image_metadata(tmp_path):
         )
     )
 
-    assert result["source_skill"]["content"].endswith("body")
+    assert result["source_skill"]["directory_hash"] == "abc123"
+    assert "content" not in result["source_skill"]
     image = result["conversation"][0]["content"][0]
     assert image == {
         "media_type": "image/png",

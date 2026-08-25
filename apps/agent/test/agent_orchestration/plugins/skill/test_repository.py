@@ -1,15 +1,16 @@
-import hashlib
 import os
 from pathlib import Path
-import stat
 from threading import Barrier, Thread
 
 import pytest
+import apps.agent.src.agent_orchestration.plugins.skill.repository as repository_module
 
 from apps.agent.src.agent_orchestration.plugins.skill.repository import (
+    MAX_FILE_BYTES,
     SkillConflictError,
     SkillRepository,
     SkillRepositoryError,
+    SkillSecurityError,
 )
 
 
@@ -48,146 +49,177 @@ def repository(tmp_path: Path) -> SkillRepository:
     return SkillRepository(tmp_path / "global", tmp_path / "workspace")
 
 
-@pytest.mark.parametrize("scope", ["workspace", "global"])
-def test_produce_writes_requested_scope_with_safe_permissions(tmp_path, scope):
-    repo = repository(tmp_path)
-    content = skill_content("new-skill")
+def prepare(repo: SkillRepository, name: str, scope="workspace") -> Path:
+    draft = repo.prepare_produce(name, scope)
+    (draft / "SKILL.md").write_text(skill_content(name), encoding="utf-8")
+    return draft
 
-    path = repo.produce(" New-Skill ", scope, content)
+
+@pytest.mark.parametrize("scope", ["workspace", "global"])
+def test_produce_publishes_complete_draft_with_binary_assets(tmp_path, scope):
+    repo = repository(tmp_path)
+    draft = prepare(repo, "new-skill", scope)
+    (draft / "scripts").mkdir()
+    (draft / "scripts" / "check.py").write_text("print('ok')\n")
+    (draft / "assets").mkdir()
+    binary = b"\x00\xff\x89PNG\r\n"
+    (draft / "assets" / "icon.bin").write_bytes(binary)
+
+    path = repo.publish_produce(" New-Skill ", scope, draft)
 
     assert path == (tmp_path / scope / "new-skill" / "SKILL.md").absolute()
-    assert path.read_text(encoding="utf-8") == content
-    assert path.parent.stat().st_mode & 0o777 == 0o700
-    assert path.stat().st_mode & 0o777 == 0o600
-    assert not list(path.parent.glob(".SKILL.md.*.tmp"))
+    assert path.read_text(encoding="utf-8") == skill_content("new-skill")
+    assert (path.parent / "scripts" / "check.py").exists()
+    assert (path.parent / "assets" / "icon.bin").read_bytes() == binary
+    assert not draft.exists()
 
 
 @pytest.mark.parametrize("existing_scope", ["workspace", "global"])
-def test_produce_rejects_conflict_in_either_scope_without_side_effect(
+def test_produce_rejects_conflict_without_consuming_draft(
     tmp_path, existing_scope
 ):
     existing = write_skill(tmp_path / existing_scope, "shared")
-    original = existing.read_text(encoding="utf-8")
     repo = repository(tmp_path)
+    draft = prepare(repo, "shared")
 
     with pytest.raises(SkillConflictError, match="already exists"):
-        repo.produce("SHARED", "workspace", skill_content("shared", body="new\n"))
+        repo.publish_produce("SHARED", "workspace", draft)
 
-    assert existing.read_text(encoding="utf-8") == original
-    if existing_scope == "global":
-        assert not (tmp_path / "workspace" / "shared").exists()
-
-
-def test_produce_detects_normalized_name_conflict_in_different_folder(tmp_path):
-    write_skill(tmp_path / "global", "legacy-folder", name="Target")
-    repo = repository(tmp_path)
-
-    with pytest.raises(SkillConflictError, match="already exists"):
-        repo.produce("target", "workspace", skill_content("target"))
+    assert existing.exists()
+    assert draft.exists()
 
 
-def test_find_conflicts_includes_invalid_same_name_physical_entry(tmp_path):
-    invalid_dir = tmp_path / "workspace" / "occupied"
-    invalid_dir.mkdir(parents=True)
-    (invalid_dir / "SKILL.md").write_text("not valid", encoding="utf-8")
+def test_find_conflicts_includes_invalid_same_name_entry(tmp_path):
+    occupied = tmp_path / "workspace" / "occupied"
+    occupied.mkdir(parents=True)
+    (occupied / "SKILL.md").write_text("invalid", encoding="utf-8")
     repo = repository(tmp_path)
 
     assert repo.find_conflicts("occupied") == ("workspace",)
     assert repo.find_conflicts("missing") == ()
 
 
-def test_workspace_evolve_updates_exact_snapshot(tmp_path):
+def test_workspace_evolve_replaces_complete_directory(tmp_path):
     original = write_skill(tmp_path / "workspace", "shared")
+    (original.parent / "keep.txt").write_text("keep")
+    (original.parent / "remove.txt").write_text("remove")
     repo = repository(tmp_path)
     snapshot = repo.capture("shared")
     assert snapshot is not None
-    replacement = skill_content("shared", body="evolved\n")
+    draft = repo.prepare_evolve(snapshot)
+    (draft / "SKILL.md").write_text(
+        skill_content("shared", body="evolved\n"), encoding="utf-8"
+    )
+    (draft / "remove.txt").unlink()
+    (draft / "new.bin").write_bytes(b"\x00new")
 
-    path = repo.evolve(snapshot, replacement)
+    path = repo.publish_evolve(snapshot, draft)
 
     assert path == original.absolute()
-    assert original.read_text(encoding="utf-8") == replacement
+    assert path.read_text().endswith("evolved\n")
+    assert (path.parent / "keep.txt").read_text() == "keep"
+    assert not (path.parent / "remove.txt").exists()
+    assert (path.parent / "new.bin").read_bytes() == b"\x00new"
 
 
-def test_global_evolve_creates_workspace_override_without_modifying_global(tmp_path):
+def test_global_evolve_creates_workspace_override(tmp_path):
     global_file = write_skill(
         tmp_path / "global",
         "shared",
         content=skill_content("shared", body="global\n"),
     )
+    (global_file.parent / "asset.bin").write_bytes(b"asset")
     repo = repository(tmp_path)
     snapshot = repo.capture("shared")
     assert snapshot is not None and snapshot.scope == "global"
-    replacement = skill_content("shared", body="workspace override\n")
+    draft = repo.prepare_evolve(snapshot)
+    (draft / "SKILL.md").write_text(
+        skill_content("shared", body="workspace override\n")
+    )
 
-    path = repo.evolve(snapshot, replacement)
+    path = repo.publish_evolve(snapshot, draft)
 
-    assert global_file.read_text(encoding="utf-8").endswith("global\n")
+    assert global_file.read_text().endswith("global\n")
     assert path == (tmp_path / "workspace" / "shared" / "SKILL.md").absolute()
-    assert path.read_text(encoding="utf-8") == replacement
+    assert (path.parent / "asset.bin").read_bytes() == b"asset"
 
 
-def test_evolve_rejects_hash_change_and_workspace_override_race(tmp_path):
+def test_evolve_rejects_any_directory_change_and_override_race(tmp_path):
     workspace_file = write_skill(tmp_path / "workspace", "workspace-skill")
     global_file = write_skill(tmp_path / "global", "global-skill")
     repo = repository(tmp_path)
     workspace_snapshot = repo.capture("workspace-skill")
     global_snapshot = repo.capture("global-skill")
     assert workspace_snapshot is not None and global_snapshot is not None
-    workspace_file.write_text(
-        skill_content("workspace-skill", body="concurrent\n"),
-        encoding="utf-8",
-    )
+    workspace_draft = repo.prepare_evolve(workspace_snapshot)
+    global_draft = repo.prepare_evolve(global_snapshot)
+    (workspace_file.parent / "concurrent.txt").write_text("changed")
     override = write_skill(tmp_path / "workspace", "global-skill")
 
     with pytest.raises(SkillConflictError, match="changed after analysis"):
-        repo.evolve(workspace_snapshot, skill_content("workspace-skill"))
+        repo.publish_evolve(workspace_snapshot, workspace_draft)
     with pytest.raises(SkillConflictError, match="override.*appeared"):
-        repo.evolve(global_snapshot, skill_content("global-skill"))
+        repo.publish_evolve(global_snapshot, global_draft)
 
-    assert global_file.exists()
-    assert override.exists()
+    assert global_file.exists() and override.exists()
+
+
+def test_prepare_evolve_rejects_source_change_during_copy(tmp_path, monkeypatch):
+    source = write_skill(tmp_path / "workspace", "shared")
+    repo = repository(tmp_path)
+    snapshot = repo.capture("shared")
+    assert snapshot is not None
+    real_copy = repository_module._copy_skill_tree
+
+    def mutate_then_copy(source_dir, destination):
+        real_copy(source_dir, destination)
+        source.write_text(skill_content("shared", body="changed\n"))
+
+    monkeypatch.setattr(repository_module, "_copy_skill_tree", mutate_then_copy)
+
+    with pytest.raises(SkillConflictError, match="preparing Draft"):
+        repo.prepare_evolve(snapshot)
+
+    assert list((tmp_path / "workspace" / ".drafts").iterdir()) == []
 
 
 @pytest.mark.parametrize(
-    ("name", "scope", "content"),
+    "mutate",
     [
-        ("../escape", "workspace", skill_content("escape")),
-        ("safe", "session", skill_content("safe")),
-        ("safe", "workspace", "# no front matter\n"),
-        ("safe", "workspace", skill_content("different")),
-        ("safe", "workspace", "---\nname: safe\ndescription:\n---\n"),
+        lambda draft: (draft / "SKILL.md").unlink(),
+        lambda draft: (draft / "SKILL.md").write_text("not valid"),
+        lambda draft: (draft / "SKILL.md").write_text(skill_content("different")),
+        lambda draft: (draft / "large.bin").write_bytes(b"x" * (MAX_FILE_BYTES + 1)),
     ],
 )
-def test_produce_rejects_invalid_target_or_content(tmp_path, name, scope, content):
+def test_publish_rejects_invalid_draft(tmp_path, mutate):
     repo = repository(tmp_path)
+    draft = prepare(repo, "safe")
+    mutate(draft)
 
     with pytest.raises(SkillRepositoryError):
-        repo.produce(name, scope, content)
+        repo.publish_produce("safe", "workspace", draft)
 
-    assert not (tmp_path / "workspace" / "safe" / "SKILL.md").exists()
-
-
-def test_repository_rejects_symlink_target_without_touching_outside(tmp_path):
-    outside_file = write_skill(tmp_path / "outside", "escaped")
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "escaped").symlink_to(outside_file.parent, target_is_directory=True)
-    repo = SkillRepository(tmp_path / "global", workspace)
-
-    with pytest.raises(SkillConflictError):
-        repo.produce("escaped", "workspace", skill_content("escaped"))
-
-    assert outside_file.read_text(encoding="utf-8") == skill_content("escaped")
+    assert not (tmp_path / "workspace" / "safe").exists()
 
 
-def test_capture_returns_hash_and_visible_workspace_override(tmp_path):
-    write_skill(tmp_path / "global", "shared", content=skill_content("shared", body="global\n"))
-    workspace_file = write_skill(
-        tmp_path / "workspace",
-        "shared",
-        content=skill_content("shared", body="workspace\n"),
-    )
+def test_publish_rejects_symlink_inside_draft(tmp_path):
+    repo = repository(tmp_path)
+    draft = prepare(repo, "safe")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside")
+    (draft / "link").symlink_to(outside)
+
+    with pytest.raises(SkillSecurityError, match="symlink"):
+        repo.publish_produce("safe", "workspace", draft)
+
+    assert outside.read_text() == "outside"
+
+
+def test_capture_returns_directory_hash_and_workspace_override(tmp_path):
+    write_skill(tmp_path / "global", "shared")
+    workspace_file = write_skill(tmp_path / "workspace", "shared")
+    (workspace_file.parent / "extra.txt").write_text("extra")
     repo = repository(tmp_path)
 
     snapshot = repo.capture("shared")
@@ -195,64 +227,66 @@ def test_capture_returns_hash_and_visible_workspace_override(tmp_path):
     assert snapshot is not None
     assert snapshot.scope == "workspace"
     assert snapshot.path == workspace_file.absolute()
-    assert snapshot.content_hash == hashlib.sha256(
-        snapshot.content.encode("utf-8")
-    ).hexdigest()
+    assert len(snapshot.directory_hash) == 64
     assert repo.capture("missing") is None
 
 
-def test_atomic_write_uses_same_directory_replace_and_fsync(tmp_path, monkeypatch):
+def test_capture_rejects_directory_exchanged_during_validation(
+    tmp_path, monkeypatch
+):
+    original = write_skill(tmp_path / "workspace", "shared")
     repo = repository(tmp_path)
-    real_replace = os.replace
-    real_fsync = os.fsync
-    replace_calls = []
-    fsync_calls = []
+    real_validate = repository_module._validate_skill_tree
 
-    def recording_replace(source, target, *, src_dir_fd=None, dst_dir_fd=None):
-        replace_calls.append((Path(source), Path(target), src_dir_fd, dst_dir_fd))
-        real_replace(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
-
-    def recording_fsync(descriptor):
-        fsync_calls.append(os.fstat(descriptor))
-        real_fsync(descriptor)
+    def exchange_then_validate(root, target_name):
+        detached = root.with_name("detached")
+        root.rename(detached)
+        write_skill(root.parent, root.name)
+        return real_validate(root, target_name)
 
     monkeypatch.setattr(
-        "apps.agent.src.agent_orchestration.plugins.skill.repository.os.replace",
-        recording_replace,
-    )
-    monkeypatch.setattr(
-        "apps.agent.src.agent_orchestration.plugins.skill.repository.os.fsync",
-        recording_fsync,
+        repository_module, "_validate_skill_tree", exchange_then_validate
     )
 
-    path = repo.produce("atomic", "workspace", skill_content("atomic"))
+    with pytest.raises(SkillConflictError, match="exchanged"):
+        repo.capture("shared")
 
-    assert path.exists()
-    assert len(replace_calls) == 1
-    temporary, target, source_fd, target_fd = replace_calls[0]
-    assert source_fd == target_fd
-    assert temporary.parent == target.parent
-    assert target.name == "SKILL.md"
-    assert any(stat.S_ISDIR(item.st_mode) for item in fsync_calls)
+    assert original.parent.name == "shared"
 
 
-def test_repository_instances_share_lock_and_concurrent_produce_does_not_overwrite(tmp_path):
+def test_cleanup_only_accepts_repository_drafts(tmp_path):
+    repo = repository(tmp_path)
+    draft = prepare(repo, "safe")
+    repo.cleanup_draft(draft)
+    repo.cleanup_draft(draft)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with pytest.raises(SkillSecurityError, match="unsafe Draft"):
+        repo.cleanup_draft(outside)
+
+
+def test_repository_instances_share_lock_and_concurrent_publish_does_not_overwrite(tmp_path):
     repo_a = repository(tmp_path)
     repo_b = repository(tmp_path)
     assert repo_a._write_lock is repo_b._write_lock
+    draft_a = prepare(repo_a, "same")
+    draft_b = prepare(repo_b, "same")
+    (draft_a / "value").write_text("first")
+    (draft_b / "value").write_text("second")
     barrier = Barrier(2)
     results = []
 
-    def produce(repo, body):
+    def publish(repo, draft):
         barrier.wait()
         try:
-            results.append(repo.produce("same", "workspace", skill_content("same", body=body)))
+            results.append(repo.publish_produce("same", "workspace", draft))
         except SkillConflictError as error:
             results.append(error)
 
     threads = [
-        Thread(target=produce, args=(repo_a, "first\n")),
-        Thread(target=produce, args=(repo_b, "second\n")),
+        Thread(target=publish, args=(repo_a, draft_a)),
+        Thread(target=publish, args=(repo_b, draft_b)),
     ]
     for thread in threads:
         thread.start()
@@ -261,3 +295,53 @@ def test_repository_instances_share_lock_and_concurrent_produce_does_not_overwri
 
     assert sum(isinstance(result, Path) for result in results) == 1
     assert sum(isinstance(result, SkillConflictError) for result in results) == 1
+
+
+def test_workspace_evolve_rolls_back_if_new_directory_move_fails(tmp_path, monkeypatch):
+    original = write_skill(tmp_path / "workspace", "shared")
+    original_text = original.read_text()
+    repo = repository(tmp_path)
+    snapshot = repo.capture("shared")
+    assert snapshot is not None
+    draft = repo.prepare_evolve(snapshot)
+    (draft / "SKILL.md").write_text(skill_content("shared", body="new\n"))
+    real_rename = os.rename
+    calls = 0
+
+    def fail_second_rename(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated publish failure")
+        return real_rename(source, target)
+
+    monkeypatch.setattr(
+        "apps.agent.src.agent_orchestration.plugins.skill.repository.os.rename",
+        fail_second_rename,
+    )
+
+    with pytest.raises(OSError, match="simulated"):
+        repo.publish_evolve(snapshot, draft)
+
+    assert original.read_text() == original_text
+
+
+def test_workspace_evolve_keeps_success_if_backup_cleanup_fails(
+    tmp_path, monkeypatch, caplog
+):
+    original = write_skill(tmp_path / "workspace", "shared")
+    repo = repository(tmp_path)
+    snapshot = repo.capture("shared")
+    assert snapshot is not None
+    draft = repo.prepare_evolve(snapshot)
+    (draft / "SKILL.md").write_text(skill_content("shared", body="new\n"))
+
+    def fail_cleanup(path, *args, **kwargs):
+        raise OSError("simulated backup cleanup failure")
+
+    monkeypatch.setattr(repository_module.shutil, "rmtree", fail_cleanup)
+
+    path = repo.publish_evolve(snapshot, draft)
+
+    assert path.read_text().endswith("new\n")
+    assert "Unable to remove committed Skill backup" in caplog.text
