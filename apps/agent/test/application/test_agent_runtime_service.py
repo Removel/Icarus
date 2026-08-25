@@ -23,6 +23,9 @@ from apps.agent.src.agent_orchestration.plugins import (
 from apps.agent.src.agent_orchestration.plugins.skill.coordinator import (
     SkillWriteCoordinator,
 )
+from apps.agent.src.agent_orchestration.plugins.skill.generation_tools import (
+    GENERATION_TOOL_NAMES,
+)
 from apps.agent.src.application.agent_runtime_service import AgentRuntimeService
 from apps.agent.src.model_config import (
     ConfigModel,
@@ -140,6 +143,8 @@ def test_runtime_service注册agent与skill工具并持有生成factory(tmp_path
         assert agent_factory.tool_registry is service.tool_registry
         assert isinstance(close_resource.__self__, AgentFactory)
         assert close_resource.__self__ is not agent_factory
+        assert close_resource.__self__.tool_registry is not service.tool_registry
+        assert close_resource.__self__.tool_registry.names() == GENERATION_TOOL_NAMES
         assert set(service.tool_registry.names()) >= {
             "skills_list",
             "skill_search",

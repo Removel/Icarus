@@ -9,6 +9,7 @@ from threading import RLock
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.hooks import hook_context
 from apps.agent.src.agent_orchestration.plugins.skill.coordinator import (
     SkillWriteCoordinator,
 )
@@ -39,6 +40,7 @@ class SkillJobManager:
         evolver: SkillEvolver,
         repository: SkillRepository,
         coordinator: SkillWriteCoordinator,
+        workspace_dir: str | Path,
         publish_event: EventPublisher | None = None,
         close_resource: Callable[[], Awaitable[None]] | None = None,
         terminal_limit: int = _TERMINAL_LIMIT,
@@ -49,6 +51,7 @@ class SkillJobManager:
         self._evolver = evolver
         self._repository = repository
         self._coordinator = coordinator
+        self._workspace_dir = Path(workspace_dir).expanduser().resolve()
         self._publish_event = publish_event
         self._close_resource = close_resource
         self._terminal_limit = terminal_limit
@@ -144,14 +147,14 @@ class SkillJobManager:
             )
             self._jobs[job.job_id] = job
             self._session_job_ids.append(job.job_id)
-        evidence = tuple(conversation)
-        loop.call_soon_threadsafe(
-            self._schedule,
-            job.job_id,
-            instructions,
-            evidence,
-            snapshot,
-        )
+            evidence = tuple(conversation)
+            loop.call_soon_threadsafe(
+                self._schedule,
+                job.job_id,
+                instructions,
+                evidence,
+                snapshot,
+            )
         return job
 
     def _schedule(
@@ -181,30 +184,54 @@ class SkillJobManager:
     ) -> None:
         self._transition(job_id, "running")
         self._stages[job_id] = "generating"
+        draft: Path | None = None
         try:
             job = self.require(job_id)
             if job.operation == "produce":
                 assert job.scope is not None
-                content = await self._producer.produce(
-                    name=job.target_name,
-                    scope=job.scope,
-                    instructions=instructions,
-                    conversation=conversation,
+                draft = await self._prepare_draft(
+                    self._repository.prepare_produce,
+                    job.target_name,
+                    job.scope,
                 )
             else:
                 if snapshot is None:
                     raise ValueError("Evolve Job requires a Skill snapshot")
-                content = await self._evolver.evolve(
-                    name=job.target_name,
-                    instructions=instructions,
-                    conversation=conversation,
-                    snapshot=snapshot,
+                draft = await self._prepare_draft(
+                    self._repository.prepare_evolve, snapshot
                 )
+            with hook_context(
+                {
+                    "task_id": job.task_id,
+                    "parent_run_id": job.run_id,
+                    "skill_job_id": job.job_id,
+                    "agent_kind": "skill_generation",
+                    "operation": job.operation,
+                    "skill_name": job.target_name,
+                },
+                run_id=None,
+            ):
+                if job.operation == "produce":
+                    assert job.scope is not None
+                    await self._producer.produce(
+                        name=job.target_name,
+                        scope=job.scope,
+                        instructions=instructions,
+                        conversation=conversation,
+                        **self._generation_paths(draft),
+                    )
+                else:
+                    assert snapshot is not None
+                    await self._evolver.evolve(
+                        name=job.target_name,
+                        instructions=instructions,
+                        conversation=conversation,
+                        snapshot=snapshot,
+                        **self._generation_paths(draft),
+                    )
             self._stages[job_id] = "committing"
-            path = await asyncio.to_thread(
-                self._coordinator.run,
-                job.target_name,
-                lambda: self._commit(job, snapshot, content),
+            path = await self._finish_commit(
+                job, snapshot, draft
             )
         except asyncio.CancelledError:
             self._transition_if_active(job_id, "interrupted")
@@ -218,20 +245,78 @@ class SkillJobManager:
             self._transition(job_id, "succeeded", path=path)
         finally:
             self._stages.pop(job_id, None)
+            if draft is not None:
+                try:
+                    await asyncio.shield(
+                        asyncio.to_thread(self._repository.cleanup_draft, draft)
+                    )
+                except Exception:
+                    self._repository.logger.exception(
+                        "Unable to clean Skill Draft: job_id=%s", job_id
+                    )
         await self._notify(job_id)
+
+    async def _prepare_draft(
+        self,
+        operation: Callable[..., Path],
+        *arguments: object,
+    ) -> Path:
+        worker = asyncio.create_task(asyncio.to_thread(operation, *arguments))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            try:
+                orphan = await worker
+            except Exception:
+                pass
+            else:
+                await asyncio.shield(
+                    asyncio.to_thread(self._repository.cleanup_draft, orphan)
+                )
+            raise
+
+    async def _finish_commit(
+        self,
+        job: SkillJob,
+        snapshot: SkillSnapshot | None,
+        draft: Path,
+    ) -> Path:
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                self._coordinator.run,
+                job.target_name,
+                lambda: self._commit(job, snapshot, draft),
+            )
+        )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Once publication starts, report its real outcome instead of
+            # abandoning a worker that may already have replaced the target.
+            return await worker
 
     def _commit(
         self,
         job: SkillJob,
         snapshot: SkillSnapshot | None,
-        content: str,
+        draft: Path,
     ) -> Path:
         if job.operation == "produce":
             assert job.scope is not None
-            return self._repository.produce(job.target_name, job.scope, content)
+            return self._repository.publish_produce(
+                job.target_name, job.scope, draft
+            )
         if snapshot is None:
             raise ValueError("Evolve Job requires a Skill snapshot")
-        return self._repository.evolve(snapshot, content)
+        return self._repository.publish_evolve(snapshot, draft)
+
+    def _generation_paths(self, draft: Path) -> dict[str, Path]:
+        return {
+            "draft_dir": draft,
+            "workspace_dir": self._workspace_dir,
+            "global_skills_dir": self._repository.global_skills_dir,
+            "workspace_skills_dir": self._repository.workspace_skills_dir,
+        }
 
     async def _notify(self, job_id: str) -> None:
         publisher = self._publish_event
@@ -326,6 +411,7 @@ class SkillJobManager:
     async def drain(self) -> None:
         # Generating tasks are cancellable. A commit already running in a worker
         # thread must finish before state can be snapshotted safely.
+        await asyncio.sleep(0)
         for job_id, task in tuple(self._tasks.items()):
             if self._stages.get(job_id) != "committing" and not task.done():
                 task.cancel()

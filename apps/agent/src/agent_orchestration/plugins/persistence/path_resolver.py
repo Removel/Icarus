@@ -36,9 +36,6 @@ class DataPathResolver:
     def workspace_log(self, identity: SessionIdentity) -> Path:
         return self.workspace_dir(identity) / "runtime.log"
 
-    def workspace_skills_dir(self, identity: SessionIdentity) -> Path:
-        return self.workspace_dir(identity) / "skills"
-
     def sessions_dir(self, identity: SessionIdentity) -> Path:
         return self.workspace_dir(identity) / "sessions"
 

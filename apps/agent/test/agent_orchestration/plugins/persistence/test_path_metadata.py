@@ -22,9 +22,6 @@ def test_path_resolver_按workspace和session生成安全目录(tmp_path):
     assert resolver.assets_dir(identity).is_dir()
     assert resolver.workspace_log(identity).parent == resolver.workspace_dir(identity)
     assert resolver.global_skills_dir == tmp_path / "skills"
-    assert resolver.workspace_skills_dir(identity) == (
-        resolver.workspace_dir(identity) / "skills"
-    )
 
 
 def test_path_resolver_拒绝相对路径和路径穿越(tmp_path):
