@@ -1,5 +1,8 @@
 # Agent Stream Event Development Plan｜Agent 流式事件开发计划
 
+> 历史计划：其中 `AgentErrorEvent` 已由 Harness 发布的统一 `TaskErrorEvent` 替代，当前契约见
+> `apps/agent/docs/arch/agent-core-capability-completion-design.md`。
+
 ## 目标
 
 基于 `agent-stream-event-design.md`，为当前无状态 ReActAgent 增加：

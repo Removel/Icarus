@@ -1,5 +1,8 @@
 # Plugin Runtime Development Plan｜插件运行时开发计划
 
+> 历史计划：其中 `AgentErrorEvent` 已由统一 `TaskErrorEvent` 替代，当前契约见
+> `apps/agent/docs/arch/agent-core-capability-completion-design.md`。
+
 ## 目标
 
 在 Agent 编排层中实现统一 Plugin Runtime，使 Agent、Blackboard、Skill、Knowledge、Memory、用户输入、UI 和未来自定义能力都可以作为 Plugin 异步生产和消费 Event。

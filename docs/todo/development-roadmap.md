@@ -113,7 +113,8 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
 - [x] 验证业务信息是否采用仍由 Agent 判断，不由 Plugin 直接改写执行状态。
 - [x] 验证干预不会被错误展示成用户输入，也不会污染不完整的会话历史。
 - [x] 验证操作不重复应用，迟到操作具有明确结果，且不会从已结束 Run 泄漏到新 Run。
-- [ ] 使用 Memory、Knowledge 或外部监督接入第二个业务语义场景，验证机制不依赖 SkillPlugin。
+- [ ] 后续使用 Memory、Knowledge 或外部监督接入第二个业务语义场景，验证机制不依赖
+  SkillPlugin；该项不纳入当前 Agent 基础能力阶段。
 - [ ] 记录从事件产生到 Kernel 响应的时延和真实使用效果。
 
 完成标志：至少一个业务语义场景和一个 Harness 控制场景端到端成立，能够用真实结果反证
@@ -127,34 +128,40 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
 - [x] 将具体 Plugin 构建、依赖装配、Event 订阅和生命周期从 `AgentRuntimeService` 下沉到
   Manifest Factory 与 Runtime Host。
 - [x] 完成首期 Tool 形式校验、并发分批、顺序回填、取消传播和 Bash 子进程清理。
-- [ ] 整理 ReAct 执行流程中四种入口仍然重复的状态转换与 Tool 回填实现。
-- [ ] 按真实风险继续完善 Agent 级步骤、超时、预算与循环限制，以及通用 Tool 权限、安全和
-  全局资源上限。
+- [x] 整理 ReAct 执行流程中四种入口仍然重复的状态转换与 Tool 回填实现。
+- [x] 由 Harness 增加默认 256 个模型 Step 的硬上限；暂不增加 Agent Run 总超时、Token/金额
+  预算和启发式循环检测。
+- [x] 使用统一 Task Error Event 表达致命与非致命错误，供产品层和其他功能订阅观察；只有
+  致命错误改变 Task 终态。
+- [x] 在 Blackboard 增加基于上一轮模型 Usage 和固定 85% 阈值的 Compact；成功后用一条摘要
+  替换旧历史，失败时保留历史并结束本轮。
+- [x] 将本地图片导入现有 Session `assets/`，Context 保存稳定相对引用，由 Provider Adapter
+  转换为厂商图片协议。
 - [ ] 继续规范尚未覆盖模块的异常、日志和配置，并基于具体调用方引入必要抽象。
 
 本阶段下一步按以下顺序推进：先在不改变四个公开入口的前提下整理 ReAct 内部重复实现，
-再基于共享状态转换增加最大步骤、总超时、Token/成本预算和循环检测。这是现有 Kernel 的
-增量整理与加固，不重新划分 Kernel、Harness、Plugin Runtime 或 Blackboard 的职责。
+再增加 256 Step Harness、统一错误 Event、Blackboard Compact 和本地图片稳定引用。这是现有
+Agent 基础能力的增量整理与补全，不重新划分 Kernel、Plugin Runtime 或 EventBus 的职责。
+详细设计见 `apps/agent/docs/arch/agent-core-capability-completion-design.md`，实施步骤见
+`apps/agent/docs/plan/agent-core-capability-completion-development-plan.md`。
 
 完成标志：新增 Plugin 和 Tool 不需要修改 Kernel 主循环；核心模块边界可以独立理解和测试；
 关键同步、异步与终态行为一致；重构后的文档与实现保持一致。
 
-### 阶段六：完善对话与上下文基础能力
+### 阶段六：产品化对话与上下文能力
 
-- [ ] 建立 Model Usage → Agent Run → Session → 应用展示的 Token 统计链路，并明确调用、
-  Run、对话累计和上下文窗口四种统计口径。
-- [ ] 在可靠 Token 统计基础上实现自动 Compact，保留原始持久化消息，并为压缩结果、触发原因
-  和失败回退留下可观测记录。
+- [ ] 将 Agent 基础层已有的 Usage、Compact、Error Event 和图片引用封装为产品可理解的状态
+  与交互，不在 UI 中重复实现基础逻辑。
 - [ ] 完善对话元数据、消息历史和索引持久化，支持进程重启后枚举并恢复已有对话。
 - [ ] 增加对话切换的应用层接口和 TUI 交互，明确运行中任务收束、状态保存、Runtime/Blackboard
   恢复以及输出订阅和 UI 投影切换。
-- [ ] 覆盖新建、恢复、切换、自动 Compact、Token 展示和异常退出的端到端验证。
+- [ ] 覆盖新建、恢复、切换、Compact 展示、错误展示、图片交互和异常退出的端到端验证。
 
-依赖顺序：Token 统计是自动 Compact 的前置条件；对话持久化和索引是恢复与切换的前置条件。
-对话生命周期由应用层和 Persistence/Blackboard 协作完成，ReActAgent 继续保持无状态。
+依赖顺序：Agent 基础能力先稳定；对话持久化和索引是恢复与切换的前置条件。对话生命周期由
+应用层和 Persistence/Blackboard 协作完成，ReActAgent 继续保持无状态。
 
-完成标志：用户可以查看、恢复和切换对话；长对话能够按明确阈值自动 Compact；Token 数据
-在模型调用、Run、Session 和界面之间口径一致，失败或重启不会造成历史混淆。
+完成标志：用户可以查看、恢复和切换对话；产品界面正确呈现基础层已有的 Usage、Compact、
+错误和图片状态，失败或重启不会造成历史混淆。
 
 ## 并行关系与依赖
 
@@ -176,7 +183,7 @@ Agent Core 现状基线
         ↓
 Agent Core 系统性重构
         ↓
-对话与上下文基础能力
+产品化对话与上下文能力
 ```
 
 依赖关系：
@@ -196,7 +203,6 @@ Agent Core 系统性重构
 - 各类内核操作的完整集合和固定枚举；
 - Skill 在大规模真实目录下的搜索词选择与召回体验；
 - Run 内动态变更 Tool 集合。
-- 自动 Compact 的具体阈值、压缩模型和摘要格式；
 - 对话切换时复用 Runtime 还是重建 Runtime 的具体实现。
 
 ## SkillPlugin 工具化验收记录

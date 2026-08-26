@@ -11,27 +11,34 @@
 
 ## 下一步开发顺序
 
-下一阶段不是重新设计 Agent Kernel，而是在现有边界上分两段增量完善：
+下一阶段先完成 Agent 基础能力，再进入 Session 和 UI 产品化：
 
 1. Agent Kernel 增量整理与运行保护：
-   - [ ] 先整理 `invoke`、`ainvoke`、`stream`、`astream` 的重复内部实现，保留四个公开入口
+   - [x] 提取 `invoke`、`ainvoke`、`stream`、`astream` 的重复内部实现，保留四个公开入口
      及现有同步、异步、流式和非流式语义；
-   - [ ] 再基于共享的 ReAct 状态转换补齐最大步骤、总超时、Token/成本预算和循环检测，
-     确定性限制继续由 Harness 执行。
-2. 对话与上下文基础能力：
-   - [ ] 建立从 Model Usage、Agent Run 汇总、Session 持久化到应用展示的 Token 统计链路；
-   - [ ] 在可靠 Token 统计基础上实现自动 Compact，并明确压缩前后历史、上下文窗口和失败回退；
-   - [ ] 完善对话索引、持久化和恢复，使进程重启后可以恢复已有对话；
-   - [ ] 提供对话列表与切换能力，明确切换时当前任务、Runtime、Blackboard 和 UI 投影的处理。
+   - [x] 由 Harness 在每次模型 Step 前执行 `max_steps` 检查，默认允许 256 个 Step，准备进入
+     第 257 个 Step 时确定性截停；
+   - [x] 使用统一 Task Error Event 表达致命与非致命错误，只有致命错误改变 Task 终态。
+2. 基础上下文与输入能力：
+   - [x] 使用上一轮最后一次模型调用的 Usage 记录 Blackboard 当前上下文 Token；
+   - [x] 每轮开始时在旧历史达到模型上下文窗口 85% 后执行 Compact，成功后用一条摘要替换
+     全部旧历史，失败时保留历史并终止本轮；
+   - [x] 将本地图片复制到现有 Session `assets/`，Context 只保存稳定相对引用，由 Provider
+     Adapter 转换为厂商协议。
+3. 产品化阶段：
+   - [ ] 完善对话索引、业务历史持久化和恢复；
+   - [ ] 提供对话列表与切换能力，并由 TUI、GUI 和 WebUI 封装 Agent 基础接口。
 
-依赖顺序为：ReAct 内部去重 → 运行保护 → Token 统计 → 自动 Compact；对话持久化与索引
-是恢复和切换的前置条件。两条后续能力链可以在边界明确后并行推进。
+当前依赖顺序为：ReAct 去重 → 256 Step Harness → 统一错误 Event → Blackboard Compact →
+本地图片引用。Session 持久化、恢复、切换和 UI 展示在上述能力稳定后再推进。详细设计见
+`apps/agent/docs/arch/agent-core-capability-completion-design.md`，实施步骤见
+`apps/agent/docs/plan/agent-core-capability-completion-development-plan.md`。
 
 ## 后续能力池
 
 以下内容不代表近期实施优先级，按路线图进入对应阶段后再设计和拆分：
 
-- 完善 Agent Core 的多模态输入能力。
+- 在本地图片完成后，根据真实需求继续扩展其他多模态输入。
 - 改造 Blackboard 的上下文组织与动态上下文收集能力。
 - 已完成 SkillPlugin 的主动发现、渐进读取、显式生产与演化重构；后续根据真实使用结果优化。
 - 实现角色卡片风格化输出插件。
@@ -144,12 +151,14 @@
 
 ## 系统性代码重构
 
-- [ ] 整理当前 `invoke`、`ainvoke`、`stream`、`astream` 中重复的 ReAct 状态转换与 Tool
+- [x] 整理当前 `invoke`、`ainvoke`、`stream`、`astream` 中重复的 ReAct 状态转换与 Tool
   回填逻辑，保持四种入口行为一致。
 - [x] 完成首期 Run Control：记录当前 Step，在稳定边界注入异步 Context，阻止取消后的新模型
   Step 或 Tool Batch，保留协议完整的历史检查点，并确定性处理完成、取消和迟到操作竞争。
-- [ ] 在现有 Run Control 上继续补齐 Agent 级最大步骤、总超时、Token/成本预算和循环检测；
-  保持 ReActAgent 无状态且不反向依赖 Plugin Runtime 或具体业务 Plugin。
+- [x] 在现有 Run Control 上增加默认 256 个模型 Step 的确定性上限；暂不增加 Agent Run 总超时、
+  Token/金额预算和启发式循环检测，保持 ReActAgent 无状态且不反向依赖 Plugin Runtime。
+- [x] 使用统一 Task Error Event 表达任务内致命与非致命错误；EventBus 只路由，只有致命错误
+  由任务所有者收束为 failed。
 - [x] 精简 `AgentRuntimeService` 的组装职责：具体 Plugin 构建、Capability 依赖装配、Tool 注册、
   Event 订阅拓扑、状态恢复与 Runtime 生命周期已下沉到 Manifest Factory 和 Runtime Host。
 - [x] SkillPlugin 已按 Catalog、Scanner、Tool、Job、Producer/Evolver、Generation Tool 和
@@ -163,14 +172,21 @@
 - [x] 已完成的 Runtime Manifest、运行中介入和 SkillPlugin 重构均同步更新了对应架构设计、
   实施计划与当前状态文档。
 
-## 对话与上下文基础能力
+## 基础上下文与多模态输入
 
-- [ ] 定义 Token 统计口径，区分单次模型调用、Agent Run、当前对话累计和当前上下文窗口，
-  不把缺失 Usage 的模型响应误计为零消耗。
-- [ ] 持久化对话元数据和消息历史，支持枚举、选择和恢复；Blackboard 继续拥有当前 Session
-  的对话历史，不把历史状态放入无状态 ReActAgent。
-- [ ] 设计并实现自动 Compact 的触发阈值、压缩输入、产物格式、失败回退和可观测记录；压缩
-  只改变后续模型使用的上下文表示，不静默删除原始持久化消息。
+- [x] 模型配置提供 `context_window`；AgentResponse 保留 Run 总 Usage 和最后一次模型调用 Usage，
+  不把缺失 Usage 误计为零。
+- [x] Blackboard 在每轮开始时检查旧历史；上一轮上下文达到窗口 85% 时调用模型 Compact，
+  成功后用一条摘要替换旧历史，失败时保留历史并结束当前 Task。
+- [x] `ImagePart` 使用扁平的 `source`、`source_type` 和 `media_type`；本地图片导入 Session
+  `assets/`，Blackboard 只保存相对引用，Provider Adapter 负责最终协议转换。
+- [x] 为 Compact 的未触发、成功、失败、Usage 缺失和本地图片的导入、移动、缺失及双 Provider
+  转换补齐确定性测试；真实模型冒烟因本轮未使用凭据而未执行。
+
+## 产品化阶段能力
+
+- [ ] 持久化对话元数据和原始业务消息，支持枚举、选择和恢复；Blackboard 继续拥有当前
+  Session 的有效模型历史，不把历史状态放入无状态 ReActAgent。
 - [ ] 提供对话切换的应用层契约，处理运行中任务、状态保存、订阅/UI 投影切换和目标对话恢复；
   不把多对话管理职责塞进 Agent Kernel。
-- [ ] 为新建、恢复、切换、Compact 前后 Token 统计、压缩失败和进程异常退出补齐功能与端到端测试。
+- [ ] 在 TUI、GUI 和 WebUI 中展示 Token、Compact、图片与错误信息，并补齐产品端到端测试。

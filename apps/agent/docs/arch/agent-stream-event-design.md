@@ -77,8 +77,7 @@ Event
 ├── AgentTextDeltaEvent
 ├── AgentToolStartedEvent
 ├── AgentToolCompletedEvent
-├── AgentCompletedEvent
-└── AgentErrorEvent
+└── AgentCompletedEvent
 ```
 
 ### AgentTextDeltaEvent
@@ -156,33 +155,17 @@ class AgentCompletedEvent(Event):
 - 最终 Message；
 - 聚合后的 reasoning；
 - 聚合 Usage；
+- 最后一次模型调用 Usage；
 - 最终 FinishReason；
 - LLM 调用步数；
 - 本次完整临时消息轨迹。
 
-### AgentErrorEvent
+### TaskErrorEvent
 
-表示 Agent Stream 发生不可恢复异常。
-
-```python
-@dataclass(frozen=True)
-class AgentErrorEvent(Event):
-    step: int
-    error_type: str
-    error_message: str
-```
-
-异常语义：
-
-```text
-已有 Stream Event
-→ AgentErrorEvent
-→ 生成器原样抛出异常
-```
-
-- 客户端可以先收到结构化错误并展示；
-- 上层服务仍然能够捕获原始异常；
-- `AgentCompletedEvent` 和 `AgentErrorEvent` 互斥。
+ReActAgent Stream 遇到不可恢复异常时只原样抛出，不在能力层同时生成错误 Event。AgentPlugin
+作为 Harness 捕获异常，通过编排层通用 `TaskErrorEvent` 发布唯一的结构化错误；完整异常证据继续
+由 Hook/Trace 保存。TaskErrorEvent 也可表达不终止 Run 的非致命错误，详细契约见
+`agent-core-capability-completion-design.md`。
 
 ## Stream 与 Hook 的边界
 

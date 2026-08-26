@@ -6,6 +6,7 @@
 > `apps/tui/docs/plan/tui-terminal-framework-development-plan.md`。当前 Textual TUI 设计和
 > 计划见 `apps/tui/docs/arch/tui-persistent-input-queue-design.md` 与
 > `apps/tui/docs/plan/textual-tui-development-plan.md`。
+> 其中旧 `AgentErrorEvent` 映射已由统一 `TaskErrorEvent` 替代。
 
 ## 目标
 

@@ -295,7 +295,7 @@ UI 排队语义。
 
 用于结束当前活动任务；TUI 随后回到等待状态，或自动调度本地队列中的下一条消息。
 
-### AgentErrorEvent
+### TaskErrorEvent
 
 ```text
 [error] RuntimeError: ...
@@ -317,7 +317,7 @@ Plugin Event 不进入。取消 Task 只提交最近的协议完整消息前缀�
 
 - 配置缺失：启动失败并打印明确错误；
 - `ICARUS_DATA_DIR` 缺失：启动失败；
-- AgentErrorEvent：显示错误并等待 InputFinishedEvent；
+- TaskErrorEvent：显示错误；只有 `fatal=True` 时等待 failed InputFinishedEvent；
 - Plugin Runtime 启动失败：关闭已启动组件；
 - 空输入上的 EOF / `Ctrl+D`：退出整个 TUI；
 - `Ctrl+C` 按上下文只执行一个动作：

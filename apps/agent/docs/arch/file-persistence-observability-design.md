@@ -146,9 +146,7 @@ $ICARUS_DATA_DIR/
 
 ### assets/
 
-当前图片使用 URL，因此 Trace 记录 URL。
-
-未来支持本地文件时：
+当前同时支持 URL 图片和本地图片。对于本地图片：
 
 - 文件复制到 Session `assets/`；
 - Trace 记录 Session 相对路径；
