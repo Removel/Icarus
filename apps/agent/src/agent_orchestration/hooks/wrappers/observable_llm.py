@@ -1,6 +1,7 @@
 """BaseLLM 的透明观测包装器。"""
 
 from collections.abc import AsyncIterator, Iterator
+import traceback
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.hooks.hook_dispatcher import (
@@ -158,6 +159,9 @@ class ObservableLLM(BaseLLM):
             "llm_call_id": llm_call_id,
             "error_type": type(error).__name__,
             "error_message": str(error),
+            "traceback": "".join(
+                traceback.format_exception(type(error), error, error.__traceback__)
+            ),
         }
 
     @staticmethod
@@ -169,6 +173,9 @@ class ObservableLLM(BaseLLM):
             "llm_call_id": llm_call_id,
             "error_type": type(error).__name__,
             "error_message": str(error),
+            "traceback": "".join(
+                traceback.format_exception(type(error), error, error.__traceback__)
+            ),
         }
 
     @staticmethod

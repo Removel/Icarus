@@ -2,14 +2,14 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
     AgentCompletedEvent,
-    AgentErrorEvent,
 )
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
 from apps.agent.src.agent_orchestration.plugins.user_input.events import (
     InputFinishedEvent,
@@ -17,7 +17,10 @@ from apps.agent.src.agent_orchestration.plugins.user_input.events import (
     InputStartedEvent,
     UserInputEvent,
 )
-from apps.agent.src.agent_orchestration.plugins.persistence import PersistenceSession
+from apps.agent.src.agent_orchestration.plugins.persistence import (
+    ImageAssetError,
+    PersistenceSession,
+)
 from apps.agent.src.agent_orchestration.run_control import (
     TaskCancelRequestedEvent,
     TaskChannelRegistry,
@@ -36,7 +39,7 @@ class InputAccepted:
 class PendingInput:
     task_id: str
     prompt: str
-    input_images: list[ImagePart] = field(default_factory=list)
+    input_images: list[ImagePart | str | Path] = field(default_factory=list)
 
 
 class UserInputPlugin(BasePlugin):
@@ -47,11 +50,13 @@ class UserInputPlugin(BasePlugin):
         plugin_id: str,
         session: PersistenceSession,
         agent_plugin_id: str = "agent",
+        blackboard_plugin_id: str = "blackboard",
         task_channels: TaskChannelRegistry | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.session = session
         self.agent_plugin_id = agent_plugin_id
+        self.blackboard_plugin_id = blackboard_plugin_id
         self.task_channels = task_channels or TaskChannelRegistry()
         self._queue: asyncio.Queue[PendingInput] = asyncio.Queue()
         self._worker: asyncio.Task[None] | None = None
@@ -74,7 +79,7 @@ class UserInputPlugin(BasePlugin):
     async def submit(
         self,
         prompt: str,
-        input_images: list[ImagePart] | None = None,
+        input_images: list[ImagePart | str | Path] | None = None,
     ) -> InputAccepted:
         if (
             not self._accepting_submissions
@@ -110,13 +115,16 @@ class UserInputPlugin(BasePlugin):
         source_plugin_id: str,
         event: Event,
     ) -> None:
-        if source_plugin_id != self.agent_plugin_id:
+        if source_plugin_id not in {
+            self.agent_plugin_id,
+            self.blackboard_plugin_id,
+        }:
             return
         if event.task_id != self._active_task_id:
             return
         if isinstance(event, AgentCompletedEvent):
             self._active_status = "completed"
-        elif isinstance(event, AgentErrorEvent):
+        elif isinstance(event, TaskErrorEvent) and event.fatal:
             self._active_status = "failed"
         elif isinstance(event, AgentCancelledEvent):
             self._active_status = "cancelled"
@@ -124,6 +132,14 @@ class UserInputPlugin(BasePlugin):
             return
         if self._active_completed is not None:
             self._active_completed.set()
+
+    def accepts_event(self, source_plugin_id: str, event: Event) -> bool:
+        if isinstance(event, TaskErrorEvent):
+            return source_plugin_id in {
+                self.agent_plugin_id,
+                self.blackboard_plugin_id,
+            }
+        return source_plugin_id == self.agent_plugin_id
 
     async def drain(self) -> None:
         await self._queue.join()
@@ -167,13 +183,39 @@ class UserInputPlugin(BasePlugin):
                                 task_id=pending.task_id,
                             )
                         )
-                        await self.publish(
-                            UserInputEvent(
-                                task_id=pending.task_id,
-                                prompt=pending.prompt,
-                                input_images=pending.input_images,
+                        try:
+                            input_images = self._import_images(
+                                pending.input_images
                             )
-                        )
+                        except ImageAssetError as error:
+                            self._active_status = "failed"
+                            channel.mark_failed()
+                            await self.publish(
+                                TaskErrorEvent(
+                                    task_id=pending.task_id,
+                                    fatal=True,
+                                    code="image_import_failed",
+                                    error_type=type(error).__name__,
+                                    error_message=str(error),
+                                )
+                            )
+                        else:
+                            await self.publish(
+                                UserInputEvent(
+                                    task_id=pending.task_id,
+                                    prompt=pending.prompt,
+                                    input_images=input_images,
+                                )
+                            )
+                        if self._active_status == "failed":
+                            await self.publish(
+                                InputFinishedEvent(
+                                    task_id=pending.task_id,
+                                    status="failed",
+                                    run_id=channel.run_id,
+                                )
+                            )
+                            continue
                         completed = asyncio.create_task(
                             self._active_completed.wait()
                         )
@@ -214,3 +256,13 @@ class UserInputPlugin(BasePlugin):
                 self._outstanding_count -= 1
                 self.task_channels.finish(pending.task_id)
                 self._queue.task_done()
+
+    def _import_images(
+        self, images: list[ImagePart | str | Path]
+    ) -> list[ImagePart]:
+        return [
+            image
+            if isinstance(image, ImagePart)
+            else self.session.import_image(image)
+            for image in images
+        ]

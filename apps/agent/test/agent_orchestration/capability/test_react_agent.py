@@ -6,6 +6,7 @@ import pytest
 from apps.agent.src.agent_orchestration.capability import ReActAgent
 from apps.agent.src.agent_orchestration.run_control import (
     AgentRunCancelled,
+    MaxStepsExceededError,
     TaskChannel,
 )
 from apps.agent.src.agent_orchestration.tools import (
@@ -113,6 +114,7 @@ def test_react_agent_完成toolcall回填并继续对话():
     assert result.steps == 2
     assert result.reasoning == "需要执行工具\n完成"
     assert result.usage == Usage(18, 5)
+    assert result.last_usage == Usage(8, 3)
     assert len(llm.calls) == 2
     first_messages, definitions = llm.calls[0]
     assert first_messages[0] == Message("system", [TextPart("你是助手")])
@@ -352,6 +354,29 @@ def test_react_agent完成竞争时补充context触发额外step():
     assert llm.calls[1][0][-1].content[0].text == (
         "<runtime_context>\n1. late but accepted\n</runtime_context>"
     )
+
+
+def test_react_agent在下一step前执行harness上限检查():
+    channel = TaskChannel("task-1", max_steps=1)
+    channel.mark_preparing_context()
+    channel.start_run("run-1")
+    agent, llm = make_agent([tool_response()])
+
+    with pytest.raises(MaxStepsExceededError) as caught:
+        agent.invoke(
+            "", [], "original", tools=["echo"], run_control=channel
+        )
+
+    assert caught.value.max_steps == 1
+    assert caught.value.attempted_step == 2
+    assert len(llm.calls) == 1
+    assert channel.current_step == 1
+    assert channel.history_checkpoint_usage == Usage(10, 2)
+    assert [message.role for message in channel.history_checkpoint] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
 
 
 def test_react_agent取消后不启动tool():

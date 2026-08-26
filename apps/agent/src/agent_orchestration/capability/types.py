@@ -20,6 +20,7 @@ class AgentResponse:
     message: Message
     reasoning: str | None = None
     usage: Usage | None = None
+    last_usage: Usage | None = None
     finish_reason: FinishReason | None = None
     steps: int = 0
     messages: list[Message] = field(default_factory=list)
@@ -64,14 +65,8 @@ class AgentCompletedEvent(Event):
 
 
 @dataclass(frozen=True, kw_only=True)
-class AgentErrorEvent(Event):
-    step: int
-    error_type: str
-    error_message: str
-
-
-@dataclass(frozen=True, kw_only=True)
 class AgentCancelledEvent(Event):
     step: int
     reason: str | None = None
     task_messages: tuple[Message, ...] = ()
+    last_usage: Usage | None = None

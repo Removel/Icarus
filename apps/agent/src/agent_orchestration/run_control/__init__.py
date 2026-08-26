@@ -2,6 +2,7 @@
 
 from apps.agent.src.agent_orchestration.run_control.channel import (
     AgentRunCancelled,
+    MaxStepsExceededError,
     TaskChannel,
 )
 from apps.agent.src.agent_orchestration.run_control.events import (
@@ -25,6 +26,7 @@ from apps.agent.src.agent_orchestration.run_control.types import (
 __all__ = [
     "AgentRunControl",
     "AgentRunCancelled",
+    "MaxStepsExceededError",
     "AppliedContextBatch",
     "RuntimeContextRecord",
     "TaskCancelRequestedEvent",

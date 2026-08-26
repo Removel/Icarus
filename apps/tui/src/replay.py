@@ -11,14 +11,14 @@ from typing import Any, Literal
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentResponse,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.plugins import (
+    BlackboardCompactedEvent,
     InputAccepted,
     InputFinishedEvent,
     InputQueuedEvent,
@@ -30,7 +30,7 @@ from apps.agent.src.application.output_bridge import OutputEvent
 from apps.agent.src.model_provider.types import Message, TextPart, ToolCall
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class ReplayFormatError(ValueError):
@@ -95,7 +95,8 @@ def decode_replay_record(value: object) -> OutputEvent:
         "agent_text_delta": _decode_agent_text_delta,
         "agent_tool_started": _decode_agent_tool_started,
         "agent_tool_completed": _decode_agent_tool_completed,
-        "agent_error": _decode_agent_error,
+        "task_error": _decode_task_error,
+        "blackboard_compacted": _decode_blackboard_compacted,
         "agent_completed": _decode_agent_completed,
         "input_finished": _decode_input_finished,
     }
@@ -346,12 +347,27 @@ def _decode_agent_tool_completed(
     )
 
 
-def _decode_agent_error(task_id: str, payload: dict[str, Any]) -> Event:
-    return AgentErrorEvent(
+def _decode_task_error(task_id: str, payload: dict[str, Any]) -> Event:
+    step = payload.get("step")
+    if step is not None and (isinstance(step, bool) or not isinstance(step, int)):
+        raise ReplayFormatError("payload.step must be an integer or null")
+    return TaskErrorEvent(
         task_id=task_id,
-        step=_require_int(payload, "step"),
+        fatal=_require_bool(payload, "fatal"),
+        code=_require_str(payload, "code"),
+        step=step,
         error_type=_require_str(payload, "error_type"),
         error_message=_require_str(payload, "error_message"),
+    )
+
+
+def _decode_blackboard_compacted(
+    task_id: str, payload: dict[str, Any]
+) -> Event:
+    return BlackboardCompactedEvent(
+        task_id=task_id,
+        before_tokens=_require_int(payload, "before_tokens"),
+        after_tokens=_require_int(payload, "after_tokens"),
     )
 
 

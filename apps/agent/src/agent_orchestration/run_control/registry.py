@@ -7,17 +7,25 @@ from apps.agent.src.agent_orchestration.run_control.types import TaskOperationRe
 
 
 class TaskChannelRegistry:
-    def __init__(self, *, finished_task_limit: int = 1024) -> None:
+    def __init__(
+        self,
+        *,
+        finished_task_limit: int = 1024,
+        max_steps: int = 256,
+    ) -> None:
         if finished_task_limit < 0:
             raise ValueError("finished_task_limit cannot be negative")
+        if max_steps < 1:
+            raise ValueError("max_steps must be at least 1")
         self.finished_task_limit = finished_task_limit
+        self.max_steps = max_steps
         self._channels: dict[str, TaskChannel] = {}
         self._finished_run_ids: OrderedDict[str, str | None] = OrderedDict()
 
     def create(self, task_id: str) -> TaskChannel:
         if task_id in self._channels or task_id in self._finished_run_ids:
             raise ValueError(f"Task channel already exists: {task_id}")
-        channel = TaskChannel(task_id)
+        channel = TaskChannel(task_id, max_steps=self.max_steps)
         self._channels[task_id] = channel
         return channel
 

@@ -2,9 +2,12 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from apps.agent.src.model_config import ThinkMode
 from apps.agent.src.model_provider.impl.openai_llm import OpenAILLM
 from apps.agent.src.model_provider.types import (
+    ImageAssetUnavailableError,
     ImagePart,
     Message,
     TextPart,
@@ -31,6 +34,7 @@ def make_openai_llm():
     llm.max_tokens = 128
     llm.temperature = 0.2
     llm.reasoning_effort = ThinkMode.HIGH
+    llm._image_resolver = None
     llm._client = MagicMock()
     llm._async_client = MagicMock()
     return llm
@@ -118,6 +122,39 @@ def test_invoke_转换图片工具和完整响应():
     ]
     assert result.finish_reason == "tool_call"
     assert result.usage.total_tokens == 14
+
+
+def test_asset图片转换为data_url(tmp_path):
+    path = tmp_path / "asset.png"
+    path.write_bytes(b"png-data")
+    llm = make_openai_llm()
+    llm._image_resolver = lambda image: path
+
+    converted = llm._convert_message(
+        Message("user", [ImagePart("assets/a.png", "asset", "image/png")])
+    )
+
+    assert converted["content"][0]["image_url"]["url"] == (
+        "data:image/png;base64,cG5nLWRhdGE="
+    )
+
+
+def test_asset图片缺少resolver时明确失败():
+    llm = make_openai_llm()
+    with pytest.raises(ImageAssetUnavailableError, match="resolver"):
+        llm._convert_message(
+            Message("user", [ImagePart("assets/a.png", "asset")])
+        )
+
+
+def test_image_part兼容旧url关键字和二位置参数():
+    keyword = ImagePart(url="https://example.com/a.png")
+    positional = ImagePart("https://example.com/a.png", "image/png")
+
+    assert keyword.source == "https://example.com/a.png"
+    assert keyword.source_type == "url"
+    assert positional.source_type == "url"
+    assert positional.media_type == "image/png"
 
 
 def test_invoke_携带助手工具调用和工具结果历史():

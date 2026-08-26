@@ -30,6 +30,7 @@ def make_anthropic_llm():
     llm.max_tokens = 128
     llm.temperature = 0.2
     llm.thinking_budget = 1024
+    llm._image_resolver = None
     llm._client = MagicMock()
     llm._async_client = MagicMock()
     return llm
@@ -139,6 +140,26 @@ def test_invoke_转换系统图片工具和完整响应():
         ToolCall("tool_1", "get_weather", {"city": "Beijing"})
     ]
     assert result.finish_reason == "tool_call"
+
+
+def test_asset图片转换为base64_source(tmp_path):
+    path = tmp_path / "asset.png"
+    path.write_bytes(b"png-data")
+    llm = make_anthropic_llm()
+    llm._image_resolver = lambda image: path
+
+    converted = llm._convert_message(
+        Message("user", [ImagePart("assets/a.png", "asset", "image/png")])
+    )
+
+    assert converted["content"][0] == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "cG5nLWRhdGE=",
+        },
+    }
 
 
 def test_invoke_携带助手工具调用和工具结果历史():

@@ -1,12 +1,15 @@
+import base64
 import json
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from anthropic import Anthropic, AsyncAnthropic
 
 from apps.agent.src.model_provider.base_llm import BaseLLM
 from apps.agent.src.model_provider.types import (
     FinishReason,
+    ImageAssetUnavailableError,
     ImagePart,
     LLMResponse,
     LLMStreamChunk,
@@ -29,11 +32,13 @@ class AnthropicLLM(BaseLLM):
         base_url: str | None = None,
         temperature: float | None = None,
         thinking_budget: int = 1024,
+        image_resolver: Callable[[ImagePart], Path] | None = None,
     ) -> None:
         self.model_name = model_name
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.thinking_budget = thinking_budget
+        self._image_resolver = image_resolver
         self._client = Anthropic(api_key=api_key, base_url=base_url)
         self._async_client = AsyncAnthropic(api_key=api_key, base_url=base_url)
 
@@ -275,27 +280,49 @@ class AnthropicLLM(BaseLLM):
             )
         return {"role": message.role, "content": content}
 
-    @staticmethod
-    def _convert_content(message: Message) -> list[dict[str, Any]]:
+    def _convert_content(self, message: Message) -> list[dict[str, Any]]:
         content: list[dict[str, Any]] = []
         for part in message.content:
             if isinstance(part, TextPart):
                 content.append({"type": "text", "text": part.text})
             elif message.role == "user":
-                content.append(
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "url",
-                            "url": part.url,
-                        },
-                    }
-                )
+                content.append(self._convert_image(part))
             else:
                 raise ValueError(
                     f"Anthropic {message.role} message only supports text content",
                 )
         return content
+
+    def _convert_image(self, image: ImagePart) -> dict[str, Any]:
+        if image.source_type == "url":
+            return {
+                "type": "image",
+                "source": {"type": "url", "url": image.source},
+            }
+        if self._image_resolver is None:
+            raise ImageAssetUnavailableError(
+                "image asset resolver is unavailable"
+            )
+        path = self._image_resolver(image)
+        if image.media_type is None:
+            raise ImageAssetUnavailableError(
+                "image asset media type is unavailable"
+            )
+        media_type = image.media_type
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError as error:
+            raise ImageAssetUnavailableError(
+                "image asset is unavailable"
+            ) from error
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": encoded,
+            },
+        }
 
     @staticmethod
     def _text_content(message: Message) -> str:

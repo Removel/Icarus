@@ -5,17 +5,20 @@ from collections.abc import Mapping, Sequence
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
     AgentCompletedEvent,
-    AgentErrorEvent,
 )
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
 from apps.agent.src.model_config import LLMRole
 from apps.agent.src.agent_orchestration.plugins.blackboard.state import (
     BlackboardTaskState,
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
+    BlackboardCompactedEvent,
     BlackboardContextReadyEvent,
     ContextContributionEvent,
+)
+from apps.agent.src.agent_orchestration.plugins.blackboard.history_compactor import (
+    HistoryCompactor,
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard.prompt_composer import (
     BlackboardPromptComposer,
@@ -29,6 +32,7 @@ from apps.agent.src.model_provider.types import (
     Message,
     TextPart,
     ToolCall,
+    Usage,
 )
 
 
@@ -45,6 +49,8 @@ class BlackboardPlugin(BasePlugin):
         tools: list[str] | None = None,
         initial_messages: list[Message] | None = None,
         prompt_composer: BlackboardPromptComposer | None = None,
+        context_window: int | None = None,
+        history_compactor: HistoryCompactor | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.required_context_sources = frozenset(required_context_sources)
@@ -53,7 +59,10 @@ class BlackboardPlugin(BasePlugin):
         self.system_prompt = system_prompt
         self.tools = None if tools is None else list(tools)
         self.prompt_composer = prompt_composer or BlackboardPromptComposer()
+        self.context_window = context_window
+        self.history_compactor = history_compactor
         self._messages = list(initial_messages or [])
+        self._context_tokens: int | None = None
         self._tasks: dict[str, BlackboardTaskState] = {}
 
     async def consume(
@@ -83,12 +92,32 @@ class BlackboardPlugin(BasePlugin):
                         state,
                         event,
                     )
-                self._commit_task_messages(state, task_messages)
+                committed = self._commit_task_messages(state, task_messages)
+                await self._update_context_tokens(
+                    state.task_id,
+                    event.response.last_usage,
+                    committed,
+                )
                 state.agent_finished = True
-            elif isinstance(event, AgentErrorEvent):
+            elif isinstance(event, TaskErrorEvent) and event.fatal:
+                committed = self._commit_task_messages(
+                    state, event.task_messages
+                )
+                await self._update_context_tokens(
+                    state.task_id,
+                    event.last_usage,
+                    committed,
+                )
                 state.agent_finished = True
             elif isinstance(event, AgentCancelledEvent):
-                self._commit_task_messages(state, event.task_messages)
+                committed = self._commit_task_messages(
+                    state, event.task_messages
+                )
+                await self._update_context_tokens(
+                    state.task_id,
+                    event.last_usage,
+                    committed,
+                )
                 state.agent_finished = True
             self._remove_task_if_finished(state)
             return
@@ -121,8 +150,29 @@ class BlackboardPlugin(BasePlugin):
                     f"publisher={source_plugin_id}"
                 )
             state.contributions[source_plugin_id] = event
+            if (
+                event.status == "failed"
+                and source_plugin_id not in state.reported_context_errors
+            ):
+                state.reported_context_errors.add(source_plugin_id)
+                await self.publish(
+                    TaskErrorEvent(
+                        task_id=task_id,
+                        fatal=False,
+                        code="context_provider_failed",
+                        error_type="ContextProviderError",
+                        error_message=event.error or "context loading failed",
+                    )
+                )
             await self._publish_if_ready(state)
             return
+
+    def accepts_event(self, source_plugin_id: str, event: Event) -> bool:
+        if source_plugin_id == self.plugin_id:
+            return False
+        if isinstance(event, TaskErrorEvent):
+            return source_plugin_id == self.agent_plugin_id
+        return True
 
     def get_task_state(self, task_id: str) -> BlackboardTaskState:
         try:
@@ -143,6 +193,10 @@ class BlackboardPlugin(BasePlugin):
     def get_messages(self) -> list[Message]:
         return list(self._messages)
 
+    @property
+    def context_tokens(self) -> int | None:
+        return self._context_tokens
+
     async def restore_workspace_state(
         self, state: Mapping[str, object], *, state_version: int
     ) -> None:
@@ -157,14 +211,27 @@ class BlackboardPlugin(BasePlugin):
         if not isinstance(messages, list):
             raise ValueError("Blackboard session state requires messages")
         self._messages = [_deserialize_message(item) for item in messages]
+        context_tokens = state.get("context_tokens")
+        if context_tokens is not None and (
+            isinstance(context_tokens, bool)
+            or not isinstance(context_tokens, int)
+            or context_tokens < 0
+        ):
+            raise ValueError("Blackboard context_tokens must be non-negative")
+        self._context_tokens = context_tokens
 
     async def snapshot_workspace_state(self) -> Mapping[str, object] | None:
         return None
 
     async def snapshot_session_state(self) -> Mapping[str, object] | None:
         return {
-            "messages": [_serialize_message(item) for item in self._messages]
+            "messages": [_serialize_message(item) for item in self._messages],
+            "context_tokens": self._context_tokens,
         }
+
+    async def stop(self) -> None:
+        if self.history_compactor is not None:
+            await self.history_compactor.aclose()
 
     async def _publish_if_ready(self, state: BlackboardTaskState) -> None:
         if state.context_published or not state.is_context_ready(
@@ -174,6 +241,42 @@ class BlackboardPlugin(BasePlugin):
         user_input = state.user_input
         if user_input is None:
             return
+        if (
+            self.context_window is not None
+            and len(user_input.prompt.encode("utf-8"))
+            >= self.context_window * 4
+        ):
+            await self._fail_before_agent(
+                state,
+                code="input_too_long",
+                error_type="InputTooLongError",
+                message="input is too large for the configured context window",
+            )
+            return
+        if self._should_compact():
+            try:
+                assert self.history_compactor is not None
+                summary, usage = await self.history_compactor.compact(
+                    self.get_messages()
+                )
+            except Exception as error:
+                await self._fail_before_agent(
+                    state,
+                    code="compact_failed",
+                    error_type=type(error).__name__,
+                    message=str(error),
+                )
+                return
+            before_tokens = self._context_tokens
+            self._messages = [summary]
+            self._context_tokens = usage.output_tokens
+            await self.publish(
+                BlackboardCompactedEvent(
+                    task_id=state.task_id,
+                    before_tokens=before_tokens or 0,
+                    after_tokens=usage.output_tokens,
+                )
+            )
 
         context_blocks = [
             block
@@ -204,15 +307,66 @@ class BlackboardPlugin(BasePlugin):
         state.context_published = True
         await self.publish(context_event)
 
+    def _should_compact(self) -> bool:
+        return (
+            bool(self._messages)
+            and self.history_compactor is not None
+            and self.context_window is not None
+            and self._context_tokens is not None
+            and self._context_tokens >= self.context_window * 0.85
+        )
+
+    async def _fail_before_agent(
+        self,
+        state: BlackboardTaskState,
+        *,
+        code: str,
+        error_type: str,
+        message: str,
+    ) -> None:
+        state.context_published = True
+        state.agent_finished = True
+        await self.publish(
+            TaskErrorEvent(
+                task_id=state.task_id,
+                fatal=True,
+                code=code,
+                error_type=error_type,
+                error_message=message,
+            )
+        )
+
+    async def _update_context_tokens(
+        self,
+        task_id: str,
+        usage: Usage | None,
+        history_committed: bool,
+    ) -> None:
+        if not history_committed or self.context_window is None:
+            return
+        if usage is not None:
+            self._context_tokens = usage.total_tokens
+            return
+        await self.publish(
+            TaskErrorEvent(
+                task_id=task_id,
+                fatal=False,
+                code="usage_unavailable",
+                error_type="UsageUnavailableError",
+                error_message="model response did not include usage",
+            )
+        )
+
     def _commit_task_messages(
         self,
         state: BlackboardTaskState,
         messages: Sequence[Message],
-    ) -> None:
+    ) -> bool:
         if state.history_committed or not messages:
-            return
+            return False
         self._messages.extend(messages)
         state.history_committed = True
+        return True
 
     @staticmethod
     def _fallback_completed_messages(
@@ -252,7 +406,8 @@ def _serialize_message(message: Message) -> dict[str, object]:
             content.append(
                 {
                     "type": "image",
-                    "url": part.url,
+                    "source": part.source,
+                    "source_type": part.source_type,
                     "media_type": part.media_type,
                 }
             )
@@ -287,10 +442,15 @@ def _deserialize_message(value: object) -> Message:
         if part.get("type") == "text":
             content.append(TextPart(str(part.get("text", ""))))
         elif part.get("type") == "image":
+            source = part.get("source", part.get("url", ""))
+            source_type = part.get("source_type", "url")
+            if source_type not in {"url", "asset"}:
+                raise ValueError("Blackboard image source type is invalid")
             content.append(
                 ImagePart(
-                    str(part.get("url", "")),
-                    (
+                    source=str(source),
+                    source_type=source_type,
+                    media_type=(
                         str(part["media_type"])
                         if part.get("media_type") is not None
                         else None

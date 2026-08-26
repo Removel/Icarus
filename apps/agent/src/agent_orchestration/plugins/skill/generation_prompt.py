@@ -181,9 +181,15 @@ def _serialize_content_part(part: Any) -> dict[str, Any]:
     if isinstance(part, TextPart):
         return {"type": "text", "text": part.text}
     if isinstance(part, ImagePart):
+        source = (
+            _strip_url_credentials(part.source)
+            if part.source_type == "url"
+            else part.source
+        )
         return {
             "type": "image",
-            "url": _strip_url_credentials(part.url),
+            "source": source,
+            "source_type": part.source_type,
             "media_type": part.media_type,
         }
     raise TypeError(f"unsupported Message content part: {type(part).__name__}")

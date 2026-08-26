@@ -14,7 +14,7 @@ from apps.agent.src.agent_orchestration.run_control.types import (
     TaskChannelStatus,
     TaskOperationResult,
 )
-from apps.agent.src.model_provider.types import Message, TextPart
+from apps.agent.src.model_provider.types import Message, TextPart, Usage
 
 
 class AgentRunCancelled(asyncio.CancelledError):
@@ -25,19 +25,35 @@ class AgentRunCancelled(asyncio.CancelledError):
         self.reason = reason
 
 
+class MaxStepsExceededError(RuntimeError):
+    """Harness 在准备启动超出上限的模型 Step 时发出。"""
+
+    def __init__(self, max_steps: int, attempted_step: int) -> None:
+        super().__init__(
+            f"agent run exceeded max_steps={max_steps} "
+            f"before step={attempted_step}"
+        )
+        self.max_steps = max_steps
+        self.attempted_step = attempted_step
+
+
 class TaskChannel:
     """Task 从接受到终态期间唯一的运行控制状态。"""
 
-    def __init__(self, task_id: str) -> None:
+    def __init__(self, task_id: str, *, max_steps: int = 256) -> None:
         if not task_id.strip():
             raise ValueError("task_id cannot be empty")
+        if max_steps < 1:
+            raise ValueError("max_steps must be at least 1")
         self.task_id = task_id
+        self.max_steps = max_steps
         self._lock = RLock()
         self._status = TaskChannelStatus.ACCEPTED
         self._run_id: str | None = None
         self._context_records: deque[RuntimeContextRecord] = deque()
         self._applied_batches: list[AppliedContextBatch] = []
         self._history_checkpoint: tuple[Message, ...] = ()
+        self._history_checkpoint_usage: Usage | None = None
         self._cancel_requested = asyncio.Event()
         self._cancel_reason: str | None = None
         self._current_step = 0
@@ -73,6 +89,11 @@ class TaskChannel:
     def history_checkpoint(self) -> tuple[Message, ...]:
         with self._lock:
             return tuple(deepcopy(self._history_checkpoint))
+
+    @property
+    def history_checkpoint_usage(self) -> Usage | None:
+        with self._lock:
+            return self._history_checkpoint_usage
 
     def mark_preparing_context(self) -> bool:
         with self._lock:
@@ -133,6 +154,10 @@ class TaskChannel:
         if self._cancel_requested.is_set():
             raise AgentRunCancelled(self.cancel_reason)
 
+    def raise_if_step_exceeded(self, step: int) -> None:
+        if step > self.max_steps:
+            raise MaxStepsExceededError(self.max_steps, step)
+
     async def wait_cancel_requested(self) -> None:
         await self._cancel_requested.wait()
 
@@ -140,11 +165,16 @@ class TaskChannel:
         with self._lock:
             self._current_step = step
 
-    def checkpoint_history(self, messages: Sequence[Message]) -> None:
+    def checkpoint_history(
+        self,
+        messages: Sequence[Message],
+        last_usage: Usage | None = None,
+    ) -> None:
         with self._lock:
             if self._status != TaskChannelStatus.RUNNING:
                 return
             self._history_checkpoint = tuple(deepcopy(list(messages)))
+            self._history_checkpoint_usage = last_usage
 
     def drain_context(self, *, applied_before_step: int) -> AppliedContextBatch | None:
         with self._lock:

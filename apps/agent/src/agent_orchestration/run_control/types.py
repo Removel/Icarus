@@ -6,7 +6,7 @@ from enum import Enum
 from collections.abc import Sequence
 from typing import Literal, Protocol, TypeAlias
 
-from apps.agent.src.model_provider.types import Message
+from apps.agent.src.model_provider.types import Message, Usage
 
 
 class TaskChannelStatus(str, Enum):
@@ -69,13 +69,24 @@ class AgentRunControl(Protocol):
     def history_checkpoint(self) -> tuple[Message, ...]:
         ...
 
+    @property
+    def history_checkpoint_usage(self) -> Usage | None:
+        ...
+
+    def raise_if_step_exceeded(self, step: int) -> None:
+        ...
+
     def mark_step(self, step: int) -> None:
         ...
 
     def raise_if_cancelled(self) -> None:
         ...
 
-    def checkpoint_history(self, messages: Sequence[Message]) -> None:
+    def checkpoint_history(
+        self,
+        messages: Sequence[Message],
+        last_usage: Usage | None = None,
+    ) -> None:
         ...
 
     def drain_context(

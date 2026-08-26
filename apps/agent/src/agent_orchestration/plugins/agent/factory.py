@@ -5,6 +5,13 @@ from apps.agent.src.agent_orchestration.plugin_runtime import (
     ProvidedCapability,
 )
 from apps.agent.src.agent_orchestration.plugins.agent.plugin import AgentPlugin
+from apps.agent.src.agent_orchestration.plugins.persistence.runtime import (
+    PersistenceRuntime,
+    PersistenceSession,
+)
+from apps.agent.src.agent_orchestration.plugins.persistence.session_identity import (
+    SessionIdentity,
+)
 from apps.agent.src.agent_orchestration.run_control import TaskChannelRegistry
 from apps.agent.src.agent_orchestration.tools import ToolRegistry
 from apps.agent.src.model_config import ConfigModel
@@ -14,7 +21,7 @@ def create_plugin(
     plugin_id, workspace_path, session_id, config, required_capabilities,
     logger,
 ):
-    del workspace_path, session_id, required_capabilities, logger
+    del logger
     hook_registry = config.get("hook_registry")
     if hook_registry is None:
         raise ValueError("agent config requires hook_registry")
@@ -24,13 +31,23 @@ def create_plugin(
     tool_registry = config.get("tool_registry")
     if not isinstance(tool_registry, ToolRegistry):
         raise ValueError("agent config requires tool_registry")
+    persistence_runtime = required_capabilities[("persistence", "runtime")]
+    identity = required_capabilities[("persistence", "session")]
+    if not isinstance(persistence_runtime, PersistenceRuntime):
+        raise ValueError("agent requires persistence runtime")
+    if not isinstance(identity, SessionIdentity):
+        raise ValueError("agent requires persistence session")
+    session = PersistenceSession(persistence_runtime, identity)
     agent_factory = AgentFactory(
         config=config_model,
         tool_registry=tool_registry,
         hook_registry=hook_registry,
         register_builtin_tools=False,
+        image_resolver=session.resolve_image,
     )
-    task_channels = config.get("task_channels") or TaskChannelRegistry()
+    task_channels = config.get("task_channels") or TaskChannelRegistry(
+        max_steps=config_model.agent.max_steps
+    )
     try:
         plugin = AgentPlugin(
             plugin_id,

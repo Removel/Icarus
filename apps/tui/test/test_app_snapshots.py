@@ -6,11 +6,11 @@ import asyncio
 from collections.abc import Callable
 
 from apps.agent.src.agent_orchestration.capability import (
-    AgentErrorEvent,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
+from apps.agent.src.agent_orchestration.events import TaskErrorEvent
 from apps.agent.src.agent_orchestration.plugins import (
     InputAccepted,
     InputFinishedEvent,
@@ -412,8 +412,10 @@ def test_snapshot_tool_failure_and_agent_error(snap_compare):
         publish(
             pilot,
             "agent",
-            AgentErrorEvent(
+            TaskErrorEvent(
                 task_id="task-1",
+                fatal=True,
+                code="agent_run_failed",
                 step=1,
                 error_type="ToolExecutionError",
                 error_message="Could not read settings.json",

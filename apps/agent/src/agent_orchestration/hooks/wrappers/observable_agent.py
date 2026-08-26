@@ -1,11 +1,11 @@
 """BaseAgent 的透明观测包装器。"""
 
 from collections.abc import AsyncIterator, Iterator
+import traceback
 
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.capability.types import (
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentResponse,
 )
 from apps.agent.src.agent_orchestration.events import Event
@@ -142,7 +142,6 @@ class ObservableAgent(BaseAgent):
                     tools,
                 ),
             )
-            error_event_seen = False
             try:
                 for event in self._agent.stream(
                     system_prompt,
@@ -158,24 +157,13 @@ class ObservableAgent(BaseAgent):
                             "after",
                             {"response": event.response},
                         )
-                    elif isinstance(event, AgentErrorEvent):
-                        error_event_seen = True
-                        self._dispatcher.trigger(
-                            "agent.stream",
-                            "error",
-                            {
-                                "error_type": event.error_type,
-                                "error_message": event.error_message,
-                            },
-                        )
                     yield event
             except BaseException as error:
-                if not error_event_seen:
-                    self._dispatcher.trigger(
-                        "agent.stream",
-                        "error",
-                        self._base_error_data(error),
-                    )
+                self._dispatcher.trigger(
+                    "agent.stream",
+                    "error",
+                    self._base_error_data(error),
+                )
                 raise
 
     async def astream(
@@ -199,7 +187,6 @@ class ObservableAgent(BaseAgent):
                     tools,
                 ),
             )
-            error_event_seen = False
             try:
                 async for event in self._agent.astream(
                     system_prompt,
@@ -215,24 +202,13 @@ class ObservableAgent(BaseAgent):
                             "after",
                             {"response": event.response},
                         )
-                    elif isinstance(event, AgentErrorEvent):
-                        error_event_seen = True
-                        await self._dispatcher.atrigger(
-                            "agent.stream",
-                            "error",
-                            {
-                                "error_type": event.error_type,
-                                "error_message": event.error_message,
-                            },
-                        )
                     yield event
             except BaseException as error:
-                if not error_event_seen:
-                    await self._dispatcher.atrigger(
-                        "agent.stream",
-                        "error",
-                        self._base_error_data(error),
-                    )
+                await self._dispatcher.atrigger(
+                    "agent.stream",
+                    "error",
+                    self._base_error_data(error),
+                )
                 raise
 
     @staticmethod
@@ -256,6 +232,9 @@ class ObservableAgent(BaseAgent):
         return {
             "error_type": type(error).__name__,
             "error_message": str(error),
+            "traceback": "".join(
+                traceback.format_exception(type(error), error, error.__traceback__)
+            ),
         }
 
     @staticmethod
@@ -263,6 +242,9 @@ class ObservableAgent(BaseAgent):
         return {
             "error_type": type(error).__name__,
             "error_message": str(error),
+            "traceback": "".join(
+                traceback.format_exception(type(error), error, error.__traceback__)
+            ),
         }
 
     def _run_context(self, run_control: AgentRunControl | None):

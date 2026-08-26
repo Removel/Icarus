@@ -9,6 +9,7 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentTextDeltaEvent,
 )
 from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
+from apps.agent.src.agent_orchestration.events import TaskErrorEvent
 from apps.agent.src.agent_orchestration.run_control import (
     TaskCancelResultEvent,
     TaskContextInputEvent,
@@ -33,12 +34,13 @@ from apps.agent.src.model_config import (
     ModelSettings,
     ThinkMode,
 )
-from apps.agent.src.model_provider.types import Message, TextPart
+from apps.agent.src.model_provider.types import ImagePart, Message, TextPart
 
 
 def make_config(data_dir) -> ConfigModel:
     model = LLMConfig(
         model_name="test-model",
+        context_window=128000,
         max_tokens=1024,
         temperature=0,
         default_think_level=ThinkMode.LOW,
@@ -225,6 +227,7 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
         "user-input",
         "agent",
         "agent",
+        "blackboard",
         "user-input",
     ]
     assert isinstance(events[0][1], InputQueuedEvent)
@@ -232,8 +235,11 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
     assert isinstance(events[2][1], UserInputEvent)
     assert isinstance(events[3][1], AgentTextDeltaEvent)
     assert isinstance(events[4][1], AgentCompletedEvent)
-    assert isinstance(events[5][1], InputFinishedEvent)
-    assert events[5][1].status == "completed"
+    assert isinstance(events[5][1], TaskErrorEvent)
+    assert events[5][1].code == "usage_unavailable"
+    assert events[5][1].fatal is False
+    assert isinstance(events[6][1], InputFinishedEvent)
+    assert events[6][1].status == "completed"
     assert second_events == events
     assert service.is_running is False
     assert service.session_id is None
@@ -242,6 +248,46 @@ def test_runtime_service_组装固定session并转发完整任务事件(tmp_path
     assert generation_factory.closed is True
     assert "skill" in agent_subscribers
     assert skill_runtime.processed_count == 0
+
+
+def test_runtime_service本地图片在user_event前导入session_asset(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        service = AgentRuntimeService(
+            workspace_path=tmp_path,
+            session_id="image-session",
+            config=config,
+        )
+        agent = AgentStub()
+        source = tmp_path / "original.png"
+        source.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+        await service.start()
+        service.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda model_role: agent
+        )
+        subscription = service.subscribe_events()
+        accepted = await service.submit("describe", [source])
+        events = await collect_task_events(subscription, accepted.task_id)
+        trace_path = (
+            service.persistence.resolver.trace_file(
+                service.runtime_host.get_plugin("persistence").identity
+            )
+        )
+        subscription.close()
+        await service.stop(timeout=1)
+        return events, agent, trace_path.read_text(encoding="utf-8")
+
+    events, agent, trace = asyncio.run(run())
+    user_event = next(
+        event for _, event in events if isinstance(event, UserInputEvent)
+    )
+    assert len(user_event.input_images) == 1
+    image = user_event.input_images[0]
+    assert image.source_type == "asset"
+    assert image.source.startswith("assets/")
+    assert agent.calls[0]["input_images"] == [image]
+    assert str(tmp_path / "original.png") not in repr(events)
+    assert str(tmp_path / "original.png") not in trace
 
 
 def test_runtime_service由manifest生成冻结运行图并保存退出快照(tmp_path):

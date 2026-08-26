@@ -90,11 +90,15 @@ def create_default_projector_registry(
     """Create the explicit projector set for currently exported sources."""
 
     from apps.tui.src.event_pipeline.projectors.agent import AgentProjector
+    from apps.tui.src.event_pipeline.projectors.blackboard import (
+        BlackboardProjector,
+    )
     from apps.tui.src.event_pipeline.projectors.user_input import (
         UserInputProjector,
     )
 
     registry = ProjectorRegistry(logger=logger)
     registry.register("agent", AgentProjector())
+    registry.register("blackboard", BlackboardProjector())
     registry.register("user-input", UserInputProjector())
     return registry

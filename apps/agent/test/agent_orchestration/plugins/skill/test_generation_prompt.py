@@ -93,8 +93,9 @@ def test_evolve_prompt_includes_source_snapshot_and_image_metadata(tmp_path):
     image = result["conversation"][0]["content"][0]
     assert image == {
         "media_type": "image/png",
+        "source": "https://example.com/a.png",
+        "source_type": "url",
         "type": "image",
-        "url": "https://example.com/a.png",
     }
 
 

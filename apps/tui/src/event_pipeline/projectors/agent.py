@@ -4,18 +4,19 @@ import json
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
-    AppendError,
     AppendToolStarted,
     UiAction,
     UpdateToolCompleted,
+)
+from apps.tui.src.event_pipeline.projectors.task_error import (
+    project_task_error,
 )
 
 
@@ -64,13 +65,10 @@ class AgentProjector:
                 ),
             )
 
-        if isinstance(event, AgentErrorEvent):
-            return (
-                AppendError(
-                    task_id=task_id,
-                    error_type=event.error_type,
-                    message=event.error_message,
-                ),
+        if isinstance(event, TaskErrorEvent):
+            return project_task_error(
+                event,
+                hidden_codes=frozenset({"tool_execution_failed"}),
             )
 
         if isinstance(event, AgentCompletedEvent):

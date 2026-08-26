@@ -14,6 +14,7 @@ from apps.agent.src.model_provider.llm_factory import LLMFactory
 def make_config() -> ConfigModel:
     model = LLMConfig(
         model_name="test-model",
+        context_window=128000,
         max_tokens=4096,
         temperature=0.2,
         default_think_level=ThinkMode.MEDIUM,
