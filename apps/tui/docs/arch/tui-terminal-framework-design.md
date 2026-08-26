@@ -338,7 +338,7 @@ scrollback。
 | `AgentTextDeltaEvent` | 流式 Rich Markdown | 只展示模型可见文本 |
 | `AgentToolStartedEvent` | 工具名和紧凑参数摘要 | 先固化当前 Markdown |
 | `AgentToolCompletedEvent` | 成功或失败状态 | 默认不展开完整 ToolResult |
-| `AgentErrorEvent` | 明确错误摘要 | 先固化当前 Markdown |
+| `TaskErrorEvent` | 明确错误摘要 | Tool 普通失败不与 Tool 卡片重复显示 |
 | `InputQueuedEvent` | 当前任务已被 Runtime 接收 | 不代表 TUI 本地消息队列 |
 | `InputFinishedEvent` | 固化本轮；失败时显示任务失败 | 结束当前任务等待 |
 | 其他 Event | 默认不显示 | 可在未来 debug 模式扩展 |
@@ -385,7 +385,7 @@ capture cwd
 - 配置或 Service 启动失败：向 stderr 输出简洁错误并返回非零退出码；
 - 输入读取失败：结束当前 REPL，执行统一清理；
 - Event 消费失败：不继续假装当前任务完成，交给顶层错误路径；
-- `AgentErrorEvent`：展示错误，并继续等待对应 `InputFinishedEvent`；
+- `TaskErrorEvent`：展示错误；非致命错误不结束当前任务，致命错误继续等待对应 `InputFinishedEvent`；
 - Renderer 异常：固化可固化的 Live 区域后进入统一清理；
 - 输出订阅必须显式 `close()`；
 - Service 无论成功、EOF、异常还是中断都必须执行 `stop()`；

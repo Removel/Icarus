@@ -2,7 +2,8 @@
 
 > 状态说明：本文记录第二阶段最初的实施路径。工具轨迹来源现已修正为仅从
 > `AgentCompletedEvent.response.messages` 恢复；SkillPlugin 不再消费
-> `AgentToolStartedEvent`、`AgentToolCompletedEvent` 或 `AgentErrorEvent`。权威行为以
+> `AgentToolStartedEvent`、`AgentToolCompletedEvent` 或错误 Event。`AgentErrorEvent` 已被统一
+> `TaskErrorEvent` 替代。权威行为以
 > `apps/agent/docs/arch/skill-plugin-design.md` 为准，后续修正计划单独维护。
 
 ## 目标

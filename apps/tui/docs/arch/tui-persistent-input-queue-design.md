@@ -589,7 +589,7 @@ Worker 不直接修改 Widget 或按当时的 `active_task_id` 丢弃 Event；�
 | `agent` | `AgentTextDeltaEvent` | `AppendAssistantDelta` | 无 |
 | `agent` | `AgentToolStartedEvent` | `AppendToolStarted` | 结束当前 Markdown 段 |
 | `agent` | `AgentToolCompletedEvent` | `UpdateToolCompleted` | 结束当前 Markdown 段 |
-| `agent` | `AgentErrorEvent` | `AppendError` | 等待对应 InputFinished |
+| `agent` / `blackboard` / `user-input` | `TaskErrorEvent` | `AppendError`；Tool 普通失败去重 | fatal 时等待对应 InputFinished |
 | `agent` | `AgentCompletedEvent` | 默认不投影完整 Response | 等待 InputFinished |
 | 任意 | 未注册来源或未知 Event | 忽略并诊断 | 无 |
 

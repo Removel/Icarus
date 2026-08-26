@@ -21,7 +21,7 @@ AgentRuntimeService.submit
 → AgentPlugin 创建后台 asyncio.Task
 → ReActAgent.astream
 → LLM Step → Tool Batch → Tool Result → 下一 LLM Step
-→ AgentCompletedEvent / AgentErrorEvent
+→ AgentCompletedEvent / TaskErrorEvent
 → InputFinishedEvent
 ```
 
@@ -411,13 +411,14 @@ ACCEPTED → PREPARING_CONTEXT → RUNNING → COMPLETED
 首期新增终态：
 
 ```python
-AgentCancelledEvent(task_id, step, reason, task_messages)
+AgentCancelledEvent(task_id, step, reason, task_messages, last_usage)
 InputFinishedEvent(task_id, status="cancelled", run_id)
 ```
 
 `AgentCancelledEvent` 只描述已经启动的 Agent Run；上下文准备阶段被取消的 Task 没有 Agent Run，
-因此不伪造 AgentCancelledEvent，直接由 UserInputPlugin 发布 InputFinishedEvent。现有
-`AgentCompletedEvent` 和 `AgentErrorEvent` 保持各自语义。
+因此不伪造 AgentCancelledEvent，直接由 UserInputPlugin 发布 InputFinishedEvent。
+`AgentCompletedEvent` 表达正常完成；Task 内错误统一使用 `TaskErrorEvent`，并由 `fatal` 区分是否
+终止。
 
 已启动 Run 的 `AgentCancelledEvent.task_messages` 携带最近安全检查点。`InputFinishedEvent.run_id`
 用于让 Blackboard 在终态乱序时区分“Run 启动前取消”和“等待 AgentCancelledEvent 的运行中取消”。
@@ -468,7 +469,8 @@ InputFinishedEvent(task_id, status="cancelled", run_id)
 
 - 保持 Session History 所有权；
 - 成功时提交当前 Task 的完整 Message 链，包括 ToolCall 和 ToolResult；
-- 取消时提交最近的协议完整消息前缀；失败或 Run 启动前取消不提交；
+- 取消时提交最近的协议完整消息前缀；受控的最大 Step 截停也可提交安全检查点，其他失败和
+  Run 启动前取消不提交；
 - 不直接修改正在执行的 ReActAgent。
 
 ### Hook / Persistence
@@ -636,7 +638,7 @@ run_control/
 - 识别 AgentCancelledEvent 和 `InputFinishedEvent(status="cancelled")`；
 - 正常完成时提交 `AgentResponse.task_messages` 的完整 Tool 轨迹；
 - 取消时提交 AgentCancelledEvent 携带的最近安全消息前缀；
-- Run 启动前取消和失败 Task 不提交 Session History；
+- Run 启动前取消和普通失败 Task 不提交 Session History；最大 Step 截停提交明确携带的安全检查点；
 - 保留双终态乱序保护和历史提交幂等。
 
 BlackboardContextReadyEvent 无需重新加入原始 ContextBlock 或 Context Error。

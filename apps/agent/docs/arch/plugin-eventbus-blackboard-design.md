@@ -398,7 +398,8 @@ BlackboardPlugin 的状态分为两部分。
 - Agent 和 UserInput 两个终态事件是否均已到达。
 
 BlackboardPlugin 收到 AgentCompletedEvent 后，将本轮完整 Message 链写入跨轮上下文；收到
-AgentCancelledEvent 后写入最近的协议完整消息前缀；收到 AgentErrorEvent 时不写入失败任务。
+AgentCancelledEvent 后写入最近的协议完整消息前缀；收到 TaskErrorEvent 时仅在事件明确携带安全
+检查点时写入，否则不写入失败任务。
 Agent 与 UserInput 的终态事件都到达后，删除该轮临时组装状态。
 
 ### 生产
@@ -448,7 +449,7 @@ BlackboardPlugin 等待 UserInput 和全部固定来源返回后，只发布一�
 - Agent Stream Event 使用原始任务 task_id 回写 Blackboard；
 - AgentCompletedEvent 用于更新 Blackboard 的跨轮消息上下文；
 - AgentCancelledEvent 用于提交取消前的协议完整消息前缀；
-- AgentErrorEvent 用于结束失败任务，但失败任务不写入跨轮消息上下文；
+- TaskErrorEvent 用于统一表达致命与非致命错误；仅受控截停等明确携带安全检查点的失败写入历史；
 - InputFinishedEvent 与 Agent 终态事件共同触发本轮临时状态清理；
 - 不依赖 AgentCompletedEvent 与 InputFinishedEvent 的异步消费顺序。
 
@@ -495,7 +496,7 @@ AgentPlugin 可以生产：
 - AgentToolStartedEvent；
 - AgentToolCompletedEvent；
 - AgentCompletedEvent；
-- AgentErrorEvent。
+- TaskErrorEvent。
 
 未来如需额外 Agent 业务 Event，应由 AgentPlugin 或核心编排层生成，不污染 ReActAgent 能力内核。
 
@@ -532,7 +533,7 @@ InputQueuedEvent
 → UserInputEvent
 → BlackboardPlugin
 → AgentPlugin
-→ AgentCompletedEvent / AgentErrorEvent
+→ AgentCompletedEvent / TaskErrorEvent
 → InputFinishedEvent
 → 处理下一条输入
 ```
@@ -556,7 +557,7 @@ AgentTextDeltaEvent
 AgentToolStartedEvent
 AgentToolCompletedEvent
 AgentCompletedEvent
-AgentErrorEvent
+TaskErrorEvent
 ```
 
 过程中需要的更新由各领域 Plugin 自行消费和判断：
