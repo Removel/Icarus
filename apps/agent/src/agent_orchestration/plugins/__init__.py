@@ -4,6 +4,7 @@ from apps.agent.src.agent_orchestration.plugins.agent import (
     AgentPlugin,
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard import (
+    BlackboardCompactedEvent,
     BlackboardContextReadyEvent,
     BlackboardPlugin,
     ContextBlock,
@@ -24,6 +25,7 @@ from apps.agent.src.agent_orchestration.plugins.user_input import (
 __all__ = [
     "AgentPlugin",
     "BlackboardContextReadyEvent",
+    "BlackboardCompactedEvent",
     "BlackboardPlugin",
     "ContextBlock",
     "ContextContributionEvent",

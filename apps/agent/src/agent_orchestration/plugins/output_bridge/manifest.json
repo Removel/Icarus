@@ -15,11 +15,12 @@
     "apps.agent.src.agent_orchestration.plugins.user_input.events.InputStartedEvent",
     "apps.agent.src.agent_orchestration.plugins.user_input.events.UserInputEvent",
     "apps.agent.src.agent_orchestration.plugins.user_input.events.InputFinishedEvent",
+    "apps.agent.src.agent_orchestration.plugins.blackboard.events.BlackboardCompactedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentTextDeltaEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentToolStartedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentToolCompletedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCompletedEvent",
-    "apps.agent.src.agent_orchestration.capability.types.AgentErrorEvent",
+    "apps.agent.src.agent_orchestration.events.task_error.TaskErrorEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCancelledEvent",
     "apps.agent.src.agent_orchestration.run_control.events.TaskContextInputResultEvent",
     "apps.agent.src.agent_orchestration.run_control.events.TaskCancelResultEvent"

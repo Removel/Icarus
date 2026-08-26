@@ -1,11 +1,14 @@
 """Projection of public UserInputPlugin lifecycle events."""
 
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.plugins import (
     InputFinishedEvent,
     InputQueuedEvent,
     InputStartedEvent,
     UserInputEvent,
+)
+from apps.tui.src.event_pipeline.projectors.task_error import (
+    project_task_error,
 )
 from apps.tui.src.event_pipeline.actions import (
     FinishTurn,
@@ -45,5 +48,8 @@ class UserInputProjector:
 
         if isinstance(event, UserInputEvent):
             return ()
+
+        if isinstance(event, TaskErrorEvent):
+            return project_task_error(event)
 
         return None

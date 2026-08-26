@@ -15,7 +15,9 @@ class SameEventProjector:
 def test_default_registry只显式注册当前公开来源():
     registry = create_default_projector_registry()
 
-    assert registry.source_plugin_ids == frozenset({"agent", "user-input"})
+    assert registry.source_plugin_ids == frozenset(
+        {"agent", "blackboard", "user-input"}
+    )
 
 
 def test_dispatcher同时按来源和当前task过滤():

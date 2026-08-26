@@ -6,12 +6,12 @@ import pytest
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentResponse,
 )
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin, PluginManager
 from apps.agent.src.agent_orchestration.plugins import (
+    BlackboardCompactedEvent,
     BlackboardContextReadyEvent,
     BlackboardPlugin,
     ContextBlock,
@@ -19,7 +19,13 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputFinishedEvent,
     UserInputEvent,
 )
-from apps.agent.src.model_provider.types import Message, TextPart, ToolCall
+from apps.agent.src.model_provider.types import (
+    ImagePart,
+    Message,
+    TextPart,
+    ToolCall,
+    Usage,
+)
 
 
 class ProducerPlugin(BasePlugin):
@@ -68,6 +74,279 @@ class ReplyAgentPlugin(BasePlugin):
                 ),
             )
         )
+
+
+class CompactorStub:
+    def __init__(self, *, error=None):
+        self.error = error
+        self.calls = []
+        self.closed = False
+
+    async def compact(self, messages):
+        self.calls.append(messages)
+        if self.error is not None:
+            raise self.error
+        return (
+            Message(
+                "user",
+                [TextPart("<conversation_summary>\nsummary\n</conversation_summary>")],
+            ),
+            Usage(100, 20),
+        )
+
+    async def aclose(self):
+        self.closed = True
+
+
+def test_blackboard达到阈值只压缩旧历史再发布当前输入():
+    async def run():
+        old = Message("user", [TextPart("old history")])
+        compactor = CompactorStub()
+        plugin = BlackboardPlugin(
+            "blackboard",
+            required_context_sources=set(),
+            initial_messages=[old],
+            context_window=100,
+            history_compactor=compactor,
+        )
+        plugin._context_tokens = 85
+        events = []
+
+        async def publish(event):
+            events.append(event)
+
+        plugin.bind_publisher(publish)
+        await plugin.consume(
+            "user-input",
+            UserInputEvent(task_id="task-1", prompt="new input"),
+        )
+        return plugin, compactor, events
+
+    plugin, compactor, events = asyncio.run(run())
+
+    assert compactor.calls == [[Message("user", [TextPart("old history")])]]
+    assert isinstance(events[0], BlackboardCompactedEvent)
+    assert events[0].before_tokens == 85
+    assert events[0].after_tokens == 20
+    assert isinstance(events[1], BlackboardContextReadyEvent)
+    assert events[1].history_messages == plugin.get_messages()
+    assert "new input" not in repr(compactor.calls[0])
+    assert plugin.context_tokens == 20
+
+
+def test_blackboard低于阈值不压缩():
+    async def run():
+        compactor = CompactorStub()
+        plugin = BlackboardPlugin(
+            "blackboard",
+            required_context_sources=set(),
+            initial_messages=[Message("user", [TextPart("old")])],
+            context_window=100,
+            history_compactor=compactor,
+        )
+        plugin._context_tokens = 84
+        events = []
+
+        async def publish(event):
+            events.append(event)
+
+        plugin.bind_publisher(publish)
+        await plugin.consume(
+            "user-input",
+            UserInputEvent(task_id="task-1", prompt="new"),
+        )
+        return compactor, events
+
+    compactor, events = asyncio.run(run())
+    assert compactor.calls == []
+    assert len(events) == 1
+    assert isinstance(events[0], BlackboardContextReadyEvent)
+
+
+def test_blackboard拒绝自己发布的事件避免来源路由回环():
+    plugin = BlackboardPlugin("blackboard", required_context_sources=set())
+
+    assert plugin.accepts_event(
+        "blackboard",
+        BlackboardCompactedEvent(
+            task_id="task-1", before_tokens=90, after_tokens=10
+        ),
+    ) is False
+    assert plugin.accepts_event(
+        "blackboard",
+        TaskErrorEvent(
+            task_id="task-1",
+            fatal=True,
+            code="compact_failed",
+            error_type="RuntimeError",
+            error_message="failed",
+        ),
+    ) is False
+
+
+def test_blackboard_compact失败保留历史且不发布context():
+    async def run():
+        old = Message("user", [TextPart("old history")])
+        plugin = BlackboardPlugin(
+            "blackboard",
+            required_context_sources=set(),
+            initial_messages=[old],
+            context_window=100,
+            history_compactor=CompactorStub(error=RuntimeError("failed")),
+        )
+        plugin._context_tokens = 90
+        events = []
+
+        async def publish(event):
+            events.append(event)
+
+        plugin.bind_publisher(publish)
+        await plugin.consume(
+            "user-input",
+            UserInputEvent(task_id="task-1", prompt="new input"),
+        )
+        return plugin, events
+
+    plugin, events = asyncio.run(run())
+
+    assert plugin.get_messages() == [Message("user", [TextPart("old history")])]
+    assert plugin.context_tokens == 90
+    assert len(events) == 1
+    assert isinstance(events[0], TaskErrorEvent)
+    assert events[0].fatal is True
+    assert events[0].code == "compact_failed"
+
+
+def test_blackboard成功提交使用last_usage更新上下文标记():
+    async def run():
+        plugin = BlackboardPlugin(
+            "blackboard",
+            required_context_sources=set(),
+            context_window=100,
+        )
+        events = []
+
+        async def publish(event):
+            events.append(event)
+
+        plugin.bind_publisher(publish)
+        await plugin.consume(
+            "user-input",
+            UserInputEvent(task_id="task-1", prompt="hello"),
+        )
+        await plugin.consume(
+            "agent",
+            AgentCompletedEvent(
+                task_id="task-1",
+                step=1,
+                response=AgentResponse(
+                    message=Message("assistant", [TextPart("done")]),
+                    last_usage=Usage(70, 10),
+                    messages=[
+                        Message("user", [TextPart("hello")]),
+                        Message("assistant", [TextPart("done")]),
+                    ],
+                    task_message_start=0,
+                ),
+            ),
+        )
+        return plugin, events
+
+    plugin, events = asyncio.run(run())
+
+    assert plugin.context_tokens == 80
+    assert not any(
+        isinstance(event, TaskErrorEvent)
+        and event.code == "usage_unavailable"
+        for event in events
+    )
+
+
+def test_blackboard超长输入不启动agent():
+    async def run():
+        plugin = BlackboardPlugin(
+            "blackboard",
+            required_context_sources=set(),
+            context_window=2,
+        )
+        events = []
+
+        async def publish(event):
+            events.append(event)
+
+        plugin.bind_publisher(publish)
+        await plugin.consume(
+            "user-input",
+            UserInputEvent(task_id="task-1", prompt="12345678"),
+        )
+        return events
+
+    events = asyncio.run(run())
+    assert len(events) == 1
+    assert isinstance(events[0], TaskErrorEvent)
+    assert events[0].code == "input_too_long"
+    assert events[0].fatal is True
+
+
+def test_blackboard旧状态恢复时context_tokens默认为未知():
+    async def run():
+        plugin = BlackboardPlugin("blackboard", required_context_sources=set())
+        await plugin.restore_session_state(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "old"}],
+                        "tool_calls": [],
+                        "tool_call_id": None,
+                    }
+                ]
+            },
+            state_version=1,
+        )
+        return plugin, await plugin.snapshot_session_state()
+
+    plugin, snapshot = asyncio.run(run())
+    assert plugin.context_tokens is None
+    assert snapshot["context_tokens"] is None
+    assert plugin.get_messages() == [Message("user", [TextPart("old")])]
+
+
+def test_blackboard图片状态兼容旧url并写入稳定source字段():
+    async def run():
+        plugin = BlackboardPlugin("blackboard", required_context_sources=set())
+        await plugin.restore_session_state(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "url": "https://example.com/old.png",
+                                "media_type": "image/png",
+                            }
+                        ],
+                        "tool_calls": [],
+                        "tool_call_id": None,
+                    }
+                ]
+            },
+            state_version=1,
+        )
+        return plugin, await plugin.snapshot_session_state()
+
+    plugin, snapshot = asyncio.run(run())
+
+    assert plugin.get_messages()[0].content == [
+        ImagePart("https://example.com/old.png", media_type="image/png")
+    ]
+    assert snapshot["messages"][0]["content"][0] == {
+        "type": "image",
+        "source": "https://example.com/old.png",
+        "source_type": "url",
+        "media_type": "image/png",
+    }
 
 
 def test_blackboard_plugin_等待固定来源并只发布一次context():
@@ -172,8 +451,12 @@ def test_blackboard_plugin_失败来源计为完成并记录错误():
 
     events = asyncio.run(run())
 
-    assert len(events) == 1
-    context = events[0][1]
+    assert len(events) == 2
+    error = events[0][1]
+    assert isinstance(error, TaskErrorEvent)
+    assert error.code == "context_provider_failed"
+    assert error.fatal is False
+    context = events[1][1]
     assert context.input_prompt == (
         "<plugin_context_errors>\n"
         '{"memory":"timeout"}\n'
@@ -646,9 +929,12 @@ def test_blackboard_plugin_失败任务不写入跨轮消息():
         )
         await blackboard.consume(
             "agent",
-            AgentErrorEvent(
+            TaskErrorEvent(
                 task_id="task-1",
+                fatal=True,
+                code="agent_run_failed",
                 step=1,
+                run_id="run-1",
                 error_type="RuntimeError",
                 error_message="failed",
             ),

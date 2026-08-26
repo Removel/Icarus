@@ -5,6 +5,9 @@
     "allow_produce": false,
     "allow_evolve": false
   },
+  "agent": {
+    "max_steps": 256
+  },
   "runtime": {
     "plugin_dirs": [],
     "plugin_config": {},
@@ -21,12 +24,14 @@
   "model_settings": {
     "thinking": {
       "model_name": "deepseek-v4-pro",
+      "context_window": 1000000,
       "max_tokens": 4096,
       "temperature": 0.9,
       "default_think_level": "high"
-    },  
+    },
     "perception": {
       "model_name": "deepseek-v4-flash",
+      "context_window": 1000000,
       "max_tokens": 4096,
       "temperature": 0.6,
       "default_think_level": "high"

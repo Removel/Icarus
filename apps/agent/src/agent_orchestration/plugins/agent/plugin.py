@@ -10,9 +10,9 @@ from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
     AgentCompletedEvent,
-    AgentErrorEvent,
+    AgentToolCompletedEvent,
 )
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher, hook_context
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin
 from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
@@ -27,7 +27,9 @@ from apps.agent.src.agent_orchestration.run_control import (
     TaskContextInputEvent,
     TaskContextInputResultEvent,
     TaskOperationResult,
+    MaxStepsExceededError,
 )
+from apps.agent.src.model_provider.types import ImageAssetUnavailableError
 
 
 logger = logging.getLogger(__name__)
@@ -233,19 +235,30 @@ class AgentPlugin(BasePlugin):
                     if not channel.mark_completed():
                         channel.raise_if_cancelled()
                         return
-                elif isinstance(stream_event, AgentErrorEvent):
-                    if not channel.mark_failed():
-                        channel.raise_if_cancelled()
-                        return
                 await self._publish_run_event(
                     event.task_id,
                     channel,
                     replace(stream_event, task_id=event.task_id),
                 )
-                if isinstance(
-                    stream_event,
-                    (AgentCompletedEvent, AgentErrorEvent),
-                ):
+                if isinstance(stream_event, AgentToolCompletedEvent):
+                    if not stream_event.result.success:
+                        await self._publish_run_event(
+                            event.task_id,
+                            channel,
+                            TaskErrorEvent(
+                                task_id=event.task_id,
+                                fatal=False,
+                                code="tool_execution_failed",
+                                error_type="ToolExecutionError",
+                                error_message=(
+                                    stream_event.result.error
+                                    or "tool execution failed"
+                                ),
+                                step=stream_event.step,
+                                run_id=channel.run_id,
+                            ),
+                        )
+                if isinstance(stream_event, AgentCompletedEvent):
                     return
             raise RuntimeError("Agent stream ended without a terminal event")
         except asyncio.CancelledError:
@@ -259,20 +272,35 @@ class AgentPlugin(BasePlugin):
                             step=channel.current_step,
                             reason=channel.cancel_reason,
                             task_messages=channel.history_checkpoint,
+                            last_usage=channel.history_checkpoint_usage,
                         )
                     )
                 return
             raise
         except Exception as error:
             if channel.mark_failed():
+                code, message = self._error_details(error)
                 await self._publish_run_event(
                     event.task_id,
                     channel,
-                    AgentErrorEvent(
+                    TaskErrorEvent(
                         task_id=event.task_id,
+                        fatal=True,
+                        code=code,
                         step=channel.current_step,
+                        run_id=channel.run_id,
                         error_type=type(error).__name__,
-                        error_message=str(error),
+                        error_message=message,
+                        task_messages=(
+                            channel.history_checkpoint
+                            if code == "max_steps_exceeded"
+                            else ()
+                        ),
+                        last_usage=(
+                            channel.history_checkpoint_usage
+                            if code == "max_steps_exceeded"
+                            else None
+                        ),
                     )
                 )
                 return
@@ -286,12 +314,21 @@ class AgentPlugin(BasePlugin):
                             step=channel.current_step,
                             reason=channel.cancel_reason,
                             task_messages=channel.history_checkpoint,
+                            last_usage=channel.history_checkpoint_usage,
                         )
                     )
                 return
             raise
         finally:
             self._trace_applied_context(event.task_id, channel)
+
+    @staticmethod
+    def _error_details(error: Exception) -> tuple[str, str]:
+        if isinstance(error, MaxStepsExceededError):
+            return "max_steps_exceeded", str(error)
+        if isinstance(error, ImageAssetUnavailableError):
+            return "image_asset_unavailable", str(error)
+        return "agent_run_failed", str(error)
 
     def _trace_operation(
         self,

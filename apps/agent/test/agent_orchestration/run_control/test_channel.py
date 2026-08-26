@@ -4,11 +4,12 @@ import pytest
 
 from apps.agent.src.agent_orchestration.run_control import (
     AgentRunCancelled,
+    MaxStepsExceededError,
     TaskChannel,
     TaskChannelRegistry,
     TaskChannelStatus,
 )
-from apps.agent.src.model_provider.types import Message, TextPart
+from apps.agent.src.model_provider.types import Message, TextPart, Usage
 
 
 def test_task_channel按fifo合并补充信息():
@@ -151,3 +152,20 @@ def test_task_channel终态不能互相覆盖():
     assert cancelling.mark_completed() is False
     assert cancelling.mark_cancelled() is True
     assert cancelling.status == TaskChannelStatus.CANCELLED
+
+
+def test_task_channel保存usage并在第257步前截停():
+    channel = TaskChannel("task-1", max_steps=256)
+    channel.mark_preparing_context()
+    channel.start_run("run-1")
+    usage = Usage(10, 2)
+
+    channel.checkpoint_history(
+        [Message("user", [TextPart("hello")])], usage
+    )
+    channel.raise_if_step_exceeded(256)
+
+    assert channel.history_checkpoint_usage == usage
+    with pytest.raises(MaxStepsExceededError) as caught:
+        channel.raise_if_step_exceeded(257)
+    assert caught.value.attempted_step == 257

@@ -12,6 +12,7 @@ def model_settings():
     return {
         role: {
             "model_name": f"{role}-model",
+            "context_window": 128000,
             "max_tokens": 4096,
             "temperature": 0.2,
             "default_think_level": "medium",
@@ -61,6 +62,25 @@ def test_config_model_skill_permissions_default_disabled():
     )
     assert config.skill.allow_produce is False
     assert config.skill.allow_evolve is False
+    assert config.agent.max_steps == 256
+
+
+def test_config_model拒绝非法agent_step和context_window():
+    settings = model_settings()
+    settings["thinking"]["context_window"] = 0
+    with pytest.raises(pydantic.ValidationError, match="context_window"):
+        ConfigModel(
+            openai_base_url="https://openai.example.com/v1",
+            anthropic_base_url="https://anthropic.example.com",
+            model_settings=settings,
+        )
+    with pytest.raises(pydantic.ValidationError, match="max_steps"):
+        ConfigModel(
+            openai_base_url="https://openai.example.com/v1",
+            anthropic_base_url="https://anthropic.example.com",
+            agent={"max_steps": 0},
+            model_settings=model_settings(),
+        )
 
 
 @pytest.mark.parametrize("field", ["allow_produce", "allow_evolve"])

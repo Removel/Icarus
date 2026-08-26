@@ -1,3 +1,6 @@
+from pathlib import Path
+from typing import Callable
+
 from apps.agent.src.model_config import (
     ConfigModel,
     LLMProtocol,
@@ -6,6 +9,7 @@ from apps.agent.src.model_config import (
     get_config,
 )
 from apps.agent.src.model_provider.base_llm import BaseLLM
+from apps.agent.src.model_provider.types import ImagePart
 from apps.agent.src.model_provider.impl.anthropic_llm import AnthropicLLM
 from apps.agent.src.model_provider.impl.openai_llm import OpenAILLM
 
@@ -13,8 +17,13 @@ from apps.agent.src.model_provider.impl.openai_llm import OpenAILLM
 class LLMFactory:
     """根据协议创建持久化使用的 LLM 适配器。"""
 
-    def __init__(self, config: ConfigModel | None = None) -> None:
+    def __init__(
+        self,
+        config: ConfigModel | None = None,
+        image_resolver: Callable[[ImagePart], Path] | None = None,
+    ) -> None:
         self.config = config or get_config()
+        self.image_resolver = image_resolver
 
     def create_llm(
         self,
@@ -51,6 +60,7 @@ class LLMFactory:
                 max_tokens=selected_max_tokens,
                 temperature=selected_temperature,
                 reasoning_effort=selected_think_level,
+                image_resolver=self.image_resolver,
             )
         if selected_protocol == "anthropic":
             return AnthropicLLM(
@@ -62,5 +72,6 @@ class LLMFactory:
                 thinking_budget=(
                     thinking_budget if thinking_budget is not None else 1024
                 ),
+                image_resolver=self.image_resolver,
             )
         raise ValueError(f"Unsupported protocol: {selected_protocol}")

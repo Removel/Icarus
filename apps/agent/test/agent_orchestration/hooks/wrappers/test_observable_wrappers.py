@@ -329,3 +329,24 @@ def test_observable_agent使用业务run_id():
     agent.invoke("system", [], "hello", run_control=channel)
 
     assert {event.run_id for event in recorder.events} == {"business-run"}
+
+
+def test_observable_agent错误hook包含traceback但事件层不依赖异常():
+    class FailingAgent(StubAgent):
+        def invoke(self, *args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("broken")
+
+    registry = HookRegistry()
+    recorder = RecordingHook()
+    registry.register("*", recorder)
+    agent = ObservableAgent(FailingAgent(), HookDispatcher(registry))
+
+    try:
+        agent.invoke("", [], "hello")
+    except RuntimeError:
+        pass
+
+    error = next(event for event in recorder.events if event.phase == "error")
+    assert error.data["error_type"] == "RuntimeError"
+    assert "RuntimeError: broken" in error.data["traceback"]

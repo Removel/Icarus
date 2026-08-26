@@ -1,9 +1,11 @@
 """持久化与监测组件统一组装。"""
 
 from contextlib import contextmanager
+from hashlib import sha256
 import logging
 import os
 from pathlib import Path
+import tempfile
 from typing import Iterator
 
 from apps.agent.src.agent_orchestration.hooks.hook_context import hook_context
@@ -26,6 +28,22 @@ from apps.agent.src.agent_orchestration.plugins.persistence.trace_hook import (
 )
 from apps.agent.src.agent_orchestration.plugins.persistence.trace_writer import (
     FileTraceWriter,
+)
+from apps.agent.src.model_provider.types import (
+    ImageAssetUnavailableError,
+    ImagePart,
+)
+
+
+class ImageAssetError(ImageAssetUnavailableError):
+    """本地图片无法安全导入或解析。"""
+
+
+_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "image/png", "png"),
+    (b"\xff\xd8\xff", "image/jpeg", "jpg"),
+    (b"GIF87a", "image/gif", "gif"),
+    (b"GIF89a", "image/gif", "gif"),
 )
 
 
@@ -189,3 +207,63 @@ class PersistenceSession:
             run_id=None,
         ):
             yield self.identity
+
+    def import_image(self, path: str | Path) -> ImagePart:
+        source = Path(path).expanduser()
+        try:
+            data = source.read_bytes()
+        except OSError as error:
+            raise ImageAssetError("image file is unavailable") from error
+        media_type, extension = _detect_image_type(data)
+        assets_dir = self.runtime.resolver.assets_dir(self.identity)
+        assets_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        filename = f"{sha256(data).hexdigest()}.{extension}"
+        target = assets_dir / filename
+        if not target.exists():
+            temporary_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    dir=assets_dir,
+                    prefix=".image-",
+                    delete=False,
+                ) as temporary:
+                    temporary.write(data)
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                    temporary_path = Path(temporary.name)
+                temporary_path.replace(target)
+                target.chmod(0o600)
+            except OSError as error:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+                raise ImageAssetError("image asset could not be stored") from error
+        return ImagePart(
+            source=f"assets/{filename}",
+            source_type="asset",
+            media_type=media_type,
+        )
+
+    def resolve_image(self, image: ImagePart) -> Path:
+        if image.source_type != "asset":
+            raise ImageAssetError("image is not a session asset")
+        relative = Path(image.source)
+        if relative.is_absolute() or not relative.parts or relative.parts[0] != "assets":
+            raise ImageAssetError("image asset reference is invalid")
+        assets_dir = self.runtime.resolver.assets_dir(self.identity).resolve()
+        target = (self.runtime.resolver.session_dir(self.identity) / relative).resolve()
+        try:
+            target.relative_to(assets_dir)
+        except ValueError as error:
+            raise ImageAssetError("image asset reference escapes session") from error
+        if not target.is_file():
+            raise ImageAssetError("image asset is unavailable")
+        return target
+
+
+def _detect_image_type(data: bytes) -> tuple[str, str]:
+    for signature, media_type, extension in _IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return media_type, extension
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp", "webp"
+    raise ImageAssetError("unsupported image format")

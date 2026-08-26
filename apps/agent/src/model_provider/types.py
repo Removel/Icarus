@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 
+class ImageAssetUnavailableError(ValueError):
+    """Session Asset 无法解析为可读取图片。"""
+
+
 @dataclass(frozen=True)
 class TextPart:
     """消息中的文本内容。"""
@@ -11,12 +15,47 @@ class TextPart:
     text: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ImagePart:
-    """消息中的远程图片，目前仅支持 URL。"""
+    """消息中的远程图片或 Session Asset 引用。"""
 
-    url: str
+    source: str
+    source_type: Literal["url", "asset"] = "url"
     media_type: str | None = None
+
+    def __init__(
+        self,
+        source: str | None = None,
+        source_type: Literal["url", "asset"] | str = "url",
+        media_type: str | None = None,
+        *,
+        url: str | None = None,
+    ) -> None:
+        if source is None:
+            source = url
+        elif url is not None:
+            raise ValueError("image source and url cannot both be provided")
+        # 兼容旧的 ImagePart(url, media_type) 二位置参数。
+        if (
+            isinstance(source_type, str)
+            and source_type.startswith("image/")
+            and media_type is None
+        ):
+            media_type = source_type
+            source_type = "url"
+        if not source:
+            raise ValueError("image source cannot be empty")
+        if source_type not in {"url", "asset"}:
+            raise ValueError("image source_type must be url or asset")
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "source_type", source_type)
+        object.__setattr__(self, "media_type", media_type)
+
+    @property
+    def url(self) -> str:
+        """兼容只读取旧 URL 字段的调用方。"""
+
+        return self.source
 
 
 ContentPart: TypeAlias = TextPart | ImagePart

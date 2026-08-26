@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from apps.agent.src.agent_orchestration.plugins import (
+    BlackboardCompactedEvent,
     InputFinishedEvent,
     InputQueuedEvent,
 )
@@ -41,7 +42,7 @@ def test_load_replay按终态切分三轮并保留unrelated事件():
 )
 def test_decode_replay_record严格拒绝未知或缺失字段(change, message):
     record = {
-        "schema_version": 2,
+        "schema_version": 3,
         "source_plugin_id": "agent",
         "event_type": "agent_text_delta",
         "task_id": "task-1",
@@ -56,7 +57,7 @@ def test_decode_replay_record严格拒绝未知或缺失字段(change, message):
 def test_decode_replay_record支持cancelled终态():
     source, event = decode_replay_record(
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "source_plugin_id": "user-input",
             "event_type": "input_finished",
             "task_id": "task-1",
@@ -68,6 +69,27 @@ def test_decode_replay_record支持cancelled终态():
     assert isinstance(event, InputFinishedEvent)
     assert event.task_id == "task-1"
     assert event.status == "cancelled"
+
+
+def test_decode_replay_record支持blackboard_compact事件():
+    source, event = decode_replay_record(
+        {
+            "schema_version": 3,
+            "source_plugin_id": "blackboard",
+            "event_type": "blackboard_compacted",
+            "task_id": "task-1",
+            "payload": {"before_tokens": 900, "after_tokens": 100},
+        }
+    )
+
+    assert source == "blackboard"
+    assert event == BlackboardCompactedEvent(
+        task_id="task-1",
+        before_tokens=900,
+        after_tokens=100,
+        event_id=event.event_id,
+        occurred_at=event.occurred_at,
+    )
 
 
 def test_load_replay错误包含行号(tmp_path):

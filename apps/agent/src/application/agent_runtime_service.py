@@ -113,6 +113,8 @@ class AgentRuntimeService:
                     "system_prompt": self.system_prompt,
                     "tools": self.tools,
                     "initial_messages": self.initial_messages,
+                    "config_model": self.config,
+                    "hook_registry": self.hook_registry,
                 },
                 "output-bridge": {
                     **self.config.runtime.plugin_config.get(
@@ -175,7 +177,7 @@ class AgentRuntimeService:
     async def submit(
         self,
         prompt: str,
-        input_images: list[ImagePart] | None = None,
+        input_images: list[ImagePart | str | Path] | None = None,
     ) -> InputAccepted:
         if not self._started or self._user_input is None:
             raise RuntimeError("AgentRuntimeService is not running")

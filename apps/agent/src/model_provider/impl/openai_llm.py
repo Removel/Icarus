@@ -1,6 +1,8 @@
+import base64
 import json
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from openai import AsyncOpenAI, OpenAI
 
@@ -8,6 +10,7 @@ from apps.agent.src.model_config import ThinkMode
 from apps.agent.src.model_provider.base_llm import BaseLLM
 from apps.agent.src.model_provider.types import (
     FinishReason,
+    ImageAssetUnavailableError,
     ImagePart,
     LLMResponse,
     LLMStreamChunk,
@@ -30,11 +33,13 @@ class OpenAILLM(BaseLLM):
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ThinkMode | None = None,
+        image_resolver: Callable[[ImagePart], Path] | None = None,
     ) -> None:
         self.model_name = model_name
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.reasoning_effort = reasoning_effort
+        self._image_resolver = image_resolver
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._async_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
@@ -240,10 +245,31 @@ class OpenAILLM(BaseLLM):
                 content.append(
                     {
                         "type": "image_url",
-                        "image_url": {"url": part.url},
+                        "image_url": {"url": self._image_url(part)},
                     }
                 )
         return {"role": message.role, "content": content}
+
+    def _image_url(self, image: ImagePart) -> str:
+        if image.source_type == "url":
+            return image.source
+        if self._image_resolver is None:
+            raise ImageAssetUnavailableError(
+                "image asset resolver is unavailable"
+            )
+        path = self._image_resolver(image)
+        if image.media_type is None:
+            raise ImageAssetUnavailableError(
+                "image asset media type is unavailable"
+            )
+        media_type = image.media_type
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError as error:
+            raise ImageAssetUnavailableError(
+                "image asset is unavailable"
+            ) from error
+        return f"data:{media_type};base64,{encoded}"
 
     @staticmethod
     def _text_content(message: Message) -> str:

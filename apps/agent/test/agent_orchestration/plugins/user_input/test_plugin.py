@@ -6,12 +6,12 @@ import pytest
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentResponse,
 )
 from apps.agent.src.agent_orchestration.run_control import TaskChannelRegistry
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.plugin_runtime import BasePlugin, PluginManager
+from apps.agent.src.agent_orchestration.plugins.persistence import ImageAssetError
 from apps.agent.src.agent_orchestration.plugins import (
     InputFinishedEvent,
     InputQueuedEvent,
@@ -19,7 +19,7 @@ from apps.agent.src.agent_orchestration.plugins import (
     UserInputEvent,
     UserInputPlugin,
 )
-from apps.agent.src.model_provider.types import Message, TextPart
+from apps.agent.src.model_provider.types import ImagePart, Message, TextPart
 
 
 class SessionStub:
@@ -187,9 +187,12 @@ def test_user_input_plugin_完成或失败后开始下一条():
             == 2
         )
         await agent.publish(
-            AgentErrorEvent(
+            TaskErrorEvent(
                 task_id=second.task_id,
+                fatal=True,
+                code="agent_run_failed",
                 step=1,
+                run_id="run-2",
                 error_type="RuntimeError",
                 error_message="failed",
             )
@@ -336,3 +339,108 @@ def test_user_input_plugin运行阶段等待agent取消终态():
     assert [(event.task_id, event.status) for event in finished] == [
         (accepted.task_id, "cancelled")
     ]
+
+
+def test_user_input_plugin导入图片后只发布稳定引用(tmp_path):
+    class ImageSession(SessionStub):
+        def import_image(self, path):
+            assert path == tmp_path / "input.png"
+            return ImagePart("assets/hash.png", "asset", "image/png")
+
+    async def run():
+        manager = PluginManager()
+        channels = TaskChannelRegistry()
+        user_input = UserInputPlugin(
+            "user-input", ImageSession(), task_channels=channels
+        )
+        sink = SinkPlugin("sink")
+        agent = SinkPlugin("agent")
+        for plugin in (user_input, sink, agent):
+            manager.register(plugin)
+        manager.subscribe("sink", "user-input")
+        manager.subscribe("user-input", "agent")
+        await manager.start()
+        accepted = await user_input.submit(
+            "describe", [tmp_path / "input.png"]
+        )
+        await wait_until(
+            lambda: any(
+                isinstance(event, UserInputEvent)
+                for _, event in sink.received
+            )
+        )
+        await agent.publish(
+            AgentCompletedEvent(
+                task_id=accepted.task_id,
+                step=1,
+                response=AgentResponse(
+                    Message("assistant", [TextPart("done")])
+                ),
+            )
+        )
+        await user_input.drain()
+        await manager.stop(timeout=1)
+        return sink.received
+
+    events = asyncio.run(run())
+    user_event = next(
+        event for _, event in events if isinstance(event, UserInputEvent)
+    )
+    assert user_event.input_images == [
+        ImagePart("assets/hash.png", "asset", "image/png")
+    ]
+    assert str(tmp_path) not in repr(user_event)
+
+
+def test_user_input_plugin图片导入失败直接结束且不发布用户输入(tmp_path):
+    class FailingImageSession(SessionStub):
+        def import_image(self, path):
+            del path
+            raise ImageAssetError("image file is unavailable")
+
+    async def run():
+        manager = PluginManager()
+        channels = TaskChannelRegistry()
+        user_input = UserInputPlugin(
+            "user-input", FailingImageSession(), task_channels=channels
+        )
+        sink = SinkPlugin("sink")
+        for plugin in (user_input, sink):
+            manager.register(plugin)
+        manager.subscribe("sink", "user-input")
+        await manager.start()
+        accepted = await user_input.submit(
+            "describe", [tmp_path / "missing.png"]
+        )
+        await user_input.drain()
+        await manager.stop(timeout=1)
+        return accepted, sink.received
+
+    accepted, events = asyncio.run(run())
+    task_events = [
+        event for _, event in events if event.task_id == accepted.task_id
+    ]
+    assert [type(event) for event in task_events] == [
+        InputQueuedEvent,
+        InputStartedEvent,
+        TaskErrorEvent,
+        InputFinishedEvent,
+    ]
+    assert task_events[2].code == "image_import_failed"
+    assert task_events[3].status == "failed"
+    assert not any(isinstance(event, UserInputEvent) for event in task_events)
+
+
+def test_user_input_plugin错误事件只接受agent和blackboard来源():
+    plugin = UserInputPlugin("user-input", SessionStub())
+    error = TaskErrorEvent(
+        task_id="task-1",
+        fatal=True,
+        code="failed",
+        error_type="RuntimeError",
+        error_message="failed",
+    )
+
+    assert plugin.accepts_event("agent", error) is True
+    assert plugin.accepts_event("blackboard", error) is True
+    assert plugin.accepts_event("user-input", error) is False

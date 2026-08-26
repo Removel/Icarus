@@ -3,12 +3,12 @@ import asyncio
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentResponse,
     AgentTextDeltaEvent,
+    AgentToolCompletedEvent,
 )
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
-from apps.agent.src.agent_orchestration.events import Event
+from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.hooks import (
     BaseHook,
     HookDispatcher,
@@ -26,7 +26,14 @@ from apps.agent.src.agent_orchestration.run_control import (
     TaskContextInputEvent,
     TaskContextInputResultEvent,
 )
-from apps.agent.src.model_provider.types import Message, TextPart
+from apps.agent.src.model_provider.types import (
+    LLMResponse,
+    Message,
+    TextPart,
+    ToolCall,
+    Usage,
+)
+from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
 
 
 class StubAgent(BaseAgent):
@@ -418,9 +425,11 @@ def test_agent_plugin为直接异常发布failed终态():
         return events, channel
 
     events, channel = asyncio.run(run())
-    errors = [event for event in events if isinstance(event, AgentErrorEvent)]
+    errors = [event for event in events if isinstance(event, TaskErrorEvent)]
 
     assert len(errors) == 1
+    assert errors[0].fatal is True
+    assert errors[0].code == "agent_run_failed"
     assert errors[0].error_message == "agent exploded"
     assert channel.status.value == "failed"
 
@@ -431,11 +440,9 @@ def test_agent_plugin最终关闭后异常仍发布failed终态():
             del args, kwargs
             assert run_control is not None
             run_control.close_or_drain(applied_before_step=1)
-            yield AgentErrorEvent(
-                step=0,
-                error_type="RuntimeError",
-                error_message="too late",
-            )
+            raise RuntimeError("too late")
+            if False:
+                yield
 
     async def run():
         manager = PluginManager()
@@ -466,7 +473,118 @@ def test_agent_plugin最终关闭后异常仍发布failed终态():
 
     events, channel = asyncio.run(run())
 
-    errors = [event for event in events if isinstance(event, AgentErrorEvent)]
+    errors = [event for event in events if isinstance(event, TaskErrorEvent)]
     assert len(errors) == 1
     assert errors[0].error_message == "too late"
     assert channel.status.value == "failed"
+
+
+def test_agent_plugin最大step错误携带安全检查点():
+    class MaxStepAgent(StubAgent):
+        async def astream(self, *args, run_control=None, **kwargs):
+            del args, kwargs
+            assert run_control is not None
+            checkpoint = (
+                Message("user", [TextPart("work")]),
+                Message(
+                    "assistant",
+                    [],
+                    tool_calls=[ToolCall("call-1", "read", {})],
+                ),
+                Message("tool", [TextPart("{}")], tool_call_id="call-1"),
+            )
+            run_control.checkpoint_history(checkpoint, Usage(10, 2))
+            run_control.raise_if_step_exceeded(2)
+            if False:
+                yield
+
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        factory.agent = MaxStepAgent()
+        channels = TaskChannelRegistry(max_steps=1)
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+        await agent_plugin.consume(
+            "blackboard",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            ),
+        )
+        await agent_plugin.drain()
+        await manager.stop(timeout=1)
+        return sink.events
+
+    errors = [
+        event
+        for event in asyncio.run(run())
+        if isinstance(event, TaskErrorEvent)
+    ]
+    assert len(errors) == 1
+    assert errors[0].code == "max_steps_exceeded"
+    assert errors[0].last_usage == Usage(10, 2)
+    assert [message.role for message in errors[0].task_messages] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+
+
+def test_agent_plugin工具失败发布非致命错误但run仍完成():
+    class ToolFailureAgent(StubAgent):
+        async def astream(self, *args, **kwargs):
+            del args, kwargs
+            call = ToolCall("call-1", "read", {})
+            yield AgentToolCompletedEvent(
+                step=1,
+                tool_call=call,
+                result=ToolExecutionResult(False, error="not found"),
+            )
+            yield AgentCompletedEvent(
+                step=2,
+                response=AgentResponse(
+                    Message("assistant", [TextPart("recovered")])
+                ),
+            )
+
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        factory.agent = ToolFailureAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+        await agent_plugin.consume(
+            "blackboard",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            ),
+        )
+        await agent_plugin.drain()
+        await manager.stop(timeout=1)
+        return sink.events, channel
+
+    events, channel = asyncio.run(run())
+    errors = [event for event in events if isinstance(event, TaskErrorEvent)]
+    assert len(errors) == 1
+    assert errors[0].code == "tool_execution_failed"
+    assert errors[0].fatal is False
+    assert channel.status.value == "completed"

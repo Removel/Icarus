@@ -20,6 +20,7 @@ class BlackboardTaskState:
     history_committed: bool = False
     agent_finished: bool = False
     input_finished: bool = False
+    reported_context_errors: set[str] = field(default_factory=set)
 
     def is_context_ready(self, required_sources: frozenset[str]) -> bool:
         return (

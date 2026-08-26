@@ -11,6 +11,7 @@ from apps.agent.src.agent_orchestration.plugins.persistence.path_resolver import
 )
 from apps.agent.src.agent_orchestration.plugins.persistence.redactor import Redactor
 from apps.agent.src.agent_orchestration.plugins.persistence.runtime import (
+    ImageAssetError,
     PersistenceRuntime,
     PersistenceSession,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "DataPathResolver",
     "FileTraceHook",
     "FileTraceWriter",
+    "ImageAssetError",
     "MetadataStore",
     "PersistenceRuntime",
     "PersistencePlugin",

@@ -1,11 +1,11 @@
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentResponse,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
+from apps.agent.src.agent_orchestration.events import TaskErrorEvent
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
 from apps.agent.src.model_provider.types import Message, TextPart, ToolCall
@@ -98,8 +98,10 @@ def test_agent_projector映射错误并有意忽略completed与空delta():
     )
 
     assert projector.project(
-        AgentErrorEvent(
+        TaskErrorEvent(
             task_id="task-1",
+            fatal=True,
+            code="agent_run_failed",
             step=1,
             error_type="RuntimeError",
             error_message="broken",
@@ -120,3 +122,17 @@ def test_agent_projector映射错误并有意忽略completed与空delta():
         AgentTextDeltaEvent(task_id="task-1", step=1, text="")
     ) == ()
     assert projector.project(Event(task_id="task-1")) is None
+
+
+def test_agent_projector不重复显示tool失败错误事件():
+    projector = AgentProjector()
+
+    assert projector.project(
+        TaskErrorEvent(
+            task_id="task-1",
+            fatal=False,
+            code="tool_execution_failed",
+            error_type="ToolExecutionError",
+            error_message="failed",
+        )
+    ) == ()

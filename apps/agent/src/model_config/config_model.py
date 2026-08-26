@@ -15,6 +15,7 @@ class ThinkMode(str, enum.Enum):
 
 class LLMConfig(pydantic.BaseModel):
     model_name: str
+    context_window: int = pydantic.Field(gt=0)
     max_tokens: int
     temperature: float
     default_think_level: ThinkMode
@@ -28,6 +29,10 @@ class ModelSettings(pydantic.BaseModel):
 class SkillSettings(pydantic.BaseModel):
     allow_produce: StrictBool = False
     allow_evolve: StrictBool = False
+
+
+class AgentSettings(pydantic.BaseModel):
+    max_steps: int = pydantic.Field(default=256, ge=1)
 
 
 class RuntimeSettings(pydantic.BaseModel):
@@ -59,6 +64,7 @@ class ConfigModel(pydantic.BaseModel):
     anthropic_api_key: str = ""
     icarus_data_dir: Path | None = None
     skill: SkillSettings = pydantic.Field(default_factory=SkillSettings)
+    agent: AgentSettings = pydantic.Field(default_factory=AgentSettings)
     runtime: RuntimeSettings = pydantic.Field(default_factory=RuntimeSettings)
     model_settings: ModelSettings
     use_protocol: LLMProtocol = "openai"

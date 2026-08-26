@@ -5,7 +5,6 @@ import pytest
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
@@ -13,6 +12,7 @@ from apps.agent.src.agent_orchestration.capability import (
 )
 from apps.agent.src.agent_orchestration.run_control import (
     AgentRunCancelled,
+    MaxStepsExceededError,
     TaskChannel,
 )
 from apps.agent.src.agent_orchestration.tools import (
@@ -492,7 +492,7 @@ def test_astream最后一个tool完成事件可见时完整step已进入checkpoi
     ]
 
 
-def test_stream_先流出error再抛出原始异常():
+def test_stream_直接抛出原始异常由harness统一转换():
     class FailingLLM(StreamQueueLLM):
         def stream(self, messages, tools=None):
             yield LLMStreamChunk(text_delta="开始")
@@ -503,10 +503,44 @@ def test_stream_先流出error再抛出原始异常():
     generator = agent.stream("", [], "hello", tools=[])
 
     first = next(generator)
-    second = next(generator)
 
     assert isinstance(first, AgentTextDeltaEvent)
-    assert isinstance(second, AgentErrorEvent)
-    assert second.error_message == "stream failed"
     with pytest.raises(RuntimeError, match="stream failed"):
         next(generator)
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_stream和astream都在超出step上限前截停(async_mode):
+    channel = TaskChannel("task-1", max_steps=1)
+    channel.mark_preparing_context()
+    channel.start_run("run-1")
+    agent, llm = make_agent([tool_stream()])
+
+    if async_mode:
+        async def run():
+            with pytest.raises(MaxStepsExceededError):
+                async for _ in agent.astream(
+                    "",
+                    [],
+                    "hello",
+                    tools=["echo"],
+                    run_control=channel,
+                ):
+                    pass
+
+        asyncio.run(run())
+    else:
+        with pytest.raises(MaxStepsExceededError):
+            list(
+                agent.stream(
+                    "",
+                    [],
+                    "hello",
+                    tools=["echo"],
+                    run_control=channel,
+                )
+            )
+
+    assert len(llm.calls) == 1
+    assert channel.current_step == 1
+    assert channel.history_checkpoint_usage == Usage(10, 4)

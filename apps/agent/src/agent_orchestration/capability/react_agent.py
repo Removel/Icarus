@@ -2,12 +2,12 @@
 
 from collections.abc import AsyncIterator, Iterator
 from copy import deepcopy
+from dataclasses import dataclass, field
 import json
 
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.capability.types import (
     AgentCompletedEvent,
-    AgentErrorEvent,
     AgentResponse,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
@@ -29,6 +29,19 @@ from apps.agent.src.model_provider.types import (
     ToolDefinition,
     Usage,
 )
+
+
+@dataclass
+class _RunState:
+    messages: list[Message]
+    task_message_start: int
+    tool_executor: BaseToolExecutor
+    tool_definitions: list[ToolDefinition]
+    usage: Usage = field(default_factory=lambda: Usage(0, 0))
+    has_usage: bool = False
+    last_usage: Usage | None = None
+    reasoning_parts: list[str] = field(default_factory=list)
+    steps: int = 0
 
 
 class ReActAgent(BaseAgent):
@@ -57,78 +70,54 @@ class ReActAgent(BaseAgent):
         tools: list[str] | None = None,
         run_control: AgentRunControl | None = None,
     ) -> AgentResponse:
-        messages = self._build_messages(
+        state = self._create_run_state(
             system_prompt,
             history_messages,
             input_prompt,
             input_images,
+            tools,
         )
-        task_message_start = len(messages) - 1
-        tool_executor = self._tool_executor.snapshot(tools)
-        tool_definitions = tool_executor.definitions()
-        usage = Usage(input_tokens=0, output_tokens=0)
-        has_usage = False
-        reasoning_parts: list[str] = []
-        steps = 0
 
         while True:
-            self._prepare_step(
-                messages,
-                run_control,
-                steps + 1,
-                task_message_start,
+            self._begin_step(state, run_control)
+            response = self._llm.invoke(
+                state.messages, state.tool_definitions or None
             )
-            response = self._llm.invoke(messages, tool_definitions or None)
-            steps += 1
-            self._mark_step(run_control, steps)
-            messages.append(response.message)
-            usage, has_usage = self._add_usage(usage, has_usage, response)
-            if response.reasoning:
-                reasoning_parts.append(response.reasoning)
+            self._accept_response(state, response)
 
             if not response.message.tool_calls:
-                if not self._close_or_continue(messages, run_control, steps + 1):
+                if not self._close_or_continue(
+                    state.messages, run_control, state.steps + 1
+                ):
+                    self._checkpoint_state(state, run_control)
                     continue
-                self._checkpoint_history(
-                    messages,
-                    run_control,
-                    task_message_start,
-                )
-                return self._build_response(
-                    response,
-                    messages,
-                    reasoning_parts,
-                    usage if has_usage else None,
-                    steps,
-                    run_control,
-                    task_message_start,
-                )
+                self._checkpoint_state(state, run_control)
+                return self._build_response(response, state)
 
-            for batch in tool_executor.build_batches(
+            for batch in state.tool_executor.build_batches(
                 response.message.tool_calls
             ):
                 self._raise_if_cancelled(run_control)
                 execution = self._tool_execution(
-                    messages, run_control, steps, task_message_start
+                    state.messages,
+                    run_control,
+                    state.steps,
+                    state.task_message_start,
                 )
                 results_by_id = {
                     tool_call.id: result
-                    for tool_call, result in tool_executor.iter_completed(
+                    for tool_call, result in state.tool_executor.iter_completed(
                         batch, **execution
                     )
                 }
                 for tool_call in batch:
-                    messages.append(
+                    state.messages.append(
                         self._tool_result_message(
                             tool_call.id,
                             results_by_id[tool_call.id],
                         )
                     )
-            self._checkpoint_history(
-                messages,
-                run_control,
-                task_message_start,
-            )
+            self._checkpoint_state(state, run_control)
 
     async def ainvoke(
         self,
@@ -139,80 +128,54 @@ class ReActAgent(BaseAgent):
         tools: list[str] | None = None,
         run_control: AgentRunControl | None = None,
     ) -> AgentResponse:
-        messages = self._build_messages(
+        state = self._create_run_state(
             system_prompt,
             history_messages,
             input_prompt,
             input_images,
+            tools,
         )
-        task_message_start = len(messages) - 1
-        tool_executor = self._tool_executor.snapshot(tools)
-        tool_definitions = tool_executor.definitions()
-        usage = Usage(input_tokens=0, output_tokens=0)
-        has_usage = False
-        reasoning_parts: list[str] = []
-        steps = 0
 
         while True:
-            self._prepare_step(
-                messages,
-                run_control,
-                steps + 1,
-                task_message_start,
-            )
+            self._begin_step(state, run_control)
             response = await self._llm.ainvoke(
-                messages,
-                tool_definitions or None,
+                state.messages,
+                state.tool_definitions or None,
             )
-            steps += 1
-            self._mark_step(run_control, steps)
-            messages.append(response.message)
-            usage, has_usage = self._add_usage(usage, has_usage, response)
-            if response.reasoning:
-                reasoning_parts.append(response.reasoning)
+            self._accept_response(state, response)
 
             if not response.message.tool_calls:
-                if not self._close_or_continue(messages, run_control, steps + 1):
+                if not self._close_or_continue(
+                    state.messages, run_control, state.steps + 1
+                ):
+                    self._checkpoint_state(state, run_control)
                     continue
-                self._checkpoint_history(
-                    messages,
-                    run_control,
-                    task_message_start,
-                )
-                return self._build_response(
-                    response,
-                    messages,
-                    reasoning_parts,
-                    usage if has_usage else None,
-                    steps,
-                    run_control,
-                    task_message_start,
-                )
+                self._checkpoint_state(state, run_control)
+                return self._build_response(response, state)
 
-            for batch in tool_executor.build_batches(
+            for batch in state.tool_executor.build_batches(
                 response.message.tool_calls
             ):
                 self._raise_if_cancelled(run_control)
                 execution = self._tool_execution(
-                    messages, run_control, steps, task_message_start
+                    state.messages,
+                    run_control,
+                    state.steps,
+                    state.task_message_start,
                 )
                 results_by_id: dict[str, ToolExecutionResult] = {}
-                async for tool_call, result in tool_executor.aiter_completed(
+                async for tool_call, result in state.tool_executor.aiter_completed(
                     batch, **execution
                 ):
                     results_by_id[tool_call.id] = result
                 for tool_call in batch:
-                    messages.append(
+                    state.messages.append(
                         self._tool_result_message(
                             tool_call.id,
                             results_by_id[tool_call.id],
                         )
                     )
-            self._checkpoint_history(
-                messages,
-                run_control,
-                task_message_start,
-            )
+            self._checkpoint_state(state, run_control)
 
     def stream(
         self,
@@ -223,122 +186,85 @@ class ReActAgent(BaseAgent):
         tools: list[str] | None = None,
         run_control: AgentRunControl | None = None,
     ) -> Iterator[Event]:
-        messages = self._build_messages(
+        state = self._create_run_state(
             system_prompt,
             history_messages,
             input_prompt,
             input_images,
+            tools,
         )
-        task_message_start = len(messages) - 1
-        tool_executor = self._tool_executor.snapshot(tools)
-        tool_definitions = tool_executor.definitions()
-        usage = Usage(input_tokens=0, output_tokens=0)
-        has_usage = False
-        reasoning_parts: list[str] = []
-        steps = 0
 
-        try:
-            while True:
-                self._prepare_step(
-                    messages,
+        while True:
+            self._begin_step(state, run_control)
+            chunks: list[LLMStreamChunk] = []
+            for chunk in self._llm.stream(
+                state.messages,
+                state.tool_definitions or None,
+            ):
+                if chunk.text_delta:
+                    yield AgentTextDeltaEvent(
+                        step=state.steps,
+                        text=chunk.text_delta,
+                    )
+                chunks.append(chunk)
+
+            response = self._aggregate_stream_chunks(chunks)
+            self._accept_response(state, response)
+
+            if not response.message.tool_calls:
+                if not self._close_or_continue(
+                    state.messages,
                     run_control,
-                    steps + 1,
-                    task_message_start,
-                )
-                steps += 1
-                self._mark_step(run_control, steps)
-                chunks: list[LLMStreamChunk] = []
-                for chunk in self._llm.stream(
-                    messages,
-                    tool_definitions or None,
+                    state.steps + 1,
                 ):
-                    if chunk.text_delta:
-                        yield AgentTextDeltaEvent(
-                            step=steps,
-                            text=chunk.text_delta,
-                        )
-                    chunks.append(chunk)
-
-                response = self._aggregate_stream_chunks(chunks)
-                messages.append(response.message)
-                usage, has_usage = self._add_usage(usage, has_usage, response)
-                if response.reasoning:
-                    reasoning_parts.append(response.reasoning)
-
-                if not response.message.tool_calls:
-                    if not self._close_or_continue(
-                        messages,
-                        run_control,
-                        steps + 1,
-                    ):
-                        continue
-                    self._checkpoint_history(
-                        messages,
-                        run_control,
-                        task_message_start,
-                    )
-                    agent_response = self._build_response(
-                        response,
-                        messages,
-                        reasoning_parts,
-                        usage if has_usage else None,
-                        steps,
-                        run_control,
-                        task_message_start,
-                    )
-                    yield AgentCompletedEvent(
-                        step=steps,
-                        response=agent_response,
-                    )
-                    return
-
-                self._raise_if_cancelled(run_control)
-                batches = tool_executor.build_batches(
-                    response.message.tool_calls
+                    self._checkpoint_state(state, run_control)
+                    continue
+                self._checkpoint_state(state, run_control)
+                agent_response = self._build_response(response, state)
+                yield AgentCompletedEvent(
+                    step=state.steps,
+                    response=agent_response,
                 )
-                for batch_index, batch in enumerate(batches):
-                    self._raise_if_cancelled(run_control)
-                    for tool_call in batch:
-                        yield AgentToolStartedEvent(
-                            step=steps,
-                            tool_call=tool_call,
-                        )
+                return
 
-                    results_by_id: dict[str, ToolExecutionResult] = {}
-                    execution = self._tool_execution(
-                        messages, run_control, steps, task_message_start
-                    )
-                    for tool_call, result in tool_executor.iter_completed(
-                        batch, **execution
-                    ):
-                        results_by_id[tool_call.id] = result
-                        is_last_result = len(results_by_id) == len(batch)
-                        is_last_batch = batch_index == len(batches) - 1
-                        if is_last_result:
-                            self._append_tool_results(
-                                messages,
-                                batch,
-                                results_by_id,
-                            )
-                            if is_last_batch:
-                                self._checkpoint_history(
-                                    messages,
-                                    run_control,
-                                    task_message_start,
-                                )
-                        yield AgentToolCompletedEvent(
-                            step=steps,
-                            tool_call=tool_call,
-                            result=result,
-                        )
-
-        except Exception as error:
-            yield AgentErrorEvent(
-                step=steps,
-                error_type=type(error).__name__,
-                error_message=str(error),
+            self._raise_if_cancelled(run_control)
+            batches = state.tool_executor.build_batches(
+                response.message.tool_calls
             )
-            raise
+            for batch_index, batch in enumerate(batches):
+                self._raise_if_cancelled(run_control)
+                for tool_call in batch:
+                    yield AgentToolStartedEvent(
+                        step=state.steps,
+                        tool_call=tool_call,
+                    )
+
+                results_by_id: dict[str, ToolExecutionResult] = {}
+                execution = self._tool_execution(
+                    state.messages,
+                    run_control,
+                    state.steps,
+                    state.task_message_start,
+                )
+                for tool_call, result in state.tool_executor.iter_completed(
+                    batch, **execution
+                ):
+                    results_by_id[tool_call.id] = result
+                    is_last_result = len(results_by_id) == len(batch)
+                    is_last_batch = batch_index == len(batches) - 1
+                    if is_last_result:
+                        self._append_tool_results(
+                            state.messages,
+                            batch,
+                            results_by_id,
+                        )
+                        if is_last_batch:
+                            self._checkpoint_state(state, run_control)
+                    yield AgentToolCompletedEvent(
+                        step=state.steps,
+                        tool_call=tool_call,
+                        result=result,
+                    )
 
     async def astream(
         self,
@@ -349,122 +275,85 @@ class ReActAgent(BaseAgent):
         tools: list[str] | None = None,
         run_control: AgentRunControl | None = None,
     ) -> AsyncIterator[Event]:
-        messages = self._build_messages(
+        state = self._create_run_state(
             system_prompt,
             history_messages,
             input_prompt,
             input_images,
+            tools,
         )
-        task_message_start = len(messages) - 1
-        tool_executor = self._tool_executor.snapshot(tools)
-        tool_definitions = tool_executor.definitions()
-        usage = Usage(input_tokens=0, output_tokens=0)
-        has_usage = False
-        reasoning_parts: list[str] = []
-        steps = 0
 
-        try:
-            while True:
-                self._prepare_step(
-                    messages,
+        while True:
+            self._begin_step(state, run_control)
+            chunks: list[LLMStreamChunk] = []
+            async for chunk in self._llm.astream(
+                state.messages,
+                state.tool_definitions or None,
+            ):
+                if chunk.text_delta:
+                    yield AgentTextDeltaEvent(
+                        step=state.steps,
+                        text=chunk.text_delta,
+                    )
+                chunks.append(chunk)
+
+            response = self._aggregate_stream_chunks(chunks)
+            self._accept_response(state, response)
+
+            if not response.message.tool_calls:
+                if not self._close_or_continue(
+                    state.messages,
                     run_control,
-                    steps + 1,
-                    task_message_start,
-                )
-                steps += 1
-                self._mark_step(run_control, steps)
-                chunks: list[LLMStreamChunk] = []
-                async for chunk in self._llm.astream(
-                    messages,
-                    tool_definitions or None,
+                    state.steps + 1,
                 ):
-                    if chunk.text_delta:
-                        yield AgentTextDeltaEvent(
-                            step=steps,
-                            text=chunk.text_delta,
-                        )
-                    chunks.append(chunk)
-
-                response = self._aggregate_stream_chunks(chunks)
-                messages.append(response.message)
-                usage, has_usage = self._add_usage(usage, has_usage, response)
-                if response.reasoning:
-                    reasoning_parts.append(response.reasoning)
-
-                if not response.message.tool_calls:
-                    if not self._close_or_continue(
-                        messages,
-                        run_control,
-                        steps + 1,
-                    ):
-                        continue
-                    self._checkpoint_history(
-                        messages,
-                        run_control,
-                        task_message_start,
-                    )
-                    agent_response = self._build_response(
-                        response,
-                        messages,
-                        reasoning_parts,
-                        usage if has_usage else None,
-                        steps,
-                        run_control,
-                        task_message_start,
-                    )
-                    yield AgentCompletedEvent(
-                        step=steps,
-                        response=agent_response,
-                    )
-                    return
-
-                self._raise_if_cancelled(run_control)
-                batches = tool_executor.build_batches(
-                    response.message.tool_calls
+                    self._checkpoint_state(state, run_control)
+                    continue
+                self._checkpoint_state(state, run_control)
+                agent_response = self._build_response(response, state)
+                yield AgentCompletedEvent(
+                    step=state.steps,
+                    response=agent_response,
                 )
-                for batch_index, batch in enumerate(batches):
-                    self._raise_if_cancelled(run_control)
-                    for tool_call in batch:
-                        yield AgentToolStartedEvent(
-                            step=steps,
-                            tool_call=tool_call,
-                        )
+                return
 
-                    results_by_id: dict[str, ToolExecutionResult] = {}
-                    execution = self._tool_execution(
-                        messages, run_control, steps, task_message_start
-                    )
-                    async for tool_call, result in tool_executor.aiter_completed(
-                        batch, **execution
-                    ):
-                        results_by_id[tool_call.id] = result
-                        is_last_result = len(results_by_id) == len(batch)
-                        is_last_batch = batch_index == len(batches) - 1
-                        if is_last_result:
-                            self._append_tool_results(
-                                messages,
-                                batch,
-                                results_by_id,
-                            )
-                            if is_last_batch:
-                                self._checkpoint_history(
-                                    messages,
-                                    run_control,
-                                    task_message_start,
-                                )
-                        yield AgentToolCompletedEvent(
-                            step=steps,
-                            tool_call=tool_call,
-                            result=result,
-                        )
-
-        except Exception as error:
-            yield AgentErrorEvent(
-                step=steps,
-                error_type=type(error).__name__,
-                error_message=str(error),
+            self._raise_if_cancelled(run_control)
+            batches = state.tool_executor.build_batches(
+                response.message.tool_calls
             )
-            raise
+            for batch_index, batch in enumerate(batches):
+                self._raise_if_cancelled(run_control)
+                for tool_call in batch:
+                    yield AgentToolStartedEvent(
+                        step=state.steps,
+                        tool_call=tool_call,
+                    )
+
+                results_by_id: dict[str, ToolExecutionResult] = {}
+                execution = self._tool_execution(
+                    state.messages,
+                    run_control,
+                    state.steps,
+                    state.task_message_start,
+                )
+                async for tool_call, result in state.tool_executor.aiter_completed(
+                    batch, **execution
+                ):
+                    results_by_id[tool_call.id] = result
+                    is_last_result = len(results_by_id) == len(batch)
+                    is_last_batch = batch_index == len(batches) - 1
+                    if is_last_result:
+                        self._append_tool_results(
+                            state.messages,
+                            batch,
+                            results_by_id,
+                        )
+                        if is_last_batch:
+                            self._checkpoint_state(state, run_control)
+                    yield AgentToolCompletedEvent(
+                        step=state.steps,
+                        tool_call=tool_call,
+                        result=result,
+                    )
 
     @staticmethod
     def _build_messages(
@@ -480,6 +369,69 @@ class ReActAgent(BaseAgent):
         content = [TextPart(input_prompt), *(input_images or [])]
         messages.append(Message("user", content))
         return messages
+
+    def _create_run_state(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None,
+        tools: list[str] | None,
+    ) -> _RunState:
+        messages = self._build_messages(
+            system_prompt,
+            history_messages,
+            input_prompt,
+            input_images,
+        )
+        tool_executor = self._tool_executor.snapshot(tools)
+        return _RunState(
+            messages=messages,
+            task_message_start=len(messages) - 1,
+            tool_executor=tool_executor,
+            tool_definitions=tool_executor.definitions(),
+        )
+
+    @classmethod
+    def _begin_step(
+        cls,
+        state: _RunState,
+        run_control: AgentRunControl | None,
+    ) -> None:
+        cls._prepare_step(
+            state.messages,
+            run_control,
+            state.steps + 1,
+            state.task_message_start,
+            state.last_usage,
+        )
+        state.steps += 1
+        cls._mark_step(run_control, state.steps)
+
+    @staticmethod
+    def _accept_response(state: _RunState, response: LLMResponse) -> None:
+        state.messages.append(response.message)
+        state.usage, state.has_usage = ReActAgent._add_usage(
+            state.usage,
+            state.has_usage,
+            response,
+        )
+        state.last_usage = response.usage
+        if response.reasoning:
+            state.reasoning_parts.append(response.reasoning)
+
+    @classmethod
+    def _checkpoint_state(
+        cls,
+        state: _RunState,
+        run_control: AgentRunControl | None,
+    ) -> None:
+        cls._checkpoint_history(
+            state.messages,
+            run_control,
+            state.task_message_start,
+            state.last_usage,
+        )
 
     @staticmethod
     def _tool_execution(
@@ -554,21 +506,17 @@ class ReActAgent(BaseAgent):
     @staticmethod
     def _build_response(
         response: LLMResponse,
-        messages: list[Message],
-        reasoning_parts: list[str],
-        usage: Usage | None,
-        steps: int,
-        run_control: AgentRunControl | None,
-        task_message_start: int,
+        state: _RunState,
     ) -> AgentResponse:
         return AgentResponse(
             message=response.message,
-            reasoning="\n".join(reasoning_parts) or None,
-            usage=usage,
+            reasoning="\n".join(state.reasoning_parts) or None,
+            usage=state.usage if state.has_usage else None,
+            last_usage=state.last_usage,
             finish_reason=response.finish_reason,
-            steps=steps,
-            messages=list(messages),
-            task_message_start=task_message_start,
+            steps=state.steps,
+            messages=list(state.messages),
+            task_message_start=state.task_message_start,
         )
 
     @staticmethod
@@ -577,6 +525,7 @@ class ReActAgent(BaseAgent):
         run_control: AgentRunControl | None,
         step: int,
         task_message_start: int,
+        last_usage: Usage | None,
     ) -> None:
         if run_control is None:
             return
@@ -584,7 +533,11 @@ class ReActAgent(BaseAgent):
         batch = run_control.drain_context(applied_before_step=step)
         if batch is not None:
             messages.append(batch.message)
-        run_control.checkpoint_history(messages[task_message_start:])
+        run_control.checkpoint_history(
+            messages[task_message_start:],
+            last_usage,
+        )
+        run_control.raise_if_step_exceeded(step)
 
     @staticmethod
     def _close_or_continue(
@@ -610,9 +563,13 @@ class ReActAgent(BaseAgent):
         messages: list[Message],
         run_control: AgentRunControl | None,
         task_message_start: int,
+        last_usage: Usage | None,
     ) -> None:
         if run_control is not None:
-            run_control.checkpoint_history(messages[task_message_start:])
+            run_control.checkpoint_history(
+                messages[task_message_start:],
+                last_usage,
+            )
 
     @staticmethod
     def _raise_if_cancelled(run_control: AgentRunControl | None) -> None:

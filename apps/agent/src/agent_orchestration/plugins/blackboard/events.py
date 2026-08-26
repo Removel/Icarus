@@ -41,3 +41,9 @@ class BlackboardContextReadyEvent(Event):
     history_messages: list[Message] = field(default_factory=list)
     input_images: list[ImagePart] = field(default_factory=list)
     tools: list[str] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class BlackboardCompactedEvent(Event):
+    before_tokens: int
+    after_tokens: int

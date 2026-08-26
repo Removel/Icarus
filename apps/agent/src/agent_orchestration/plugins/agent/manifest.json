@@ -4,7 +4,10 @@
   "plugin_version": "1.0.0",
   "entrypoint": "apps.agent.src.agent_orchestration.plugins.agent.factory:create_plugin",
   "python_requires": [],
-  "required_capabilities": [],
+  "required_capabilities": [
+    {"plugin_id": "persistence", "capability_id": "runtime", "version_spec": ">=1,<2"},
+    {"plugin_id": "persistence", "capability_id": "session", "version_spec": ">=1,<2"}
+  ],
   "provided_capabilities": [
     {"capability_id": "task_control", "version": "1.0.0"},
     {"capability_id": "task_channels", "version": "1.0.0"}
@@ -15,7 +18,7 @@
     "apps.agent.src.agent_orchestration.capability.types.AgentToolStartedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentToolCompletedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCompletedEvent",
-    "apps.agent.src.agent_orchestration.capability.types.AgentErrorEvent",
+    "apps.agent.src.agent_orchestration.events.task_error.TaskErrorEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCancelledEvent",
     "apps.agent.src.agent_orchestration.run_control.events.TaskContextInputResultEvent",
     "apps.agent.src.agent_orchestration.run_control.events.TaskCancelResultEvent"

@@ -1,5 +1,8 @@
 """Agent 编排基础能力的统一组装入口。"""
 
+from pathlib import Path
+from typing import Callable
+
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.capability.react_agent import ReActAgent
 from apps.agent.src.agent_orchestration.hooks.hook_dispatcher import (
@@ -21,6 +24,7 @@ from apps.agent.src.agent_orchestration.tools.tool_registry import ToolRegistry
 from apps.agent.src.model_config import ConfigModel, LLMRole
 from apps.agent.src.model_provider.base_llm import BaseLLM
 from apps.agent.src.model_provider.llm_factory import LLMFactory
+from apps.agent.src.model_provider.types import ImagePart
 
 
 class AgentFactory:
@@ -33,8 +37,11 @@ class AgentFactory:
         tool_registry: ToolRegistry | None = None,
         hook_registry: HookRegistry | None = None,
         register_builtin_tools: bool = True,
+        image_resolver: Callable[[ImagePart], Path] | None = None,
     ) -> None:
-        self.llm_factory = llm_factory or LLMFactory(config=config)
+        self.llm_factory = llm_factory or LLMFactory(
+            config=config, image_resolver=image_resolver
+        )
         self.tool_registry = tool_registry or ToolRegistry()
         self.hook_registry = hook_registry or HookRegistry()
         self.hook_dispatcher = HookDispatcher(self.hook_registry)
