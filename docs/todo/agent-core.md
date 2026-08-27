@@ -190,3 +190,5 @@
 - [ ] 提供对话切换的应用层契约，处理运行中任务、状态保存、订阅/UI 投影切换和目标对话恢复；
   不把多对话管理职责塞进 Agent Kernel。
 - [ ] 在 TUI、GUI 和 WebUI 中展示 Token、Compact、图片与错误信息，并补齐产品端到端测试。
+  TUI 已接入 macOS `Ctrl+V` 图片输入并显示 `[#imageN]` 引用；图片历史展示、其他平台输入以及
+  Token、Compact 和错误信息展示仍待产品化。
