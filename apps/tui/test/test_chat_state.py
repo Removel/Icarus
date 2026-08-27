@@ -5,6 +5,7 @@ from apps.tui.src.chat_state import (
     InterruptAction,
     RuntimePhase,
 )
+from apps.tui.src.submission import DraftImage, PendingMessage
 
 
 def ready_state() -> ChatState:
@@ -28,13 +29,13 @@ def test_dispatch成功前保留队首并防止重复dispatch():
     state.enqueue("first")
     state.enqueue("second")
 
-    assert state.begin_dispatch() == "first"
+    assert state.begin_dispatch() == PendingMessage("first")
     assert state.pending_items == ("first", "second")
     assert state.begin_dispatch() is None
 
     accepted_message = state.accept_dispatch("task-1")
 
-    assert accepted_message == "first"
+    assert accepted_message == PendingMessage("first")
     assert state.pending_items == ("second",)
     assert state.active_task_id == "task-1"
     assert state.phase == RuntimePhase.RUNNING
@@ -62,9 +63,23 @@ def test正常消费FIFO且撤回LIFO并保留原文():
     state.enqueue(second)
 
     state.begin_dispatch()
-    assert state.accept_dispatch("task-1") == first
-    assert state.pop_pending_tail() == second
+    assert state.accept_dispatch("task-1") == PendingMessage(first)
+    assert state.pop_pending_tail() == PendingMessage(second)
     assert state.pending_items == ()
+
+
+def test图片附件随消息排队提交和撤回(tmp_path):
+    state = ready_state()
+    image = DraftImage("image1", tmp_path / "clipboard.png")
+    submission = PendingMessage("查看 [#image1]", (image,))
+    state.enqueue(submission)
+
+    assert state.pending_items == ("查看 [#image1]",)
+    assert state.pending_messages == (submission,)
+    assert state.begin_dispatch() is submission
+
+    state.fail_dispatch()
+    assert state.pop_pending_tail() is submission
 
 
 def test只有匹配当前task的终态能结束并恢复调度():

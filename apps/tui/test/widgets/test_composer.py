@@ -3,12 +3,15 @@ import asyncio
 from textual.app import App, ComposeResult
 
 from apps.tui.src.widgets.composer import PersistentComposer
+from apps.tui.src.submission import DraftImage, PendingMessage
 
 
 class ComposerTestApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.submissions = []
+        self.submission_records = []
+        self.image_paste_requests = 0
 
     def compose(self) -> ComposeResult:
         yield PersistentComposer(id="composer")
@@ -20,6 +23,13 @@ class ComposerTestApp(App):
         self, event: PersistentComposer.Submitted
     ) -> None:
         self.submissions.append(event.text)
+        self.submission_records.append(event.submission)
+
+    def on_persistent_composer_image_paste_requested(
+        self, event: PersistentComposer.ImagePasteRequested
+    ) -> None:
+        del event
+        self.image_paste_requests += 1
 
 
 def run_case(keys):
@@ -120,3 +130,81 @@ def test输入框从单行增长并在八行封顶():
     assert initial_height == 1
     assert three_line_height == 3
     assert capped_height == PersistentComposer.MAX_VISIBLE_LINES
+
+
+def test_attach_image在光标处插入marker并随提交发送(tmp_path):
+    async def run():
+        app = ComposerTestApp()
+        async with app.run_test() as pilot:
+            composer = app.query_one(PersistentComposer)
+            composer.load_text("比较 前 后")
+            composer.move_cursor((0, 3))
+            image = composer.attach_image(tmp_path / "first.png")
+            await pilot.pause()
+            draft = (composer.text, composer.cursor_location, composer.images)
+            await pilot.press("enter")
+            await pilot.pause()
+            return draft, image, app.submission_records, composer.has_draft
+
+    draft, image, submissions, has_draft = asyncio.run(run())
+
+    assert draft[0] == "比较 [#image1]前 后"
+    assert draft[1] == (0, 12)
+    assert draft[2] == (image,)
+    assert submissions == [PendingMessage(draft[0], (image,))]
+    assert has_draft is False
+
+
+def test提交按marker位置排序并忽略已删除图片(tmp_path):
+    async def run():
+        app = ComposerTestApp()
+        async with app.run_test() as pilot:
+            composer = app.query_one(PersistentComposer)
+            first = composer.attach_image(tmp_path / "first.png")
+            second = composer.attach_image(tmp_path / "second.png")
+            composer.load_text("[#image2] 重复 [#image2]，已删除第一张")
+            composer.move_cursor(composer.document.end)
+            await pilot.press("enter")
+            await pilot.pause()
+            return first, second, app.submission_records
+
+    first, second, submissions = asyncio.run(run())
+
+    assert first not in submissions[0].images
+    assert submissions[0].images == (second,)
+
+
+def test_restore_draft恢复附件并从最大编号继续(tmp_path):
+    async def run():
+        app = ComposerTestApp()
+        async with app.run_test() as pilot:
+            composer = app.query_one(PersistentComposer)
+            restored = PendingMessage(
+                "已有 [#image3]",
+                (
+                    DraftImage(
+                        "image3", tmp_path / "third.png"
+                    ),
+                ),
+            )
+            composer.restore_draft(restored)
+            attached = composer.attach_image(tmp_path / "fourth.png")
+            await pilot.pause()
+            return composer.text, composer.images, attached
+
+    text, images, attached = asyncio.run(run())
+
+    assert text.endswith("[#image4]")
+    assert [image.reference for image in images] == ["image3", "image4"]
+    assert attached.reference == "image4"
+
+
+def test_ctrl_v只发布图片粘贴请求():
+    async def run():
+        app = ComposerTestApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+v")
+            await pilot.pause()
+            return app.image_paste_requests
+
+    assert asyncio.run(run()) == 1

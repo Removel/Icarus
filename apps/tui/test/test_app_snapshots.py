@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentTextDeltaEvent,
@@ -26,6 +27,7 @@ from apps.tui.src.widgets import (
     AssistantMessage,
     ConversationView,
     ErrorMessage,
+    PersistentComposer,
     QueuePanel,
     ToolMessage,
     TurnStatusMessage,
@@ -65,6 +67,7 @@ class SnapshotService:
     def __init__(self) -> None:
         self.subscription = SnapshotSubscription()
         self.submissions: list[str] = []
+        self.submission_images: list[tuple[Path, ...]] = []
         self.started = False
 
     async def start(self) -> None:
@@ -76,9 +79,9 @@ class SnapshotService:
         return self.subscription
 
     async def submit(self, prompt: str, input_images=None) -> InputAccepted:
-        del input_images
         task_id = f"task-{len(self.submissions) + 1}"
         self.submissions.append(prompt)
+        self.submission_images.append(tuple(input_images or ()))
         return InputAccepted(task_id=task_id, queue_position=0)
 
     async def stop(self, timeout: float | None = 30) -> None:
@@ -248,6 +251,32 @@ def test_snapshot_short_initializing_with_queue(snap_compare):
     assert snap_compare(
         make_app(service),
         terminal_size=(58, 12),
+        run_before=prepare,
+    )
+
+
+def test_snapshot_image_markers_in_queue_and_draft(snap_compare, tmp_path):
+    service = BlockingSnapshotService()
+
+    async def prepare(pilot) -> None:
+        await service.start_entered.wait()
+        composer = pilot.app.query_one(PersistentComposer)
+        composer.load_text("比较这张图 ")
+        composer.move_cursor(composer.document.end)
+        composer.attach_image(tmp_path / "first.png")
+        await pilot.press("enter")
+        composer.load_text("继续参考 ")
+        composer.move_cursor(composer.document.end)
+        composer.attach_image(tmp_path / "second.png")
+        await wait_until(
+            pilot,
+            lambda: pilot.app.query_one(QueuePanel).items
+            == ("比较这张图 [#image1]",),
+        )
+
+    assert snap_compare(
+        make_app(service),
+        terminal_size=(80, 24),
         run_before=prepare,
     )
 

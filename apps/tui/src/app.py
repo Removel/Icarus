@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from functools import partial
 import logging
 from pathlib import Path
+import tempfile
 from typing import Any, Protocol
 
 from textual import events
@@ -18,6 +19,11 @@ from textual.message import Message
 from textual.widgets import Static
 from textual.worker import Worker, WorkerCancelled
 
+from apps.tui.src.clipboard import (
+    ClipboardImage,
+    ClipboardImageReadError,
+    read_clipboard_image,
+)
 from apps.tui.src.chat_state import (
     ChatState,
     InterruptAction,
@@ -160,6 +166,10 @@ class IcarusTextualApp(App[int]):
         self.subscription: RuntimeSubscription | None = None
         self._runtime_start_worker: Worker[Any] | None = None
         self._event_worker: Worker[Any] | None = None
+        self._clipboard_worker: Worker[Any] | None = None
+        self._clipboard_temp_directory: tempfile.TemporaryDirectory[
+            str
+        ] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._dispatch_scheduled = False
         self._accepting_input = True
@@ -328,7 +338,7 @@ class IcarusTextualApp(App[int]):
             return
 
         self._has_user_submission = True
-        self.chat_state.enqueue(message.text)
+        self.chat_state.enqueue(message.submission)
         if not await self._refresh_queue():
             return
         self._refresh_status()
@@ -340,10 +350,79 @@ class IcarusTextualApp(App[int]):
             )
         await self._dispatch_next()
 
+    def on_persistent_composer_image_paste_requested(
+        self, message: PersistentComposer.ImagePasteRequested
+    ) -> None:
+        del message
+        if not self._accepting_input:
+            return
+        worker = self._clipboard_worker
+        if worker is not None and not worker.is_finished:
+            return
+        self._clipboard_worker = self.run_worker(
+            self._paste_clipboard_image,
+            name="clipboard-image-paste",
+            group="clipboard",
+            exit_on_error=False,
+        )
+
+    async def _paste_clipboard_image(self) -> None:
+        try:
+            image = await asyncio.to_thread(read_clipboard_image)
+        except asyncio.CancelledError:
+            raise
+        except ClipboardImageReadError as error:
+            self._notify_image_paste_failure(error)
+            return
+        except Exception as error:
+            self._notify_image_paste_failure(error)
+            return
+
+        if not self._accepting_input:
+            return
+        composer = self.query_one(PersistentComposer)
+        if image is None:
+            composer.paste_text_from_clipboard()
+            return
+
+        try:
+            path = self._store_clipboard_image(image)
+            composer.attach_image(path)
+        except Exception as error:
+            self._notify_image_paste_failure(error)
+
+    def _store_clipboard_image(self, image: ClipboardImage) -> Path:
+        directory = self._clipboard_temp_directory
+        if directory is None:
+            directory = tempfile.TemporaryDirectory(
+                prefix="icarus-tui-clipboard-"
+            )
+            self._clipboard_temp_directory = directory
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix="image-",
+            suffix=f".{image.extension}",
+            dir=directory.name,
+            delete=False,
+        ) as file:
+            file.write(image.data)
+            path = Path(file.name)
+        path.chmod(0o600)
+        return path
+
+    def _notify_image_paste_failure(self, error: BaseException) -> None:
+        if not self._accepting_input:
+            return
+        self._safe_notify(
+            f"Unable to paste clipboard image: {error}",
+            title="Image paste failed",
+            severity="warning",
+        )
+
     async def _dispatch_next(self) -> None:
         self._dispatch_scheduled = False
-        prompt = self.chat_state.begin_dispatch()
-        if prompt is None:
+        submission = self.chat_state.begin_dispatch()
+        if submission is None:
             return
 
         self._refresh_status("Submitting queued message")
@@ -356,7 +435,10 @@ class IcarusTextualApp(App[int]):
             self._refresh_status(self._fatal_message)
             return
         try:
-            accepted = await service.submit(prompt=prompt)
+            accepted = await service.submit(
+                prompt=submission.model_prompt(),
+                input_images=list(submission.image_paths) or None,
+            )
         except asyncio.CancelledError:
             self.chat_state.fail_dispatch()
             raise
@@ -372,9 +454,11 @@ class IcarusTextualApp(App[int]):
             return
 
         try:
-            accepted_prompt = self.chat_state.accept_dispatch(accepted.task_id)
+            accepted_message = self.chat_state.accept_dispatch(
+                accepted.task_id
+            )
             await self.query_one(ConversationView).append_user_message(
-                accepted_prompt
+                accepted_message.text
             )
         except asyncio.CancelledError:
             raise
@@ -553,7 +637,7 @@ class IcarusTextualApp(App[int]):
         if not self._accepting_input:
             return
         composer = self.query_one(PersistentComposer)
-        action = self.chat_state.interrupt_action(composer.text)
+        action = self.chat_state.interrupt_action(composer.has_draft)
         if action == InterruptAction.CLEAR_DRAFT:
             composer.clear_draft()
             self._refresh_status("Draft cleared")
@@ -660,6 +744,19 @@ class IcarusTextualApp(App[int]):
     async def _release_runtime_resources(self) -> list[str]:
         errors: list[str] = []
 
+        clipboard_worker = self._clipboard_worker
+        self._clipboard_worker = None
+        if clipboard_worker is not None:
+            clipboard_worker.cancel()
+            try:
+                await clipboard_worker.wait()
+            except (asyncio.CancelledError, WorkerCancelled):
+                pass
+            except Exception as error:
+                errors.append(
+                    self._cleanup_error("clipboard worker", error)
+                )
+
         start_worker = self._runtime_start_worker
         self._runtime_start_worker = None
         if start_worker is not None:
@@ -699,6 +796,16 @@ class IcarusTextualApp(App[int]):
                 raise
             except Exception as error:
                 errors.append(self._cleanup_error("runtime stop", error))
+
+        clipboard_directory = self._clipboard_temp_directory
+        self._clipboard_temp_directory = None
+        if clipboard_directory is not None:
+            try:
+                clipboard_directory.cleanup()
+            except Exception as error:
+                errors.append(
+                    self._cleanup_error("clipboard files", error)
+                )
 
         return errors
 

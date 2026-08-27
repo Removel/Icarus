@@ -1,10 +1,17 @@
 """Persistent multiline input widget for the Icarus TUI."""
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from textual import events
 from textual.message import Message
 from textual.widgets import TextArea
+
+from apps.tui.src.submission import (
+    DraftImage,
+    PendingMessage,
+    referenced_images,
+)
 
 
 class PersistentComposer(TextArea):
@@ -14,7 +21,19 @@ class PersistentComposer(TextArea):
 
     @dataclass
     class Submitted(Message):
-        text: str
+        submission: PendingMessage
+
+        @property
+        def text(self) -> str:
+            return self.submission.text
+
+        @property
+        def images(self) -> tuple[DraftImage, ...]:
+            return self.submission.images
+
+    @dataclass
+    class ImagePasteRequested(Message):
+        pass
 
     def __init__(self, *, id: str | None = None) -> None:
         super().__init__(
@@ -27,6 +46,8 @@ class PersistentComposer(TextArea):
             id=id,
         )
         self.styles.height = 1
+        self._images: dict[str, DraftImage] = {}
+        self._next_image_number = 1
 
     def on_mount(self) -> None:
         self._sync_height()
@@ -60,11 +81,44 @@ class PersistentComposer(TextArea):
 
     def submit(self) -> bool:
         value = self.text
-        if not value.strip():
+        images = referenced_images(value, tuple(self._images.values()))
+        if not value.strip() and not images:
             return False
-        self.clear()
-        self.post_message(self.Submitted(value))
+        submission = PendingMessage(value, images)
+        self.clear_draft()
+        self.post_message(self.Submitted(submission))
         return True
+
+    @property
+    def has_draft(self) -> bool:
+        return bool(self.text or self._images)
+
+    @property
+    def images(self) -> tuple[DraftImage, ...]:
+        return tuple(self._images.values())
+
+    def action_paste(self) -> None:
+        if not self.read_only:
+            self.post_message(self.ImagePasteRequested())
+
+    def paste_text_from_clipboard(self) -> None:
+        super().action_paste()
+
+    def attach_image(self, path: str | Path) -> DraftImage:
+        reference = f"image{self._next_image_number}"
+        self._next_image_number += 1
+        image = DraftImage(reference, Path(path))
+        self._images[reference] = image
+        start, end = self.selection
+        result = self.replace(
+            image.marker,
+            start,
+            end,
+            maintain_selection_offset=False,
+        )
+        self.move_cursor(result.end_location)
+        self.focus()
+        return image
 
     def insert_newline(self) -> None:
         start, end = self.selection
@@ -78,8 +132,20 @@ class PersistentComposer(TextArea):
 
     def clear_draft(self) -> None:
         self.clear()
+        self._images.clear()
+        self._next_image_number = 1
         self.move_cursor((0, 0))
 
-    def restore_draft(self, text: str) -> None:
-        self.load_text(text)
+    def restore_draft(self, draft: str | PendingMessage) -> None:
+        submission = (
+            draft if isinstance(draft, PendingMessage) else PendingMessage(draft)
+        )
+        self.load_text(submission.text)
+        self._images = {image.reference: image for image in submission.images}
+        numbers = [
+            int(image.reference.removeprefix("image"))
+            for image in submission.images
+            if image.reference.removeprefix("image").isdigit()
+        ]
+        self._next_image_number = max(numbers, default=0) + 1
         self.move_cursor(self.document.end)
