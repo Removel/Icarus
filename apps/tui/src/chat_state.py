@@ -6,6 +6,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 
+from apps.tui.src.submission import DraftImage, PendingMessage
+
 
 class RuntimePhase(str, Enum):
     """Lifecycle phase visible to the TUI."""
@@ -37,7 +39,7 @@ class ChatState:
     """
 
     phase: RuntimePhase = RuntimePhase.STARTING
-    pending: deque[str] = field(default_factory=deque)
+    pending: deque[PendingMessage] = field(default_factory=deque)
     active_task_id: str | None = None
     dispatch_in_progress: bool = False
 
@@ -54,6 +56,10 @@ class ChatState:
     def pending_items(self) -> tuple[str, ...]:
         """Return an immutable UI projection of the pending queue."""
 
+        return tuple(item.text for item in self.pending)
+
+    @property
+    def pending_messages(self) -> tuple[PendingMessage, ...]:
         return tuple(self.pending)
 
     def mark_ready(self) -> None:
@@ -73,12 +79,21 @@ class ChatState:
         self.dispatch_in_progress = False
         self.phase = RuntimePhase.STOPPING
 
-    def enqueue(self, message: str) -> None:
-        if not message.strip():
+    def enqueue(
+        self,
+        message: str | PendingMessage,
+        images: tuple[DraftImage, ...] = (),
+    ) -> None:
+        submission = (
+            message
+            if isinstance(message, PendingMessage)
+            else PendingMessage(message, images)
+        )
+        if not submission.text.strip() and not submission.images:
             raise ValueError("Pending message cannot be empty")
-        self.pending.append(message)
+        self.pending.append(submission)
 
-    def begin_dispatch(self) -> str | None:
+    def begin_dispatch(self) -> PendingMessage | None:
         """Reserve the queue head while ``submit`` performs its handshake."""
 
         if not self.can_dispatch:
@@ -86,7 +101,7 @@ class ChatState:
         self.dispatch_in_progress = True
         return self.pending[0]
 
-    def accept_dispatch(self, task_id: str) -> str:
+    def accept_dispatch(self, task_id: str) -> PendingMessage:
         """Commit a successful submit and return the accepted user message."""
 
         if not self.dispatch_in_progress:
@@ -120,12 +135,12 @@ class ChatState:
             self.phase = RuntimePhase.READY
         return True
 
-    def pop_pending_tail(self) -> str | None:
+    def pop_pending_tail(self) -> PendingMessage | None:
         if not self.pending:
             return None
         return self.pending.pop()
 
-    def interrupt_action(self, draft: str) -> InterruptAction:
+    def interrupt_action(self, draft: str | bool) -> InterruptAction:
         if draft:
             return InterruptAction.CLEAR_DRAFT
         if self.pending:

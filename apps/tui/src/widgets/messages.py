@@ -87,7 +87,7 @@ class WelcomeMessage(Vertical):
         yield Static(
             (
                 "Enter submit · Shift+Enter/Ctrl+J newline · "
-                "Ctrl+C clear/restore/cancel/exit"
+                "Ctrl+V image · Ctrl+C actions"
             ),
             markup=False,
             classes="welcome-help",

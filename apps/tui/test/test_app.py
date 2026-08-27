@@ -1,5 +1,7 @@
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
+import threading
 
 import pytest
 from textual.widgets import Static
@@ -13,6 +15,10 @@ from apps.agent.src.agent_orchestration.plugins import (
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.tui.src.app import IcarusTextualApp, RuntimeSubscriptionFailed
 from apps.tui.src.chat_state import RuntimePhase
+from apps.tui.src.clipboard import (
+    ClipboardImage,
+    ClipboardImageReadError,
+)
 from apps.tui.src.event_pipeline import FinishTurn, ShowNotification
 from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
 from apps.tui.src.widgets import (
@@ -79,6 +85,7 @@ class ControlledService:
         self.stop_error = stop_error
         self.cancel_error = cancel_error
         self.submissions = []
+        self.submission_images: list[tuple[Path, ...]] = []
         self.session_id = "test-session"
         self.stopped = False
         self.cancelled_tasks = []
@@ -98,10 +105,10 @@ class ControlledService:
         return self.subscription
 
     async def submit(self, prompt, input_images=None):
-        del input_images
         task_id = f"task-{len(self.submissions) + 1}"
         self.actions.append(f"submit:{prompt}")
         self.submissions.append(prompt)
+        self.submission_images.append(tuple(input_images or ()))
         if self.submit_error is not None:
             raise self.submit_error
         if self.publish_queued_before_return:
@@ -253,6 +260,211 @@ def test_starting期间可排队且ready后自动提交(tmp_path):
     assert submissions == ("queued while starting",)
     assert active_task_id == "task-1"
     assert pending == ()
+
+
+def test_ctrl_v图片生成marker并向runtime提交映射和路径(
+    monkeypatch, tmp_path
+):
+    clipboard_image = ClipboardImage(b"png-data", "image/png", "png")
+    monkeypatch.setattr(
+        "apps.tui.src.app.read_clipboard_image",
+        lambda: clipboard_image,
+    )
+
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await pilot.press(*"请查看 ", "ctrl+v")
+            composer = app.query_one(PersistentComposer)
+            await wait_until(pilot, lambda: "[#image1]" in composer.text)
+            draft = composer.text
+            image_path = composer.images[0].path
+            mode = image_path.stat().st_mode & 0o777
+            data = image_path.read_bytes()
+
+            await pilot.press("enter")
+            await wait_until(pilot, lambda: bool(service.submissions))
+            user_message = app.query_one(".user-message .message-content", Static)
+            result = (
+                draft,
+                image_path,
+                mode,
+                data,
+                service.submissions[0],
+                service.submission_images[0],
+                str(user_message.render()),
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    (
+        draft,
+        image_path,
+        mode,
+        data,
+        prompt,
+        image_paths,
+        user_text,
+    ) = asyncio.run(run())
+
+    assert draft == "请查看 [#image1]"
+    assert mode == 0o600
+    assert data == b"png-data"
+    assert prompt == (
+        "请查看 [#image1]\n\n"
+        "<attached_images>\n"
+        "[#image1] 对应第 1 张附件图片\n"
+        "</attached_images>"
+    )
+    assert image_paths == (image_path,)
+    assert user_text == "请查看 [#image1]"
+    assert image_path.exists() is False
+
+
+def test_ctrl_v没有图片时回退textual文本剪贴板(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "apps.tui.src.app.read_clipboard_image", lambda: None
+    )
+
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            app.copy_to_clipboard("plain text")
+            await pilot.press("ctrl+v")
+            composer = app.query_one(PersistentComposer)
+            await wait_until(pilot, lambda: composer.text == "plain text")
+            result = (composer.text, composer.images)
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    assert asyncio.run(run()) == ("plain text", ())
+
+
+def test_ctrl_v在后台线程读取系统剪贴板(monkeypatch, tmp_path):
+    caller_threads = []
+
+    def read_image():
+        caller_threads.append(threading.get_ident())
+        return None
+
+    monkeypatch.setattr(
+        "apps.tui.src.app.read_clipboard_image", read_image
+    )
+
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        event_loop_thread = threading.get_ident()
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await pilot.press("ctrl+v")
+            await wait_until(pilot, lambda: bool(caller_threads))
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+        return event_loop_thread
+
+    event_loop_thread = asyncio.run(run())
+
+    assert caller_threads[0] != event_loop_thread
+
+
+def test_ctrl_v读取失败只显示非致命通知(monkeypatch, tmp_path):
+    def fail_read():
+        raise ClipboardImageReadError("clipboard unavailable")
+
+    monkeypatch.setattr(
+        "apps.tui.src.app.read_clipboard_image", fail_read
+    )
+
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        notifications = []
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            monkeypatch.setattr(
+                app,
+                "notify",
+                lambda message, **kwargs: notifications.append(
+                    (message, kwargs)
+                ),
+            )
+            await pilot.press("ctrl+v")
+            await wait_until(pilot, lambda: bool(notifications))
+            result = (
+                app.chat_state.phase,
+                app.query_one(PersistentComposer).text,
+                notifications,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    phase, text, notifications = asyncio.run(run())
+
+    assert phase == RuntimePhase.READY
+    assert text == ""
+    assert "clipboard unavailable" in notifications[0][0]
+    assert notifications[0][1]["severity"] == "warning"
+
+
+def test图片提交失败后ctrl_c恢复文字和附件(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "apps.tui.src.app.read_clipboard_image",
+        lambda: ClipboardImage(b"png-data", "image/png", "png"),
+    )
+
+    async def run():
+        service = ControlledService(submit_error=RuntimeError("broken"))
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await pilot.press("ctrl+v")
+            composer = app.query_one(PersistentComposer)
+            await wait_until(pilot, lambda: bool(composer.images))
+            image_path = composer.images[0].path
+            await pilot.press("enter")
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED
+            )
+            pending = app.chat_state.pending_messages[0]
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            result = (
+                pending,
+                composer.text,
+                composer.images,
+                app.chat_state.pending_messages,
+                image_path.exists(),
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result, image_path
+
+    result, image_path = asyncio.run(run())
+    pending, text, images, queued, existed_before_shutdown = result
+
+    assert text == "[#image1]"
+    assert images == pending.images
+    assert queued == ()
+    assert existed_before_shutdown is True
+    assert image_path.exists() is False
 
 
 def test_factory失败前保持静默且提交后保留队首并显示错误(tmp_path):
