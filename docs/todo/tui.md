@@ -3,7 +3,7 @@
 ## 待办
 
 - 完善用于验证和使用 Agent Core 的终端交互能力。
-- 增加多模态输入支持。
+- 完善已经接入的图片输入，并按真实需求扩展其他平台和多模态类型。
 - 增加任务控制和会话操作能力。
 
 ## 近期优先级
@@ -12,7 +12,7 @@
   状态无法恢复或缺少回归保护的问题。
 - P1：滚动、长内容、输入、队列和诊断体验。
 - P1：继续完善任务控制和异常恢复体验。
-- P2：多模态输入、Session 历史、恢复和切换。
+- P2：Windows/Linux 图片输入、Session 历史、恢复和切换。
 
 ## 基础交互能力
 
@@ -70,10 +70,19 @@
 - [ ] `TUI-14` 增加可选诊断视图，展示未知 Event、被忽略的 task_id、Runtime 状态和
   必要的调试计数，同时保持普通对话界面简洁；设计时决定诊断信息只属于当前进程还是需要
   持久化。
+- [ ] `TUI-19` 在真实 macOS 终端中完成剪贴板图片验收：分别复制系统截图和浏览器图片，
+  验证 `Ctrl+V` Marker、连续图片顺序、提交、撤回恢复和退出清理。当前固定系统脚本、
+  无图片回退、后台线程、临时文件与提交参数已有自动化测试；此项只保留真实桌面环境验收。
 
 ## 后续产品能力
 
-- [ ] `TUI-15` 支持多模态输入，并与 Agent Core 的统一输入类型和能力边界保持一致。
+- [x] `TUI-15` 支持多模态输入，并与 Agent Core 的统一输入类型和能力边界保持一致。第一阶段在
+  macOS 实现剪贴板图片 `Ctrl+V`，Composer 使用 `[#imageN]` 占位，文字与图片共同排队、撤回并通过
+  `AgentRuntimeService.submit(prompt, input_images)` 提交；Windows/Linux 后续只扩展统一平台函数，
+  不修改 TUI 主流程。图片读取失败作为非致命 TUI 通知，临时文件保留到应用退出后清理；
+  已覆盖 TUI 功能测试和视觉快照。详细设计见
+  `apps/tui/docs/arch/tui-clipboard-image-paste-design.md`，实施步骤见
+  `apps/tui/docs/plan/tui-clipboard-image-paste-development-plan.md`。
 - [ ] `TUI-16` 支持 Session 历史浏览、恢复和切换；TUI 只展示并发起应用服务操作，不自行
   重建 Blackboard 业务历史。
 - [x] `TUI-17` 缩短命令到首帧可见的时间。打开页面时只加载轻量 Textual 壳层，不创建

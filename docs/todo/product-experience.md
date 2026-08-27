@@ -49,6 +49,7 @@
 
 ## 当前切入点
 
-当前已经完成 TUI 启动首帧、底栏布局、流式输出滚动和任务取消的第一组回归保护。后续先完成
-Agent 基础层的 ReAct 去重、256 Step Harness、统一错误 Event、Blackboard Compact 和本地图片
-稳定引用，再推进对话持久化、恢复、切换和 UI 展示，不引入新的统一控制层。
+当前已经完成 TUI 启动首帧、底栏布局、流式输出滚动、任务取消，以及 macOS `Ctrl+V` 图片草稿、
+排队、提交和退出清理的回归保护。Agent 基础层的 ReAct 去重、256 Step Harness、统一错误 Event、
+Blackboard Compact 和本地图片稳定引用也已完成。下一步先完成真实 macOS 图片粘贴验收，再推进
+对话持久化、恢复、切换，以及 Usage、Compact 和错误信息的 UI 展示，不引入新的统一控制层。

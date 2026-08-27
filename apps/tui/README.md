@@ -13,6 +13,7 @@
 - 固定在底部、可增长到八行的持久多行输入框；
 - Agent 运行期间继续编辑和提交；
 - TUI 本地 FIFO 待发送队列，以及从队尾撤回的 LIFO 操作；
+- macOS 剪贴板图片粘贴，Composer 使用 `[#imageN]` 表示随消息提交的图片；
 - 流式 Markdown、工具状态、错误和任务终态；
 - 按 Plugin 来源投影 Runtime Event；当前注册来源为 `agent` 和 `user-input`。
 
@@ -48,6 +49,8 @@ icarus --session-id demo-session
 - `Enter`：把非空草稿加入 TUI 本地队列；Runtime 空闲时立即提交，否则排队；
 - `Shift+Enter`：在终端能区分该按键时插入换行；
 - `Ctrl+J`：在所有支持终端中插入换行；
+- `Ctrl+V`：macOS 剪贴板存在图片时，在光标处插入 `[#imageN]`；没有图片时回退为普通
+  文本粘贴。Windows/Linux 暂未实现系统剪贴板图片读取；
 - Composer 聚焦时，左右键、上下键和 `Home` / `End` 在 TextArea 中移动光标，滚轮不控制
   Conversation；
 - Conversation 聚焦时，上下键、`Home` / `End` 和滚轮浏览对话；用户上滚后流式输出不会
@@ -69,6 +72,10 @@ icarus --session-id demo-session
 正常队列消费从队首开始，撤回从队尾开始。取消只结束当前 Task，不停止或重启 Runtime；
 收到 `InputFinishedEvent(status="cancelled")` 后才调度下一条消息。多轮业务对话上下文仍由
 Agent Core 的 Blackboard 维护；TUI Conversation 只是当前进程的 UI 投影。
+
+图片 Marker 可以和文字一起编辑。提交时只发送草稿中仍然存在完整 Marker 的图片，并按 Marker
+第一次出现的顺序建立附件映射；删除 Marker 会让对应图片退出本次提交。图片暂存文件不会显示
+在对话中，并在 TUI 退出后清理。
 
 仓库内开发启动：
 

@@ -5,8 +5,8 @@ Icarus 是一个面向可扩展 Agent 系统的 Monorepo。项目通过模型接
 ## 当前应用
 
 - `apps/agent`：模型接入、Agent 编排、工具、插件运行时、持久化与应用服务。
-- `apps/tui`：基于 Textual 的全屏 Agent 终端客户端，提供应用内滚动、持久输入框和本地
-  消息队列。
+- `apps/tui`：基于 Textual 的全屏 Agent 终端客户端，提供应用内滚动、持久输入框、本地
+  消息队列和 macOS 剪贴板图片输入。
 
 架构设计位于 [`apps/agent/docs/arch/`](apps/agent/docs/arch/)，开发计划位于各应用的 `docs/plan/`。
 
@@ -48,7 +48,9 @@ icarus
 当前目录会作为 Agent Workspace，并默认创建一个新 Session。`Enter` 把消息提交到 TUI
 本地队列；Agent 运行期间输入框仍可编辑，待发送消息会显示在输入框上方，并在当前轮次
 结束后按 FIFO 自动发送。受支持终端可用 `Shift+Enter` 换行，所有支持的终端都可用
-`Ctrl+J` 换行。
+`Ctrl+J` 换行。在 macOS 上复制截图或浏览器图片后，可在 Composer 中按 `Ctrl+V` 插入
+`[#imageN]` 并随消息提交；如果剪贴板没有图片，则保持普通文本粘贴。Windows/Linux 的
+系统剪贴板图片读取暂未实现。
 
 `Ctrl+C` 会依次处理当前草稿、撤回最新排队消息、取消正在运行的 Task，或在完全空闲时
 退出。取消过程中会显示 `Cancelling`，并保留已经输出的内容；收到取消终态后才继续调度队列。
