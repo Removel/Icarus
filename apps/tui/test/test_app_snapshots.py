@@ -7,22 +7,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from apps.agent.src.agent_orchestration.capability import (
-    AgentTextDeltaEvent,
-    AgentToolCompletedEvent,
-    AgentToolStartedEvent,
-)
-from apps.agent.src.agent_orchestration.events import TaskErrorEvent
-from apps.agent.src.agent_orchestration.plugins import (
-    InputAccepted,
-    InputFinishedEvent,
-    InputStartedEvent,
-)
-from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
-from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
-from apps.agent.src.model_provider.types import ToolCall
 from packages.gateway_protocol import RuntimeUpdateModel, SessionHistoryModel
-from apps.tui.src.gateway_client.models import SubmitAccepted
+from apps.tui.src.gateway_client.models import (
+    SubmitAccepted,
+    TaskOperationResult,
+)
 from apps.tui.src.app import IcarusTextualApp
 from apps.tui.src.chat_state import RuntimePhase
 from apps.tui.src.event_pipeline import AppendToolStarted, UpdateToolCompleted
@@ -54,8 +43,11 @@ class SnapshotSubscription:
         return item
 
     def publish(self, source_plugin_id: str, event: object) -> None:
+        del source_plugin_id
         if not self.closed:
-            self.queue.put_nowait(_event_update(source_plugin_id, event))
+            if not isinstance(event, RuntimeUpdateModel):
+                raise TypeError("SnapshotSubscription accepts RuntimeUpdateModel")
+            self.queue.put_nowait(event)
 
     def close(self) -> None:
         if self.closed:
@@ -110,7 +102,7 @@ class SnapshotService:
             )
         )
         await asyncio.sleep(0)
-        return InputAccepted(task_id=task_id, queue_position=0)
+        return SubmitAccepted(task_id=task_id, queue_position=0)
 
     async def close(self) -> None:
         self.started = False
@@ -190,47 +182,17 @@ def publish(pilot, source_plugin_id: str, event: object) -> None:
     pilot.app.service.subscription.publish(source_plugin_id, event)
 
 
-def input_started(task_id: str = "task-1") -> InputStartedEvent:
-    return InputStartedEvent(task_id=task_id)
+def input_started(task_id: str = "task-1") -> RuntimeUpdateModel:
+    return runtime_update("task.started", task_id=task_id)
 
 
-def _event_update(source, event) -> RuntimeUpdateModel:
-    update_type = source
-    payload = {}
-    if isinstance(event, InputStartedEvent):
-        update_type = "task.started"
-    elif isinstance(event, InputFinishedEvent):
-        update_type = "task.finished"
-        payload = {"status": event.status, "run_id": event.run_id}
-    elif isinstance(event, AgentTextDeltaEvent):
-        update_type = "assistant.text_delta"
-        payload = {"step": event.step, "text": event.text}
-    elif isinstance(event, AgentToolStartedEvent):
-        update_type = "tool.started"
-        payload = {
-            "step": event.step, "call_id": event.tool_call.id,
-            "tool_name": event.tool_call.name,
-            "arguments": event.tool_call.arguments,
-        }
-    elif isinstance(event, AgentToolCompletedEvent):
-        update_type = "tool.completed"
-        payload = {
-            "step": event.step, "call_id": event.tool_call.id,
-            "tool_name": event.tool_call.name,
-            "success": event.result.success,
-            "error": event.result.error,
-        }
-    elif isinstance(event, TaskErrorEvent):
-        update_type = "task.error"
-        payload = {
-            "fatal": event.fatal, "code": event.code,
-            "error_type": event.error_type, "message": event.error_message,
-            "step": event.step, "run_id": event.run_id,
-        }
+def runtime_update(
+    update_type, *, task_id="task-1", payload=None
+) -> RuntimeUpdateModel:
     return RuntimeUpdateModel(
         workspace_key="workspace", session_id="snapshot-session",
-        task_id=getattr(event, "task_id", None), type=update_type, payload=payload,
-        occurred_at=getattr(event, "occurred_at", datetime.now(UTC)),
+        task_id=task_id, type=update_type, payload=payload or {},
+        occurred_at=datetime.now(UTC),
     )
 
 
@@ -370,10 +332,10 @@ def test_snapshot_streaming_markdown_with_draft(snap_compare):
         publish(
             pilot,
             "agent",
-            AgentTextDeltaEvent(
+            runtime_update(
+                "assistant.text_delta",
                 task_id="task-1",
-                step=1,
-                text=markdown,
+                payload={"step": 1, "text": markdown},
             ),
         )
         await pilot.press(*"Add a focused regression test next")
@@ -398,13 +360,16 @@ def test_snapshot_running_with_pending_queue(snap_compare):
         publish(
             pilot,
             "agent",
-            AgentTextDeltaEvent(
+            runtime_update(
+                "assistant.text_delta",
                 task_id="task-1",
-                step=1,
-                text=(
-                    "The projection layer is in place. I am validating the "
-                    "full interaction flow now."
-                ),
+                payload={
+                    "step": 1,
+                    "text": (
+                        "The projection layer is in place. I am validating the "
+                        "full interaction flow now."
+                    ),
+                },
             ),
         )
         await pilot.press(*"Review the documentation", "enter")
@@ -431,12 +396,6 @@ def test_snapshot_running_with_pending_queue(snap_compare):
 
 
 def test_snapshot_tool_success_uses_positive_state_color(snap_compare):
-    tool_call = ToolCall(
-        id="call-read",
-        name="read_workspace_config",
-        arguments={"path": "settings.json"},
-    )
-
     async def prepare(pilot) -> None:
         await wait_ready(pilot)
         await submit_text(pilot, "Inspect the workspace configuration")
@@ -444,16 +403,16 @@ def test_snapshot_tool_success_uses_positive_state_color(snap_compare):
         await conversation.apply_action(
             AppendToolStarted(
                 task_id="task-1",
-                call_id=tool_call.id,
-                tool_name=tool_call.name,
+                call_id="call-read",
+                tool_name="read_workspace_config",
                 arguments_json='{"path":"settings.json"}',
             )
         )
         await conversation.apply_action(
             UpdateToolCompleted(
                 task_id="task-1",
-                call_id=tool_call.id,
-                tool_name=tool_call.name,
+                call_id="call-read",
+                tool_name="read_workspace_config",
                 success=True,
             )
         )
@@ -470,12 +429,6 @@ def test_snapshot_tool_success_uses_positive_state_color(snap_compare):
 
 
 def test_snapshot_tool_failure_and_agent_error(snap_compare):
-    tool_call = ToolCall(
-        id="call-settings",
-        name="read_workspace_config",
-        arguments={"path": "settings.json"},
-    )
-
     async def prepare(pilot) -> None:
         await wait_ready(pilot)
         await submit_text(pilot, "Inspect the workspace configuration")
@@ -483,52 +436,67 @@ def test_snapshot_tool_failure_and_agent_error(snap_compare):
         publish(
             pilot,
             "agent",
-            AgentTextDeltaEvent(
+            runtime_update(
+                "assistant.text_delta",
                 task_id="task-1",
-                step=1,
-                text="I will read the workspace configuration first.",
+                payload={
+                    "step": 1,
+                    "text": "I will read the workspace configuration first.",
+                },
             ),
         )
         publish(
             pilot,
             "agent",
-            AgentToolStartedEvent(
+            runtime_update(
+                "tool.started",
                 task_id="task-1",
-                step=1,
-                tool_call=tool_call,
+                payload={
+                    "step": 1,
+                    "call_id": "call-settings",
+                    "tool_name": "read_workspace_config",
+                    "arguments": {"path": "settings.json"},
+                },
             ),
         )
         publish(
             pilot,
             "agent",
-            AgentToolCompletedEvent(
+            runtime_update(
+                "tool.completed",
                 task_id="task-1",
-                step=1,
-                tool_call=tool_call,
-                result=ToolExecutionResult(
-                    success=False,
-                    error="permission denied",
-                ),
+                payload={
+                    "step": 1,
+                    "call_id": "call-settings",
+                    "tool_name": "read_workspace_config",
+                    "success": False,
+                    "error": "permission denied",
+                },
             ),
         )
         publish(
             pilot,
             "agent",
-            TaskErrorEvent(
+            runtime_update(
+                "task.error",
                 task_id="task-1",
-                fatal=True,
-                code="agent_run_failed",
-                step=1,
-                error_type="ToolExecutionError",
-                error_message="Could not read settings.json",
+                payload={
+                    "fatal": True,
+                    "code": "agent_run_failed",
+                    "step": 1,
+                    "error_type": "ToolExecutionError",
+                    "message": "Could not read settings.json",
+                    "run_id": None,
+                },
             ),
         )
         publish(
             pilot,
             "user-input",
-            InputFinishedEvent(
+            runtime_update(
+                "task.finished",
                 task_id="task-1",
-                status="failed",
+                payload={"status": "failed", "run_id": None},
             ),
         )
         await wait_until(
@@ -555,10 +523,10 @@ def test_snapshot_narrow_running_layout(snap_compare):
         publish(
             pilot,
             "agent",
-            AgentTextDeltaEvent(
+            runtime_update(
+                "assistant.text_delta",
                 task_id="task-1",
-                step=1,
-                text=expected_markdown,
+                payload={"step": 1, "text": expected_markdown},
             ),
         )
         await pilot.press(*"Queue this follow-up", "enter")

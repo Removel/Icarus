@@ -122,36 +122,14 @@ def test_main_keyboard_interrupt返回130(monkeypatch):
     assert main_module.main([]) == 130
 
 
-def test_pyproject_console_script指向main入口():
-    import tomllib
-
+def test_tui依赖和脚本归属当前app():
     project_root = Path(__file__).resolve().parents[3]
-    with (project_root / "pyproject.toml").open("rb") as file:
-        pyproject = tomllib.load(file)
+    requirements = (project_root / "apps/tui/requirements.txt").read_text()
+    start_script = (project_root / "apps/tui/scripts/start.sh").read_text()
 
-    assert (
-        pyproject["project"]["scripts"]["icarus"]
-        == "apps.tui.src.main:main"
-    )
-    assert "apps/agent/settings.json" not in pyproject["project"]["dependencies"]
-    assert pyproject["tool"]["setuptools"]["package-data"]["apps.agent"] == [
-        "settings.json"
-    ]
-    assert pyproject["tool"]["setuptools"]["package-data"]["apps.tui.src"] == [
-        "styles.tcss"
-    ]
-    dependencies = pyproject["project"]["dependencies"]
-    assert any(item.startswith("textual>=") for item in dependencies)
-    assert not any(item.startswith("prompt-toolkit") for item in dependencies)
-    assert pyproject["project"]["optional-dependencies"]["test"] == [
-        "httpx",
-        "pytest-textual-snapshot>=1.1,<2",
-    ]
-    assert pyproject["project"]["scripts"]["icarus-gateway"] == (
-        "apps.gateway.src.main:main"
-    )
-    assert pyproject["tool"]["setuptools"]["packages"]["find"]["exclude"] == [
-        "apps.agent.test*",
-        "apps.gateway.test*",
-        "apps.tui.test*",
-    ]
+    assert "textual>=8.2.8,<9" in requirements
+    assert "websockets" in requirements
+    assert "openai" not in requirements
+    assert "anthropic" not in requirements
+    assert "apps.tui.src.main" in start_script
+    assert "PYTHONPATH" in start_script
