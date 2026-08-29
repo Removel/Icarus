@@ -66,6 +66,13 @@ class Subscription:
 
 
 @dataclass(frozen=True)
+class BackgroundWorkSnapshot:
+    work_id: str
+    name: str
+    started_at: datetime
+
+
+@dataclass(frozen=True)
 class PluginRuntimeSnapshot:
     plugin_id: PluginId
     status: PluginStatus
@@ -75,6 +82,12 @@ class PluginRuntimeSnapshot:
     failed_count: int
     last_event_at: datetime | None
     last_error: str | None
+    pending_count: int = 0
+    background_work_count: int = 0
+    active_background_works: tuple[BackgroundWorkSnapshot, ...] = ()
+    last_background_work_at: datetime | None = None
+    background_failed_count: int = 0
+    last_background_error: str | None = None
 
 
 @dataclass(frozen=True)

@@ -26,10 +26,22 @@ class WorkspaceSessionFileHandler(logging.Handler):
         self.workspace_identity = workspace_identity
         self._handles: dict[Path, object] = {}
         self._lock = threading.RLock()
+        self._session_identity: SessionIdentity | None = None
+
+    def bind_session(self, identity: SessionIdentity) -> None:
+        if identity.workspace_key != self.workspace_identity.workspace_key:
+            raise ValueError("Session identity belongs to another workspace")
+        self._session_identity = identity
+
+    def unbind_session(self) -> None:
+        self._session_identity = None
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             identity = self._identity_from_context()
+            expected = self._session_identity
+            if expected is not None and identity != expected:
+                return
             path = (
                 self.resolver.session_log(identity)
                 if identity is not None
@@ -48,6 +60,7 @@ class WorkspaceSessionFileHandler(logging.Handler):
                 except OSError:
                     pass
             self._handles.clear()
+        self._session_identity = None
         super().close()
 
     def handleError(self, record: logging.LogRecord) -> None:

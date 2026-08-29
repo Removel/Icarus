@@ -1,4 +1,4 @@
-"""Source-aware projection from runtime events to TUI-owned actions."""
+"""Projection from public RuntimeUpdate values to TUI-owned actions."""
 
 from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
@@ -11,8 +11,8 @@ from apps.tui.src.event_pipeline.actions import (
     UpdateToolCompleted,
 )
 from apps.tui.src.event_pipeline.dispatcher import (
-    EventProjector,
     ProjectorRegistry,
+    UpdateProjector,
     create_default_projector_registry,
 )
 
@@ -20,12 +20,12 @@ __all__ = [
     "AppendAssistantDelta",
     "AppendError",
     "AppendToolStarted",
-    "EventProjector",
     "FinishTurn",
     "ProjectorRegistry",
     "SetRuntimeStatus",
     "ShowNotification",
     "UiAction",
     "UpdateToolCompleted",
+    "UpdateProjector",
     "create_default_projector_registry",
 ]

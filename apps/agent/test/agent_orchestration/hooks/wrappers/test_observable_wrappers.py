@@ -320,6 +320,25 @@ def test_observable_agent_stream_保持事件并记录生命周期():
     assert stream_events[0].run_id is not None
 
 
+def test_observable_agent_async_stream可在不同context关闭():
+    async def run():
+        recorder, _, _, agent = make_observed_components()
+        stream = agent.astream("system", [], "hello")
+
+        async def read_one():
+            return await anext(stream)
+
+        first = await asyncio.create_task(read_one())
+        await asyncio.create_task(stream.aclose())
+        return first, recorder.events
+
+    first, events = asyncio.run(run())
+
+    assert isinstance(first, AgentTextDeltaEvent)
+    stream_events = [event for event in events if event.name == "agent.stream"]
+    assert [event.phase for event in stream_events] == ["before"]
+
+
 def test_observable_agent使用业务run_id():
     recorder, _, _, agent = make_observed_components()
     channel = TaskChannel("task-1")

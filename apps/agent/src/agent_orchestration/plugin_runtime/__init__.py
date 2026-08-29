@@ -46,6 +46,7 @@ from apps.agent.src.agent_orchestration.plugin_runtime.state_coordinator import 
     PluginStateCoordinator,
 )
 from apps.agent.src.agent_orchestration.plugin_runtime.types import (
+    BackgroundWorkSnapshot,
     PluginId,
     PluginRuntimeSnapshot,
     PluginStatus,
@@ -57,6 +58,7 @@ from apps.agent.src.agent_orchestration.plugin_runtime.types import (
 )
 
 __all__ = [
+    "BackgroundWorkSnapshot",
     "BasePlugin",
     "DiscoveredPlugin",
     "DiscoveryResult",

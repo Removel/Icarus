@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+import logging
 from pathlib import Path
 
 from apps.agent.src.agent_orchestration.plugin_runtime import (
@@ -35,8 +36,11 @@ def create_plugin(
     hook_registry = config.get("hook_registry")
     if hook_registry is None:
         raise ValueError("persistence config requires hook_registry")
+    runtime_logger = config.get("runtime_logger", logger)
+    if not isinstance(runtime_logger, logging.Logger):
+        raise ValueError("persistence config runtime_logger must be a Logger")
     plugin = PersistencePlugin(
-        plugin_id, runtime, identity, logger, hook_registry
+        plugin_id, runtime, identity, runtime_logger, hook_registry
     )
     return PluginRegistration(
         plugin=plugin,

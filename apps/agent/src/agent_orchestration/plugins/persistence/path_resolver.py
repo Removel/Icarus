@@ -26,6 +26,10 @@ class DataPathResolver:
     def global_skills_dir(self) -> Path:
         return self.data_dir / "skills"
 
+    @property
+    def incoming_dir(self) -> Path:
+        return self.data_dir / "incoming"
+
     def workspace_dir(self, identity: SessionIdentity) -> Path:
         self._validate_id(identity.workspace_key, "workspace_key")
         return self.workspaces_dir / identity.workspace_key
@@ -66,6 +70,19 @@ class DataPathResolver:
         self._mkdir(session_directory)
         self._mkdir(self.assets_dir(identity))
         return session_directory
+
+    def session_exists(self, identity: SessionIdentity) -> bool:
+        return self.session_dir(identity).is_dir()
+
+    def list_session_ids(self, identity: SessionIdentity) -> tuple[str, ...]:
+        directory = self.sessions_dir(identity)
+        if not directory.is_dir():
+            return ()
+        return tuple(
+            child.name
+            for child in sorted(directory.iterdir(), key=lambda item: item.name)
+            if child.is_dir() and _SAFE_ID.fullmatch(child.name)
+        )
 
     @staticmethod
     def _validate_id(value: str, name: str) -> None:

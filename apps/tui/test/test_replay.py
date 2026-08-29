@@ -1,14 +1,8 @@
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
 
-from apps.agent.src.agent_orchestration.plugins import (
-    BlackboardCompactedEvent,
-    InputFinishedEvent,
-    InputQueuedEvent,
-)
 from apps.tui.src.replay import (
     ReplayFormatError,
     ReplayRuntimeService,
@@ -17,134 +11,111 @@ from apps.tui.src.replay import (
 )
 
 
-FIXTURE = Path(__file__).parent / "fixtures" / "synthetic_tui_events.jsonl"
+FIXTURE = (
+    Path(__file__).parent / "fixtures" / "synthetic_tui_events.jsonl"
+)
 
 
-def test_load_replay按终态切分三轮并保留unrelated事件():
+def test_load_replay按终态切分三轮并保留unrelated_update():
     scenario = load_replay(FIXTURE)
-
     assert scenario.task_ids == ("task-1", "task-2", "task-3")
-    first_task_ids = [
-        event.task_id for _, event in scenario.turns[0].events
-    ]
-    assert "unrelated-task" in first_task_ids
-    assert first_task_ids[0] == "task-1"
-    assert first_task_ids[-1] == "task-1"
+    ids = [update.task_id for update in scenario.turns[0].updates]
+    assert ids[0] == "task-1"
+    assert "unrelated-task" in ids
+    assert ids[-1] == "task-1"
 
 
 @pytest.mark.parametrize(
     ("change", "message"),
     [
         ({"schema_version": 99}, "unsupported schema_version"),
-        ({"event_type": "unknown"}, "unsupported event_type"),
-        ({"payload": None}, "payload must be an object"),
+        ({"payload": object()}, "invalid RuntimeUpdate"),
     ],
 )
-def test_decode_replay_record严格拒绝未知或缺失字段(change, message):
+def test_decode_replay_record严格拒绝非法公共update(change, message):
     record = {
-        "schema_version": 3,
-        "source_plugin_id": "agent",
-        "event_type": "agent_text_delta",
-        "task_id": "task-1",
-        "payload": {"step": 1, "text": "hello"},
+        "schema_version": 4,
+        "workspace_key": "workspace",
+        "session_id": "session",
+        "task_id": "task",
+        "type": "task.started",
+        "payload": {},
+        "occurred_at": "2026-01-01T00:00:00Z",
     }
     record.update(change)
-
     with pytest.raises(ReplayFormatError, match=message):
         decode_replay_record(record)
 
 
-def test_decode_replay_record支持cancelled终态():
-    source, event = decode_replay_record(
+def test_decode_replay_record支持cancelled和compact():
+    cancelled = decode_replay_record(
         {
-            "schema_version": 3,
-            "source_plugin_id": "user-input",
-            "event_type": "input_finished",
-            "task_id": "task-1",
+            "schema_version": 4,
+            "workspace_key": "workspace",
+            "session_id": "session",
+            "task_id": "task",
+            "type": "task.finished",
             "payload": {"status": "cancelled"},
+            "occurred_at": "2026-01-01T00:00:00Z",
         }
     )
-
-    assert source == "user-input"
-    assert isinstance(event, InputFinishedEvent)
-    assert event.task_id == "task-1"
-    assert event.status == "cancelled"
-
-
-def test_decode_replay_record支持blackboard_compact事件():
-    source, event = decode_replay_record(
+    compact = decode_replay_record(
         {
-            "schema_version": 3,
-            "source_plugin_id": "blackboard",
-            "event_type": "blackboard_compacted",
-            "task_id": "task-1",
+            "schema_version": 4,
+            "workspace_key": "workspace",
+            "session_id": "session",
+            "task_id": "task",
+            "type": "context.compacted",
             "payload": {"before_tokens": 900, "after_tokens": 100},
+            "occurred_at": "2026-01-01T00:00:01Z",
         }
     )
-
-    assert source == "blackboard"
-    assert event == BlackboardCompactedEvent(
-        task_id="task-1",
-        before_tokens=900,
-        after_tokens=100,
-        event_id=event.event_id,
-        occurred_at=event.occurred_at,
-    )
+    assert cancelled.payload["status"] == "cancelled"
+    assert compact.type == "context.compacted"
 
 
 def test_load_replay错误包含行号(tmp_path):
     path = tmp_path / "broken.jsonl"
     path.write_text("{}\nnot-json\n", encoding="utf-8")
-
     with pytest.raises(ReplayFormatError, match="Line 1"):
         load_replay(path)
 
 
-def test_replay_service在submit返回前发布queued并依次消费turn():
+def test_replay_service在submit返回前发布accepted并依次消费turn():
     async def run():
         service = ReplayRuntimeService(load_replay(FIXTURE))
         await service.start()
-        subscription = service.subscribe_events()
-
-        submit_task = asyncio.create_task(service.submit("first prompt"))
-        source, first_event = await asyncio.wait_for(
-            subscription.next_event(), timeout=1
+        subscription = service.subscribe_updates()
+        submit_task = asyncio.create_task(
+            service.submit("first prompt", submission_id="submission")
         )
+        first = await asyncio.wait_for(subscription.next_update(), timeout=1)
         accepted = await submit_task
-
         remaining = []
         while True:
-            item = await asyncio.wait_for(subscription.next_event(), timeout=1)
-            remaining.append(item)
-            if (
-                item[1].task_id == accepted.task_id
-                and type(item[1]).__name__ == "InputFinishedEvent"
-            ):
+            update = await asyncio.wait_for(subscription.next_update(), timeout=1)
+            remaining.append(update)
+            if update.type == "task.finished" and update.task_id == accepted.task_id:
                 break
-        subscription.close()
-        await service.stop()
-        return service, accepted, source, first_event, remaining
+        await service.close()
+        return service, accepted, first, remaining
 
-    service, accepted, source, first_event, remaining = asyncio.run(run())
-
+    service, accepted, first, remaining = asyncio.run(run())
     assert accepted.task_id == "task-1"
-    assert source == "user-input"
-    assert isinstance(first_event, InputQueuedEvent)
-    assert first_event.task_id == accepted.task_id
+    assert first.type == "task.accepted"
     assert service.submissions == ["first prompt"]
-    assert any(event.task_id == "unrelated-task" for _, event in remaining)
+    assert any(item.task_id == "unrelated-task" for item in remaining)
 
 
 def test_replay_subscription关闭后唤醒等待者():
     async def run():
         service = ReplayRuntimeService(load_replay(FIXTURE))
         await service.start()
-        subscription = service.subscribe_events()
-        waiter = asyncio.create_task(subscription.next_event())
+        subscription = service.subscribe_updates()
+        waiter = asyncio.create_task(subscription.next_update())
         await asyncio.sleep(0)
-        subscription.close()
+        await service.close()
         with pytest.raises(RuntimeError, match="closed"):
             await asyncio.wait_for(waiter, timeout=1)
-        await service.stop()
 
     asyncio.run(run())

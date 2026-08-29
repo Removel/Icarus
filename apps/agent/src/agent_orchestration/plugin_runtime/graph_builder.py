@@ -532,8 +532,10 @@ class PluginGraphBuilder:
         disabled: set[str],
         code: str,
         message: str,
+        *,
+        level: str = "error",
     ) -> None:
-        self.diagnostics.add(plugin_id, code, message)
+        self.diagnostics.add(plugin_id, code, message, level=level)
         if plugin_id in self.required_plugin_ids:
             raise RequiredPluginError(message)
         disabled.add(plugin_id)
@@ -557,6 +559,8 @@ class PluginGraphBuilder:
         disabled: set[str],
         code: str,
         message: str,
+        *,
+        level: str = "error",
     ) -> None:
         if plugin_id in self.required_plugin_ids:
             raise RequiredPluginError(message)
@@ -570,7 +574,9 @@ class PluginGraphBuilder:
                 str(error),
             )
         finally:
-            self.disable_plugin(plugin_id, disabled, code, message)
+            self.disable_plugin(
+                plugin_id, disabled, code, message, level=level
+            )
 
     async def rollback(self, started: list[str]) -> None:
         if self.plugin_manager.is_running:

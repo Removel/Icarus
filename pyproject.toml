@@ -10,26 +10,32 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic",
+    "fastapi",
     "openai",
+    "packaging",
     "pydantic",
     "python-dotenv",
     "PyYAML",
     "rich>=14.2,<15",
     "textual>=8.2.8,<9",
+    "uvicorn",
+    "websockets",
 ]
 
 [project.optional-dependencies]
 test = [
+    "httpx",
     "pytest-textual-snapshot>=1.1,<2",
 ]
 
 [project.scripts]
 icarus = "apps.tui.src.main:main"
+icarus-gateway = "apps.gateway.src.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["apps*"]
-exclude = ["apps.agent.test*", "apps.tui.test*"]
+include = ["apps*", "packages*"]
+exclude = ["apps.agent.test*", "apps.gateway.test*", "apps.tui.test*"]
 namespaces = true
 
 [tool.setuptools.package-data]

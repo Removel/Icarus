@@ -65,6 +65,11 @@ class SkillPlugin(BasePlugin):
         self.job_manager.bind_publisher(self.publish)
 
     async def start(self) -> None:
+        self.job_manager.bind_background_work_starter(
+            lambda name, operation: self.start_background_work(
+                operation, name=name
+            )
+        )
         await self.job_manager.start()
 
     def accepts_event(self, source_plugin_id: str, event: Event) -> bool:

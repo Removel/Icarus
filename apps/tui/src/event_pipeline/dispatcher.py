@@ -1,94 +1,72 @@
-"""Explicit source registry for public runtime event projectors."""
+"""Projection of public RuntimeUpdate values into TUI actions."""
 
 from __future__ import annotations
 
 import logging
 from typing import Protocol
 
+from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import UiAction
 
 
-class EventProjector(Protocol):
-    """Project one known source Event.
-
-    ``None`` means the Event type is unknown. An empty tuple means the Event is
-    recognized but intentionally has no visible projection.
-    """
-
-    def project(self, event: object) -> tuple[UiAction, ...] | None:
-        ...
+class UpdateProjector(Protocol):
+    def project(
+        self, update: RuntimeUpdateModel
+    ) -> tuple[UiAction, ...] | None: ...
 
 
 class ProjectorRegistry:
-    """Route Events by source identity and reject unrelated task output."""
-
     def __init__(self, *, logger: logging.Logger | None = None) -> None:
-        self._projectors: dict[str, EventProjector] = {}
+        self._projectors: dict[str, UpdateProjector] = {}
         self._logger = logger or logging.getLogger("icarus.tui.projectors")
-        self.unknown_source_count = 0
-        self.unknown_event_count = 0
-        self.unrelated_event_count = 0
+        self.unknown_update_count = 0
+        self.unrelated_update_count = 0
 
-    def register(self, source_plugin_id: str, projector: EventProjector) -> None:
-        if not source_plugin_id.strip():
-            raise ValueError("source_plugin_id cannot be empty")
-        if source_plugin_id in self._projectors:
-            raise ValueError(
-                f"Projector is already registered: {source_plugin_id}"
-            )
-        self._projectors[source_plugin_id] = projector
+    def register(self, update_type: str, projector: UpdateProjector) -> None:
+        if not update_type.strip():
+            raise ValueError("update_type cannot be empty")
+        if update_type in self._projectors:
+            raise ValueError(f"Projector is already registered: {update_type}")
+        self._projectors[update_type] = projector
 
     @property
-    def source_plugin_ids(self) -> frozenset[str]:
+    def update_types(self) -> frozenset[str]:
         return frozenset(self._projectors)
 
     def project(
         self,
-        source_plugin_id: str,
-        event: object,
+        update: RuntimeUpdateModel,
         *,
         active_task_id: str | None,
     ) -> tuple[UiAction, ...]:
-        projector = self._projectors.get(source_plugin_id)
+        projector = self._projectors.get(update.type)
         if projector is None:
-            self.unknown_source_count += 1
+            self.unknown_update_count += 1
             self._logger.debug(
-                "Ignoring event from unregistered source: source=%s type=%s",
-                source_plugin_id,
-                type(event).__name__,
+                "Ignoring unknown RuntimeUpdate: type=%s", update.type
             )
             return ()
-
-        task_id = getattr(event, "task_id", None)
-        if active_task_id is None or task_id != active_task_id:
-            self.unrelated_event_count += 1
+        if update.task_id is not None and (
+            active_task_id is None or update.task_id != active_task_id
+        ):
+            self.unrelated_update_count += 1
             self._logger.debug(
-                "Ignoring unrelated runtime event: source=%s type=%s task=%s active=%s",
-                source_plugin_id,
-                type(event).__name__,
-                task_id,
+                "Ignoring unrelated RuntimeUpdate: type=%s task=%s active=%s",
+                update.type,
+                update.task_id,
                 active_task_id,
             )
             return ()
-
-        actions = projector.project(event)
+        actions = projector.project(update)
         if actions is None:
-            self.unknown_event_count += 1
-            self._logger.debug(
-                "Ignoring unknown event for registered source: source=%s type=%s",
-                source_plugin_id,
-                type(event).__name__,
-            )
+            self.unknown_update_count += 1
             return ()
         return actions
 
 
 def create_default_projector_registry(
-    *,
-    logger: logging.Logger | None = None,
+    *, logger: logging.Logger | None = None
 ) -> ProjectorRegistry:
-    """Create the explicit projector set for currently exported sources."""
-
     from apps.tui.src.event_pipeline.projectors.agent import AgentProjector
     from apps.tui.src.event_pipeline.projectors.blackboard import (
         BlackboardProjector,
@@ -98,7 +76,19 @@ def create_default_projector_registry(
     )
 
     registry = ProjectorRegistry(logger=logger)
-    registry.register("agent", AgentProjector())
-    registry.register("blackboard", BlackboardProjector())
-    registry.register("user-input", UserInputProjector())
+    agent = AgentProjector()
+    for update_type in (
+        "assistant.text_delta",
+        "tool.started",
+        "tool.completed",
+        "task.error",
+        "task.usage",
+    ):
+        registry.register(update_type, agent)
+    input_projector = UserInputProjector()
+    for update_type in ("task.accepted", "task.started", "task.finished"):
+        registry.register(update_type, input_projector)
+    blackboard = BlackboardProjector()
+    registry.register("context.compacted", blackboard)
+    registry.register("session.lifecycle", blackboard)
     return registry

@@ -1,5 +1,6 @@
 """Plugin 抽象。"""
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 
@@ -8,6 +9,10 @@ from apps.agent.src.agent_orchestration.plugin_runtime.types import PluginId
 
 
 EventPublisher = Callable[[Event], Awaitable[None]]
+BackgroundOperation = Callable[[], Awaitable[None]]
+BackgroundWorkStarter = Callable[
+    [str, BackgroundOperation], asyncio.Task[None]
+]
 
 
 class BasePlugin(ABC):
@@ -18,6 +23,7 @@ class BasePlugin(ABC):
             raise ValueError("plugin_id cannot be empty")
         self._plugin_id = plugin_id
         self._publisher: EventPublisher | None = None
+        self._background_work_starter: BackgroundWorkStarter | None = None
 
     @property
     def plugin_id(self) -> PluginId:
@@ -64,3 +70,25 @@ class BasePlugin(ABC):
 
     def unbind_publisher(self) -> None:
         self._publisher = None
+
+    def start_background_work(
+        self,
+        operation: BackgroundOperation,
+        *,
+        name: str,
+    ) -> asyncio.Task[None]:
+        starter = self._background_work_starter
+        if starter is None:
+            raise RuntimeError(
+                f"Plugin is not bound to a Runtime: {self.plugin_id}"
+            )
+        return starter(name, operation)
+
+    def bind_background_work_starter(
+        self,
+        starter: BackgroundWorkStarter,
+    ) -> None:
+        self._background_work_starter = starter
+
+    def unbind_background_work_starter(self) -> None:
+        self._background_work_starter = None

@@ -29,6 +29,9 @@ from apps.agent.src.model_provider.types import Message
 
 
 EventPublisher = Callable[[Event], Awaitable[None]]
+BackgroundWorkStarter = Callable[
+    [str, Callable[[], Awaitable[None]]], asyncio.Task[None]
+]
 _TERMINAL_LIMIT = 100
 
 
@@ -53,9 +56,11 @@ class SkillJobManager:
         self._coordinator = coordinator
         self._workspace_dir = Path(workspace_dir).expanduser().resolve()
         self._publish_event = publish_event
+        self._background_work_starter: BackgroundWorkStarter | None = None
         self._close_resource = close_resource
         self._terminal_limit = terminal_limit
         self._jobs: dict[str, SkillJob] = {}
+        self._legacy_workspace_jobs: dict[str, SkillJob] = {}
         self._session_job_ids: list[str] = []
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._stages: dict[str, str] = {}
@@ -66,6 +71,12 @@ class SkillJobManager:
 
     def bind_publisher(self, publisher: EventPublisher) -> None:
         self._publish_event = publisher
+
+    def bind_background_work_starter(
+        self,
+        starter: BackgroundWorkStarter,
+    ) -> None:
+        self._background_work_starter = starter
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -168,10 +179,25 @@ class SkillJobManager:
             job = self._jobs.get(job_id)
             if job is None or job.status != "queued":
                 return
-        task = asyncio.create_task(
-            self._run(job_id, instructions, conversation, snapshot),
-            name=f"skill-job:{job_id}",
-        )
+        starter = self._background_work_starter
+        if starter is None:
+            raise RuntimeError(
+                "Skill Job manager has no background work starter"
+            )
+        name = f"skill-job:{job_id}"
+        try:
+            task = starter(
+                name,
+                lambda: self._run(
+                    job_id, instructions, conversation, snapshot
+                ),
+            )
+        except RuntimeError:
+            with self._lock:
+                current = self._jobs.get(job_id)
+                if current is not None and not current.is_terminal:
+                    self._jobs[job_id] = current.transition("interrupted")
+            return
         self._tasks[job_id] = task
         task.add_done_callback(lambda _: self._tasks.pop(job_id, None))
 
@@ -433,19 +459,15 @@ class SkillJobManager:
         if self._close_resource is not None:
             await self._close_resource()
 
-    async def snapshot_workspace_state(self) -> Mapping[str, object]:
-        with self._lock:
-            jobs = sorted(
-                (job for job in self._jobs.values() if job.is_terminal),
-                key=lambda job: (job.finished_at or job.created_at, job.job_id),
-            )[-self._terminal_limit :]
-            return {"jobs": [job.to_dict() for job in jobs]}
+    async def snapshot_workspace_state(self) -> Mapping[str, object] | None:
+        return None
 
     async def snapshot_session_state(self) -> Mapping[str, object]:
         with self._lock:
             ids = [job_id for job_id in self._session_job_ids if job_id in self._jobs]
             return {
                 "job_ids": ids,
+                "jobs": [self._jobs[job_id].to_dict() for job_id in ids],
                 "notifications": {
                     job_id: self._jobs[job_id].notification_status
                     for job_id in ids
@@ -474,8 +496,7 @@ class SkillJobManager:
                     job = job.transition("interrupted", now=now)
             restored[job.job_id] = job
         with self._lock:
-            self._jobs = restored
-            self._prune_locked()
+            self._legacy_workspace_jobs = restored
 
     async def restore_session_state(
         self, state: Mapping[str, object], *, state_version: int
@@ -490,7 +511,29 @@ class SkillJobManager:
             raise ValueError("Skill session state requires string job_ids")
         if not isinstance(notifications, Mapping):
             raise ValueError("Skill session notifications must be a mapping")
+        raw_jobs = state.get("jobs")
+        restored: dict[str, SkillJob] | None = None
+        if raw_jobs is not None:
+            if not isinstance(raw_jobs, list):
+                raise ValueError("Skill session jobs must be a list")
+            restored = {}
+            now = datetime.now(UTC)
+            for raw in raw_jobs:
+                if not isinstance(raw, Mapping):
+                    raise ValueError("Invalid persisted Skill Job entry")
+                job = SkillJob.from_dict(raw)
+                if not job.is_terminal:
+                    job = job.transition("interrupted", now=now)
+                restored[job.job_id] = job
         with self._lock:
+            if restored is not None:
+                self._jobs = restored
+            else:
+                self._jobs = {
+                    job_id: self._legacy_workspace_jobs[job_id]
+                    for job_id in job_ids
+                    if job_id in self._legacy_workspace_jobs
+                }
             self._session_job_ids = [
                 job_id for job_id in job_ids if job_id in self._jobs
             ]
@@ -500,3 +543,5 @@ class SkillJobManager:
                     continue
                 if job.notification_event_id is not None:
                     self._jobs[job.job_id] = job.with_notification_status(status)
+            self._prune_locked()
+            self._legacy_workspace_jobs = {}

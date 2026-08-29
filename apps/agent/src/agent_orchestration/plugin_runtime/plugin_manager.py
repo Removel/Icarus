@@ -100,6 +100,7 @@ class PluginManager:
             await self.event_bus.publish(plugin.plugin_id, event)
 
         plugin.bind_publisher(publish)
+        plugin.bind_background_work_starter(runtime.start_background_work)
         return runtime
 
     def unregister(self, plugin_id: str) -> BasePlugin:
@@ -108,6 +109,7 @@ class PluginManager:
             raise KeyError(f"Plugin runtime is not registered: {plugin_id}")
         plugin = self.registry.unregister(plugin_id)
         plugin.unbind_publisher()
+        plugin.unbind_background_work_starter()
         del self._runtimes[plugin_id]
         return plugin
 
@@ -140,6 +142,9 @@ class PluginManager:
 
     def get_runtime_snapshot(self, plugin_id: str) -> PluginRuntimeSnapshot:
         return self.get_runtime(plugin_id).snapshot()
+
+    def snapshots(self) -> tuple[PluginRuntimeSnapshot, ...]:
+        return tuple(runtime.snapshot() for runtime in self._runtimes.values())
 
     async def start(self) -> None:
         if self._started:
@@ -174,7 +179,7 @@ class PluginManager:
         errors: list[BaseException] = []
         for runtime in reversed(tuple(self._runtimes.values())):
             try:
-                await runtime.plugin.quiesce()
+                await runtime.quiesce()
             except BaseException as error:
                 errors.append(error)
         if errors:

@@ -153,6 +153,11 @@ def test_generation_agent_uses_private_tools_and_child_trace(tmp_path):
             workspace_dir=workspace,
             close_resource=factory.aclose,
         )
+        manager.bind_background_work_starter(
+            lambda name, operation: asyncio.create_task(
+                operation(), name=name
+            )
+        )
         await manager.start()
         queued = manager.submit_produce(
             name="generated",

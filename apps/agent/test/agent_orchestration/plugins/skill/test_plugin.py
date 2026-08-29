@@ -67,6 +67,8 @@ class JobManagerStub:
 
     def bind_publisher(self, publisher):
         self.publisher = publisher
+    def bind_background_work_starter(self, starter):
+        self.background_work_starter = starter
 
     async def start(self): self.lifecycle.append("start")
     async def quiesce(self): self.lifecycle.append("quiesce")

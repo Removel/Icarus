@@ -3,11 +3,10 @@ import os
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 
-from dotenv import load_dotenv
-
 from apps.agent.src.model_config.config_model import ConfigModel
+from packages.runtime_environment import load_icarus_environment
 
-load_dotenv()
+load_icarus_environment()
 
 
 def _settings_resource() -> Traversable:

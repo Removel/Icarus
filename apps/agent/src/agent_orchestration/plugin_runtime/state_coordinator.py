@@ -52,13 +52,9 @@ class PluginStateCoordinator:
                 continue
             state = loaded.get("state")
             version = loaded.get("state_version")
-            plugin_version = loaded.get("plugin_version")
-            manifest_hash = loaded.get("manifest_hash")
             expected = getattr(manifest, f"{scope}_state_version")
             if (
                 version != expected
-                or plugin_version != manifest.plugin_version
-                or manifest_hash != item.manifest_hash
                 or not isinstance(state, Mapping)
             ):
                 raise RuntimeError(

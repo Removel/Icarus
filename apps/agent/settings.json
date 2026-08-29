@@ -18,7 +18,7 @@
       "user-input",
       "skill",
       "blackboard",
-      "output-bridge"
+      "runtime-update"
     ]
   },
   "model_settings": {

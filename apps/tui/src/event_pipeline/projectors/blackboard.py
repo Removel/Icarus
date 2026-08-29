@@ -1,23 +1,13 @@
-"""Projection of public BlackboardPlugin events."""
+"""Projection of non-visible Session and context RuntimeUpdate values."""
 
-from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
-from apps.agent.src.agent_orchestration.plugins.blackboard import (
-    BlackboardCompactedEvent,
-    BlackboardContextReadyEvent,
-)
+from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import UiAction
-from apps.tui.src.event_pipeline.projectors.task_error import (
-    project_task_error,
-)
 
 
 class BlackboardProjector:
-    def project(self, event: Event) -> tuple[UiAction, ...] | None:
-        if isinstance(event, TaskErrorEvent):
-            return project_task_error(event)
-        if isinstance(
-            event,
-            (BlackboardContextReadyEvent, BlackboardCompactedEvent),
-        ):
+    def project(
+        self, update: RuntimeUpdateModel
+    ) -> tuple[UiAction, ...] | None:
+        if update.type in {"context.compacted", "session.lifecycle"}:
             return ()
         return None
