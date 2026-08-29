@@ -89,6 +89,9 @@ def test_replay_service在submit返回前发布accepted并依次消费turn():
         submit_task = asyncio.create_task(
             service.submit("first prompt", submission_id="submission")
         )
+        user_message = await asyncio.wait_for(
+            subscription.next_update(), timeout=1
+        )
         first = await asyncio.wait_for(subscription.next_update(), timeout=1)
         accepted = await submit_task
         remaining = []
@@ -98,9 +101,11 @@ def test_replay_service在submit返回前发布accepted并依次消费turn():
             if update.type == "task.finished" and update.task_id == accepted.task_id:
                 break
         await service.close()
-        return service, accepted, first, remaining
+        return service, accepted, user_message, first, remaining
 
-    service, accepted, first, remaining = asyncio.run(run())
+    service, accepted, user_message, first, remaining = asyncio.run(run())
+    assert user_message.type == "user.message"
+    assert user_message.payload["text"] == "first prompt"
     assert accepted.task_id == "task-1"
     assert first.type == "task.accepted"
     assert service.submissions == ["first prompt"]

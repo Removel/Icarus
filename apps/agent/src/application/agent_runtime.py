@@ -14,6 +14,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.plugins.persistence import (
+    ConversationStore,
     DataPathResolver,
     SessionIdentity,
 )
@@ -110,6 +111,7 @@ class AgentRuntime:
         self.logger = logger or logging.getLogger("icarus.agent.runtime")
         self._entries: dict[tuple[str, str], _SessionEntry] = {}
         self._entries_lock = asyncio.Lock()
+        self._conversation_store: ConversationStore | None = None
         self._updates = RuntimeUpdateStream(update_queue_capacity)
         self._update_queue: asyncio.Queue[RuntimeUpdate] = asyncio.Queue()
         self._update_task: asyncio.Task[None] | None = None
@@ -132,6 +134,9 @@ class AgentRuntime:
             if config.icarus_data_dir is None:
                 raise RuntimeError("ICARUS_DATA_DIR is required")
             self._data_dir = config.icarus_data_dir.expanduser().resolve()
+        self._conversation_store = ConversationStore(
+            DataPathResolver(self._data_dir)
+        )
         self._started = True
         self._stopping = False
         self._update_task = asyncio.create_task(
@@ -171,13 +176,16 @@ class AgentRuntime:
         *,
         submission_id: str,
         resources: tuple[ResourceRef, ...] = (),
+        display_text: str | None = None,
     ) -> InputAccepted:
         self._require_accepting()
         if not submission_id.strip():
             raise ValueError("submission_id cannot be empty")
         identity = SessionIdentity.create(workspace_path, session_id)
         entry = await self._entry(identity)
-        fingerprint = _submission_fingerprint(prompt, resources)
+        fingerprint = _submission_fingerprint(
+            prompt, resources, display_text
+        )
         while True:
             wait_for: asyncio.Task | None = None
             async with entry.mutation_lock:
@@ -199,7 +207,12 @@ class AgentRuntime:
                     images = await self._import_resources(
                         entry.runtime, resources
                     )
-                    accepted = await entry.runtime.submit(prompt, images)
+                    task_id = uuid4().hex
+                    accepted = await entry.runtime.submit(
+                        prompt,
+                        images,
+                        task_id=task_id,
+                    )
                     now = self._clock()
                     entry.last_task_activity_at = now
                     self._remember_submission(
@@ -216,6 +229,31 @@ class AgentRuntime:
                             updated_at=now,
                         ),
                     )
+                    user_update = self._history_store().append(
+                        identity,
+                        RuntimeUpdate(
+                            workspace_key=identity.workspace_key,
+                            session_id=identity.session_id,
+                            task_id=accepted.task_id,
+                            type="user.message",
+                            payload={
+                                "text": (
+                                    prompt
+                                    if display_text is None
+                                    else display_text
+                                ),
+                                "resources": [
+                                    {
+                                        "resource_id": image.source,
+                                        "media_type": image.media_type,
+                                    }
+                                    for image in (images or [])
+                                ],
+                            },
+                            occurred_at=now,
+                        ),
+                    )
+                    await self._updates.publish(user_update)
                     return accepted
             assert wait_for is not None
             await asyncio.shield(wait_for)
@@ -308,6 +346,78 @@ class AgentRuntime:
         if entry is None or task_id not in entry.tasks:
             raise KeyError("Task status is unavailable")
         return entry.tasks[task_id]
+
+    async def get_session_history(
+        self,
+        workspace_path: str | Path,
+        session_id: str,
+        *,
+        after_sequence: int = 0,
+    ) -> tuple[tuple[RuntimeUpdate, ...], int]:
+        self._require_accepting()
+        identity = SessionIdentity.create(workspace_path, session_id)
+        if not self._session_exists(identity):
+            raise SessionNotFoundError(session_id)
+        entry = await self._entry(identity)
+        async with entry.mutation_lock:
+            store = self._history_store()
+            all_records, cursor = store.read(identity)
+            terminal_task_ids = {
+                item.task_id
+                for item in all_records
+                if item.type == "task.finished" and item.task_id is not None
+            }
+            seen_task_ids = {
+                item.task_id
+                for item in all_records
+                if item.task_id is not None
+            }
+            runtime_snapshot = (
+                entry.runtime.snapshot()
+                if entry.runtime is not None
+                else None
+            )
+            active_task_ids = (
+                set(runtime_snapshot.active_task_ids)
+                if runtime_snapshot is not None
+                else set()
+            )
+            active_task_ids.update(
+                task_id
+                for task_id, status in entry.tasks.items()
+                if status.lifecycle in {"accepted", "running"}
+            )
+            interrupted_task_ids = (
+                seen_task_ids - terminal_task_ids - active_task_ids
+            )
+            for task_id in sorted(interrupted_task_ids):
+                interrupted = store.append(
+                    identity,
+                    RuntimeUpdate(
+                        workspace_key=identity.workspace_key,
+                        session_id=identity.session_id,
+                        task_id=task_id,
+                        type="task.finished",
+                        payload={
+                            "status": "interrupted",
+                            "run_id": None,
+                            "recovered": True,
+                        },
+                        occurred_at=self._clock(),
+                    ),
+                )
+                all_records = (*all_records, interrupted)
+                cursor = interrupted.sequence or cursor
+                await self._updates.publish(interrupted)
+            return (
+                tuple(
+                    item
+                    for item in all_records
+                    if item.sequence is not None
+                    and item.sequence > after_sequence
+                ),
+                cursor,
+            )
 
     async def stop(self) -> None:
         if not self._started:
@@ -498,10 +608,59 @@ class AgentRuntime:
                     (update.workspace_key, update.session_id)
                 )
                 lifecycle_update: SessionLifecycle | None = None
+                recorded_update = update
+                checkpoint_error_update: RuntimeUpdate | None = None
                 if entry is not None:
                     async with entry.mutation_lock:
                         previous = entry.lifecycle
                         self._apply_task_update(entry, update)
+                        if (
+                            update.type == "task.finished"
+                            and entry.runtime is not None
+                            and entry.lifecycle in {"ready", "running"}
+                        ):
+                            try:
+                                errors = await entry.runtime.checkpoint()
+                            except Exception as error:
+                                self.logger.exception(
+                                    "Session checkpoint failed: session_id=%s",
+                                    entry.identity.session_id,
+                                )
+                                errors = (type(error).__name__,)
+                            if errors:
+                                checkpoint_error_update = RuntimeUpdate(
+                                    workspace_key=update.workspace_key,
+                                    session_id=update.session_id,
+                                    task_id=update.task_id,
+                                    type="task.error",
+                                    payload={
+                                        "fatal": True,
+                                        "code": "state_checkpoint_failed",
+                                        "error_type": "PersistenceError",
+                                        "message": (
+                                            "Session state could not be saved"
+                                        ),
+                                        "step": None,
+                                        "run_id": update.payload.get("run_id"),
+                                    },
+                                    occurred_at=update.occurred_at,
+                                )
+                                self._apply_task_update(
+                                    entry, checkpoint_error_update
+                                )
+                                update = RuntimeUpdate(
+                                    workspace_key=update.workspace_key,
+                                    session_id=update.session_id,
+                                    task_id=update.task_id,
+                                    type="task.finished",
+                                    payload={
+                                        "status": "failed",
+                                        "run_id": update.payload.get("run_id"),
+                                        "error_code": "state_checkpoint_failed",
+                                    },
+                                    occurred_at=update.occurred_at,
+                                )
+                                self._apply_task_update(entry, update)
                         if (
                             entry.runtime is not None
                             and previous in {"ready", "running"}
@@ -522,7 +681,26 @@ class AgentRuntime:
                             entry.lifecycle = projected
                             if projected != previous:
                                 lifecycle_update = projected
-                await self._updates.publish(update)
+                        if update.type != "session.lifecycle":
+                            if update.type == "task.accepted":
+                                accepted = entry.tasks.get(update.task_id or "")
+                                if accepted is None:
+                                    raise RuntimeError(
+                                        "Task accepted Update arrived before submit commit"
+                                    )
+                            if checkpoint_error_update is not None:
+                                recorded_error = self._history_store().append(
+                                    entry.identity, checkpoint_error_update
+                                )
+                                await self._updates.publish(recorded_error)
+                            recorded_update = self._history_store().append(
+                                entry.identity, update
+                            )
+                elif update.type != "session.lifecycle":
+                    raise RuntimeError(
+                        "RuntimeUpdate belongs to an unknown Session"
+                    )
+                await self._updates.publish(recorded_update)
                 if entry is not None and lifecycle_update is not None:
                     await self._publish_lifecycle(entry, lifecycle_update)
             except Exception:
@@ -556,6 +734,9 @@ class AgentRuntime:
             lifecycle = str(update.payload["status"])  # type: ignore[assignment]
             raw_run_id = update.payload.get("run_id")
             run_id = str(raw_run_id) if raw_run_id is not None else None
+            raw_error_code = update.payload.get("error_code")
+            if raw_error_code is not None:
+                error_code = str(raw_error_code)
         entry.last_task_activity_at = self._clock()
         self._remember_task(
             entry,
@@ -622,6 +803,11 @@ class AgentRuntime:
             raise RuntimeError("AgentRuntime is not started")
         return DataPathResolver(self._data_dir)
 
+    def _history_store(self) -> ConversationStore:
+        if self._conversation_store is None:
+            raise RuntimeError("AgentRuntime is not started")
+        return self._conversation_store
+
     async def _import_resources(
         self, runtime: SessionRuntime, resources: tuple[ResourceRef, ...]
     ):
@@ -671,10 +857,13 @@ def _key(identity: SessionIdentity) -> tuple[str, str]:
 
 
 def _submission_fingerprint(
-    prompt: str, resources: tuple[ResourceRef, ...]
+    prompt: str,
+    resources: tuple[ResourceRef, ...],
+    display_text: str | None,
 ) -> str:
     payload = {
         "prompt": prompt,
+        "display_text": display_text,
         "resources": [
             {
                 "resource_id": item.resource_id,

@@ -8,6 +8,9 @@ from apps.agent.src.application.agent_runtime import (
     SubmissionConflictError,
 )
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
+from apps.agent.src.agent_orchestration.plugins.persistence import (
+    ConversationHistoryCorruptError,
+)
 from apps.agent.src.application.session_runtime import SessionRuntime
 from apps.agent.src.application.resource_ref import (
     InvalidResourceError,
@@ -28,6 +31,7 @@ from apps.agent.src.runtime_update import RuntimeUpdate
 __all__ = [
     "AgentRuntime",
     "AgentRuntimeStoppingError",
+    "ConversationHistoryCorruptError",
     "TaskOperationResult",
     "SessionRuntime",
     "SessionAlreadyExistsError",

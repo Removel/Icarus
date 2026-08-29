@@ -1,5 +1,10 @@
 """Agent 本地文件持久化与监测。"""
 
+from apps.agent.src.agent_orchestration.plugins.persistence.conversation_store import (
+    ConversationHistoryCorruptError,
+    ConversationStore,
+)
+
 from apps.agent.src.agent_orchestration.plugins.persistence.metadata_store import (
     MetadataStore,
 )
@@ -33,6 +38,8 @@ from apps.agent.src.agent_orchestration.plugins.persistence.trace_writer import 
 )
 
 __all__ = [
+    "ConversationHistoryCorruptError",
+    "ConversationStore",
     "DataPathResolver",
     "FileTraceHook",
     "FileTraceWriter",

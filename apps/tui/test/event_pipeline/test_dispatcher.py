@@ -24,7 +24,12 @@ class SameProjector:
 
 def test_default_registry只显式注册公共update类型():
     registry = create_default_projector_registry()
-    assert {"assistant.text_delta", "task.finished", "session.lifecycle"} <= registry.update_types
+    assert {
+        "user.message",
+        "assistant.text_delta",
+        "task.finished",
+        "session.lifecycle",
+    } <= registry.update_types
 
 
 def test_dispatcher按type和当前task过滤():
@@ -36,6 +41,9 @@ def test_dispatcher按type和当前task过滤():
     assert registry.project(value, active_task_id="other") == ()
     assert registry.project(value, active_task_id=None) == ()
     assert registry.unrelated_update_count == 2
+    assert registry.project(
+        value, active_task_id=None, include_unrelated=True
+    ) == (AppendAssistantDelta("task-1", "hello"),)
 
 
 def test未知update只诊断且registry拒绝重复或空type():

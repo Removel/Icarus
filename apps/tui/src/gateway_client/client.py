@@ -14,6 +14,7 @@ from websockets.asyncio.client import connect
 from packages.gateway_protocol import (
     ResourceRefModel,
     RuntimeUpdateModel,
+    SessionHistoryModel,
 )
 from apps.tui.src.gateway_client.models import (
     SubmitAccepted,
@@ -109,6 +110,20 @@ class GatewayClient:
         )
         return self._updates
 
+    async def get_session_history(
+        self, *, after_sequence: int = 0
+    ) -> SessionHistoryModel:
+        result = await self.request(
+            "session.get_history",
+            {
+                "workspace_path": self.workspace_path,
+                "session_id": self._require_session_id(),
+                "after_sequence": after_sequence,
+            },
+        )
+        history = SessionHistoryModel.model_validate(result)
+        return history
+
     async def get_task_status(self, task_id: str) -> dict[str, Any]:
         return await self.request(
             "task.get_status",
@@ -130,6 +145,7 @@ class GatewayClient:
         *,
         submission_id: str,
         resources: tuple[ResourceRefModel, ...] = (),
+        display_text: str | None = None,
     ) -> SubmitAccepted:
         result = await self.request(
             "session.submit",
@@ -137,6 +153,7 @@ class GatewayClient:
                 "workspace_path": self.workspace_path,
                 "session_id": self._require_session_id(),
                 "prompt": prompt,
+                "display_text": display_text,
                 "submission_id": submission_id,
                 "resources": [item.model_dump(mode="json") for item in resources],
             },

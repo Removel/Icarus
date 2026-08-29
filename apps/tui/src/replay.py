@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
-from packages.gateway_protocol import RuntimeUpdateModel
+from packages.gateway_protocol import RuntimeUpdateModel, SessionHistoryModel
 from apps.tui.src.gateway_client.models import (
     SubmitAccepted,
     TaskOperationResult,
@@ -129,8 +130,16 @@ class ReplayRuntimeService:
             raise RuntimeError("Replay client is not running")
         return self._subscription
 
+    async def get_session_history(self, *, after_sequence=0):
+        return SessionHistoryModel(records=(), history_cursor=after_sequence)
+
     async def submit(
-        self, prompt: str, *, submission_id: str, resources=()
+        self,
+        prompt: str,
+        *,
+        submission_id: str,
+        resources=(),
+        display_text=None,
     ) -> SubmitAccepted:
         del submission_id, resources
         if self._next_turn >= len(self.scenario.turns):
@@ -141,6 +150,19 @@ class ReplayRuntimeService:
         self._task_statuses[turn.task_id] = {
             "task_id": turn.task_id, "lifecycle": "running"
         }
+        self._subscription.publish(
+            RuntimeUpdateModel(
+                workspace_key="replay-workspace",
+                session_id=self.session_id,
+                task_id=turn.task_id,
+                type="user.message",
+                payload={
+                    "text": prompt if display_text is None else display_text,
+                    "resources": [],
+                },
+                occurred_at=datetime.now(UTC),
+            )
+        )
         first = turn.updates[0]
         self._subscription.publish(first)
         await asyncio.sleep(0)

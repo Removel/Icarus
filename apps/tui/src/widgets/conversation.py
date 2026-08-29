@@ -11,6 +11,7 @@ from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
     AppendError,
     AppendToolStarted,
+    AppendUserMessage,
     FinishTurn,
     UiAction,
     UpdateToolCompleted,
@@ -34,6 +35,7 @@ class ConversationView(VerticalScroll):
         self._active_assistant: AssistantMessage | None = None
         self._tools: dict[str, ToolMessage] = {}
         self._anchor_pending = True
+        self._restoring_history = False
 
     async def on_mount(self) -> None:
         await self.mount(WelcomeMessage(self.workspace_path))
@@ -41,10 +43,22 @@ class ConversationView(VerticalScroll):
     async def append_user_message(self, text: str) -> None:
         await self._finish_assistant_segment()
         await self.mount(UserMessage(text))
-        self._activate_anchor_after_layout()
+        if not self._restoring_history:
+            self._activate_anchor_after_layout()
+
+    def begin_history_restore(self) -> None:
+        self._restoring_history = True
+        self.display = False
+
+    def finish_history_restore(self) -> None:
+        self._restoring_history = False
+        self.display = True
+        self.resume_follow()
 
     async def apply_action(self, action: UiAction) -> bool:
-        if isinstance(action, AppendAssistantDelta):
+        if isinstance(action, AppendUserMessage):
+            await self.append_user_message(action.text)
+        elif isinstance(action, AppendAssistantDelta):
             assistant = await self._ensure_assistant_segment()
             await assistant.append_delta(action.text)
         elif isinstance(action, AppendToolStarted):
@@ -72,13 +86,17 @@ class ConversationView(VerticalScroll):
             await self.mount(ErrorMessage(action.error_type, action.message))
         elif isinstance(action, FinishTurn):
             await self._finish_assistant_segment()
-            if action.status in {"failed", "cancelled"}:
+            if action.status == "interrupted":
+                for tool in self._tools.values():
+                    tool.interrupt()
+            if action.status in {"failed", "cancelled", "interrupted"}:
                 await self.mount(TurnStatusMessage(action.status))
             self._tools.clear()
         else:
             return False
 
-        self._activate_anchor_after_layout()
+        if not self._restoring_history:
+            self._activate_anchor_after_layout()
         return True
 
     async def _ensure_assistant_segment(self) -> AssistantMessage:

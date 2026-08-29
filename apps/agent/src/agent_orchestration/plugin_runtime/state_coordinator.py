@@ -67,32 +67,11 @@ class PluginStateCoordinator:
         self,
         graph_snapshot: RuntimeGraphSnapshot | None,
     ) -> list[str]:
-        errors: list[str] = []
+        errors = await self.snapshot_plugin_states(
+            tuple(self.registrations)
+        )
         if self.state_store is None:
             return errors
-        for plugin_id, registration in self.registrations.items():
-            provider = registration.state_provider
-            if provider is None:
-                continue
-            item = self.discovered[plugin_id]
-            for scope in item.manifest.state_scopes:
-                try:
-                    state = await getattr(
-                        provider, f"snapshot_{scope}_state"
-                    )()
-                    if state is not None:
-                        self.state_store.save_plugin_state(
-                            plugin_id,
-                            item.manifest.plugin_version,
-                            item.manifest_hash,
-                            scope,
-                            getattr(
-                                item.manifest, f"{scope}_state_version"
-                            ),
-                            state,
-                        )
-                except Exception as error:
-                    errors.append(f"snapshot {plugin_id}/{scope}: {error}")
         if graph_snapshot is not None:
             try:
                 self.state_store.save_runtime_snapshot(
@@ -100,4 +79,34 @@ class PluginStateCoordinator:
                 )
             except Exception as error:
                 errors.append(f"runtime snapshot: {error}")
+        return errors
+
+    async def snapshot_plugin_states(
+        self, plugin_ids: tuple[str, ...]
+    ) -> list[str]:
+        errors: list[str] = []
+        if self.state_store is None:
+            return errors
+        for plugin_id in plugin_ids:
+            registration = self.registrations.get(plugin_id)
+            if registration is None or registration.state_provider is None:
+                continue
+            item = self.discovered[plugin_id]
+            for scope in item.manifest.state_scopes:
+                try:
+                    state = await getattr(
+                        registration.state_provider,
+                        f"snapshot_{scope}_state",
+                    )()
+                    if state is not None:
+                        self.state_store.save_plugin_state(
+                            plugin_id,
+                            item.manifest.plugin_version,
+                            item.manifest_hash,
+                            scope,
+                            getattr(item.manifest, f"{scope}_state_version"),
+                            state,
+                        )
+                except Exception as error:
+                    errors.append(f"snapshot {plugin_id}/{scope}: {error}")
         return errors

@@ -1,5 +1,9 @@
 from packages.gateway_protocol import RuntimeUpdateModel
-from apps.tui.src.event_pipeline.actions import FinishTurn, SetRuntimeStatus
+from apps.tui.src.event_pipeline.actions import (
+    AppendUserMessage,
+    FinishTurn,
+    SetRuntimeStatus,
+)
 from apps.tui.src.event_pipeline.projectors.user_input import UserInputProjector
 
 
@@ -12,6 +16,9 @@ def update(update_type, payload=None, task_id="task-1"):
 
 def test_user_input_projector映射生命周期():
     projector = UserInputProjector()
+    assert projector.project(
+        update("user.message", {"text": "hello", "resources": []})
+    ) == (AppendUserMessage("task-1", "hello"),)
     assert projector.project(update("task.accepted", {"queue_position": 0})) == (
         SetRuntimeStatus("task-1", "accepted", "Accepted by runtime"),
     )
@@ -24,4 +31,7 @@ def test_user_input_projector映射生命周期():
     assert projector.project(update("task.finished", {"status": "cancelled"})) == (
         FinishTurn("task-1", "cancelled"),
     )
+    assert projector.project(
+        update("task.finished", {"status": "interrupted"})
+    ) == (FinishTurn("task-1", "interrupted"),)
     assert projector.project(update("unknown")) is None

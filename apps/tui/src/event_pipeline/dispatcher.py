@@ -38,6 +38,7 @@ class ProjectorRegistry:
         update: RuntimeUpdateModel,
         *,
         active_task_id: str | None,
+        include_unrelated: bool = False,
     ) -> tuple[UiAction, ...]:
         projector = self._projectors.get(update.type)
         if projector is None:
@@ -46,7 +47,7 @@ class ProjectorRegistry:
                 "Ignoring unknown RuntimeUpdate: type=%s", update.type
             )
             return ()
-        if update.task_id is not None and (
+        if not include_unrelated and update.task_id is not None and (
             active_task_id is None or update.task_id != active_task_id
         ):
             self.unrelated_update_count += 1
@@ -86,7 +87,12 @@ def create_default_projector_registry(
     ):
         registry.register(update_type, agent)
     input_projector = UserInputProjector()
-    for update_type in ("task.accepted", "task.started", "task.finished"):
+    for update_type in (
+        "user.message",
+        "task.accepted",
+        "task.started",
+        "task.finished",
+    ):
         registry.register(update_type, input_projector)
     blackboard = BlackboardProjector()
     registry.register("context.compacted", blackboard)

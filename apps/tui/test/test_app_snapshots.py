@@ -21,7 +21,7 @@ from apps.agent.src.agent_orchestration.plugins import (
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolCall
-from packages.gateway_protocol import RuntimeUpdateModel
+from packages.gateway_protocol import RuntimeUpdateModel, SessionHistoryModel
 from apps.tui.src.gateway_client.models import SubmitAccepted
 from apps.tui.src.app import IcarusTextualApp
 from apps.tui.src.chat_state import RuntimePhase
@@ -81,13 +81,35 @@ class SnapshotService:
             raise RuntimeError("snapshot service is not running")
         return self.subscription
 
+    async def get_session_history(self, *, after_sequence=0):
+        return SessionHistoryModel(records=(), history_cursor=after_sequence)
+
     async def submit(
-        self, prompt: str, *, submission_id: str, resources=()
+        self,
+        prompt: str,
+        *,
+        submission_id: str,
+        resources=(),
+        display_text=None,
     ) -> SubmitAccepted:
         del submission_id
         task_id = f"task-{len(self.submissions) + 1}"
         self.submissions.append(prompt)
         self.submission_images.append(tuple(resources))
+        self.subscription.queue.put_nowait(
+            RuntimeUpdateModel(
+                workspace_key="workspace",
+                session_id=self.session_id,
+                task_id=task_id,
+                type="user.message",
+                payload={
+                    "text": prompt if display_text is None else display_text,
+                    "resources": [],
+                },
+                occurred_at=datetime.now(UTC),
+            )
+        )
+        await asyncio.sleep(0)
         return InputAccepted(task_id=task_id, queue_position=0)
 
     async def close(self) -> None:
