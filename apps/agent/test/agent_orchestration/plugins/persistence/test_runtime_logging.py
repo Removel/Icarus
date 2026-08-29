@@ -6,6 +6,7 @@ import pytest
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher, HookRegistry
 from apps.agent.src.agent_orchestration.plugins.persistence import (
     PersistenceRuntime,
+    SessionIdentity,
 )
 
 
@@ -78,3 +79,34 @@ def test_persistence_runtime_重启不重复注册hook(tmp_path):
         encoding="utf-8"
     ).splitlines()
     assert len(lines) == 1
+
+
+def test_session_logger只写入绑定的完整session_identity(tmp_path):
+    workspace = tmp_path / "workspace"
+    first = PersistenceRuntime(tmp_path / "data", workspace)
+    second = PersistenceRuntime(tmp_path / "data", workspace)
+    first_identity = SessionIdentity.create(workspace, "session-1")
+    second_identity = SessionIdentity.create(workspace, "session-2")
+    logger = logging.getLogger("persistence-multi-session-test")
+    logger.setLevel(logging.INFO)
+    first.start(logger=logger, session_identity=first_identity)
+    second.start(logger=logger, session_identity=second_identity)
+
+    with first.session_scope(session_id="session-1"):
+        logger.info("only first")
+    with second.session_scope(session_id="session-2"):
+        logger.info("only second")
+
+    first.stop(logger=logger)
+    second.stop(logger=logger)
+
+    first_log = first.resolver.session_log(first_identity).read_text(
+        encoding="utf-8"
+    )
+    second_log = second.resolver.session_log(second_identity).read_text(
+        encoding="utf-8"
+    )
+    assert "only first" in first_log
+    assert "only second" not in first_log
+    assert "only second" in second_log
+    assert "only first" not in second_log

@@ -48,7 +48,7 @@ class RuntimeSettings(pydantic.BaseModel):
             "user-input",
             "skill",
             "blackboard",
-            "output-bridge",
+            "runtime-update",
         ]
     )
 

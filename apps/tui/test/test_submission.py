@@ -40,3 +40,12 @@ def test只有图片marker时补充默认模型指令(tmp_path):
     assert PendingMessage(" [#image1] ", (image,)).model_prompt().startswith(
         "请分析所附图片。\n\n<attached_images>"
     )
+
+
+def test_pending_message自动生成稳定submission_id():
+    first = PendingMessage("hello")
+    second = PendingMessage("hello")
+
+    assert first.submission_id
+    assert second.submission_id
+    assert first.submission_id != second.submission_id

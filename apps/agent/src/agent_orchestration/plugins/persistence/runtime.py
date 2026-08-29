@@ -100,6 +100,7 @@ class PersistenceRuntime:
         self,
         hook_registry: HookRegistry | None = None,
         logger: logging.Logger | None = None,
+        session_identity: SessionIdentity | None = None,
     ) -> None:
         if self._started:
             return
@@ -109,6 +110,8 @@ class PersistenceRuntime:
             hook_registry.register("*", self.trace_hook)
             self._hook_registry = hook_registry
         self._logger = logger or logging.getLogger()
+        if session_identity is not None:
+            self.log_handler.bind_session(session_identity)
         self._logger.addHandler(self.log_handler)
         self._started = True
 

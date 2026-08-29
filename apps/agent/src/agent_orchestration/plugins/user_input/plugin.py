@@ -67,6 +67,22 @@ class UserInputPlugin(BasePlugin):
         self._submit_lock = asyncio.Lock()
         self._accepting_submissions = False
 
+    @property
+    def pending_count(self) -> int:
+        return self._outstanding_count
+
+    @property
+    def queued_count(self) -> int:
+        return max(
+            0,
+            self._outstanding_count
+            - (1 if self._active_task_id is not None else 0),
+        )
+
+    @property
+    def active_task_id(self) -> str | None:
+        return self._active_task_id
+
     async def start(self) -> None:
         if self._worker is not None and not self._worker.done():
             return

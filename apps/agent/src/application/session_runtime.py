@@ -1,11 +1,12 @@
-"""Application entrypoint for one manifest-driven Agent Runtime."""
+"""One Session-scoped Agent execution environment."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from datetime import datetime
 import logging
 from pathlib import Path
-from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.hooks import (
     HookDispatcher,
@@ -18,11 +19,11 @@ from apps.agent.src.agent_orchestration.plugin_runtime import (
 )
 from apps.agent.src.agent_orchestration.plugins.agent import AgentPlugin
 from apps.agent.src.agent_orchestration.plugins.persistence import (
-    PersistencePlugin,
+    ImageAssetError,
     PersistenceRuntime,
+    PersistenceSession,
     SessionIdentity,
 )
-from apps.agent.src.agent_orchestration.plugins.skill import SkillPlugin
 from apps.agent.src.agent_orchestration.plugins.user_input import (
     InputAccepted,
     UserInputPlugin,
@@ -32,22 +33,25 @@ from apps.agent.src.agent_orchestration.run_control import (
     TaskOperationResult,
 )
 from apps.agent.src.agent_orchestration.tools import ToolRegistry
-from apps.agent.src.application.output_bridge import (
-    OutputBridgePlugin,
-    OutputEventSubscription,
-)
-from apps.agent.src.model_config import ConfigModel, get_config
+from apps.agent.src.application.runtime_status import SessionRuntimeSnapshot
+from apps.agent.src.application.resource_ref import InvalidResourceError
+from apps.agent.src.model_config import ConfigModel
 from apps.agent.src.model_provider.types import ImagePart, Message
+from apps.agent.src.runtime_update import RuntimeUpdate
 
-class AgentRuntimeService:
+
+UpdatePublisher = Callable[[RuntimeUpdate], Awaitable[None]]
+
+
+class SessionRuntime:
     """Manage one fixed Session through a manifest-driven Runtime Host."""
 
     def __init__(
         self,
-        workspace_path: str | Path,
+        identity: SessionIdentity,
         *,
-        session_id: str | None = None,
-        config: ConfigModel | None = None,
+        config: ConfigModel,
+        publish_update: UpdatePublisher,
         system_prompt: str = (
             "你是 Icarus Agent。准确理解用户目标，必要时使用工具完成任务，"
             "并在完成后给出清晰的结果。"
@@ -56,71 +60,62 @@ class AgentRuntimeService:
         initial_messages: list[Message] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
-        self.workspace_path = Path(workspace_path).expanduser().resolve()
-        self.requested_session_id = session_id
-        self._session_id = session_id or uuid4().hex
-        self.config = config or get_config()
-        self.system_prompt = system_prompt
-        self.tools = tools
-        self.initial_messages = list(initial_messages or [])
-        self.logger = logger or logging.getLogger("icarus.agent.runtime")
-        if self.config.icarus_data_dir is None:
+        self.identity = identity
+        self.workspace_path = identity.workspace_path
+        self.config = config
+        self.logger = logger or logging.getLogger("icarus.agent.session")
+        if config.icarus_data_dir is None:
             raise RuntimeError("ICARUS_DATA_DIR is required")
 
         self.hook_registry = HookRegistry()
         self.persistence = PersistenceRuntime(
-            data_dir=self.config.icarus_data_dir,
-            workspace_path=self.workspace_path,
+            data_dir=config.icarus_data_dir,
+            workspace_path=identity.workspace_path,
         )
         self.tool_registry = ToolRegistry()
         self.plugin_manager = PluginManager(
             hook_dispatcher=HookDispatcher(self.hook_registry),
         )
-        self.output_bridge = OutputBridgePlugin()
+        required = set(config.runtime.required_plugin_ids)
+        required.discard("output-bridge")
+        required.add("runtime-update")
         self.runtime_host = PluginRuntimeHost(
-            self.workspace_path,
-            self._session_id,
-            plugin_dirs=tuple(self.config.runtime.plugin_dirs),
-            required_plugin_ids=frozenset(
-                self.config.runtime.required_plugin_ids
-            ),
+            identity.workspace_path,
+            identity.session_id,
+            plugin_dirs=tuple(config.runtime.plugin_dirs),
+            required_plugin_ids=frozenset(required),
             plugin_configs={
-                **self.config.runtime.plugin_config,
+                **config.runtime.plugin_config,
                 "persistence": {
-                    **self.config.runtime.plugin_config.get(
-                        "persistence", {}
-                    ),
-                    "data_dir": self.config.icarus_data_dir,
+                    **config.runtime.plugin_config.get("persistence", {}),
+                    "data_dir": config.icarus_data_dir,
                     "runtime": self.persistence,
                     "hook_registry": self.hook_registry,
+                    "runtime_logger": self.logger,
                 },
                 "skill": {
-                    **self.config.runtime.plugin_config.get("skill", {}),
-                    "config_model": self.config,
+                    **config.runtime.plugin_config.get("skill", {}),
+                    "config_model": config,
                     "hook_registry": self.hook_registry,
                 },
                 "agent": {
-                    **self.config.runtime.plugin_config.get("agent", {}),
-                    "config_model": self.config,
+                    **config.runtime.plugin_config.get("agent", {}),
+                    "config_model": config,
                     "tool_registry": self.tool_registry,
                     "hook_registry": self.hook_registry,
                 },
                 "blackboard": {
-                    **self.config.runtime.plugin_config.get(
-                        "blackboard", {}
-                    ),
+                    **config.runtime.plugin_config.get("blackboard", {}),
                     "model_role": "thinking",
-                    "system_prompt": self.system_prompt,
-                    "tools": self.tools,
-                    "initial_messages": self.initial_messages,
-                    "config_model": self.config,
+                    "system_prompt": system_prompt,
+                    "tools": tools,
+                    "initial_messages": list(initial_messages or []),
+                    "config_model": config,
                     "hook_registry": self.hook_registry,
                 },
-                "output-bridge": {
-                    **self.config.runtime.plugin_config.get(
-                        "output-bridge", {}
-                    ),
-                    "plugin": self.output_bridge,
+                "runtime-update": {
+                    **config.runtime.plugin_config.get("runtime-update", {}),
+                    "publish_update": publish_update,
                 },
             },
             plugin_manager=self.plugin_manager,
@@ -129,30 +124,18 @@ class AgentRuntimeService:
         )
         self._user_input: UserInputPlugin | None = None
         self._agent_plugin: AgentPlugin | None = None
-        self._skill_plugin: SkillPlugin | None = None
-        self._persistence_plugin: PersistencePlugin | None = None
         self._started = False
         self._closed = False
-
-    @property
-    def session_id(self) -> str | None:
-        return self._session_id if self._started else None
 
     @property
     def is_running(self) -> bool:
         return self._started
 
-    @property
-    def task_channels(self):
-        if self._agent_plugin is None:
-            return None
-        return self._agent_plugin.task_channels
-
     async def start(self) -> None:
         if self._started:
             return
         if self._closed:
-            raise RuntimeError("AgentRuntimeService cannot be restarted")
+            raise RuntimeError("SessionRuntime cannot be restarted")
         try:
             with self._context_scope():
                 await self.runtime_host.start()
@@ -161,10 +144,6 @@ class AgentRuntimeService:
             )
             self._agent_plugin = self.runtime_host.get_capability(
                 "agent", "task_control"
-            )
-            self._skill_plugin = self.runtime_host.get_plugin("skill")
-            self._persistence_plugin = self.runtime_host.get_plugin(
-                "persistence"
             )
             self._started = True
         except asyncio.CancelledError:
@@ -180,15 +159,23 @@ class AgentRuntimeService:
         input_images: list[ImagePart | str | Path] | None = None,
     ) -> InputAccepted:
         if not self._started or self._user_input is None:
-            raise RuntimeError("AgentRuntimeService is not running")
-        return await self._user_input.submit(
-            prompt=prompt, input_images=input_images
-        )
+            raise RuntimeError("SessionRuntime is not running")
+        return await self._user_input.submit(prompt, input_images)
 
-    def subscribe_events(self) -> OutputEventSubscription:
-        if not self._started:
-            raise RuntimeError("AgentRuntimeService is not running")
-        return self.output_bridge.subscribe()
+    def import_resources(self, paths: list[tuple[Path, str | None]]) -> list[ImagePart]:
+        session = PersistenceSession(self.persistence, self.identity)
+        images = []
+        for path, media_type in paths:
+            try:
+                image = session.import_image(path)
+            except ImageAssetError as error:
+                raise InvalidResourceError(str(error)) from error
+            if media_type is not None and image.media_type != media_type:
+                raise InvalidResourceError(
+                    "Resource media_type does not match file content"
+                )
+            images.append(image)
+        return images
 
     async def cancel_task(
         self, task_id: str, reason: str | None = None
@@ -201,11 +188,44 @@ class AgentRuntimeService:
                 TaskCancelRequestedEvent(task_id=task_id, reason=reason),
             )
 
-    async def stop(self, timeout: float | None = 30) -> None:
+    def snapshot(self) -> SessionRuntimeSnapshot:
+        task_ids = (
+            self._agent_plugin.task_channels.active_task_ids
+            if self._agent_plugin is not None
+            else ()
+        )
+        runtimes = self.plugin_manager.snapshots()
+        return SessionRuntimeSnapshot(
+            active_task_ids=task_ids,
+            queued_task_count=(
+                self._user_input.queued_count
+                if self._user_input is not None
+                else 0
+            ),
+            pending_event_count=self.plugin_manager.event_bus.pending_count,
+            pending_plugin_event_count=sum(
+                item.pending_count for item in runtimes
+            ),
+            background_work_count=sum(
+                item.background_work_count for item in runtimes
+            ),
+            last_event_at=_latest(item.last_event_at for item in runtimes),
+            last_background_work_at=_latest(
+                item.last_background_work_at for item in runtimes
+            ),
+        )
+
+    async def stop(
+        self,
+        reason: str,
+        timeout: float | None = 30,
+    ) -> None:
+        del reason
         if not self._started:
             return
         stop_task = asyncio.create_task(
-            self._stop_impl(timeout), name="agent-runtime:stop"
+            self._stop_impl(timeout),
+            name=f"session-runtime:{self.identity.session_id}:stop",
         )
         cancelled = False
         while not stop_task.done():
@@ -239,7 +259,6 @@ class AgentRuntimeService:
                 self.persistence.stop(drain=False, logger=self.logger)
             except Exception:
                 self.logger.exception("Persistence fallback cleanup failed")
-        self.output_bridge.close_subscriptions()
         self._clear_runtime_references()
         self._started = False
         self._closed = True
@@ -256,32 +275,29 @@ class AgentRuntimeService:
     def _clear_runtime_references(self) -> None:
         self._user_input = None
         self._agent_plugin = None
-        self._skill_plugin = None
-        self._persistence_plugin = None
 
     def _context_scope(self):
-        identity = SessionIdentity.create(
-            self.workspace_path, self._session_id
-        )
         return hook_context(
             {
-                "workspace_path": str(identity.workspace_path),
-                "workspace_key": identity.workspace_key,
-                "session_id": identity.session_id,
+                "workspace_path": str(self.identity.workspace_path),
+                "workspace_key": self.identity.workspace_key,
+                "session_id": self.identity.session_id,
             },
             run_id=None,
         )
 
     def _task_context_scope(self, task_id: str):
-        identity = SessionIdentity.create(
-            self.workspace_path, self._session_id
-        )
         return hook_context(
             {
-                "workspace_path": str(identity.workspace_path),
-                "workspace_key": identity.workspace_key,
-                "session_id": identity.session_id,
+                "workspace_path": str(self.identity.workspace_path),
+                "workspace_key": self.identity.workspace_key,
+                "session_id": self.identity.session_id,
                 "task_id": task_id,
             },
             run_id=None,
         )
+
+
+def _latest(values) -> datetime | None:
+    present = tuple(value for value in values if value is not None)
+    return max(present) if present else None

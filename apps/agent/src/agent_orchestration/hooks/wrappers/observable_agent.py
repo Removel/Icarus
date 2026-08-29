@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator, Iterator
 import traceback
+from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.capability.types import (
@@ -9,7 +10,10 @@ from apps.agent.src.agent_orchestration.capability.types import (
     AgentResponse,
 )
 from apps.agent.src.agent_orchestration.events import Event
-from apps.agent.src.agent_orchestration.hooks.hook_context import hook_context
+from apps.agent.src.agent_orchestration.hooks.hook_context import (
+    get_hook_context,
+    hook_context,
+)
 from apps.agent.src.agent_orchestration.hooks.hook_dispatcher import (
     HookDispatcher,
 )
@@ -130,7 +134,8 @@ class ObservableAgent(BaseAgent):
         tools: list[str] | None = None,
         run_control: AgentRunControl | None = None,
     ) -> Iterator[Event]:
-        with self._run_context(run_control):
+        context_data, run_id = self._capture_run_context(run_control)
+        with hook_context(context_data, run_id=run_id):
             self._dispatcher.trigger(
                 "agent.stream",
                 "before",
@@ -142,29 +147,46 @@ class ObservableAgent(BaseAgent):
                     tools,
                 ),
             )
-            try:
-                for event in self._agent.stream(
-                    system_prompt,
-                    history_messages,
-                    input_prompt,
-                    input_images,
-                    tools,
-                    run_control=run_control,
-                ):
+        iterator = iter(
+            self._agent.stream(
+                system_prompt,
+                history_messages,
+                input_prompt,
+                input_images,
+                tools,
+                run_control=run_control,
+            )
+        )
+        try:
+            while True:
+                try:
+                    with hook_context(context_data, run_id=run_id):
+                        event = next(iterator)
+                except StopIteration:
+                    break
+                with hook_context(context_data, run_id=run_id):
                     if isinstance(event, AgentCompletedEvent):
                         self._dispatcher.trigger(
                             "agent.stream",
                             "after",
                             {"response": event.response},
                         )
-                    yield event
-            except BaseException as error:
+                yield event
+        except GeneratorExit:
+            raise
+        except BaseException as error:
+            with hook_context(context_data, run_id=run_id):
                 self._dispatcher.trigger(
                     "agent.stream",
                     "error",
                     self._base_error_data(error),
                 )
-                raise
+            raise
+        finally:
+            close = getattr(iterator, "close", None)
+            if callable(close):
+                with hook_context(context_data, run_id=run_id):
+                    close()
 
     async def astream(
         self,
@@ -175,7 +197,8 @@ class ObservableAgent(BaseAgent):
         tools: list[str] | None = None,
         run_control: AgentRunControl | None = None,
     ) -> AsyncIterator[Event]:
-        with self._run_context(run_control):
+        context_data, run_id = self._capture_run_context(run_control)
+        with hook_context(context_data, run_id=run_id):
             await self._dispatcher.atrigger(
                 "agent.stream",
                 "before",
@@ -187,29 +210,44 @@ class ObservableAgent(BaseAgent):
                     tools,
                 ),
             )
-            try:
-                async for event in self._agent.astream(
-                    system_prompt,
-                    history_messages,
-                    input_prompt,
-                    input_images,
-                    tools,
-                    run_control=run_control,
-                ):
+        iterator = self._agent.astream(
+            system_prompt,
+            history_messages,
+            input_prompt,
+            input_images,
+            tools,
+            run_control=run_control,
+        ).__aiter__()
+        try:
+            while True:
+                try:
+                    with hook_context(context_data, run_id=run_id):
+                        event = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                with hook_context(context_data, run_id=run_id):
                     if isinstance(event, AgentCompletedEvent):
                         await self._dispatcher.atrigger(
                             "agent.stream",
                             "after",
                             {"response": event.response},
                         )
-                    yield event
-            except BaseException as error:
+                yield event
+        except GeneratorExit:
+            raise
+        except BaseException as error:
+            with hook_context(context_data, run_id=run_id):
                 await self._dispatcher.atrigger(
                     "agent.stream",
                     "error",
                     self._base_error_data(error),
                 )
-                raise
+            raise
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                with hook_context(context_data, run_id=run_id):
+                    await close()
 
     @staticmethod
     def _input_data(
@@ -252,3 +290,16 @@ class ObservableAgent(BaseAgent):
         if run_control is not None and run_control.run_id is not None:
             return hook_context(data, run_id=run_control.run_id)
         return hook_context(data, new_run=True)
+
+    def _capture_run_context(
+        self, run_control: AgentRunControl | None
+    ) -> tuple[dict[str, object], str]:
+        parent = get_hook_context()
+        data = dict(parent.data) if parent is not None else {}
+        data["model_role"] = self.model_role
+        run_id = (
+            run_control.run_id
+            if run_control is not None and run_control.run_id is not None
+            else uuid4().hex
+        )
+        return data, run_id

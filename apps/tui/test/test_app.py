@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 import threading
 
@@ -13,6 +14,8 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputQueuedEvent,
 )
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
+from packages.gateway_protocol import RuntimeUpdateModel
+from apps.tui.src.gateway_client.models import SubmitAccepted
 from apps.tui.src.app import IcarusTextualApp, RuntimeSubscriptionFailed
 from apps.tui.src.chat_state import RuntimePhase
 from apps.tui.src.clipboard import (
@@ -37,14 +40,14 @@ class ControlledSubscription:
         self.closed = False
         self.close_error = close_error
 
-    async def next_event(self):
+    async def next_update(self):
         item = await self.queue.get()
         if item is None:
             raise RuntimeError("subscription is closed")
         return item
 
     def publish(self, source, event) -> None:
-        self.queue.put_nowait((source, event))
+        self.queue.put_nowait(_event_update(source, event))
 
     def close(self) -> None:
         if self.closed:
@@ -89,6 +92,7 @@ class ControlledService:
         self.session_id = "test-session"
         self.stopped = False
         self.cancelled_tasks = []
+        self.task_statuses = {}
 
     async def start(self) -> None:
         self.actions.append("service-start")
@@ -98,17 +102,18 @@ class ControlledService:
             raise self.start_error
         self.actions.append("service-started")
 
-    def subscribe_events(self):
+    def subscribe_updates(self):
         self.actions.append("subscribe")
         if self.subscribe_error is not None:
             raise self.subscribe_error
         return self.subscription
 
-    async def submit(self, prompt, input_images=None):
+    async def submit(self, prompt, *, submission_id, resources=()):
+        del submission_id
         task_id = f"task-{len(self.submissions) + 1}"
         self.actions.append(f"submit:{prompt}")
         self.submissions.append(prompt)
-        self.submission_images.append(tuple(input_images or ()))
+        self.submission_images.append(tuple(resources))
         if self.submit_error is not None:
             raise self.submit_error
         if self.publish_queued_before_return:
@@ -122,8 +127,7 @@ class ControlledService:
             await asyncio.sleep(0)
         return InputAccepted(task_id=task_id, queue_position=0)
 
-    async def stop(self, timeout=30) -> None:
-        del timeout
+    async def close(self) -> None:
         self.actions.append("service-stop")
         self.stopped = True
         self.subscription.close()
@@ -136,6 +140,17 @@ class ControlledService:
             raise self.cancel_error
         return TaskOperationResult(task_id=task_id, status="accepted")
 
+    async def get_task_status(self, task_id):
+        return self.task_statuses.get(
+            task_id, {"task_id": task_id, "lifecycle": "running"}
+        )
+
+
+class ReconnectingService(ControlledService):
+    async def reconnect(self):
+        self.actions.append("reconnect")
+        self.subscription = ControlledSubscription(self.actions)
+        return self.subscription
 
 def make_app(
     service: ControlledService,
@@ -173,6 +188,30 @@ def finish_event(task_id: str, status="completed") -> InputFinishedEvent:
     return InputFinishedEvent(
         task_id=task_id,
         status=status,
+    )
+
+
+def _event_update(source, event) -> RuntimeUpdateModel:
+    if isinstance(event, RuntimeUpdateModel):
+        return event
+    update_type = source
+    payload = {}
+    if isinstance(event, InputQueuedEvent):
+        update_type = "task.accepted"
+        payload = {"queue_position": event.queue_position}
+    elif isinstance(event, InputFinishedEvent):
+        update_type = "task.finished"
+        payload = {"status": event.status, "run_id": event.run_id}
+    elif isinstance(event, AgentTextDeltaEvent):
+        update_type = "assistant.text_delta"
+        payload = {"step": event.step, "text": event.text}
+    return RuntimeUpdateModel(
+        workspace_key="workspace",
+        session_id="test-session",
+        task_id=getattr(event, "task_id", None),
+        type=update_type,
+        payload=payload,
+        occurred_at=getattr(event, "occurred_at", datetime.now(UTC)),
     )
 
 
@@ -321,7 +360,8 @@ def test_ctrl_v图片生成marker并向runtime提交映射和路径(
         "[#image1] 对应第 1 张附件图片\n"
         "</attached_images>"
     )
-    assert image_paths == (image_path,)
+    assert len(image_paths) == 1
+    assert image_paths[0].resource_id == image_path.name
     assert user_text == "请查看 [#image1]"
     assert image_path.exists() is False
 
@@ -588,6 +628,36 @@ def test_subscription运行中失败后忽略迟到终态且不调度队首(tmp_
     assert submissions == ("active",)
 
 
+def test_subscription断线后重连并保留运行中task(tmp_path):
+    async def run():
+        service = ReconnectingService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "active")
+            app.post_message(
+                RuntimeSubscriptionFailed(ConnectionError("disconnected"))
+            )
+            await wait_until(pilot, lambda: "reconnect" in service.actions)
+            result = (
+                app.chat_state.phase,
+                app.chat_state.active_task_id,
+                app._fatal_failure,
+                str(app.query_one(RuntimeStatusBar).render()),
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    phase, active, fatal, status = asyncio.run(run())
+    assert phase == RuntimePhase.RUNNING
+    assert active == "task-1"
+    assert fatal is False
+    assert "Reconnected" in status
+
+
 def test运行中输入按FIFO排队并在finish后每次只提交一条(tmp_path):
     async def run():
         service = ControlledService()
@@ -648,7 +718,7 @@ def test_submit返回前到达queued_event不会被误丢弃(tmp_path):
             )
             result = (
                 app.chat_state.active_task_id,
-                app.projector_registry.unrelated_event_count,
+                app.projector_registry.unrelated_update_count,
                 str(app.query_one(RuntimeStatusBar).render()),
             )
             app.request_shutdown(return_code=0)

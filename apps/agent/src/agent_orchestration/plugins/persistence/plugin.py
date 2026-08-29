@@ -29,7 +29,11 @@ class PersistencePlugin(BasePlugin):
         self.hook_registry = hook_registry
 
     async def start(self) -> None:
-        self.runtime.start(self.hook_registry, self.logger)
+        self.runtime.start(
+            self.hook_registry,
+            self.logger,
+            session_identity=self.identity,
+        )
         self.runtime.metadata_store.initialize(self.identity)
 
     async def consume(self, source_plugin_id: str, event: Event) -> None:

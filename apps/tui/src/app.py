@@ -1,10 +1,11 @@
-"""Textual application controller for one Icarus Agent Runtime session."""
+"""Textual application controller for one Gateway-backed Session."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 import logging
 from pathlib import Path
@@ -37,6 +38,7 @@ from apps.tui.src.event_pipeline import (
     create_default_projector_registry,
 )
 from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
+from packages.gateway_protocol import ResourceRefModel, RuntimeUpdateModel
 from apps.tui.src.widgets import (
     ConversationView,
     PersistentComposer,
@@ -48,27 +50,29 @@ from apps.tui.src.widgets import (
 logger = logging.getLogger("icarus.tui.app")
 
 
-class RuntimeSubscription(Protocol):
-    async def next_event(self) -> tuple[str, object]:
+class UpdateSubscription(Protocol):
+    async def next_update(self) -> RuntimeUpdateModel:
         ...
 
     def close(self) -> None:
         ...
 
 
-class RuntimeService(Protocol):
+class RuntimeClient(Protocol):
     session_id: str | None
 
     async def start(self) -> None:
         ...
 
-    def subscribe_events(self) -> RuntimeSubscription:
+    def subscribe_updates(self) -> UpdateSubscription:
         ...
 
     async def submit(
         self,
         prompt: str,
-        input_images=None,
+        *,
+        submission_id: str,
+        resources: tuple[ResourceRefModel, ...] = (),
     ) -> SubmitAccepted:
         ...
 
@@ -79,7 +83,13 @@ class RuntimeService(Protocol):
     ) -> TaskOperationResult:
         ...
 
-    async def stop(self, timeout: float | None = 30) -> None:
+    async def reconnect(self) -> UpdateSubscription:
+        ...
+
+    async def get_task_status(self, task_id: str) -> dict[str, Any]:
+        ...
+
+    async def close(self) -> None:
         ...
 
 
@@ -93,18 +103,17 @@ class TaskOperationResult(Protocol):
     status: str
 
 
-RuntimeFactory = Callable[[], Awaitable[RuntimeService]]
+RuntimeFactory = Callable[[], Awaitable[RuntimeClient]]
 
 
 @dataclass
 class RuntimeOutputReceived(Message):
-    source_plugin_id: str
-    event: object
+    update: RuntimeUpdateModel
 
 
 @dataclass
 class RuntimeStarted(Message):
-    subscription: RuntimeSubscription
+    subscription: UpdateSubscription
 
 
 @dataclass
@@ -155,15 +164,21 @@ class IcarusTextualApp(App[int]):
         *,
         runtime_factory: RuntimeFactory,
         workspace_path: str | Path,
+        resource_root: str | Path | None = None,
         projector_registry: ProjectorRegistry | None = None,
     ) -> None:
         super().__init__()
         self.runtime_factory = runtime_factory
-        self.service: RuntimeService | None = None
+        self.service: RuntimeClient | None = None
         self.workspace_path = Path(workspace_path).expanduser().resolve()
+        self.resource_root = (
+            Path(resource_root).expanduser().resolve()
+            if resource_root is not None
+            else None
+        )
         self.chat_state = ChatState()
         self.projector_registry = projector_registry
-        self.subscription: RuntimeSubscription | None = None
+        self.subscription: UpdateSubscription | None = None
         self._runtime_start_worker: Worker[Any] | None = None
         self._event_worker: Worker[Any] | None = None
         self._clipboard_worker: Worker[Any] | None = None
@@ -176,6 +191,7 @@ class IcarusTextualApp(App[int]):
         self._has_user_submission = False
         self._fatal_message = ""
         self._fatal_failure = False
+        self._early_updates: dict[str, list[RuntimeUpdateModel]] = {}
 
     def compose(self) -> ComposeResult:
         yield Static("ICARUS", id="app-title", markup=False)
@@ -214,7 +230,7 @@ class IcarusTextualApp(App[int]):
             service = await self.runtime_factory()
             self.service = service
             if not self._accepting_input:
-                await service.stop()
+                await service.close()
                 self.service = None
                 return
             if self.projector_registry is None:
@@ -227,13 +243,13 @@ class IcarusTextualApp(App[int]):
             return
 
         try:
-            subscription = service.subscribe_events()
+            subscription = service.subscribe_updates()
         except asyncio.CancelledError:
             raise
         except BaseException as error:
             cleanup_error: BaseException | None = None
             try:
-                await service.stop()
+                await service.close()
             except BaseException as stop_error:
                 cleanup_error = stop_error
             else:
@@ -296,14 +312,12 @@ class IcarusTextualApp(App[int]):
             )
 
     async def _consume_runtime_events(
-        self, subscription: RuntimeSubscription
+        self, subscription: UpdateSubscription
     ) -> None:
         try:
             while True:
-                source_plugin_id, event = await subscription.next_event()
-                self.post_message(
-                    RuntimeOutputReceived(source_plugin_id, event)
-                )
+                update = await subscription.next_update()
+                self.post_message(RuntimeOutputReceived(update))
         except asyncio.CancelledError:
             raise
         except BaseException as error:
@@ -315,6 +329,32 @@ class IcarusTextualApp(App[int]):
     ) -> None:
         if not self._accepting_input:
             return
+        service = self.service
+        if service is not None:
+            try:
+                subscription = await service.reconnect()
+                active_task_id = self.chat_state.active_task_id
+                self.subscription = subscription
+                self._fatal_failure = False
+                self._fatal_message = ""
+                self.chat_state.mark_ready()
+                if active_task_id is not None:
+                    await self._reconcile_task_status(
+                        service, active_task_id
+                    )
+                self._event_worker = self.run_worker(
+                    partial(self._consume_runtime_events, subscription),
+                    name="runtime-events",
+                    group="runtime",
+                    exit_on_error=False,
+                )
+                self._refresh_status("Reconnected")
+                self._schedule_dispatch()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
         self._fatal_failure = True
         self.chat_state.mark_failed()
         self._fatal_message = (
@@ -387,15 +427,19 @@ class IcarusTextualApp(App[int]):
 
         try:
             path = self._store_clipboard_image(image)
-            composer.attach_image(path)
+            composer.attach_image(path, owned_temporary_file=True)
         except Exception as error:
             self._notify_image_paste_failure(error)
 
     def _store_clipboard_image(self, image: ClipboardImage) -> Path:
         directory = self._clipboard_temp_directory
         if directory is None:
+            root = self.resource_root
+            if root is not None:
+                root.mkdir(parents=True, exist_ok=True, mode=0o700)
             directory = tempfile.TemporaryDirectory(
-                prefix="icarus-tui-clipboard-"
+                prefix="icarus-tui-clipboard-",
+                dir=str(root) if root is not None else None,
             )
             self._clipboard_temp_directory = directory
         with tempfile.NamedTemporaryFile(
@@ -437,7 +481,14 @@ class IcarusTextualApp(App[int]):
         try:
             accepted = await service.submit(
                 prompt=submission.model_prompt(),
-                input_images=list(submission.image_paths) or None,
+                submission_id=submission.submission_id,
+                resources=tuple(
+                    ResourceRefModel(
+                        resource_id=self._resource_id(image),
+                        media_type=None,
+                    )
+                    for image in submission.images
+                ),
             )
         except asyncio.CancelledError:
             self.chat_state.fail_dispatch()
@@ -460,6 +511,7 @@ class IcarusTextualApp(App[int]):
             await self.query_one(ConversationView).append_user_message(
                 accepted_message.text
             )
+            self._delete_submission_images(accepted_message)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -468,12 +520,34 @@ class IcarusTextualApp(App[int]):
         if not await self._refresh_queue():
             return
         self._refresh_status("Accepted by runtime")
+        await self._flush_early_updates(accepted.task_id)
+        if self.chat_state.active_task_id == accepted.task_id:
+            try:
+                await self._reconcile_task_status(service, accepted.task_id)
+            except Exception:
+                logger.debug(
+                    "Unable to reconcile accepted task status",
+                    exc_info=True,
+                )
 
     async def on_runtime_output_received(
         self, message: RuntimeOutputReceived
     ) -> None:
         if self._fatal_failure or not self._accepting_input:
             return
+        update = message.update
+        if (
+            self.chat_state.dispatch_in_progress
+            and self.chat_state.active_task_id is None
+            and update.task_id is not None
+        ):
+            self._early_updates.setdefault(update.task_id, []).append(update)
+            return
+        await self._project_runtime_update(update)
+
+    async def _project_runtime_update(
+        self, update: RuntimeUpdateModel
+    ) -> None:
         projector_registry = self.projector_registry
         if projector_registry is None:
             self._enter_fatal(
@@ -485,8 +559,7 @@ class IcarusTextualApp(App[int]):
             return
         try:
             actions = projector_registry.project(
-                message.source_plugin_id,
-                message.event,
+                update,
                 active_task_id=self.chat_state.active_task_id,
             )
         except Exception as error:
@@ -502,6 +575,34 @@ class IcarusTextualApp(App[int]):
             except Exception as error:
                 self._enter_fatal("UI action routing", error)
                 break
+
+    async def _flush_early_updates(self, task_id: str) -> None:
+        updates = self._early_updates.pop(task_id, [])
+        self._early_updates.clear()
+        for update in updates:
+            await self._project_runtime_update(update)
+            if self._fatal_failure:
+                return
+
+    async def _reconcile_task_status(
+        self, service: RuntimeClient, task_id: str
+    ) -> None:
+        status = await service.get_task_status(task_id)
+        lifecycle = status.get("lifecycle")
+        if lifecycle not in {"completed", "failed", "cancelled"}:
+            return
+        update = RuntimeUpdateModel(
+            workspace_key=str(getattr(service, "workspace_key", "unknown")),
+            session_id=str(getattr(service, "session_id", "unknown")),
+            task_id=task_id,
+            type="task.finished",
+            payload={
+                "status": lifecycle,
+                "run_id": status.get("run_id"),
+            },
+            occurred_at=datetime.now(UTC),
+        )
+        await self._project_runtime_update(update)
 
     async def _apply_action(self, action: UiAction) -> None:
         if isinstance(action, SetRuntimeStatus):
@@ -791,7 +892,7 @@ class IcarusTextualApp(App[int]):
         self.service = None
         if service is not None:
             try:
-                await service.stop()
+                await service.close()
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -808,6 +909,25 @@ class IcarusTextualApp(App[int]):
                 )
 
         return errors
+
+    def _resource_id(self, image) -> str:
+        root = self.resource_root
+        if root is None:
+            return image.path.name
+        try:
+            return image.path.resolve().relative_to(root).as_posix()
+        except ValueError as error:
+            raise ValueError("Image is outside the controlled resource root") from error
+
+    @staticmethod
+    def _delete_submission_images(submission) -> None:
+        for image in submission.images:
+            if not image.owned_temporary_file:
+                continue
+            try:
+                image.path.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Unable to remove accepted image resource")
 
     @staticmethod
     def _cleanup_error(stage: str, error: BaseException) -> str:

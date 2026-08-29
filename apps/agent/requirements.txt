@@ -1,9 +1,14 @@
 anthropic
+fastapi
 openai
+packaging
 pydantic
 python-dotenv
 PyYAML
 rich>=14.2,<15
 textual>=8.2.8,<9
+uvicorn
+websockets
 pytest
+httpx
 pytest-textual-snapshot>=1.1,<2

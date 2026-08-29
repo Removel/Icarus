@@ -1,13 +1,15 @@
 """TUI-owned draft image and pending submission models."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 
 @dataclass(frozen=True)
 class DraftImage:
     reference: str
     path: Path
+    owned_temporary_file: bool = False
 
     @property
     def marker(self) -> str:
@@ -18,6 +20,7 @@ class DraftImage:
 class PendingMessage:
     text: str
     images: tuple[DraftImage, ...] = ()
+    submission_id: str = field(default_factory=lambda: uuid4().hex, compare=False)
 
     @property
     def image_paths(self) -> tuple[Path, ...]:

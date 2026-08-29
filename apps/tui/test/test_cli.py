@@ -14,18 +14,20 @@ def test_run_app_使用启动目录透传session_id并返回textual结果(monkey
 
     service = object()
 
-    async def create_runtime_service(workspace_path, session_id):
+    async def create_gateway_client(workspace_path, session_id, gateway_url):
         assert captured["app_run_entered"] is True
         captured["service_workspace"] = workspace_path
         captured["session_id"] = session_id
+        captured["gateway_url"] = gateway_url
         return service
 
     class AppStub:
         return_code = None
 
-        def __init__(self, *, runtime_factory, workspace_path):
+        def __init__(self, *, runtime_factory, workspace_path, resource_root):
             captured["runtime_factory"] = runtime_factory
             captured["app_workspace"] = workspace_path
+            captured["resource_root"] = resource_root
             captured["app_run_entered"] = False
 
         def run(self):
@@ -36,19 +38,24 @@ def test_run_app_使用启动目录透传session_id并返回textual结果(monkey
             return 7
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ICARUS_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
         main_module,
-        "_create_runtime_service",
-        create_runtime_service,
+        "_create_gateway_client",
+        create_gateway_client,
     )
     monkeypatch.setattr(main_module, "IcarusTextualApp", AppStub)
 
-    result = main_module.run_app(["--session-id", "demo"])
+    result = main_module.run_app(
+        ["--session-id", "demo", "--gateway-url", "ws://test/rpc"]
+    )
 
     assert result == 7
     assert captured["service_workspace"] == tmp_path.resolve()
     assert captured["app_workspace"] == tmp_path.resolve()
     assert captured["session_id"] == "demo"
+    assert captured["gateway_url"] == "ws://test/rpc"
+    assert captured["resource_root"] == (tmp_path / "data" / "incoming")
     assert captured["app_service"] is service
 
 
@@ -58,7 +65,7 @@ def test_parse_args_help不初始化runtime(monkeypatch, capsys):
 
     monkeypatch.setattr(
         main_module,
-        "_create_runtime_service",
+        "_create_gateway_client",
         fail_if_initialized,
     )
 
@@ -73,6 +80,7 @@ def test_import_main首帧模块边界不加载agent与provider重依赖():
     project_root = Path(__file__).resolve().parents[3]
     forbidden = [
         "apps.agent.src.application.agent_runtime_service",
+        "apps.agent.src.application.agent_runtime",
         "apps.agent.src.agent_orchestration.agent_factory",
         "openai",
         "anthropic",
@@ -136,9 +144,14 @@ def test_pyproject_console_script指向main入口():
     assert any(item.startswith("textual>=") for item in dependencies)
     assert not any(item.startswith("prompt-toolkit") for item in dependencies)
     assert pyproject["project"]["optional-dependencies"]["test"] == [
-        "pytest-textual-snapshot>=1.1,<2"
+        "httpx",
+        "pytest-textual-snapshot>=1.1,<2",
     ]
+    assert pyproject["project"]["scripts"]["icarus-gateway"] == (
+        "apps.gateway.src.main:main"
+    )
     assert pyproject["tool"]["setuptools"]["packages"]["find"]["exclude"] == [
         "apps.agent.test*",
+        "apps.gateway.test*",
         "apps.tui.test*",
     ]

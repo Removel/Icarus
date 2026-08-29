@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from apps.agent.src.agent_orchestration.capability import (
@@ -20,6 +21,8 @@ from apps.agent.src.agent_orchestration.plugins import (
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolCall
+from packages.gateway_protocol import RuntimeUpdateModel
+from apps.tui.src.gateway_client.models import SubmitAccepted
 from apps.tui.src.app import IcarusTextualApp
 from apps.tui.src.chat_state import RuntimePhase
 from apps.tui.src.event_pipeline import AppendToolStarted, UpdateToolCompleted
@@ -44,7 +47,7 @@ class SnapshotSubscription:
         self.queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
         self.closed = False
 
-    async def next_event(self):
+    async def next_update(self):
         item = await self.queue.get()
         if item is None:
             raise RuntimeError("snapshot subscription is closed")
@@ -52,7 +55,7 @@ class SnapshotSubscription:
 
     def publish(self, source_plugin_id: str, event: object) -> None:
         if not self.closed:
-            self.queue.put_nowait((source_plugin_id, event))
+            self.queue.put_nowait(_event_update(source_plugin_id, event))
 
     def close(self) -> None:
         if self.closed:
@@ -73,25 +76,33 @@ class SnapshotService:
     async def start(self) -> None:
         self.started = True
 
-    def subscribe_events(self) -> SnapshotSubscription:
+    def subscribe_updates(self) -> SnapshotSubscription:
         if not self.started:
             raise RuntimeError("snapshot service is not running")
         return self.subscription
 
-    async def submit(self, prompt: str, input_images=None) -> InputAccepted:
+    async def submit(
+        self, prompt: str, *, submission_id: str, resources=()
+    ) -> SubmitAccepted:
+        del submission_id
         task_id = f"task-{len(self.submissions) + 1}"
         self.submissions.append(prompt)
-        self.submission_images.append(tuple(input_images or ()))
+        self.submission_images.append(tuple(resources))
         return InputAccepted(task_id=task_id, queue_position=0)
 
-    async def stop(self, timeout: float | None = 30) -> None:
-        del timeout
+    async def close(self) -> None:
         self.started = False
         self.subscription.close()
 
     async def cancel_task(self, task_id: str, reason: str | None = None):
         del reason
         return TaskOperationResult(task_id=task_id, status="accepted")
+
+    async def get_task_status(self, task_id):
+        return {"task_id": task_id, "lifecycle": "running"}
+
+    async def reconnect(self):
+        return self.subscription
 
 
 class BlockingSnapshotService(SnapshotService):
@@ -159,6 +170,46 @@ def publish(pilot, source_plugin_id: str, event: object) -> None:
 
 def input_started(task_id: str = "task-1") -> InputStartedEvent:
     return InputStartedEvent(task_id=task_id)
+
+
+def _event_update(source, event) -> RuntimeUpdateModel:
+    update_type = source
+    payload = {}
+    if isinstance(event, InputStartedEvent):
+        update_type = "task.started"
+    elif isinstance(event, InputFinishedEvent):
+        update_type = "task.finished"
+        payload = {"status": event.status, "run_id": event.run_id}
+    elif isinstance(event, AgentTextDeltaEvent):
+        update_type = "assistant.text_delta"
+        payload = {"step": event.step, "text": event.text}
+    elif isinstance(event, AgentToolStartedEvent):
+        update_type = "tool.started"
+        payload = {
+            "step": event.step, "call_id": event.tool_call.id,
+            "tool_name": event.tool_call.name,
+            "arguments": event.tool_call.arguments,
+        }
+    elif isinstance(event, AgentToolCompletedEvent):
+        update_type = "tool.completed"
+        payload = {
+            "step": event.step, "call_id": event.tool_call.id,
+            "tool_name": event.tool_call.name,
+            "success": event.result.success,
+            "error": event.result.error,
+        }
+    elif isinstance(event, TaskErrorEvent):
+        update_type = "task.error"
+        payload = {
+            "fatal": event.fatal, "code": event.code,
+            "error_type": event.error_type, "message": event.error_message,
+            "step": event.step, "run_id": event.run_id,
+        }
+    return RuntimeUpdateModel(
+        workspace_key="workspace", session_id="snapshot-session",
+        task_id=getattr(event, "task_id", None), type=update_type, payload=payload,
+        occurred_at=getattr(event, "occurred_at", datetime.now(UTC)),
+    )
 
 
 def test_snapshot_initial_welcome(snap_compare):

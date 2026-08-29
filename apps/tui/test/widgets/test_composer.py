@@ -199,6 +199,27 @@ def test_restore_draft恢复附件并从最大编号继续(tmp_path):
     assert attached.reference == "image4"
 
 
+def test_clear_draft删除未提交图片且restore保留submission_id(tmp_path):
+    async def run():
+        path = tmp_path / "draft.png"
+        path.write_bytes(b"image")
+        app = ComposerTestApp()
+        async with app.run_test() as pilot:
+            composer = app.query_one(PersistentComposer)
+            draft = PendingMessage(
+                "[#image1]",
+                (DraftImage("image1", path, owned_temporary_file=True),),
+                submission_id="stable",
+            )
+            composer.restore_draft(draft)
+            restored_id = composer._submission_id
+            composer.clear_draft()
+            await pilot.pause()
+            return restored_id, path.exists()
+
+    assert asyncio.run(run()) == ("stable", False)
+
+
 def test_ctrl_v只发布图片粘贴请求():
     async def run():
         app = ComposerTestApp()

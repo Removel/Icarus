@@ -1,77 +1,65 @@
-"""Projection of public AgentPlugin stream events."""
+"""Projection of public Agent RuntimeUpdate values."""
 
 import json
 
-from apps.agent.src.agent_orchestration.capability import (
-    AgentCompletedEvent,
-    AgentTextDeltaEvent,
-    AgentToolCompletedEvent,
-    AgentToolStartedEvent,
-)
-from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
+from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
+    AppendError,
     AppendToolStarted,
     UiAction,
     UpdateToolCompleted,
 )
-from apps.tui.src.event_pipeline.projectors.task_error import (
-    project_task_error,
-)
 
 
 class AgentProjector:
-    """Convert Agent output without exposing full results or reasoning."""
-
-    def project(self, event: Event) -> tuple[UiAction, ...] | None:
-        task_id = event.task_id
+    def project(
+        self, update: RuntimeUpdateModel
+    ) -> tuple[UiAction, ...] | None:
+        task_id = update.task_id
         if task_id is None:
             return ()
-
-        if isinstance(event, AgentTextDeltaEvent):
-            if not event.text:
-                return ()
-            return (AppendAssistantDelta(task_id=task_id, text=event.text),)
-
-        if isinstance(event, AgentToolStartedEvent):
-            arguments_json = json.dumps(
-                event.tool_call.arguments,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            )
+        payload = update.payload
+        if update.type == "assistant.text_delta":
+            text = str(payload.get("text", ""))
+            return (AppendAssistantDelta(task_id, text),) if text else ()
+        if update.type == "tool.started":
             return (
                 AppendToolStarted(
                     task_id=task_id,
-                    call_id=event.tool_call.id,
-                    tool_name=event.tool_call.name,
-                    arguments_json=arguments_json,
+                    call_id=str(payload["call_id"]),
+                    tool_name=str(payload["tool_name"]),
+                    arguments_json=json.dumps(
+                        payload["arguments"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
                 ),
             )
-
-        if isinstance(event, AgentToolCompletedEvent):
+        if update.type == "tool.completed":
+            success = bool(payload["success"])
             return (
                 UpdateToolCompleted(
                     task_id=task_id,
-                    call_id=event.tool_call.id,
-                    tool_name=event.tool_call.name,
-                    success=event.result.success,
+                    call_id=str(payload["call_id"]),
+                    tool_name=str(payload["tool_name"]),
+                    success=success,
                     error=(
-                        event.result.error
-                        if not event.result.success
+                        str(payload["error"])
+                        if not success and payload.get("error") is not None
                         else None
                     ),
                 ),
             )
-
-        if isinstance(event, TaskErrorEvent):
-            return project_task_error(
-                event,
-                hidden_codes=frozenset({"tool_execution_failed"}),
+        if update.type == "task.error":
+            return (
+                AppendError(
+                    task_id=task_id,
+                    error_type=str(payload["error_type"]),
+                    message=str(payload["message"]),
+                ),
             )
-
-        if isinstance(event, AgentCompletedEvent):
+        if update.type == "task.usage":
             return ()
-
         return None

@@ -80,9 +80,9 @@ def transcript_from_scenario(
     registry = registry or create_default_projector_registry()
     recorder = TranscriptRecorder()
     for turn in scenario.turns:
-        for source, event in turn.events:
+        for update in turn.updates:
             for action in registry.project(
-                source, event, active_task_id=turn.task_id
+                update, active_task_id=turn.task_id
             ):
                 recorder.record(action)
     return recorder.render()

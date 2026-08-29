@@ -126,7 +126,18 @@ class PluginRuntimeHost:
                     if plugin_id == "persistence":
                         self.state.refresh_state_store()
                     self.status = "restoring"
-                    await self.state.restore_plugin_state(plugin_id)
+                    try:
+                        await self.state.restore_plugin_state(plugin_id)
+                    except Exception as error:
+                        if plugin_id in self.required_plugin_ids:
+                            raise
+                        await self.graph.disable_started_plugin(
+                            plugin_id,
+                            disabled,
+                            "plugin_state_restore_failed",
+                            str(error),
+                            level="warning",
+                        )
                     self.status = "starting"
                 except Exception as error:
                     if plugin_id in self.required_plugin_ids:

@@ -63,7 +63,7 @@ class EvolverStub:
 
 
 def manager(tmp_path, producer, evolver=None, publisher=None, terminal_limit=100):
-    return SkillJobManager(
+    job_manager = SkillJobManager(
         producer=producer,
         evolver=evolver or EvolverStub(),
         repository=SkillRepository(tmp_path / "global", tmp_path / "workspace"),
@@ -72,6 +72,10 @@ def manager(tmp_path, producer, evolver=None, publisher=None, terminal_limit=100
         publish_event=publisher,
         terminal_limit=terminal_limit,
     )
+    job_manager.bind_background_work_starter(
+        lambda name, operation: asyncio.create_task(operation(), name=name)
+    )
+    return job_manager
 
 
 async def wait_terminal(job_manager, job_id):
@@ -174,7 +178,11 @@ def test_notification_result_is_correlated_for_all_existing_statuses(tmp_path, s
             task_id="task", run_id="run", step=0
         )
         await wait_terminal(job_manager, queued.job_id)
-        await asyncio.sleep(0)
+        for _ in range(100):
+            if events:
+                break
+            await asyncio.sleep(0.01)
+        assert events
         event = events[0]
         return job_manager.record_notification_result(
             TaskContextInputResultEvent(
@@ -344,8 +352,39 @@ def test_workspace_and_session_state_restore_interrupts_unfinished_and_prunes(tm
         return job_manager, await job_manager.snapshot_workspace_state(), await job_manager.snapshot_session_state()
 
     job_manager, workspace, session = asyncio.run(run())
-    assert len(workspace["jobs"]) == 2
-    assert all(item["status"] in {"succeeded", "interrupted"} for item in workspace["jobs"])
+    assert workspace is None
     assert len(session["job_ids"]) == 2
+    assert len(session["jobs"]) == 2
+    assert all(
+        item["status"] in {"succeeded", "interrupted"}
+        for item in session["jobs"]
+    )
     with pytest.raises(KeyError, match="not found"):
         job_manager.require("unknown")
+
+
+def test_session_state完整jobs可独立恢复无需workspace_state(tmp_path):
+    async def run():
+        original = manager(tmp_path, ProducerStub())
+        finished = SkillJob.create(
+            job_id="done", operation="produce", target_name="a",
+            scope="workspace", task_id="task", run_id="run", step=0,
+        ).transition("running").transition("succeeded", path="/tmp/a")
+        await original.restore_session_state(
+            {
+                "job_ids": ["done"],
+                "jobs": [finished.to_dict()],
+                "notifications": {},
+            },
+            state_version=1,
+        )
+        snapshot = await original.snapshot_session_state()
+
+        restored = manager(tmp_path, ProducerStub())
+        await restored.restore_session_state(snapshot, state_version=1)
+        return restored.require("done"), snapshot
+
+    job, snapshot = asyncio.run(run())
+
+    assert job.status == "succeeded"
+    assert snapshot["jobs"][0]["job_id"] == "done"
