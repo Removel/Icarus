@@ -300,6 +300,7 @@ AgentRuntime 是 Agent 应用层唯一公开入口。Gateway 使用扁平的 `wo
 - 取消已加载 Session 中的 Task；
 - 卸载 SessionRuntime；
 - 查询单个 Session、Workspace 下的 Session 列表和已加载 Session 的 Task 状态；
+- 读取 Session 的持久化公共会话记录，不要求加载 SessionRuntime；
 - 订阅设备级 RuntimeUpdate。
 
 `create_session` 遇到已存在的本地 Session 时失败，不转成 resume；`submit` 遇到不存在的 Session 时
@@ -332,8 +333,75 @@ Update。
 增量、Tool 开始/完成和 Context Compact。成功且存在累计 Usage 时先发布 `task.usage`，再发布
 `task.finished`；失败和取消不把 `last_usage` 伪装成累计值。
 
-第一阶段复用现有 FIFO 链路，不增加全局 sequence、Update 持久化、游标或断线补发。重连后通过
-Session 和 Task 状态查询重建。
+当前实时链路复用现有 FIFO，不提供断线补发。下一阶段为 Session 历史恢复增加 Session 内 sequence
+与持久化公共会话记录；它只解决 Session 历史和历史/实时交接，不扩展为设备级全局事件日志。
+
+### 13.1 持久化会话记录与状态 Checkpoint
+
+为了让 TUI、Backend、GUI 和 WebUI 在打开已有 Session 时恢复完整展示，Agent 应用层为每个 Session
+持久化一份公共会话记录：
+
+```text
+sessions/<session_id>/conversation.jsonl
+```
+
+它是客户端会话展示的持久化事实源，使用 RuntimeUpdate 的公共语义，不保存内部
+`source_plugin_id + Event`、Hook Trace、System Prompt 或完整 AgentResponse。`trace.jsonl` 继续只用于
+观测和诊断；Blackboard State 继续作为下一次 Agent Run 的模型上下文事实源。三者职责不能互相
+替代：
+
+| 数据 | 用途 | 是否作为 TUI 历史来源 |
+|---|---|---|
+| Blackboard State | 下一轮模型上下文 | 否 |
+| `conversation.jsonl` | 跨客户端会话展示 | 是 |
+| `trace.jsonl` | Hook 观测与故障诊断 | 否 |
+
+每条持久化记录包含 `schema_version=1`、RuntimeUpdate 的 SessionIdentity、`task_id`、`type`、
+`payload`、`occurred_at`，并增加当前 Session 内单调递增的 `sequence`。公共 RuntimeUpdate 对会话记录
+类型携带该 sequence，
+用于按序读取、去重以及历史与实时 Update 的无缝交接；它不承诺跨 Session 全局有序。Session 生命周期
+Update 不写入会话记录，也不占用会话 sequence。
+
+会话记录覆盖：
+
+- `user.message`：用户可见原文和已导入 Session Asset 的稳定资源引用；
+- `task.accepted`、`task.started`、`task.usage` 和 `task.finished`；
+- `assistant.text_delta`；
+- `tool.started` 和 `tool.completed`；
+- `task.error`；
+- `context.compacted`。
+
+`user.message` payload 保持扁平：`text` 是用户可见原文，`resources` 是已经导入 Session 的
+`resource_id + media_type` 列表。图片只记录稳定 Asset 引用和媒体类型，不记录 Base64、调用方绝对
+路径或暂存路径。`session.submit`
+中的 `prompt` 保持用户可见原文；纯图片默认请求和附件顺序提示由 SessionRuntime 在提交给 Blackboard
+前生成，不能反向污染 `user.message`。`InputQueuedEvent` 携带已接受的用户原文与稳定 Asset 引用，
+RuntimeUpdatePlugin 按 `user.message → task.accepted` 的顺序投影，使所有客户端看到同一份用户输入。
+
+AgentRuntime 在调用 SessionRuntime 前生成 `task_id` 并先持久化 `user.message`；SessionRuntime 和
+UserInputPlugin 接受该 task_id，避免应用层与 Plugin 各自生成任务身份。RuntimeUpdatePlugin 继续负责
+内部执行 Event 的公共投影；AgentRuntime 负责为可展示 Update 分配
+sequence，并通过当前 Session 的 PersistenceRuntime 追加会话记录。所有可展示记录都必须先成功
+追加并 flush，再进入设备级广播。同一 Session 的 append、sequence 分配和历史读取边界串行，不影响
+不同 Session 并发。写入失败必须成为明确的 Session 持久化错误，不能静默广播一条无法恢复的
+Update。
+
+如果持久化记录中某个 Task 已有任意记录，但没有 `task.finished`，并且当前 AgentRuntime 中也不存在
+该活动 Task，则把它视为上次进程异常结束。历史读取会为该 Task 持久化唯一的
+`task.finished(status="interrupted", recovered=true)` 记录。已产生的用户消息、助手文本、Tool 和错误
+继续保留；未完成 Tool 由客户端在该终态下标记为 interrupted，不伪造成功或失败结果。
+
+本功能不读取或迁移旧 Session 的 `trace.jsonl`。没有 `conversation.jsonl` 的旧 Session 返回空展示
+历史；它仍可按现有 Blackboard State 恢复模型上下文。旧 Session 升级后的新 Task 从新的 journal
+起点开始记录。
+
+会话展示持久化不能代替 Plugin State 持久化。AgentRuntime 处理 `task.finished` 时要求所属
+SessionRuntime 先执行 checkpoint；SessionRuntime 等待当前 EventBus 与 Plugin inbox drain，再由
+PluginRuntimeHost 和现有 StateCoordinator 对已声明的 StateProvider 执行 snapshot。checkpoint 成功后
+才持久化和广播 `task.finished`。Host 停止时仍保留完整 snapshot；终态 checkpoint 用于避免进程在
+下一次 unload 前退出而丢失最后几轮 Blackboard 与 Plugin State。该流程复用现有 Host 状态能力，不让
+Plugin 直接操作文件，不新增 TaskManagerPlugin 或第二套 Plugin 状态接口。checkpoint 失败时发布安全的
+持久化错误并将公共 Task 终态收束为 failed，不能让客户端误以为上下文已经可恢复。
 
 ## 14. 本地资源提交
 
