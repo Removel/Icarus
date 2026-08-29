@@ -333,8 +333,8 @@ Update。
 增量、Tool 开始/完成和 Context Compact。成功且存在累计 Usage 时先发布 `task.usage`，再发布
 `task.finished`；失败和取消不把 `last_usage` 伪装成累计值。
 
-当前实时链路复用现有 FIFO，不提供断线补发。下一阶段为 Session 历史恢复增加 Session 内 sequence
-与持久化公共会话记录；它只解决 Session 历史和历史/实时交接，不扩展为设备级全局事件日志。
+当前实时链路复用现有 FIFO，并为 Session 历史恢复提供 Session 内 sequence 与持久化公共会话记录；
+它只解决 Session 历史和历史/实时交接，不扩展为设备级全局事件日志。
 
 ### 13.1 持久化会话记录与状态 Checkpoint
 
@@ -373,10 +373,12 @@ Update 不写入会话记录，也不占用会话 sequence。
 
 `user.message` payload 保持扁平：`text` 是用户可见原文，`resources` 是已经导入 Session 的
 `resource_id + media_type` 列表。图片只记录稳定 Asset 引用和媒体类型，不记录 Base64、调用方绝对
-路径或暂存路径。`session.submit`
-中的 `prompt` 保持用户可见原文；纯图片默认请求和附件顺序提示由 SessionRuntime 在提交给 Blackboard
-前生成，不能反向污染 `user.message`。`InputQueuedEvent` 携带已接受的用户原文与稳定 Asset 引用，
-RuntimeUpdatePlugin 按 `user.message → task.accepted` 的顺序投影，使所有客户端看到同一份用户输入。
+路径或暂存路径。`session.submit` 使用扁平的 `prompt` 传模型输入，并用可选 `display_text` 传用户可见
+原文；没有 `display_text` 时二者相同。TUI 的纯图片默认请求和附件顺序提示只进入 `prompt`，不能反向
+污染 `user.message`。SessionRuntime 成功创建 Task 并加入 Runtime Queue 后，AgentRuntime 在释放当前
+Session mutation lock 和返回提交响应前持久化并广播 `user.message`。已经进入 AgentRuntime Update
+Queue 的 `task.accepted` 等待同一 mutation lock，随后才会持久化和广播，从而保证公共顺序为
+`user.message → task.accepted`，并让所有客户端看到同一份已经被 Runtime 接受的用户输入。
 
 AgentRuntime 在调用 SessionRuntime 前生成 `task_id` 并先持久化 `user.message`；SessionRuntime 和
 UserInputPlugin 接受该 task_id，避免应用层与 Plugin 各自生成任务身份。RuntimeUpdatePlugin 继续负责
@@ -396,12 +398,13 @@ Update。
 起点开始记录。
 
 会话展示持久化不能代替 Plugin State 持久化。AgentRuntime 处理 `task.finished` 时要求所属
-SessionRuntime 先执行 checkpoint；SessionRuntime 等待当前 EventBus 与 Plugin inbox drain，再由
-PluginRuntimeHost 和现有 StateCoordinator 对已声明的 StateProvider 执行 snapshot。checkpoint 成功后
-才持久化和广播 `task.finished`。Host 停止时仍保留完整 snapshot；终态 checkpoint 用于避免进程在
-下一次 unload 前退出而丢失最后几轮 Blackboard 与 Plugin State。该流程复用现有 Host 状态能力，不让
-Plugin 直接操作文件，不新增 TaskManagerPlugin 或第二套 Plugin 状态接口。checkpoint 失败时发布安全的
-持久化错误并将公共 Task 终态收束为 failed，不能让客户端误以为上下文已经可恢复。
+SessionRuntime 先执行 Blackboard checkpoint；SessionRuntime 等待 Blackboard Plugin inbox drain，再由
+PluginRuntimeHost 和现有 StateCoordinator 对 Blackboard 声明的 Session State 执行 snapshot。checkpoint
+成功后才持久化和广播 `task.finished`。Host 停止时仍保留所有 Plugin 的完整 snapshot；终态
+checkpoint 只解决已经确认的 Blackboard 最后一轮丢失问题，不把所有 Plugin Event 变成同步落盘。该
+流程复用现有 Host 状态能力，不让 Plugin 直接操作文件，不新增 TaskManagerPlugin 或第二套 Plugin 状态
+接口。checkpoint 失败时发布安全的持久化错误并将公共 Task 终态收束为 failed，不能让客户端误以为
+上下文已经可恢复。
 
 ## 14. 本地资源提交
 
