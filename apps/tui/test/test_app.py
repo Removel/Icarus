@@ -7,15 +7,11 @@ import threading
 import pytest
 from textual.widgets import Static
 
-from apps.agent.src.agent_orchestration.capability import AgentTextDeltaEvent
-from apps.agent.src.agent_orchestration.plugins import (
-    InputAccepted,
-    InputFinishedEvent,
-    InputQueuedEvent,
-)
-from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from packages.gateway_protocol import RuntimeUpdateModel, SessionHistoryModel
-from apps.tui.src.gateway_client.models import SubmitAccepted
+from apps.tui.src.gateway_client.models import (
+    SubmitAccepted,
+    TaskOperationResult,
+)
 from apps.tui.src.app import IcarusTextualApp, RuntimeSubscriptionFailed
 from apps.tui.src.chat_state import RuntimePhase
 from apps.tui.src.clipboard import (
@@ -53,7 +49,10 @@ class ControlledSubscription:
         return item
 
     def publish(self, source, event) -> None:
-        self.queue.put_nowait(_event_update(source, event))
+        del source
+        if not isinstance(event, RuntimeUpdateModel):
+            raise TypeError("ControlledSubscription accepts RuntimeUpdateModel")
+        self.queue.put_nowait(event)
 
     def close(self) -> None:
         if self.closed:
@@ -147,13 +146,14 @@ class ControlledService:
         if self.publish_queued_before_return:
             self.subscription.publish(
                 "user-input",
-                InputQueuedEvent(
+                runtime_update(
+                    "task.accepted",
                     task_id=task_id,
-                    queue_position=0,
+                    payload={"queue_position": 0},
                 ),
             )
             await asyncio.sleep(0)
-        return InputAccepted(task_id=task_id, queue_position=0)
+        return SubmitAccepted(task_id=task_id, queue_position=0)
 
     async def close(self) -> None:
         self.actions.append("service-stop")
@@ -212,34 +212,24 @@ async def enter_text(pilot, text: str) -> None:
     await pilot.pause()
 
 
-def finish_event(task_id: str, status="completed") -> InputFinishedEvent:
-    return InputFinishedEvent(
+def finish_event(task_id: str, status="completed") -> RuntimeUpdateModel:
+    return runtime_update(
+        "task.finished",
         task_id=task_id,
-        status=status,
+        payload={"status": status, "run_id": None},
     )
 
 
-def _event_update(source, event) -> RuntimeUpdateModel:
-    if isinstance(event, RuntimeUpdateModel):
-        return event
-    update_type = source
-    payload = {}
-    if isinstance(event, InputQueuedEvent):
-        update_type = "task.accepted"
-        payload = {"queue_position": event.queue_position}
-    elif isinstance(event, InputFinishedEvent):
-        update_type = "task.finished"
-        payload = {"status": event.status, "run_id": event.run_id}
-    elif isinstance(event, AgentTextDeltaEvent):
-        update_type = "assistant.text_delta"
-        payload = {"step": event.step, "text": event.text}
+def runtime_update(
+    update_type, *, task_id="task-1", payload=None
+) -> RuntimeUpdateModel:
     return RuntimeUpdateModel(
         workspace_key="workspace",
         session_id="test-session",
-        task_id=getattr(event, "task_id", None),
+        task_id=task_id,
         type=update_type,
-        payload=payload,
-        occurred_at=getattr(event, "occurred_at", datetime.now(UTC)),
+        payload=payload or {},
+        occurred_at=datetime.now(UTC),
     )
 
 
@@ -928,10 +918,10 @@ def test_agent输出期间草稿光标和焦点保持不变(tmp_path):
 
             service.subscription.publish(
                 "agent",
-                AgentTextDeltaEvent(
+                runtime_update(
+                    "assistant.text_delta",
                     task_id="task-1",
-                    step=1,
-                    text="**streaming**",
+                    payload={"step": 1, "text": "**streaming**"},
                 ),
             )
             await wait_until(
@@ -1104,11 +1094,7 @@ def test_projector失败进入fatal并保留当前任务队列和草稿(tmp_path
             composer.load_text("keep draft")
             service.subscription.publish(
                 "agent",
-                type(
-                    "RuntimeEvent",
-                    (),
-                    {"task_id": "task-1"},
-                )(),
+                runtime_update("agent"),
             )
             await wait_until(
                 pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED
@@ -1154,10 +1140,10 @@ def test_conversation更新失败后忽略后续event且不调度队首(
             await enter_text(pilot, "must not dispatch")
             service.subscription.publish(
                 "agent",
-                AgentTextDeltaEvent(
+                runtime_update(
+                    "assistant.text_delta",
                     task_id="task-1",
-                    step=1,
-                    text="broken update",
+                    payload={"step": 1, "text": "broken update"},
                 ),
             )
             await wait_until(
@@ -1257,14 +1243,7 @@ def test_notification展示失败不阻止同一event完成任务(monkeypatch, t
             monkeypatch.setattr(app, "notify", fail_notification)
             service.subscription.publish(
                 "test-source",
-                type(
-                    "RuntimeEvent",
-                    (),
-                    {
-                        "task_id": "task-1",
-                        "task_id": "task-1",
-                    },
-                )(),
+                runtime_update("test-source"),
             )
             await wait_until(
                 pilot, lambda: app.chat_state.active_task_id is None
@@ -1407,11 +1386,7 @@ def test未知ui_action进入fatal而不是终止textual消息循环(tmp_path):
             await enter_text(pilot, "active")
             service.subscription.publish(
                 "test-source",
-                type(
-                    "RuntimeEvent",
-                    (),
-                    {"task_id": "task-1"},
-                )(),
+                runtime_update("test-source"),
             )
             await wait_until(
                 pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED
