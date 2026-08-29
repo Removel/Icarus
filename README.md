@@ -24,14 +24,24 @@ Icarus 希望通过长期共处逐渐理解用户、用户正在经历的事情�
 ```text
 apps/
 ├── agent/       Agent 执行、模型接入、工具、Plugin 和本地持久化
+│   ├── requirements.txt
+│   └── scripts/
 ├── gateway/     本机 Agent 服务入口
+│   ├── requirements.txt
+│   └── scripts/
 └── tui/         Textual 终端客户端
+    ├── requirements.txt
+    └── scripts/
 packages/        应用间共享的数据模型和环境配置
 docs/            项目定位、路线图和待办
+scripts/         整个仓库的安装、启动和测试编排
+Makefile         根目录统一命令入口
 ```
 
 各应用的说明、设计和实施计划分别放在自己的 `README.md`、`docs/arch/` 和 `docs/plan/` 中。
 完整产品定位见 [`docs/product-positioning.md`](docs/product-positioning.md)。
+每个 App 使用自己的 `.venv` 和 requirements；根目录不集中安装某一种语言的依赖，只调用各 App
+提供的脚本。
 
 ## 技术特色
 
@@ -77,23 +87,40 @@ Event 用于业务通信，Blackboard 表达当前上下文状态，Hook 只负�
 
 ## 快速开始
 
-开发环境安装：
+安装全部 App 的运行依赖：
 
 ```bash
-python -m venv apps/agent/.venv
-apps/agent/.venv/bin/pip install -r apps/agent/requirements.txt
+make install
 ```
 
-使用 `uv` 把全局 `icarus` 命令安装到用户工具环境：
+安装完成后会在 `${ICARUS_BIN_DIR:-~/.local/bin}` 创建 `icarus` 和 `icarus-gateway` 软链接。需要使用
+其他命令目录时可以执行：
 
 ```bash
-uv tool install --editable /absolute/path/to/Icarus
+ICARUS_BIN_DIR=/your/bin make install
 ```
 
-代码或依赖更新后可执行：
+需要运行测试时，安装各 App 的开发依赖：
 
 ```bash
-uv tool upgrade icarus-agent
+make install-dev
+```
+
+也可以只安装一个 App：
+
+```bash
+make install-agent
+make install-gateway
+make install-tui
+make install-commands
+```
+
+上述命令分别创建：
+
+```text
+apps/agent/.venv
+apps/gateway/.venv
+apps/tui/.venv
 ```
 
 从示例创建 `apps/agent/.env`，配置模型 API Key 和绝对数据目录，并在
@@ -108,24 +135,40 @@ ICARUS_DATA_DIR=/Users/you/.icarus
 只需填写当前协议实际使用的 API Key。`ICARUS_DATA_DIR` 用于保存 Workspace、Session、会话记录、
 Plugin State、Trace 和图片 Asset。Gateway 与 TUI 都会读取 `apps/agent/.env`。
 
-先启动本机 Gateway：
+同时启动本机 Gateway 和 TUI：
 
 ```bash
-icarus-gateway
+make start
 ```
 
-再进入任意 Workspace 启动 TUI：
+也可以继续使用独立命令：
+
+```bash
+# 终端一
+icarus-gateway
+
+# 终端二
+cd /path/to/workspace
+icarus --session-id my-session
+```
+
+`make start` 会把命令执行时的当前目录作为 Agent Workspace。可以用 `ARGS` 传递 TUI 参数：
 
 ```bash
 cd /path/to/workspace
-icarus
+make -f /absolute/path/to/Icarus/Makefile \
+  start ARGS="--session-id my-session"
 ```
 
 当前目录会作为 Agent Workspace；不传 `--session-id` 时生成一个新 Session ID。建议在需要后续恢复
-时显式指定 ID：
+时显式指定 ID。也可以从仓库根目录分别启动两个 App：
 
 ```bash
-icarus --session-id my-session
+# 终端一
+make gateway
+
+# 终端二
+make tui ARGS="--session-id my-session"
 ```
 
 使用同一 Workspace 和 Session ID 再次启动时，TUI 会在进入 Ready 前一次性恢复已持久化的
@@ -144,16 +187,11 @@ Asset。Windows/Linux 的系统剪贴板图片读取暂未实现。
 退出。取消过程中会显示 `Cancelling`，并保留已经输出的内容；收到取消终态后才继续调度队列。
 输入 `exit`、`quit`，或在空输入时按 `Ctrl+D` 也会退出。Textual 退出后恢复启动前的终端画面。
 
-仓库内开发启动仍可使用：
+各 App 的直接启动脚本：
 
 ```bash
-apps/agent/.venv/bin/python -m apps.tui.src.main
-```
-
-Gateway 仓库内开发启动：
-
-```bash
-apps/agent/.venv/bin/python -m apps.gateway.src.main
+./apps/gateway/scripts/start.sh
+./apps/tui/scripts/start.sh --session-id my-session
 ```
 
 Gateway 默认监听：
@@ -185,7 +223,8 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 
 ## 当前边界
 
-- Gateway 需要独立启动，TUI 不会隐式启动本地 Runtime；
+- Gateway 作为独立进程运行；`make start` 可以统一启动 Gateway 与 TUI，单独运行 TUI 时不会隐式
+  创建本地 Runtime；
 - TUI 尚未提供 Session 列表和切换界面，需要通过 `--session-id` 记住并指定会话；
 - Gateway 首次不可用时不会持续后台重连；
 - TUI 未被 Runtime 接受的 Pending Queue 不跨 TUI 进程持久化；
@@ -195,10 +234,10 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 ## 测试
 
 ```bash
-apps/agent/.venv/bin/python -m pytest \
-  apps/agent/test apps/gateway/test apps/tui/test -q
-apps/agent/.venv/bin/python -m compileall -q \
-  apps/agent/src apps/agent/test \
-  apps/gateway/src apps/gateway/test \
-  apps/tui/src apps/tui/test packages
+make test
+
+# 或分别执行
+make test-agent
+make test-gateway
+make test-tui
 ```

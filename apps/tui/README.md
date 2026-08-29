@@ -4,6 +4,9 @@
 只消费公共 RuntimeUpdate，不直接访问 SessionRuntime、Plugin Runtime、EventBus、Blackboard 或
 具体 Plugin。对话在应用内部滚动；退出后恢复启动前的终端画面。
 
+TUI 使用独立的 `apps/tui/.venv`，运行环境不安装模型 SDK 或 Gateway 服务依赖。它只依赖公共
+Gateway 协议与客户端库。
+
 当前界面提供：
 
 - 宽屏 ASCII Icarus Logo、紧凑屏文字回退和当前 Workspace；
@@ -25,26 +28,46 @@
 ICARUS_DATA_DIR=/Users/you/.icarus
 ```
 
-从仓库根目录安装全局命令：
+安装 TUI 自己的运行依赖：
 
 ```bash
-uv tool install --editable /absolute/path/to/Icarus
+./apps/tui/scripts/install.sh
 ```
 
-先启动 Gateway：
+依赖安装在 `apps/tui/.venv`。需要运行测试时使用：
 
 ```bash
-icarus-gateway
+./apps/tui/scripts/install.sh --dev
+```
+
+Gateway 使用独立虚拟环境，需要单独安装和启动：
+
+```bash
+./apps/gateway/scripts/install.sh
+./apps/gateway/scripts/start.sh
 ```
 
 进入任意 Workspace 启动一次新会话：
 
 ```bash
 cd /path/to/workspace
+/absolute/path/to/Icarus/apps/tui/scripts/start.sh
+```
+
+在仓库根目录执行过 `make install` 或 `make install-commands` 后，也可以直接运行：
+
+```bash
+cd /path/to/workspace
 icarus
 ```
 
-可选指定 Trace Session ID：
+可选指定 Session ID：
+
+```bash
+/absolute/path/to/Icarus/apps/tui/scripts/start.sh --session-id demo-session
+```
+
+对应的全局命令是：
 
 ```bash
 icarus --session-id demo-session
@@ -87,29 +110,24 @@ Agent Core 的 Blackboard 维护；TUI Conversation 只是当前进程的 UI 投
 `$ICARUS_DATA_DIR/incoming/` 并只通过 ResourceRef 提交，Runtime 接受任务并复制到 Session Asset 后
 删除暂存文件；失败或未确认请求保留文件用于重试。
 
-仓库内开发启动：
-
-```bash
-apps/agent/.venv/bin/python -m apps.tui.src.main
-```
-
 ## 测试
 
 ```bash
-apps/agent/.venv/bin/python -m pytest apps/tui/test -q
+./apps/tui/scripts/install.sh --dev
+./apps/tui/scripts/test.sh
 ```
 
 确定性 transcript replay：
 
 ```bash
-apps/agent/.venv/bin/python apps/tui/scripts/replay_events.py \
+apps/tui/.venv/bin/python apps/tui/scripts/replay_events.py \
   apps/tui/test/fixtures/synthetic_tui_events.jsonl
 ```
 
 完整 Textual shell replay（不调用模型、不写 Session）：
 
 ```bash
-apps/agent/.venv/bin/python apps/tui/scripts/replay_events.py \
+apps/tui/.venv/bin/python apps/tui/scripts/replay_events.py \
   --tui-real --speed 8 \
   apps/tui/test/fixtures/synthetic_tui_events.jsonl
 ```
@@ -117,6 +135,6 @@ apps/agent/.venv/bin/python apps/tui/scripts/replay_events.py \
 视觉快照：
 
 ```bash
-apps/agent/.venv/bin/python -m pytest \
+apps/tui/.venv/bin/python -m pytest \
   apps/tui/test/test_app_snapshots.py -q
 ```
