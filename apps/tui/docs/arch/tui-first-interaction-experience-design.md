@@ -1,5 +1,8 @@
 # TUI First Interaction Experience Design｜TUI 首次交互体验设计
 
+> 本文的首帧、布局和滚动设计仍有效；AgentRuntimeService 初始化链属于迁移前历史。当前后台启动
+> 动作为连接本机 Agent Gateway，不再在 TUI 进程内构造 Agent Runtime。
+
 ## 文档定位
 
 本文定义 Icarus Textual TUI 第一轮体验修复，包括：

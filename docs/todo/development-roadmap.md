@@ -120,7 +120,7 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
 完成标志：至少一个业务语义场景和一个 Harness 控制场景端到端成立，能够用真实结果反证
 或确认 Kernel 边界。
 
-### 阶段五：推进 Agent Core 系统性重构（进行中）
+### 阶段五：Agent Core 系统性重构基础版本（已完成，持续加固）
 
 - [x] 完成 Tool 由默认基础能力和 Plugin 贡献能力共同装配的生产机制，包括 Plugin 生命周期、
   注册集成、READY 前冻结和单次 Run 快照。
@@ -139,10 +139,9 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
   转换为厂商图片协议。
 - [ ] 继续规范尚未覆盖模块的异常、日志和配置，并基于具体调用方引入必要抽象。
 
-本阶段下一步按以下顺序推进：先在不改变四个公开入口的前提下整理 ReAct 内部重复实现，
-再增加 256 Step Harness、统一错误 Event、Blackboard Compact 和本地图片稳定引用。这是现有
-Agent 基础能力的增量整理与补全，不重新划分 Kernel、Plugin Runtime 或 EventBus 的职责。
-详细设计见 `apps/agent/docs/arch/agent-core-capability-completion-design.md`，实施步骤见
+上述基础能力已经完成。后续异常、日志、配置、安全和资源限制继续由真实调用方驱动加固，不再
+阻塞设备级 Runtime、Gateway 和 Session 产品化。详细设计见
+`apps/agent/docs/arch/agent-core-capability-completion-design.md`，实施结果见
 `apps/agent/docs/plan/agent-core-capability-completion-development-plan.md`。
 
 完成标志：新增 Plugin 和 Tool 不需要修改 Kernel 主循环；核心模块边界可以独立理解和测试；
@@ -150,6 +149,22 @@ Agent 基础能力的增量整理与补全，不重新划分 Kernel、Plugin Run
 
 ### 阶段六：产品化对话与上下文能力
 
+- [x] 新增一台设备唯一的 `AgentRuntime`，管理多个相互隔离的 `SessionRuntime`；将当前固定单
+  Session 的 `AgentRuntimeService` 复用为 Session 执行单元，并保留每个 Session 一套独立
+  PluginRuntimeHost、Plugin 实例、EventBus、Blackboard 和 Runtime Queue。
+- [x] 使用完整 SessionIdentity 保证同一 Session 只有一个活动 SessionRuntime；并发 resume 共用
+  同一次恢复，不同 Session 可以并发恢复。Plugin/配置在 SessionRuntime 生命周期内冻结。
+- [x] 将内部 Plugin Event 在 Agent 应用层投影为携带 SessionIdentity 的公共 RuntimeUpdate，
+  Gateway 只负责 JSON-RPC 序列化、连接与路由。
+- [x] 将 Skill Job 等 Plugin 运行状态统一按 SessionIdentity 快照，补齐 Persistence 在多个
+  SessionRuntime 并行时的日志、Trace 和状态写入安全。`state_version` 是状态格式兼容契约；核心
+  Plugin 恢复失败阻止 Session Ready，非核心 Plugin 由 Host 禁用并级联依赖。每个 SessionRuntime
+  继续独立持有现有 Persistence 资源，Logger Handler 只写入与自身完整 SessionIdentity 匹配的日志。
+- [x] 提供 `unload_session(SessionIdentity)` 释放运行实例并保留 Session 持久化数据；运行中或排队
+  Session 返回忙，不隐式取消。连续 6 小时没有状态变化且没有 Task、排队工作或 Plugin 后台工作
+  时，由 AgentRuntime 加锁复检后自动调用同一 unload 流程；连接、订阅和只读查询不刷新空闲时间，
+  新建或 resume 进入 Ready 时初始化计时，下一次提交自动 resume。第一阶段不设置活动
+  SessionRuntime 上限，也不按数量或内存压力淘汰。
 - [ ] 将 Agent 基础层已有的 Usage、Compact、Error Event 和图片引用继续封装为产品可理解的状态
   与交互，不在 UI 中重复实现基础逻辑。TUI 已完成 macOS `Ctrl+V` 图片输入首期闭环；Usage、
   Compact、错误详情、图片历史展示以及 GUI/WebUI 接入仍待完成。

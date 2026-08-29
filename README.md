@@ -5,6 +5,7 @@ Icarus 是一个面向可扩展 Agent 系统的 Monorepo。项目通过模型接
 ## 当前应用
 
 - `apps/agent`：模型接入、Agent 编排、工具、插件运行时、持久化与应用服务。
+- `apps/gateway`：本机 FastAPI WebSocket + JSON-RPC Agent Gateway。
 - `apps/tui`：基于 Textual 的全屏 Agent 终端客户端，提供应用内滚动、持久输入框、本地
   消息队列和 macOS 剪贴板图片输入。
 
@@ -38,7 +39,13 @@ OPENAI_API_KEY=your-api-key
 ICARUS_DATA_DIR=/Users/you/.icarus
 ```
 
-进入任意 Workspace 后启动：
+先启动本机 Gateway：
+
+```bash
+icarus-gateway
+```
+
+再进入任意 Workspace 启动 TUI：
 
 ```bash
 cd /path/to/workspace
@@ -62,9 +69,19 @@ icarus
 apps/agent/.venv/bin/python -m apps.tui.src.main
 ```
 
+Gateway 仓库内开发启动：
+
+```bash
+apps/agent/.venv/bin/python -m apps.gateway.src.main
+```
+
 ## 测试
 
 ```bash
-apps/agent/.venv/bin/python -m pytest apps/agent/test apps/tui/test -q
-apps/agent/.venv/bin/python -m compileall -q apps/agent/src apps/agent/test apps/tui
+apps/agent/.venv/bin/python -m pytest \
+  apps/agent/test apps/gateway/test apps/tui/test -q
+apps/agent/.venv/bin/python -m compileall -q \
+  apps/agent/src apps/agent/test \
+  apps/gateway/src apps/gateway/test \
+  apps/tui/src apps/tui/test packages
 ```

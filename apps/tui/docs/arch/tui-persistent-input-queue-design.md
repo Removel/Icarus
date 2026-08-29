@@ -1,5 +1,9 @@
 # Textual TUI Persistent Input and Local Queue Design｜持久输入框与本地队列设计
 
+> 本文的本地草稿、FIFO/LIFO 队列和 `Ctrl+C` 交互仍有效；AgentRuntimeService、OutputBridge 和
+> 内部 Event 投影部分属于迁移前历史。当前 TUI 通过 GatewayClient 使用 JSON-RPC，并消费公共
+> RuntimeUpdate。
+
 ## 文档定位
 
 本文定义 Icarus TUI 当前 Textual 全屏界面、持久输入框、运行中编辑、本地待发送队列和

@@ -1,5 +1,9 @@
 # Plugin Runtime Current State｜插件运行时当前状态与事件流
 
+> 本文的 Runtime 内部 EventBus 与 Plugin 拓扑仍是当前实现事实；其中 AgentRuntimeService 和
+> OutputBridge 对外链路属于迁移前历史。当前应用入口是 AgentRuntime，内部 Event 由
+> RuntimeUpdatePlugin 投影为公共 RuntimeUpdate，Gateway 和 TUI 不直接消费 Plugin Event。
+
 ## 文档定位
 
 本文记录当前 Manifest Runtime 的 Plugin 装配、来源订阅、Tool 注入、事件流和状态所有权。

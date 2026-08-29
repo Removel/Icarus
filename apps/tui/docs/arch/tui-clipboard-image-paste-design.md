@@ -1,5 +1,9 @@
 # TUI Clipboard Image Paste Design｜TUI 剪贴板图片粘贴设计
 
+> 本文记录剪贴板读取和 Composer Marker 的已实现基础。提交链已从本地 Path 直传迁移为
+> `$ICARUS_DATA_DIR/incoming/` ResourceRef，经 Gateway 交给 AgentRuntime，并在返回 task_id 前导入
+> Session Asset。
+
 ## 1. 背景
 
 ### 1.1 核心结论
