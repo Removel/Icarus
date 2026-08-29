@@ -5,6 +5,12 @@ from typing import Literal, TypeAlias
 
 
 @dataclass(frozen=True)
+class AppendUserMessage:
+    task_id: str
+    text: str
+
+
+@dataclass(frozen=True)
 class AppendAssistantDelta:
     task_id: str
     text: str
@@ -50,11 +56,12 @@ class ShowNotification:
 @dataclass(frozen=True)
 class FinishTurn:
     task_id: str
-    status: Literal["completed", "failed", "cancelled"]
+    status: Literal["completed", "failed", "cancelled", "interrupted"]
 
 
 UiAction: TypeAlias = (
-    AppendAssistantDelta
+    AppendUserMessage
+    | AppendAssistantDelta
     | AppendToolStarted
     | UpdateToolCompleted
     | AppendError

@@ -53,6 +53,9 @@ class DataPathResolver:
     def trace_file(self, identity: SessionIdentity) -> Path:
         return self.session_dir(identity) / "trace.jsonl"
 
+    def conversation_file(self, identity: SessionIdentity) -> Path:
+        return self.session_dir(identity) / "conversation.jsonl"
+
     def session_log(self, identity: SessionIdentity) -> Path:
         return self.session_dir(identity) / "runtime.log"
 

@@ -27,6 +27,7 @@ class RuntimeUpdateModel(StrictWireModel):
     type: str
     payload: dict[str, Any]
     occurred_at: datetime
+    sequence: int | None = Field(default=None, ge=1)
 
     @classmethod
     def from_domain(cls, update: "RuntimeUpdate") -> "RuntimeUpdateModel":
@@ -37,4 +38,10 @@ class RuntimeUpdateModel(StrictWireModel):
             type=update.type,
             payload=dict(update.payload),
             occurred_at=update.occurred_at,
+            sequence=update.sequence,
         )
+
+
+class SessionHistoryModel(StrictWireModel):
+    records: tuple[RuntimeUpdateModel, ...]
+    history_cursor: int = Field(ge=0)

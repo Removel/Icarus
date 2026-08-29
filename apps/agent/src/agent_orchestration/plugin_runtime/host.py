@@ -164,6 +164,20 @@ class PluginRuntimeHost:
             self.status = "failed"
             raise
 
+    async def checkpoint(
+        self, plugin_ids: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        if self.status not in {"ready", "running"}:
+            raise RuntimeError(
+                f"Runtime Host cannot checkpoint from {self.status}"
+            )
+        await self.plugin_manager.event_bus.drain()
+        for plugin_id in plugin_ids:
+            await self.plugin_manager.drain_plugin(plugin_id)
+        if self.state is None:
+            return ()
+        return tuple(await self.state.snapshot_plugin_states(plugin_ids))
+
     async def stop(self, timeout: float | None = 30) -> tuple[str, ...]:
         if self.status == "stopped":
             return ()

@@ -157,10 +157,22 @@ class SessionRuntime:
         self,
         prompt: str,
         input_images: list[ImagePart | str | Path] | None = None,
+        *,
+        task_id: str | None = None,
     ) -> InputAccepted:
         if not self._started or self._user_input is None:
             raise RuntimeError("SessionRuntime is not running")
-        return await self._user_input.submit(prompt, input_images)
+        return await self._user_input.submit(
+            prompt,
+            input_images,
+            task_id=task_id,
+        )
+
+    async def checkpoint(self) -> tuple[str, ...]:
+        if not self._started:
+            raise RuntimeError("SessionRuntime is not running")
+        with self._context_scope():
+            return await self.runtime_host.checkpoint(("blackboard",))
 
     def import_resources(self, paths: list[tuple[Path, str | None]]) -> list[ImagePart]:
         session = PersistenceSession(self.persistence, self.identity)

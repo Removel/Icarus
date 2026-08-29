@@ -14,7 +14,7 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputQueuedEvent,
 )
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
-from packages.gateway_protocol import RuntimeUpdateModel
+from packages.gateway_protocol import RuntimeUpdateModel, SessionHistoryModel
 from apps.tui.src.gateway_client.models import SubmitAccepted
 from apps.tui.src.app import IcarusTextualApp, RuntimeSubscriptionFailed
 from apps.tui.src.chat_state import RuntimePhase
@@ -30,6 +30,12 @@ from apps.tui.src.widgets import (
     PersistentComposer,
     QueuePanel,
     RuntimeStatusBar,
+)
+from apps.tui.src.widgets.messages import (
+    ErrorMessage,
+    ToolMessage,
+    TurnStatusMessage,
+    UserMessage,
 )
 
 
@@ -93,6 +99,7 @@ class ControlledService:
         self.stopped = False
         self.cancelled_tasks = []
         self.task_statuses = {}
+        self.history = SessionHistoryModel(records=(), history_cursor=0)
 
     async def start(self) -> None:
         self.actions.append("service-start")
@@ -108,14 +115,35 @@ class ControlledService:
             raise self.subscribe_error
         return self.subscription
 
-    async def submit(self, prompt, *, submission_id, resources=()):
+    async def get_session_history(self, *, after_sequence=0):
+        self.actions.append(f"history:{after_sequence}")
+        return self.history
+
+    async def submit(
+        self, prompt, *, submission_id, resources=(), display_text=None
+    ):
         del submission_id
         task_id = f"task-{len(self.submissions) + 1}"
         self.actions.append(f"submit:{prompt}")
         self.submissions.append(prompt)
         self.submission_images.append(tuple(resources))
+        self.display_text = display_text
         if self.submit_error is not None:
             raise self.submit_error
+        self.subscription.queue.put_nowait(
+            RuntimeUpdateModel(
+                workspace_key="workspace",
+                session_id=self.session_id,
+                task_id=task_id,
+                type="user.message",
+                payload={
+                    "text": prompt if display_text is None else display_text,
+                    "resources": [],
+                },
+                occurred_at=datetime.now(UTC),
+            )
+        )
+        await asyncio.sleep(0)
         if self.publish_queued_before_return:
             self.subscription.publish(
                 "user-input",
@@ -215,6 +243,18 @@ def _event_update(source, event) -> RuntimeUpdateModel:
     )
 
 
+def _history_update(sequence, update_type, payload=None):
+    return RuntimeUpdateModel(
+        workspace_key="workspace",
+        session_id="test-session",
+        task_id="historical-task",
+        type=update_type,
+        payload=payload or {},
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        sequence=sequence,
+    )
+
+
 class FailingProjector:
     def project(self, event):
         del event
@@ -265,6 +305,121 @@ def test_app启动订阅后ready并保持composer焦点(tmp_path):
     assert "Session" not in status
     assert service.stopped is True
     assert app.return_code == 0
+
+
+def test_app恢复session退出时的消息工具错误和中断状态(tmp_path):
+    async def run():
+        service = ControlledService()
+        service.history = SessionHistoryModel(
+            history_cursor=6,
+            records=(
+                _history_update(1, "user.message", {"text": "hello", "resources": []}),
+                _history_update(2, "task.started"),
+                _history_update(3, "assistant.text_delta", {"step": 1, "text": "partial"}),
+                _history_update(4, "tool.started", {"step": 1, "call_id": "call", "tool_name": "read", "arguments": {"path": "a"}}),
+                _history_update(5, "task.error", {"fatal": True, "code": "stopped", "error_type": "RuntimeError", "message": "stopped", "step": 1, "run_id": "run"}),
+                _history_update(6, "task.finished", {"status": "interrupted", "run_id": None, "recovered": True}),
+            ),
+        )
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            result = (
+                len(app.query(UserMessage)),
+                app.query_one(AssistantMessage).markdown_text,
+                str(app.query_one(ToolMessage).query_one(".tool-state").render()),
+                len(app.query(ErrorMessage)),
+                str(app.query_one(TurnStatusMessage).render()),
+                app._last_sequence,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    assert asyncio.run(run()) == (
+        1,
+        "partial",
+        "interrupted",
+        1,
+        "Task interrupted",
+        6,
+    )
+
+
+def test_app历史sequence缺口不进入ready(tmp_path):
+    async def run():
+        service = ControlledService()
+        service.history = SessionHistoryModel(
+            records=(
+                _history_update(2, "user.message", {"text": "gap"}),
+            ),
+            history_cursor=2,
+        )
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED)
+            result = str(app.query_one(RuntimeStatusBar).render())
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    assert "sequence gap" in asyncio.run(run())
+
+
+def test_app历史在隐藏conversation和batch中完整构建后一次显示(
+    monkeypatch, tmp_path
+):
+    observed = []
+    original = ConversationView.apply_action
+
+    async def observe(self, action):
+        observed.append((self.display, self.app._batch_count))
+        return await original(self, action)
+
+    monkeypatch.setattr(ConversationView, "apply_action", observe)
+
+    async def run():
+        service = ControlledService()
+        service.history = SessionHistoryModel(
+            records=(
+                _history_update(
+                    1,
+                    "user.message",
+                    {"text": "restored", "resources": []},
+                ),
+                _history_update(
+                    2,
+                    "assistant.text_delta",
+                    {"step": 1, "text": "complete"},
+                ),
+                _history_update(
+                    3,
+                    "task.finished",
+                    {"status": "completed", "run_id": "run"},
+                ),
+            ),
+            history_cursor=3,
+        )
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            conversation = app.query_one(ConversationView)
+            result = (
+                tuple(observed),
+                conversation.display,
+                app.query_one(AssistantMessage).markdown_text,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    states, visible, assistant = asyncio.run(run())
+    assert states
+    assert all(display is False and batch_count > 0 for display, batch_count in states)
+    assert visible is True
+    assert assistant == "complete"
 
 
 def test_starting期间可排队且ready后自动提交(tmp_path):
@@ -1074,7 +1229,7 @@ def test_runtime接受后用户消息渲染失败不把消息重新入队(
     assert submissions == ("accepted",)
     assert active == "task-1"
     assert pending == ("still pending",)
-    assert "accepted message rendering" in status
+    assert "ConversationView action" in status
     assert "user message exploded" in status
     assert exception is None
 

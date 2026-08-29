@@ -193,6 +193,11 @@ class PluginManager:
             return
         await self._drain_until_idle()
 
+    async def drain_plugin(self, plugin_id: str) -> None:
+        if not self._started:
+            return
+        await self.get_runtime(plugin_id).drain()
+
     async def stop(
         self,
         timeout: float | None = None,

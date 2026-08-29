@@ -60,7 +60,12 @@ class UnloadResult:
 
 
 TaskLifecycle: TypeAlias = Literal[
-    "accepted", "running", "completed", "failed", "cancelled"
+    "accepted",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
 ]
 
 

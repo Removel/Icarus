@@ -13,6 +13,7 @@ from pydantic import Field, ValidationError
 from apps.agent.src.application import (
     AgentRuntime,
     AgentRuntimeStoppingError,
+    ConversationHistoryCorruptError,
     InvalidResourceError,
     ResourceRef,
     ResourceUnavailableError,
@@ -27,7 +28,11 @@ from apps.gateway.src.protocol.errors import (
     METHOD_NOT_FOUND,
     GatewayRpcError,
 )
-from apps.gateway.src.protocol.models import ResourceRefModel, StrictModel
+from apps.gateway.src.protocol.models import (
+    ResourceRefModel,
+    RuntimeUpdateModel,
+    StrictModel,
+)
 
 
 class WorkspaceParams(StrictModel):
@@ -46,6 +51,7 @@ class CreateSessionParams(WorkspaceParams):
 
 class SubmitParams(SessionParams):
     prompt: str
+    display_text: str | None = None
     submission_id: str = Field(min_length=1, pattern=r".*\S.*")
     resources: tuple[ResourceRefModel, ...] = ()
 
@@ -57,6 +63,10 @@ class CancelParams(SessionParams):
 
 class TaskParams(SessionParams):
     task_id: str
+
+
+class HistoryParams(SessionParams):
+    after_sequence: int = Field(default=0, ge=0)
 
 
 class SubscriptionParams(StrictModel):
@@ -88,6 +98,7 @@ class GatewayMethods:
             "session.submit": self._session_submit,
             "session.cancel": self._session_cancel,
             "session.unload": self._session_unload,
+            "session.get_history": self._session_history,
             "task.get_status": self._task_get,
         }
         if method == "session.subscribe":
@@ -113,6 +124,10 @@ class GatewayMethods:
             raise _business("submission_conflict", "Submission ID conflicts with another request") from error
         except AgentRuntimeStoppingError as error:
             raise _business("runtime_stopping", "Runtime is not accepting calls") from error
+        except ConversationHistoryCorruptError as error:
+            raise _business(
+                "history_corrupt", "Session history is corrupt"
+            ) from error
         except KeyError as error:
             raise _business("task_status_unavailable", "Task status is unavailable") from error
         except Exception as error:
@@ -158,6 +173,7 @@ class GatewayMethods:
                 value.prompt,
                 submission_id=value.submission_id,
                 resources=resources,
+                display_text=value.display_text,
             )
         except ResourceUnavailableError as error:
             raise _business(
@@ -193,6 +209,21 @@ class GatewayMethods:
                 value.workspace_path, value.session_id, value.task_id
             )
         )
+
+    async def _session_history(self, params):
+        value = self._validate(HistoryParams, params)
+        records, cursor = await self.runtime.get_session_history(
+            value.workspace_path,
+            value.session_id,
+            after_sequence=value.after_sequence,
+        )
+        return {
+            "records": [
+                RuntimeUpdateModel.from_domain(item).model_dump(mode="json")
+                for item in records
+            ],
+            "history_cursor": cursor,
+        }
 
     @staticmethod
     def _validate(model, params):

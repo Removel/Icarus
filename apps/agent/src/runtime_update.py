@@ -12,6 +12,7 @@ from typing import Literal, TypeAlias
 
 RuntimeUpdateType: TypeAlias = Literal[
     "session.lifecycle",
+    "user.message",
     "task.accepted",
     "task.started",
     "task.finished",
@@ -32,12 +33,19 @@ class RuntimeUpdate:
     type: RuntimeUpdateType
     payload: Mapping[str, object]
     occurred_at: datetime
+    sequence: int | None = None
 
     def __post_init__(self) -> None:
         if not self.workspace_key:
             raise ValueError("workspace_key cannot be empty")
         if not self.session_id:
             raise ValueError("session_id cannot be empty")
+        if self.sequence is not None and (
+            isinstance(self.sequence, bool)
+            or not isinstance(self.sequence, int)
+            or self.sequence < 1
+        ):
+            raise ValueError("sequence must be a positive integer")
         copied = dict(self.payload)
         try:
             serialized = json.dumps(

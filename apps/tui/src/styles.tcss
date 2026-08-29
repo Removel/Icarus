@@ -119,6 +119,10 @@ Screen {
     color: $icarus-red;
 }
 
+.tool-message.is-interrupted .tool-state {
+    color: $icarus-muted;
+}
+
 .error-message {
     border-left: thick $icarus-red;
     padding-left: 1;
@@ -135,6 +139,10 @@ Screen {
 
 .turn-cancelled {
     color: $icarus-red;
+}
+
+.turn-interrupted {
+    color: $icarus-muted;
 }
 
 #queue-panel {

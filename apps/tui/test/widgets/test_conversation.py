@@ -8,6 +8,7 @@ from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
     AppendError,
     AppendToolStarted,
+    AppendUserMessage,
     FinishTurn,
     SetRuntimeStatus,
     UpdateToolCompleted,
@@ -222,6 +223,37 @@ def test_conversation对缺失start的失败工具降级并显示错误终态(tm
     assert error_count == 1
     assert status_count == 1
     assert handled is False
+
+
+def test_conversation恢复用户部分回复和未完成工具为interrupted(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(AppendUserMessage("task-1", "hello"))
+            await view.apply_action(
+                AppendAssistantDelta("task-1", "partial answer")
+            )
+            await view.apply_action(
+                AppendToolStarted(
+                    "task-1", "call-1", "read", '{"path":"a"}'
+                )
+            )
+            await view.apply_action(FinishTurn("task-1", "interrupted"))
+            await pilot.pause()
+            tool = view.query_one(ToolMessage)
+            return (
+                len(view.query(UserMessage)),
+                view.query_one(AssistantMessage).markdown_text,
+                str(tool.query_one(".tool-state").render()),
+                str(view.query_one(TurnStatusMessage).render()),
+            )
+
+    user_count, assistant, tool_state, status = asyncio.run(run())
+    assert user_count == 1
+    assert assistant == "partial answer"
+    assert tool_state == "interrupted"
+    assert status == "Task interrupted"
 
 
 def test_conversation上滚后新输出保持阅读位置且恢复后继续跟随(tmp_path):

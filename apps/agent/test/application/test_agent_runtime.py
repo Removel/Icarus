@@ -7,6 +7,7 @@ import pytest
 
 from apps.agent.src.agent_orchestration.plugins.persistence import (
     DataPathResolver,
+    SessionIdentity,
 )
 from apps.agent.src.agent_orchestration.plugins.user_input import InputAccepted
 from apps.agent.src.agent_orchestration.capability import (
@@ -21,7 +22,10 @@ from apps.agent.src.application.agent_runtime import (
     SubmissionConflictError,
 )
 from apps.agent.src.application.resource_ref import ResourceRef
-from apps.agent.src.application.runtime_status import SessionRuntimeSnapshot
+from apps.agent.src.application.runtime_status import (
+    SessionRuntimeSnapshot,
+    TaskStatus,
+)
 from apps.agent.src.model_config import (
     ConfigModel,
     LLMConfig,
@@ -29,6 +33,7 @@ from apps.agent.src.model_config import (
     ThinkMode,
 )
 from apps.agent.src.model_provider.types import Message, TextPart, Usage
+from apps.agent.src.runtime_update import RuntimeUpdate
 
 
 def make_config(data_dir):
@@ -79,10 +84,19 @@ class SessionStub:
             raise self.error
         self.is_running = True
 
-    async def submit(self, prompt, input_images=None):
+    async def submit(
+        self,
+        prompt,
+        input_images=None,
+        *,
+        task_id=None,
+    ):
         del prompt, input_images
         self.submit_count += 1
-        return InputAccepted(f"task-{self.submit_count}", 0)
+        return InputAccepted(task_id or f"task-{self.submit_count}", 0)
+
+    async def checkpoint(self):
+        return ()
 
     async def cancel_task(self, task_id, reason=None):
         del reason
@@ -156,7 +170,7 @@ def test_agent_runtime_create_submit幂等与unload_resume(tmp_path):
 
     first, duplicate, resumed, unloaded, factory = asyncio.run(run())
     assert duplicate == first
-    assert resumed.task_id == "task-1"
+    assert resumed.task_id
     assert unloaded.status == "unloaded"
     assert len(factory.created) == 2
 
@@ -190,7 +204,7 @@ def test_agent_runtime并发resume严格single_flight且查询不等待写锁(tm
 
     status, accepted, factory = asyncio.run(run())
     assert status.lifecycle == "loading"
-    assert accepted.task_id == "task-1"
+    assert accepted.task_id
     assert len(factory.created) == 1
 
 
@@ -248,7 +262,7 @@ def test_agent_runtime_create失败保留目录且后续可重试(tmp_path):
 
     status, accepted, successful = asyncio.run(run())
     assert status.lifecycle == "failed"
-    assert accepted.task_id == "task-1"
+    assert accepted.task_id
     assert len(successful.created) == 1
 
 
@@ -358,6 +372,7 @@ def test_agent_runtime真实session提交不重入锁且终态回到ready(tmp_pa
     assert [item.type for item in updates] == [
         "session.lifecycle",
         "session.lifecycle",
+        "user.message",
         "task.accepted",
         "session.lifecycle",
         "task.started",
@@ -411,3 +426,129 @@ def test_agent_runtime真实session在接受task前导入resource(tmp_path):
     assert duplicate == accepted
     assert len(assets) == 1
     assert assets[0].read_bytes().startswith(b"\x89PNG")
+
+
+def test_agent_runtime持久化公共历史并在终态checkpoint(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        runtime = AgentRuntime(config_loader=lambda: config)
+        await runtime.start()
+        session_id = await runtime.create_session(tmp_path, "history")
+        entry = next(iter(runtime._entries.values()))
+        entry.runtime.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda role: AgentStub()
+        )
+        accepted = await runtime.submit(
+            tmp_path,
+            session_id,
+            "model prompt",
+            display_text="visible prompt",
+            submission_id="history-submit",
+        )
+        for _ in range(100):
+            records, cursor = await runtime.get_session_history(
+                tmp_path, session_id
+            )
+            if any(item.type == "task.finished" for item in records):
+                break
+            await asyncio.sleep(0.01)
+        blackboard_path = (
+            DataPathResolver(config.icarus_data_dir)
+            .session_dir(entry.identity)
+            / "plugin-state"
+            / "blackboard.json"
+        )
+        await runtime.stop()
+        return accepted, records, cursor, blackboard_path.read_text()
+
+    accepted, records, cursor, blackboard = asyncio.run(run())
+    assert [item.type for item in records] == [
+        "user.message",
+        "task.accepted",
+        "task.started",
+        "assistant.text_delta",
+        "task.usage",
+        "task.finished",
+    ]
+    assert records[0].task_id == accepted.task_id
+    assert records[0].payload["text"] == "visible prompt"
+    assert [item.sequence for item in records] == list(range(1, 7))
+    assert cursor == 6
+    assert "model prompt" in blackboard
+
+
+def test_agent_runtime历史查询收束异常退出task且不加载session(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        runtime = AgentRuntime(config_loader=lambda: config)
+        await runtime.start()
+        identity = SessionIdentity.create(tmp_path, "interrupted")
+        DataPathResolver(config.icarus_data_dir).ensure_session(identity)
+        runtime._history_store().append(
+            identity,
+            RuntimeUpdate(
+                workspace_key=identity.workspace_key,
+                session_id=identity.session_id,
+                task_id="task",
+                type="assistant.text_delta",
+                payload={"step": 1, "text": "partial"},
+                occurred_at=datetime.now(UTC),
+            ),
+        )
+        records, cursor = await runtime.get_session_history(
+            tmp_path, identity.session_id
+        )
+        entry = runtime._entries[(identity.workspace_key, identity.session_id)]
+        await runtime.stop()
+        return records, cursor, entry.runtime
+
+    records, cursor, loaded = asyncio.run(run())
+    assert [item.type for item in records] == [
+        "assistant.text_delta",
+        "task.finished",
+    ]
+    assert records[-1].payload["status"] == "interrupted"
+    assert records[-1].payload["recovered"] is True
+    assert cursor == 2
+    assert loaded is None
+
+
+def test_agent_runtime已加载session不把排队task误判为interrupted(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        session_id = await runtime.create_session(tmp_path, "loaded")
+        entry = next(iter(runtime._entries.values()))
+        runtime._history_store().append(
+            entry.identity,
+            RuntimeUpdate(
+                workspace_key=entry.identity.workspace_key,
+                session_id=session_id,
+                task_id="queued",
+                type="user.message",
+                payload={"text": "queued", "resources": []},
+                occurred_at=datetime.now(UTC),
+            ),
+        )
+        runtime._remember_task(
+            entry,
+            TaskStatus(
+                workspace_key=entry.identity.workspace_key,
+                session_id=session_id,
+                task_id="queued",
+                lifecycle="accepted",
+            ),
+        )
+        records, cursor = await runtime.get_session_history(
+            tmp_path, session_id
+        )
+        await runtime.stop()
+        return records, cursor
+
+    records, cursor = asyncio.run(run())
+    assert [item.type for item in records] == ["user.message"]
+    assert cursor == 1

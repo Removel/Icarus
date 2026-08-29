@@ -38,7 +38,11 @@ from apps.tui.src.event_pipeline import (
     create_default_projector_registry,
 )
 from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
-from packages.gateway_protocol import ResourceRefModel, RuntimeUpdateModel
+from packages.gateway_protocol import (
+    ResourceRefModel,
+    RuntimeUpdateModel,
+    SessionHistoryModel,
+)
 from apps.tui.src.widgets import (
     ConversationView,
     PersistentComposer,
@@ -67,12 +71,18 @@ class RuntimeClient(Protocol):
     def subscribe_updates(self) -> UpdateSubscription:
         ...
 
+    async def get_session_history(
+        self, *, after_sequence: int = 0
+    ) -> SessionHistoryModel:
+        ...
+
     async def submit(
         self,
         prompt: str,
         *,
         submission_id: str,
         resources: tuple[ResourceRefModel, ...] = (),
+        display_text: str | None = None,
     ) -> SubmitAccepted:
         ...
 
@@ -114,6 +124,8 @@ class RuntimeOutputReceived(Message):
 @dataclass
 class RuntimeStarted(Message):
     subscription: UpdateSubscription
+    history: tuple[RuntimeUpdateModel, ...] = ()
+    history_cursor: int = 0
 
 
 @dataclass
@@ -178,6 +190,7 @@ class IcarusTextualApp(App[int]):
         )
         self.chat_state = ChatState()
         self.projector_registry = projector_registry
+        self._last_sequence = 0
         self.subscription: UpdateSubscription | None = None
         self._runtime_start_worker: Worker[Any] | None = None
         self._event_worker: Worker[Any] | None = None
@@ -244,6 +257,7 @@ class IcarusTextualApp(App[int]):
 
         try:
             subscription = service.subscribe_updates()
+            history = await service.get_session_history(after_sequence=0)
         except asyncio.CancelledError:
             raise
         except BaseException as error:
@@ -261,7 +275,13 @@ class IcarusTextualApp(App[int]):
                 )
             self.post_message(RuntimeStartFailed(error))
             return
-        self.post_message(RuntimeStarted(subscription))
+        self.post_message(
+            RuntimeStarted(
+                subscription,
+                tuple(history.records),
+                history.history_cursor,
+            )
+        )
 
     async def on_runtime_started(self, message: RuntimeStarted) -> None:
         if not self._accepting_input:
@@ -275,6 +295,22 @@ class IcarusTextualApp(App[int]):
                 )
             return
         self.subscription = message.subscription
+        conversation = self.query_one(ConversationView)
+        if message.history:
+            conversation.begin_history_restore()
+            with self.batch_update():
+                for update in message.history:
+                    await self._project_runtime_update(
+                        update, historical=True
+                    )
+                    if self._fatal_failure:
+                        message.subscription.close()
+                        conversation.finish_history_restore()
+                        return
+            conversation.finish_history_restore()
+        self._last_sequence = max(
+            self._last_sequence, message.history_cursor
+        )
         self.chat_state.mark_ready()
         service = self.service
         session_id = getattr(service, "session_id", None)
@@ -333,6 +369,16 @@ class IcarusTextualApp(App[int]):
         if service is not None:
             try:
                 subscription = await service.reconnect()
+                history = await service.get_session_history(
+                    after_sequence=self._last_sequence
+                )
+                for update in history.records:
+                    await self._project_runtime_update(
+                        update, historical=True
+                    )
+                self._last_sequence = max(
+                    self._last_sequence, history.history_cursor
+                )
                 active_task_id = self.chat_state.active_task_id
                 self.subscription = subscription
                 self._fatal_failure = False
@@ -489,6 +535,7 @@ class IcarusTextualApp(App[int]):
                     )
                     for image in submission.images
                 ),
+                display_text=submission.text,
             )
         except asyncio.CancelledError:
             self.chat_state.fail_dispatch()
@@ -507,9 +554,6 @@ class IcarusTextualApp(App[int]):
         try:
             accepted_message = self.chat_state.accept_dispatch(
                 accepted.task_id
-            )
-            await self.query_one(ConversationView).append_user_message(
-                accepted_message.text
             )
             self._delete_submission_images(accepted_message)
         except asyncio.CancelledError:
@@ -546,8 +590,29 @@ class IcarusTextualApp(App[int]):
         await self._project_runtime_update(update)
 
     async def _project_runtime_update(
-        self, update: RuntimeUpdateModel
+        self,
+        update: RuntimeUpdateModel,
+        *,
+        historical: bool = False,
     ) -> None:
+        if (
+            update.sequence is not None
+            and update.sequence <= self._last_sequence
+        ):
+            return
+        if (
+            update.sequence is not None
+            and update.sequence != self._last_sequence + 1
+        ):
+            self._enter_fatal(
+                "RuntimeUpdate sequence",
+                RuntimeError(
+                    "Session history has a sequence gap: "
+                    f"expected={self._last_sequence + 1} "
+                    f"actual={update.sequence}"
+                ),
+            )
+            return
         projector_registry = self.projector_registry
         if projector_registry is None:
             self._enter_fatal(
@@ -561,6 +626,9 @@ class IcarusTextualApp(App[int]):
             actions = projector_registry.project(
                 update,
                 active_task_id=self.chat_state.active_task_id,
+                include_unrelated=(
+                    historical or update.sequence is not None
+                ),
             )
         except Exception as error:
             self._enter_fatal("event projection", error)
@@ -568,6 +636,14 @@ class IcarusTextualApp(App[int]):
         for action in actions:
             if self._fatal_failure:
                 break
+            if (
+                isinstance(action, SetRuntimeStatus)
+                and (
+                    historical
+                    or action.task_id != self.chat_state.active_task_id
+                )
+            ):
+                continue
             try:
                 await self._apply_action(action)
             except asyncio.CancelledError:
@@ -575,10 +651,24 @@ class IcarusTextualApp(App[int]):
             except Exception as error:
                 self._enter_fatal("UI action routing", error)
                 break
+        if not self._fatal_failure and update.sequence is not None:
+            self._last_sequence = update.sequence
 
     async def _flush_early_updates(self, task_id: str) -> None:
-        updates = self._early_updates.pop(task_id, [])
+        del task_id
+        updates = [
+            update
+            for buffered in self._early_updates.values()
+            for update in buffered
+        ]
         self._early_updates.clear()
+        updates.sort(
+            key=lambda update: (
+                update.sequence is None,
+                update.sequence or 0,
+                update.occurred_at,
+            )
+        )
         for update in updates:
             await self._project_runtime_update(update)
             if self._fatal_failure:

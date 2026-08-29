@@ -130,3 +130,65 @@ def test_gateway_client断线唤醒pending请求和update订阅():
 
     results = asyncio.run(run())
     assert all(isinstance(item, ConnectionError) for item in results)
+
+
+def test_gateway_client读取session历史并保留缓冲实时update():
+    async def run():
+        socket = SocketStub()
+        client = GatewayClient(
+            url="ws://gateway/rpc",
+            workspace_path="/workspace",
+            session_id="session",
+            connector=lambda url: asyncio.sleep(0, result=socket),
+        )
+        client._socket = socket
+        client._reader = asyncio.create_task(client._read_loop())
+        subscription = client.subscribe_updates()
+        history_task = asyncio.create_task(client.get_session_history())
+        while not socket.sent:
+            await asyncio.sleep(0)
+        request = socket.sent[-1]
+        await socket.incoming.put(
+            {
+                "jsonrpc": "2.0",
+                "method": "runtime.update",
+                "params": {
+                    "workspace_key": "workspace",
+                    "session_id": "session",
+                    "task_id": "task",
+                    "type": "task.started",
+                    "payload": {},
+                    "occurred_at": "2026-01-01T00:00:01Z",
+                    "sequence": 2,
+                },
+            }
+        )
+        await socket.incoming.put(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "records": [
+                        {
+                            "workspace_key": "workspace",
+                            "session_id": "session",
+                            "task_id": "task",
+                            "type": "user.message",
+                            "payload": {"text": "hello", "resources": []},
+                            "occurred_at": "2026-01-01T00:00:00Z",
+                            "sequence": 1,
+                        }
+                    ],
+                    "history_cursor": 1,
+                },
+            }
+        )
+        history = await history_task
+        live = await subscription.next_update()
+        await client.close()
+        return history, live
+
+    history, live = asyncio.run(run())
+    assert history.history_cursor == 1
+    assert history.records[0].type == "user.message"
+    assert live.sequence == 2

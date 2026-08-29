@@ -169,6 +169,14 @@ class ToolMessage(Vertical):
                 state = f"{state}: {self.error}"
             self.query_one(".tool-state", Static).update(state)
 
+    def interrupt(self) -> None:
+        if self.success is not None:
+            return
+        self.remove_class("is-running")
+        self.add_class("is-interrupted")
+        if self.is_mounted:
+            self.query_one(".tool-state", Static).update("interrupted")
+
 
 class ErrorMessage(Vertical):
     def __init__(self, error_type: str, message: str) -> None:

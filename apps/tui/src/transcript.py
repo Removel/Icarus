@@ -6,6 +6,7 @@ from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
     AppendError,
     AppendToolStarted,
+    AppendUserMessage,
     FinishTurn,
     SetRuntimeStatus,
     ShowNotification,
@@ -27,6 +28,11 @@ class TranscriptRecorder:
         self._assistant_parts: list[str] = []
 
     def record(self, action: UiAction) -> None:
+        if isinstance(action, AppendUserMessage):
+            self._flush_assistant()
+            self._lines.append("[user]")
+            self._lines.extend(action.text.splitlines())
+            return
         if isinstance(action, AppendAssistantDelta):
             self._assistant_parts.append(action.text)
             return

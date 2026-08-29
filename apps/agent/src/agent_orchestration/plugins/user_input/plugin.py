@@ -96,6 +96,8 @@ class UserInputPlugin(BasePlugin):
         self,
         prompt: str,
         input_images: list[ImagePart | str | Path] | None = None,
+        *,
+        task_id: str | None = None,
     ) -> InputAccepted:
         if (
             not self._accepting_submissions
@@ -104,7 +106,9 @@ class UserInputPlugin(BasePlugin):
         ):
             raise RuntimeError("UserInputPlugin is not running")
         async with self._submit_lock:
-            task_id = uuid4().hex
+            task_id = task_id or uuid4().hex
+            if self.task_channels.get(task_id) is not None:
+                raise ValueError(f"Task already exists: {task_id}")
             queue_position = self._outstanding_count
             self._outstanding_count += 1
             pending = PendingInput(

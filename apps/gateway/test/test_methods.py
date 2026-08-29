@@ -1,10 +1,12 @@
 import asyncio
+from datetime import UTC, datetime
 
 import pytest
 
 from apps.agent.src.agent_orchestration.plugins.user_input import InputAccepted
 from apps.gateway.src.protocol.errors import BUSINESS_ERROR, GatewayRpcError
 from apps.gateway.src.protocol.methods import GatewayMethods
+from apps.agent.src.runtime_update import RuntimeUpdate
 
 
 class RuntimeStub:
@@ -26,12 +28,45 @@ class RuntimeStub:
         return ()
 
     async def submit(
-        self, workspace_path, session_id, prompt, *, submission_id, resources
+        self,
+        workspace_path,
+        session_id,
+        prompt,
+        *,
+        submission_id,
+        resources,
+        display_text=None,
     ):
         self.submitted = (
-            workspace_path, session_id, prompt, submission_id, resources
+            workspace_path,
+            session_id,
+            prompt,
+            submission_id,
+            resources,
+            display_text,
         )
         return InputAccepted("task", 0)
+
+    async def get_session_history(
+        self, workspace_path, session_id, *, after_sequence=0
+    ):
+        del workspace_path
+        return (
+            (
+                RuntimeUpdate(
+                    workspace_key="workspace",
+                    session_id=session_id,
+                    task_id="task",
+                    type="user.message",
+                    payload={"text": "hello", "resources": []},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=1,
+                ),
+            )
+            if after_sequence < 1
+            else (),
+            1,
+        )
 
     async def cancel_task(self, *args):
         raise AssertionError(args)
@@ -59,6 +94,7 @@ def test_gateway_methods显式适配create_submit和connection订阅():
                 "workspace_path": "/workspace",
                 "session_id": "session",
                 "prompt": "hello",
+                "display_text": "visible hello",
                 "submission_id": "submission",
                 "resources": [
                     {"resource_id": "client/image.png", "media_type": "image/png"}
@@ -78,8 +114,27 @@ def test_gateway_methods显式适配create_submit和connection订阅():
     assert accepted == {"task_id": "task", "queue_position": 0}
     assert runtime.submitted[3] == "submission"
     assert runtime.submitted[4][0].resource_id == "client/image.png"
+    assert runtime.submitted[5] == "visible hello"
     assert subscribed == {"subscribed": True}
     assert subscriptions == {("workspace", "session")}
+
+
+def test_gateway_methods读取session历史():
+    async def run():
+        return await GatewayMethods(RuntimeStub()).dispatch(
+            "session.get_history",
+            {
+                "workspace_path": "/workspace",
+                "session_id": "session",
+                "after_sequence": 0,
+            },
+            set(),
+        )
+
+    result = asyncio.run(run())
+    assert result["history_cursor"] == 1
+    assert result["records"][0]["type"] == "user.message"
+    assert result["records"][0]["sequence"] == 1
 
 
 def test_gateway_methods非法参数和业务错误不泄漏内部异常():
