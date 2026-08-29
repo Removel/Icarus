@@ -23,7 +23,7 @@
   },
   "model_settings": {
     "thinking": {
-      "model_name": "deepseek-v4-pro",
+      "model_name": "deepseek-v4-flash-vision-exp",
       "context_window": 1000000,
       "max_tokens": 4096,
       "temperature": 0.9,
