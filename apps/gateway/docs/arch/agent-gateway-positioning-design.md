@@ -350,8 +350,40 @@ AgentRuntime 不感知 WebSocket 订阅关系。
 System Prompt、完整 History 或完整 AgentResponse。
 
 AgentRuntime 和 Gateway 的每个订阅/连接使用独立有界队列。慢消费者溢出时关闭对应订阅或连接并
-返回明确错误，不阻塞 Runtime，也不静默丢弃单条 Update。第一阶段不提供全局 sequence、Update
-持久化、游标或断线补发；重连后通过 Session 和 Task 状态查询重建。
+返回明确错误，不阻塞 Runtime，也不静默丢弃单条 Update。当前实现不提供断线补发；下一阶段增加
+Session 内 sequence 和持久化会话记录，用于历史读取与实时流去重，但不提供跨 Session 全局 sequence
+或通用事件回放。
+
+### 13.1 Session 历史查询与实时交接
+
+Gateway 不从 `trace.jsonl`、Blackboard 或 Plugin Event 拼装历史。AgentRuntime 提供只读的
+`get_session_history`，直接读取 Agent 应用层持久化的公共会话记录；该查询不创建或恢复
+SessionRuntime，也不刷新 Session 空闲时间。Gateway 只做参数校验和 wire model 转换。
+
+为了避免“读取历史期间刚好产生实时 Update”造成遗漏或重复，订阅和历史查询使用 Session 内
+sequence 交接：
+
+```text
+客户端建立 WebSocket
+→ session.get / session.create
+→ session.subscribe，客户端开始缓冲该 Session 的实时 runtime.update
+→ session.get_history 在一致读取边界返回 records 与 history_cursor
+→ 客户端按 sequence 渲染历史
+→ 丢弃缓冲中 sequence <= history_cursor 的重复项
+→ 按 sequence 接续剩余实时 Update
+```
+
+`session.get_history` 第一阶段接受 `after_sequence`，返回该 sequence 之后到一致读取边界的完整记录和
+边界 `history_cursor`，不增加分页、搜索或 Trace 回放。没有 journal 的旧 Session 返回空列表和 cursor
+`0`；不尝试迁移旧 Trace。Gateway 不缓存历史，也不成为第二份事实源。
+
+`session.get_history` 是新的显式 JSON-RPC 方法，参数保持扁平：`workspace_path`、`session_id` 和可选
+`after_sequence`；结果返回有序公共记录和 `history_cursor`。现有 `session.subscribe` 参数与响应保持
+不变。
+
+历史查询时，如果 AgentRuntime 判定某个没有终态的旧 Task 已不可能继续运行，会先持久化一个
+`task.finished(status="interrupted", recovered=true)`，再返回历史。仍在当前 AgentRuntime 内存中运行的
+Task 不得被误判为 interrupted。
 
 ## 14. 生命周期
 
@@ -408,7 +440,9 @@ icarus
 → TUI 从 apps/agent/.env 取得 ICARUS_DATA_DIR
 → GatewayClient 连接 ws://127.0.0.1:8765/rpc
 → 查询指定 Session；不存在时创建 SessionRuntime
-→ 订阅该 Session 的 RuntimeUpdate
+→ 订阅该 Session 并开始缓冲实时 Update
+→ 读取并渲染持久化会话记录，取得 history_cursor
+→ 接续缓冲的实时 RuntimeUpdate
 → TUI Ready
 ```
 
@@ -470,6 +504,7 @@ Task 状态查询恢复当前投影。
 - 客户端发送队列与 Runtime 执行队列分层协作。
 - 内部 Plugin Event 到公共 RuntimeUpdate 的投影由 Agent 应用层负责。
 - AgentRuntime 提供设备级 RuntimeUpdate 流，Gateway 按连接关注的 Session 过滤；
+- 新格式 Session 的公共会话记录支持 `session.get_history` 与 Session 内 sequence 交接；
 - 提交使用 Session 内有界内存 `submission_id` 去重，不保证进程重启后的幂等；
 - TUI 图片先写入受控暂存目录，RPC 只传 ResourceRef，Runtime 接受 Task 前导入 Session Asset；
 - Gateway 与 AgentRuntime 第一阶段同进程运行，默认只监听本机地址。
@@ -494,7 +529,9 @@ Task 状态查询恢复当前投影。
 - 第一阶段不设置活动 SessionRuntime 数量上限，也不按数量或内存压力淘汰；仅执行已定义的 6 小时
   空闲卸载；
 - Gateway 不接受 Base64、任意绝对路径或未受控文件 URI；
-- 第一阶段不依赖 RuntimeUpdate 历史补发，重连通过只读状态查询恢复；
+- 当前已实现版本不依赖 RuntimeUpdate 历史补发，重连通过只读状态查询恢复；历史恢复功能完成后，
+  客户端通过 Session 内 sequence 补齐持久化会话记录；
+- Session 历史恢复只读取新的公共会话 journal，不从旧 Trace 猜测或迁移产品历史；
 - 后续拆分进程时，Gateway 外部协议保持稳定。
 
 ## 18. 一句话定义
