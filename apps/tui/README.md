@@ -78,6 +78,9 @@ icarus --session-id demo-session
 正常队列消费从队首开始，撤回从队尾开始。取消只结束当前 Task，不停止或重启 Runtime；
 收到 `task.finished(status="cancelled")` 后才调度下一条消息。多轮业务对话上下文仍由
 Agent Core 的 Blackboard 维护；TUI Conversation 只是当前进程的 UI 投影。
+指定已有 `--session-id` 时，TUI 会在进入 Ready 前通过 Gateway 恢复新格式 Session 的公共会话
+记录，包括用户消息、助手文本、Tool、错误和中断终态。旧 Session 不从 Trace 迁移历史，只从升级后
+产生的新任务开始显示可恢复记录。
 
 图片 Marker 可以和文字一起编辑。提交时只发送草稿中仍然存在完整 Marker 的图片，并按 Marker
 第一次出现的顺序建立附件映射；删除 Marker 会让对应图片退出本次提交。图片写入

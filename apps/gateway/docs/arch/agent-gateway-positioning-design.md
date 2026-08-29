@@ -350,9 +350,8 @@ AgentRuntime 不感知 WebSocket 订阅关系。
 System Prompt、完整 History 或完整 AgentResponse。
 
 AgentRuntime 和 Gateway 的每个订阅/连接使用独立有界队列。慢消费者溢出时关闭对应订阅或连接并
-返回明确错误，不阻塞 Runtime，也不静默丢弃单条 Update。当前实现不提供断线补发；下一阶段增加
-Session 内 sequence 和持久化会话记录，用于历史读取与实时流去重，但不提供跨 Session 全局 sequence
-或通用事件回放。
+返回明确错误，不阻塞 Runtime，也不静默丢弃单条 Update。当前实现通过 Session 内 sequence 和
+持久化会话记录完成历史读取与实时流去重，但不提供跨 Session 全局 sequence 或通用事件回放。
 
 ### 13.1 Session 历史查询与实时交接
 
@@ -380,6 +379,10 @@ sequence 交接：
 `session.get_history` 是新的显式 JSON-RPC 方法，参数保持扁平：`workspace_path`、`session_id` 和可选
 `after_sequence`；结果返回有序公共记录和 `history_cursor`。现有 `session.subscribe` 参数与响应保持
 不变。
+
+`session.submit` 增加可选的 `display_text`。`prompt` 仍是进入 Agent 的模型输入，`display_text` 是
+`user.message` 展示原文；未提供时使用 `prompt`。该字段解决 TUI 图片 marker 的用户展示文本与附件
+映射提示不同的问题，不引入嵌套请求对象。
 
 历史查询时，如果 AgentRuntime 判定某个没有终态的旧 Task 已不可能继续运行，会先持久化一个
 `task.finished(status="interrupted", recovered=true)`，再返回历史。仍在当前 AgentRuntime 内存中运行的
@@ -529,8 +532,7 @@ Task 状态查询恢复当前投影。
 - 第一阶段不设置活动 SessionRuntime 数量上限，也不按数量或内存压力淘汰；仅执行已定义的 6 小时
   空闲卸载；
 - Gateway 不接受 Base64、任意绝对路径或未受控文件 URI；
-- 当前已实现版本不依赖 RuntimeUpdate 历史补发，重连通过只读状态查询恢复；历史恢复功能完成后，
-  客户端通过 Session 内 sequence 补齐持久化会话记录；
+- 重连通过 Session 内 sequence 补齐持久化会话记录，再通过只读 Task 状态查询对账当前任务；
 - Session 历史恢复只读取新的公共会话 journal，不从旧 Trace 猜测或迁移产品历史；
 - 后续拆分进程时，Gateway 外部协议保持稳定。
 

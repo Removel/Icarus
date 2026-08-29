@@ -64,7 +64,8 @@ TUI 启动已有 Session 时按以下顺序执行：
 → session.get；不存在时 session.create
 → session.subscribe，开始缓冲实时 runtime.update
 → session.get_history(after_sequence=0)，取得 records 与 history_cursor
-→ 按 sequence 渲染历史
+→ 隐藏 Conversation，在 Textual batch_update 中按 sequence 构建全部历史 Widget
+→ 完成后一次显示 Conversation 并定位到底部
 → 丢弃实时缓冲中 sequence <= history_cursor 的重复记录
 → 按 sequence 回放其余实时记录
 → 标记 TUI Ready 并调度本地待发送消息
@@ -72,6 +73,8 @@ TUI 启动已有 Session 时按以下顺序执行：
 
 历史加载期间 Composer 可以继续编辑，本地提交可以进入 TUI Pending Queue，但不能向 Runtime 自动
 派发。只有历史渲染和实时交接完成后才进入 Ready，避免新消息插到旧历史中间。
+历史 `assistant.text_delta` 虽然仍复用公共 Projector 合并内容，但批处理期间不触发可见重绘，因此用户
+不会看到旧回复逐字重新流式输出。
 
 断线重连使用同一交接方式，但以客户端最后已应用的 sequence 作为 `after_sequence`，只补齐缺失
 记录，再接续实时流。Session 生命周期 Update 不参与 sequence 去重。
@@ -88,7 +91,7 @@ TUI 启动已有 Session 时按以下顺序执行：
 | `tool.completed` | 更新对应 Tool 为 completed 或 failed |
 | `task.error` | `ErrorMessage` |
 | `task.usage` / `context.compacted` | 复用现有轻量状态或通知投影 |
-| `task.finished` | 显示 completed、failed、cancelled 或 interrupted 终态 |
+| `task.finished` | completed 关闭当前轮次；failed、cancelled 或 interrupted 显示终态 |
 
 历史投影不使用当前 `active_task_id` 过滤，因为它需要还原多个已结束 Task；实时投影继续只接受当前
 活动 Task。两条路径复用同一组公共记录模型和 UiAction，但由调用模式明确是否执行 active-task
