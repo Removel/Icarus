@@ -1,5 +1,10 @@
 # Agent Runtime Service and Textual TUI Integration Design｜Agent 应用服务与 Textual TUI 集成设计
 
+> 本文记录迁移前的单 Session、TUI 进程内直连 `AgentRuntimeService` 历史架构。设备级多 Session
+> 目标架构见 `apps/agent/docs/arch/device-agent-runtime-session-design.md`；Gateway 网络边界见
+> `apps/gateway/docs/arch/agent-gateway-positioning-design.md`。目标架构落地后，本文中的直连关系将
+> 已落地后，本文仅用于理解历史迁移背景，不再描述当前生产入口。
+
 ## 文档定位
 
 本文描述 Agent Core 对外提供的进程内应用服务，以及 Textual 终端应用如何只通过该服务

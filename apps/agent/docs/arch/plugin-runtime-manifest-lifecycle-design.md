@@ -403,7 +403,8 @@ Tool 名称在一个 Runtime 中全局唯一。重复 Tool 的处理不依赖扫
 Host 完成校验后冻结 Runtime Tool Registry。每个 Agent Run 开始时，再根据允许的 Tool 名称
 解析出本次 Run 的稳定 Tool 定义和执行对象快照。
 
-运行期间 Manifest 或文件变化不影响当前 Runtime；Plugin 变更只在下次 Runtime 启动时生效。
+这里的 Runtime 指当前单 Session 的 Plugin Runtime Host。目标多 Session 架构下，Manifest 或文件
+变化不影响已加载的 SessionRuntime；Plugin 变更只在下一次 SessionRuntime 启动时生效。
 
 ### Tool 执行参数
 
@@ -555,11 +556,16 @@ Runtime 不保存：
 - 执行到一半的 ToolCall；
 - asyncio Task、Queue、锁或 Python 对象引用。
 
-原则是“恢复持久状态，不恢复运行栈”。下一次启动重新构造所有 Plugin 和运行图，再按依赖
-顺序恢复 Workspace 状态和 Session 状态。
+原则是“恢复持久状态，不恢复运行栈”。下一次 SessionRuntime 启动时重新构造所有 Plugin 和运行图，
+再按依赖顺序恢复 Workspace 状态和 Session 状态。
 
-如果快照记录的 Plugin 版本、Manifest Hash 或状态版本与当前实现不兼容，核心 Plugin 恢复失败
-会终止启动；可选 Plugin 恢复失败会被禁用，并触发依赖级联处理。第一阶段不做自动状态迁移。
+`state_version` 是持久状态格式的兼容契约。`plugin_version` 和 Manifest Hash 继续随快照保存，用于
+记录状态来源和诊断，但二者发生变化本身不阻止恢复。只要 `state_version` 与当前 Manifest 声明
+相同，Host 就把状态交给当前 StateProvider 恢复；Plugin 改变状态格式时必须提升对应版本。
+
+`state_version` 不匹配或 StateProvider 实际恢复失败时，核心 Plugin 失败会终止 SessionRuntime 启动；
+可选 Plugin 会被停止并禁用、保留原快照，并由 Host 按 Capability 和 Event 依赖继续级联处理。级联
+触及核心 Plugin 时同样终止启动。第一阶段不做状态迁移，也不自动丢弃或覆盖不兼容快照。
 
 ## Plugin 生命周期
 

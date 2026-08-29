@@ -1,21 +1,21 @@
 # Icarus Textual Terminal Client
 
-`apps/tui` 是 Icarus 的 Textual 全屏终端客户端。它通过
-`AgentRuntimeService` 使用 Agent Runtime，不直接访问 Plugin Runtime、EventBus、Blackboard
-或具体 Plugin。对话在应用内部滚动；退出后恢复启动前的终端画面。
+`apps/tui` 是 Icarus 的 Textual 全屏终端客户端。它通过本机 Agent Gateway 使用 AgentRuntime，
+只消费公共 RuntimeUpdate，不直接访问 SessionRuntime、Plugin Runtime、EventBus、Blackboard 或
+具体 Plugin。对话在应用内部滚动；退出后恢复启动前的终端画面。
 
 当前界面提供：
 
 - 宽屏 ASCII Icarus Logo、紧凑屏文字回退和当前 Workspace；
 - 基于角色视觉的暖黑、羽翼粉与缎带粉主题；Tool 运行、成功、失败分别使用暖金、眼眸绿和红色；
-- 欢迎页显示后并发初始化 Agent Runtime；初始化完成前页面保持可编辑且不展示启动日志，
+- 欢迎页显示后并发连接 Gateway 并初始化目标 Session；初始化完成前页面保持可编辑且不展示启动日志，
   只有消息正在等待 Runtime 时才显示 `Initializing`；
 - 固定在底部、可增长到八行的持久多行输入框；
 - Agent 运行期间继续编辑和提交；
 - TUI 本地 FIFO 待发送队列，以及从队尾撤回的 LIFO 操作；
 - macOS 剪贴板图片粘贴，Composer 使用 `[#imageN]` 表示随消息提交的图片；
 - 流式 Markdown、工具状态、错误和任务终态；
-- 按 Plugin 来源投影 Runtime Event；当前注册来源为 `agent` 和 `user-input`。
+- 按公共 RuntimeUpdate.type 投影任务、文本、Tool、错误、Usage 和 Compact 状态。
 
 ## 运行
 
@@ -29,6 +29,12 @@ ICARUS_DATA_DIR=/Users/you/.icarus
 
 ```bash
 uv tool install --editable /absolute/path/to/Icarus
+```
+
+先启动 Gateway：
+
+```bash
+icarus-gateway
 ```
 
 进入任意 Workspace 启动一次新会话：
@@ -70,12 +76,13 @@ icarus --session-id demo-session
 4. 输入框和队列为空、Agent 空闲：退出 `icarus`。
 
 正常队列消费从队首开始，撤回从队尾开始。取消只结束当前 Task，不停止或重启 Runtime；
-收到 `InputFinishedEvent(status="cancelled")` 后才调度下一条消息。多轮业务对话上下文仍由
+收到 `task.finished(status="cancelled")` 后才调度下一条消息。多轮业务对话上下文仍由
 Agent Core 的 Blackboard 维护；TUI Conversation 只是当前进程的 UI 投影。
 
 图片 Marker 可以和文字一起编辑。提交时只发送草稿中仍然存在完整 Marker 的图片，并按 Marker
-第一次出现的顺序建立附件映射；删除 Marker 会让对应图片退出本次提交。图片暂存文件不会显示
-在对话中，并在 TUI 退出后清理。
+第一次出现的顺序建立附件映射；删除 Marker 会让对应图片退出本次提交。图片写入
+`$ICARUS_DATA_DIR/incoming/` 并只通过 ResourceRef 提交，Runtime 接受任务并复制到 Session Asset 后
+删除暂存文件；失败或未确认请求保留文件用于重试。
 
 仓库内开发启动：
 

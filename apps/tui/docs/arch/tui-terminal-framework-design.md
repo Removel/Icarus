@@ -1,5 +1,8 @@
 # TUI Terminal Framework Design｜TUI 终端框架设计
 
+> 本文记录早期终端框架决策；AgentRuntimeService 和 OutputBridge 直连关系已经由 GatewayClient 与
+> RuntimeUpdate 替代。组件、焦点、滚动和按键设计仍可作为当前 TUI 参考。
+
 ## 文档定位
 
 本文定义 Icarus 第一阶段终端交互框架。它把当前标准库串行 REPL 升级为保留终端

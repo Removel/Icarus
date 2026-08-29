@@ -11,7 +11,7 @@
 
 ## 下一步开发顺序
 
-下一阶段先完成 Agent 基础能力，再进入 Session 和 UI 产品化：
+Agent 基础能力已经完成，当前进入设备级 Runtime、Session 和 UI 产品化：
 
 1. Agent Kernel 增量整理与运行保护：
    - [x] 提取 `invoke`、`ainvoke`、`stream`、`astream` 的重复内部实现，保留四个公开入口
@@ -26,12 +26,17 @@
    - [x] 将本地图片复制到现有 Session `assets/`，Context 只保存稳定相对引用，由 Provider
      Adapter 转换为厂商协议。
 3. 产品化阶段：
+   - [x] 将当前固定单 Session 的 `AgentRuntimeService` 演进为设备级 `AgentRuntime` 管理多个
+     `SessionRuntime`；每个 Session 继续使用一套独立 PluginRuntimeHost、Plugin 实例和 EventBus；
+   - [x] 同一 SessionIdentity 只允许一个活动 SessionRuntime，并发 resume 共用同一次恢复；
+     Plugin/配置在 SessionRuntime 生命周期内冻结，下一次 SessionRuntime 启动时读取变化；
    - [ ] 完善对话索引、业务历史持久化和恢复；
    - [ ] 提供对话列表与切换能力，并由 TUI、GUI 和 WebUI 封装 Agent 基础接口。
 
-当前依赖顺序为：ReAct 去重 → 256 Step Harness → 统一错误 Event → Blackboard Compact →
-本地图片引用。Session 持久化、恢复、切换和 UI 展示在上述能力稳定后再推进。详细设计见
-`apps/agent/docs/arch/agent-core-capability-completion-design.md`，实施步骤见
+已完成的基础能力顺序为：ReAct 去重 → 256 Step Harness → 统一错误 Event → Blackboard Compact →
+本地图片引用。当前先推进设备级 AgentRuntime、SessionRuntime 与 Gateway 边界，再完成 Session
+持久化、恢复、切换和 UI 展示。基础能力设计见
+`apps/agent/docs/arch/agent-core-capability-completion-design.md`，实施结果见
 `apps/agent/docs/plan/agent-core-capability-completion-development-plan.md`。
 
 ## 后续能力池
@@ -98,7 +103,8 @@
   Tool 的正式机制；Tool 是 Plugin 内部普通组件，不注册成 Runtime 子 Plugin。
 - [x] Kernel 通过统一 Tool 契约使用默认 Tool 和 Plugin Tool，不依赖其具体来源。
 - [x] 明确 Agent Run 开始时取得稳定 Tool 快照；第一阶段在 Runtime READY 后冻结 Plugin、
-  Tool 和 Event 拓扑，变更只在下一次 Runtime 启动后生效。
+  Tool 和 Event 拓扑。这里的 Runtime 是当前单 Session Host；目标架构下变更只在下一次
+  SessionRuntime 启动后生效。
 - [x] 明确快照持有本次 Run 允许的 Tool 定义和执行对象；第一阶段 Runtime 运行中不支持
   Plugin 卸载或重启，名称冲突在 READY 前处理，资源由所属 Plugin 在退出阶段清理。
 - [x] 当前不实现同一个 Run 内的 Tool 热加载、热卸载和替换；未来只有在出现明确场景后
@@ -185,6 +191,21 @@
 
 ## 产品化阶段能力
 
+- [x] 新增设备级唯一的 `AgentRuntime` 和 Session Registry；将当前 `AgentRuntimeService` 的单
+  Session 组装与控制能力复用为内部 `SessionRuntime`，迁移期保留兼容入口。详细设计见
+  `apps/agent/docs/arch/device-agent-runtime-session-design.md`。
+- [x] 将有状态 Plugin 的运行状态统一按 SessionIdentity 快照；Skill Job/通知不再由多个 Session
+  覆盖同一 Workspace Plugin State。以 `state_version` 作为状态格式兼容契约；核心 Plugin 恢复失败
+  阻止 Session Ready，非核心 Plugin 由 Host 禁用并级联依赖。每个 SessionRuntime 独立持有现有
+  Persistence 资源，Logger Handler 只写入与自身完整 SessionIdentity 匹配的日志。补齐同 Session
+  并发 resume、多 Session Persistence 日志、Trace 和状态写入的回归测试。
+- [x] 提供 `unload_session(SessionIdentity)` 释放运行实例并保留持久化数据；运行中或排队中的
+  Session 返回忙，不隐式取消。连续 6 小时没有状态变化且没有 Task、排队工作或 Plugin 后台工作
+  时，由 AgentRuntime 加锁复检后自动调用同一 unload 流程；连接、订阅和只读查询不刷新空闲时间，
+  新建或 resume 进入 Ready 时初始化计时，下一次提交自动 resume。第一阶段不设置活动
+  SessionRuntime 上限，也不按数量或内存压力淘汰。
+- [x] 在 Agent 应用层完成内部 Plugin Event 到公共 RuntimeUpdate 的投影与多 Session 聚合；
+  Gateway 和 UI 不直接解释 `source_plugin_id + Event`。
 - [ ] 持久化对话元数据和原始业务消息，支持枚举、选择和恢复；Blackboard 继续拥有当前
   Session 的有效模型历史，不把历史状态放入无状态 ReActAgent。
 - [ ] 提供对话切换的应用层契约，处理运行中任务、状态保存、订阅/UI 投影切换和目标对话恢复；
