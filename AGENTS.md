@@ -65,8 +65,9 @@ Validation order:
 3. compile and diff checks.
 
 ```bash
-apps/agent/.venv/bin/python -m pytest apps/agent/test -q
-apps/agent/.venv/bin/python -m compileall -q apps/agent/src apps/agent/test
+make test-agent
+make test-gateway
+make test-tui
 git diff --check
 ```
 
