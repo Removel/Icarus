@@ -40,6 +40,19 @@ class ConversationView(VerticalScroll):
     async def on_mount(self) -> None:
         await self.mount(WelcomeMessage(self.workspace_path))
 
+    async def reset(self) -> None:
+        """Replace the current Session projection with an empty one."""
+
+        await self._finish_assistant_segment()
+        self._tools.clear()
+        self._restoring_history = False
+        self.display = True
+        self.anchor(False)
+        self._anchor_pending = True
+        await self.remove_children()
+        await self.mount(WelcomeMessage(self.workspace_path))
+        self.scroll_home(animate=False, immediate=True)
+
     async def append_user_message(self, text: str) -> None:
         await self._finish_assistant_segment()
         await self.mount(UserMessage(text))

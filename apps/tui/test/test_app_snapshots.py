@@ -21,11 +21,17 @@ from apps.agent.src.agent_orchestration.plugins import (
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolCall
-from packages.gateway_protocol import RuntimeUpdateModel, SessionHistoryModel
+from packages.gateway_protocol import (
+    DiscardEmptySessionResultModel,
+    RuntimeUpdateModel,
+    SessionHistoryModel,
+    SessionSummaryModel,
+)
 from apps.tui.src.gateway_client.models import SubmitAccepted
 from apps.tui.src.app import IcarusTextualApp
 from apps.tui.src.chat_state import RuntimePhase
 from apps.tui.src.event_pipeline import AppendToolStarted, UpdateToolCompleted
+from apps.tui.src.screens import SessionPicker
 from apps.tui.src.widgets import (
     AssistantMessage,
     ConversationView,
@@ -66,12 +72,14 @@ class SnapshotSubscription:
 
 class SnapshotService:
     session_id = "snapshot-session"
+    workspace_key = "workspace"
 
     def __init__(self) -> None:
         self.subscription = SnapshotSubscription()
         self.submissions: list[str] = []
         self.submission_images: list[tuple[Path, ...]] = []
         self.started = False
+        self.session_summaries = ()
 
     async def start(self) -> None:
         self.started = True
@@ -83,6 +91,23 @@ class SnapshotService:
 
     async def get_session_history(self, *, after_sequence=0):
         return SessionHistoryModel(records=(), history_cursor=after_sequence)
+
+    async def list_sessions(self):
+        return self.session_summaries
+
+    async def get_session_status(self):
+        return {
+            "workspace_key": self.workspace_key,
+            "session_id": self.session_id,
+            "lifecycle": "ready",
+        }
+
+    async def discard_empty_session(self, session_id):
+        return DiscardEmptySessionResultModel(
+            workspace_key=self.workspace_key,
+            session_id=session_id,
+            status="discarded",
+        )
 
     async def submit(
         self,
@@ -142,7 +167,8 @@ class BlockingSnapshotService(SnapshotService):
 def make_app(service: SnapshotService | None = None) -> IcarusTextualApp:
     service = service or SnapshotService()
 
-    async def runtime_factory():
+    async def runtime_factory(session_id, create_if_missing):
+        del session_id, create_if_missing
         return service
 
     return IcarusTextualApp(
@@ -243,6 +269,47 @@ def test_snapshot_initial_welcome(snap_compare):
     assert snap_compare(
         make_app(service),
         terminal_size=(100, 30),
+        run_before=prepare,
+    )
+
+
+def test_snapshot_session_picker(snap_compare):
+    service = SnapshotService()
+    service.session_summaries = (
+        SessionSummaryModel(
+            session_id="current-session-12345678",
+            first_user_input="Implement Session switching for the TUI",
+        ),
+        SessionSummaryModel(
+            session_id="older-session-87654321",
+            first_user_input=(
+                "Review a long first message that should fit the available row"
+            ),
+        ),
+    )
+    service.session_id = "current-session-12345678"
+
+    async def prepare(pilot) -> None:
+        await wait_ready(pilot)
+        await pilot.press(*"/resume", "enter")
+        await wait_until(pilot, lambda: isinstance(pilot.app.screen, SessionPicker))
+
+    assert snap_compare(
+        make_app(service),
+        terminal_size=(80, 24),
+        run_before=prepare,
+    )
+
+
+def test_snapshot_empty_session_picker(snap_compare):
+    async def prepare(pilot) -> None:
+        await wait_ready(pilot)
+        await pilot.press(*"/resume", "enter")
+        await wait_until(pilot, lambda: isinstance(pilot.app.screen, SessionPicker))
+
+    assert snap_compare(
+        make_app(),
+        terminal_size=(58, 18),
         run_before=prepare,
     )
 

@@ -33,6 +33,7 @@ class RuntimeStatusBar(Static):
             RuntimePhase.READY: "Ready",
             RuntimePhase.RUNNING: "Running",
             RuntimePhase.CANCELLING: "Cancelling",
+            RuntimePhase.SWITCHING: "Switching",
             RuntimePhase.STOPPING: "Stopping",
             RuntimePhase.FAILED: "Failed",
         }

@@ -12,9 +12,12 @@ from uuid import uuid4
 from websockets.asyncio.client import connect
 
 from packages.gateway_protocol import (
+    DiscardEmptySessionResultModel,
     ResourceRefModel,
     RuntimeUpdateModel,
     SessionHistoryModel,
+    SessionListModel,
+    SessionSummaryModel,
 )
 from apps.tui.src.gateway_client.models import (
     SubmitAccepted,
@@ -36,11 +39,13 @@ class GatewayClient:
         url: str,
         workspace_path: str | Path,
         session_id: str | None = None,
+        create_if_missing: bool = True,
         connector: Callable[[str], Awaitable[Any]] = connect,
     ) -> None:
         self.url = url
         self.workspace_path = str(Path(workspace_path).expanduser().resolve())
         self.session_id = session_id or uuid4().hex
+        self.create_if_missing = create_if_missing
         self.workspace_key: str | None = None
         self._connector = connector
         self._socket = None
@@ -54,6 +59,7 @@ class GatewayClient:
         if self._socket is not None:
             return
         await self._connect()
+        created_session = False
         try:
             try:
                 session = await self.request(
@@ -64,7 +70,10 @@ class GatewayClient:
                     },
                 )
             except GatewayClientError as error:
-                if error.code != "session_not_found":
+                if (
+                    error.code != "session_not_found"
+                    or not self.create_if_missing
+                ):
                     raise
                 session = await self.request(
                     "session.create",
@@ -73,6 +82,7 @@ class GatewayClient:
                         "session_id": self.session_id,
                     },
                 )
+                created_session = True
             self.session_id = str(session["session_id"])
             self.workspace_key = str(session["workspace_key"])
             await self.request(
@@ -83,6 +93,13 @@ class GatewayClient:
                 },
             )
         except BaseException:
+            if created_session:
+                try:
+                    await self.discard_empty_session(
+                        str(session["session_id"])
+                    )
+                except BaseException:
+                    pass
             await self.close()
             raise
 
@@ -123,6 +140,34 @@ class GatewayClient:
         )
         history = SessionHistoryModel.model_validate(result)
         return history
+
+    async def list_sessions(self) -> tuple[SessionSummaryModel, ...]:
+        result = await self.request(
+            "session.list",
+            {"workspace_path": self.workspace_path},
+        )
+        return SessionListModel.model_validate(result).sessions
+
+    async def get_session_status(self) -> dict[str, Any]:
+        return await self.request(
+            "session.get",
+            {
+                "workspace_path": self.workspace_path,
+                "session_id": self._require_session_id(),
+            },
+        )
+
+    async def discard_empty_session(
+        self, session_id: str
+    ) -> DiscardEmptySessionResultModel:
+        result = await self.request(
+            "session.discard_empty",
+            {
+                "workspace_path": self.workspace_path,
+                "session_id": session_id,
+            },
+        )
+        return DiscardEmptySessionResultModel.model_validate(result)
 
     async def get_task_status(self, task_id: str) -> dict[str, Any]:
         return await self.request(

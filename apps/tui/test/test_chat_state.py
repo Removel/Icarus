@@ -133,6 +133,32 @@ def test_dispatch握手也被视为运行中不可退出():
     )
 
 
+def test_session命令只在完全空闲时允许():
+    state = ready_state()
+    assert state.can_run_session_command is True
+
+    state.enqueue("queued")
+    assert state.can_run_session_command is False
+    state.pending.clear()
+
+    state.dispatch_in_progress = True
+    assert state.can_run_session_command is False
+    state.dispatch_in_progress = False
+
+    state.active_task_id = "task-1"
+    state.phase = RuntimePhase.RUNNING
+    assert state.can_run_session_command is False
+
+
+def test_switching阶段阻止dispatch和session命令():
+    state = ready_state()
+    state.begin_switching()
+
+    assert state.phase == RuntimePhase.SWITCHING
+    assert state.can_dispatch is False
+    assert state.can_run_session_command is False
+
+
 def test拒绝空白队列项且非法接受给出明确错误():
     state = ready_state()
 

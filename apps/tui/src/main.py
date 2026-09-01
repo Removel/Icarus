@@ -17,13 +17,17 @@ def _load_gateway_client() -> type[Any]:
 
 
 async def _create_gateway_client(
-    workspace_path: Path, session_id: str | None, gateway_url: str
+    workspace_path: Path,
+    session_id: str | None,
+    gateway_url: str,
+    create_if_missing: bool = True,
 ):
     client_type = await asyncio.to_thread(_load_gateway_client)
     return client_type(
         url=gateway_url,
         workspace_path=workspace_path,
         session_id=session_id,
+        create_if_missing=create_if_missing,
     )
 
 
@@ -46,15 +50,19 @@ def run_app(argv: list[str] | None = None) -> int:
     workspace_path = Path.cwd().resolve()
     resource_root = get_icarus_data_dir() / "incoming"
 
-    async def runtime_factory():
+    async def runtime_factory(
+        session_id: str | None, create_if_missing: bool
+    ):
         return await _create_gateway_client(
             workspace_path,
-            args.session_id,
+            session_id,
             args.gateway_url,
+            create_if_missing,
         )
 
     app = IcarusTextualApp(
         runtime_factory=runtime_factory,
+        initial_session_id=args.session_id,
         workspace_path=workspace_path,
         resource_root=resource_root,
     )
