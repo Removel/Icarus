@@ -13,6 +13,7 @@
 - 固定在底部、可增长到八行的持久多行输入框；
 - Agent 运行期间继续编辑和提交；
 - TUI 本地 FIFO 待发送队列，以及从队尾撤回的 LIFO 操作；
+- 当前 Workspace 的 Session 列表、恢复和开始新对话；
 - macOS 剪贴板图片粘贴，Composer 使用 `[#imageN]` 表示随消息提交的图片；
 - 流式 Markdown、工具状态、错误和任务终态；
 - 按公共 RuntimeUpdate.type 投影任务、文本、Tool、错误、Usage 和 Compact 状态。
@@ -44,7 +45,7 @@ cd /path/to/workspace
 icarus
 ```
 
-可选指定 Trace Session ID：
+可选指定 Session ID；已有 Session 会恢复历史，不存在时创建：
 
 ```bash
 icarus --session-id demo-session
@@ -66,6 +67,12 @@ icarus --session-id demo-session
 - `Ctrl+End`：回到 Conversation 底部并恢复自动跟随；
 - `Ctrl+D`：输入框为空时退出；有内容时执行 TextArea 的向右删除；
 - `exit`、`quit`：作为完整提交内容时退出。
+- `/resume`：仅在完全空闲时列出当前 Workspace 的非空 Session；方向键选择，`Enter` 恢复，
+  `Escape` 取消；
+- `/clear`：仅在完全空闲时开始一个新对话；当前非空 Session 会保留，当前已经为空时不会重复创建。
+
+`/resume` 和 `/clear` 是 TUI 本地命令，不进入待发送队列，也不会发送给 Agent。命令带图片附件时
+不会执行，并会恢复完整草稿。
 
 `Ctrl+C` 只执行第一条满足条件的动作：
 
