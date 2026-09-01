@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import re
+import shutil
 
 from apps.agent.src.agent_orchestration.plugins.persistence.session_identity import (
     SessionIdentity,
@@ -86,6 +87,19 @@ class DataPathResolver:
             for child in sorted(directory.iterdir(), key=lambda item: item.name)
             if child.is_dir() and _SAFE_ID.fullmatch(child.name)
         )
+
+    def discard_session(self, identity: SessionIdentity) -> bool:
+        directory = self.session_dir(identity)
+        if directory.parent != self.sessions_dir(identity):
+            raise ValueError("Session directory escaped its Workspace")
+        if directory.is_symlink():
+            raise ValueError("Session directory cannot be a symlink")
+        if not directory.exists():
+            return False
+        if not directory.is_dir():
+            raise ValueError("Session path is not a directory")
+        shutil.rmtree(directory)
+        return True
 
     @staticmethod
     def _validate_id(value: str, name: str) -> None:

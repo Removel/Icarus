@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -63,3 +63,57 @@ def test_conversation_store拒绝中间损坏和sequence缺口(tmp_path):
 
     with pytest.raises(ConversationHistoryCorruptError):
         ConversationStore(resolver).read(identity)
+
+
+def test_conversation_store读取会话摘要且不修改截断尾部(tmp_path):
+    resolver = DataPathResolver(tmp_path / "data")
+    identity = SessionIdentity.create(tmp_path, "session")
+    store = ConversationStore(resolver)
+    first = make_update(
+        identity,
+        "task-1",
+        "user.message",
+        {"text": "  first\n  message  ", "resources": []},
+    )
+    store.append(identity, first)
+    later = make_update(identity, "task-1", "assistant.text_delta")
+    later = RuntimeUpdate(
+        workspace_key=later.workspace_key,
+        session_id=later.session_id,
+        task_id=later.task_id,
+        type=later.type,
+        payload=later.payload,
+        occurred_at=later.occurred_at + timedelta(minutes=1),
+    )
+    store.append(identity, later)
+    path = resolver.conversation_file(identity)
+    with path.open("ab") as handle:
+        handle.write(b'{"broken"')
+    before = path.read_bytes()
+
+    summary = store.read_summary(identity)
+
+    assert summary is not None
+    assert summary.first_user_input == "first message"
+    assert summary.last_public_activity_at == later.occurred_at
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"text": "", "resources": [{"resource_id": "image"}]}, "[Image]"),
+        ({"text": "", "resources": []}, "[Message]"),
+        ({"text": "x" * 300, "resources": []}, "x" * 255 + "…"),
+    ],
+)
+def test_conversation_store摘要回退和长度限制(tmp_path, payload, expected):
+    resolver = DataPathResolver(tmp_path / "data")
+    identity = SessionIdentity.create(tmp_path, "session")
+    store = ConversationStore(resolver)
+    store.append(identity, make_update(identity, "task", "user.message", payload))
+
+    summary = store.read_summary(identity)
+
+    assert summary is not None
+    assert summary.first_user_input == expected
