@@ -230,9 +230,81 @@ Screen {
     color: $icarus-muted;
 }
 
+#status-bar.phase-switching {
+    color: $icarus-accent;
+}
+
 #status-bar.phase-cancelling,
 #status-bar.phase-failed {
     color: $icarus-red;
+}
+
+SessionPicker {
+    align: center middle;
+    background: $icarus-background 70%;
+}
+
+#session-picker-panel {
+    width: 72;
+    max-width: 92%;
+    height: auto;
+    max-height: 80%;
+    padding: 1 2;
+    border: round $icarus-border;
+    background: $icarus-panel;
+}
+
+#session-picker-title {
+    height: 1;
+    margin-bottom: 1;
+    color: $icarus-accent;
+    text-style: bold;
+}
+
+#session-list {
+    height: auto;
+    max-height: 16;
+    background: $icarus-panel;
+}
+
+#session-list > ListItem {
+    height: 1;
+    background: $icarus-panel;
+}
+
+#session-list > ListItem.-highlight {
+    color: $icarus-text;
+    background: $icarus-raised;
+    text-style: none;
+}
+
+.session-row {
+    width: 100%;
+    height: 1;
+}
+
+.session-current {
+    width: 2;
+    color: $icarus-accent;
+}
+
+.session-preview {
+    width: 1fr;
+    color: $icarus-text;
+    text-overflow: ellipsis;
+}
+
+.session-short-id {
+    width: 13;
+    color: $icarus-muted;
+    text-align: right;
+}
+
+#session-picker-help,
+#session-picker-empty {
+    height: 1;
+    margin-top: 1;
+    color: $icarus-muted;
 }
 
 Screen.-narrow #workspace-label {

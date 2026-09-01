@@ -14,7 +14,12 @@ from apps.agent.src.agent_orchestration.plugins import (
     InputQueuedEvent,
 )
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
-from packages.gateway_protocol import RuntimeUpdateModel, SessionHistoryModel
+from packages.gateway_protocol import (
+    DiscardEmptySessionResultModel,
+    RuntimeUpdateModel,
+    SessionHistoryModel,
+    SessionSummaryModel,
+)
 from apps.tui.src.gateway_client.models import SubmitAccepted
 from apps.tui.src.app import IcarusTextualApp, RuntimeSubscriptionFailed
 from apps.tui.src.chat_state import RuntimePhase
@@ -23,6 +28,7 @@ from apps.tui.src.clipboard import (
     ClipboardImageReadError,
 )
 from apps.tui.src.event_pipeline import FinishTurn, ShowNotification
+from apps.tui.src.screens import SessionPicker
 from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
 from apps.tui.src.widgets import (
     AssistantMessage,
@@ -96,10 +102,18 @@ class ControlledService:
         self.submissions = []
         self.submission_images: list[tuple[Path, ...]] = []
         self.session_id = "test-session"
+        self.workspace_key = "workspace"
         self.stopped = False
         self.cancelled_tasks = []
         self.task_statuses = {}
         self.history = SessionHistoryModel(records=(), history_cursor=0)
+        self.session_summaries = ()
+        self.session_status = {
+            "workspace_key": self.workspace_key,
+            "session_id": self.session_id,
+            "lifecycle": "ready",
+        }
+        self.discarded_sessions = []
 
     async def start(self) -> None:
         self.actions.append("service-start")
@@ -118,6 +132,27 @@ class ControlledService:
     async def get_session_history(self, *, after_sequence=0):
         self.actions.append(f"history:{after_sequence}")
         return self.history
+
+    async def list_sessions(self):
+        self.actions.append("session-list")
+        return self.session_summaries
+
+    async def get_session_status(self):
+        self.actions.append("session-status")
+        return self.session_status
+
+    async def discard_empty_session(self, session_id):
+        self.actions.append(f"discard:{session_id}")
+        self.discarded_sessions.append(session_id)
+        return DiscardEmptySessionResultModel(
+            workspace_key=self.workspace_key,
+            session_id=session_id,
+            status=(
+                "not_empty"
+                if session_id == self.session_id and self.submissions
+                else "discarded"
+            ),
+        )
 
     async def submit(
         self, prompt, *, submission_id, resources=(), display_text=None
@@ -186,7 +221,8 @@ def make_app(
     *,
     projector_registry: ProjectorRegistry | None = None,
 ) -> IcarusTextualApp:
-    async def runtime_factory():
+    async def runtime_factory(session_id, create_if_missing):
+        del session_id, create_if_missing
         service.actions.append("factory")
         return service
 
@@ -194,6 +230,28 @@ def make_app(
         runtime_factory=runtime_factory,
         workspace_path=workspace_path,
         projector_registry=projector_registry,
+    )
+
+
+def make_session_app(
+    current: ControlledService,
+    candidates: dict[str | None, ControlledService],
+    workspace_path,
+):
+    calls = []
+
+    async def runtime_factory(session_id, create_if_missing):
+        calls.append((session_id, create_if_missing))
+        if len(calls) == 1:
+            return current
+        return candidates[session_id]
+
+    return (
+        IcarusTextualApp(
+            runtime_factory=runtime_factory,
+            workspace_path=workspace_path,
+        ),
+        calls,
     )
 
 
@@ -305,6 +363,407 @@ def test_app启动订阅后ready并保持composer焦点(tmp_path):
     assert "Session" not in status
     assert service.stopped is True
     assert app.return_code == 0
+
+
+def test_resume选择session后复用历史激活路径并清理旧空session(tmp_path):
+    async def run():
+        current = ControlledService()
+        current.session_id = "current-empty"
+        current.session_status["session_id"] = current.session_id
+        current.session_summaries = (
+            SessionSummaryModel(
+                session_id="old-session",
+                first_user_input="old question",
+            ),
+        )
+        target = ControlledService()
+        target.session_id = "old-session"
+        target.session_status["session_id"] = target.session_id
+        target.history = SessionHistoryModel(
+            records=(
+                RuntimeUpdateModel(
+                    workspace_key="workspace",
+                    session_id="old-session",
+                    task_id="old-task",
+                    type="user.message",
+                    payload={"text": "old question", "resources": []},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=1,
+                ),
+            ),
+            history_cursor=1,
+        )
+        app, calls = make_session_app(
+            current, {"old-session": target}, tmp_path
+        )
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "/resume")
+            await wait_until(pilot, lambda: isinstance(app.screen, SessionPicker))
+            await pilot.press("enter")
+            await wait_until(
+                pilot,
+                lambda: (
+                    app.service is target
+                    and app.chat_state.phase == RuntimePhase.READY
+                ),
+            )
+            result = (
+                calls,
+                [item.message_text for item in app.query(UserMessage)],
+                current.stopped,
+                tuple(target.discarded_sessions),
+                app._last_sequence,
+                app._session_has_user_input,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: target.stopped)
+            return result
+
+    calls, messages, old_stopped, discarded, cursor, has_input = asyncio.run(
+        run()
+    )
+    assert calls == [(None, True), ("old-session", False)]
+    assert messages == ["old question"]
+    assert old_stopped is True
+    assert discarded == ("current-empty",)
+    assert cursor == 1
+    assert has_input is True
+
+
+def test_clear从非空session创建新session并显示空会话(tmp_path):
+    async def run():
+        current = ControlledService()
+        current.session_id = "current"
+        current.session_status["session_id"] = current.session_id
+        current.history = SessionHistoryModel(
+            records=(
+                RuntimeUpdateModel(
+                    workspace_key="workspace",
+                    session_id="current",
+                    task_id="task",
+                    type="user.message",
+                    payload={"text": "keep me", "resources": []},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=1,
+                ),
+            ),
+            history_cursor=1,
+        )
+        fresh = ControlledService()
+        fresh.session_id = "fresh"
+        fresh.session_status["session_id"] = fresh.session_id
+        app, calls = make_session_app(current, {None: fresh}, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "/clear")
+            await wait_until(
+                pilot,
+                lambda: (
+                    app.service is fresh
+                    and app.chat_state.phase == RuntimePhase.READY
+                ),
+            )
+            result = (
+                calls,
+                len(app.query(UserMessage)),
+                len(app.query(".welcome-message")),
+                current.stopped,
+                tuple(fresh.discarded_sessions),
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: fresh.stopped)
+            return result
+
+    calls, user_count, welcome_count, old_stopped, discarded = asyncio.run(
+        run()
+    )
+    assert calls == [(None, True), (None, True)]
+    assert user_count == 0
+    assert welcome_count == 1
+    assert old_stopped is True
+    assert "current" not in discarded
+
+
+def test_clear在空session不创建另一个session(tmp_path):
+    async def run():
+        current = ControlledService()
+        app, calls = make_session_app(current, {}, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "/clear")
+            await wait_until(
+                pilot,
+                lambda: (
+                    app.chat_state.phase == RuntimePhase.READY
+                    and app._session_operation_worker is not None
+                    and app._session_operation_worker.is_finished
+                ),
+            )
+            result = calls, app.service is current, current.submissions
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: current.stopped)
+            return result
+
+    calls, unchanged, submissions = asyncio.run(run())
+    assert calls == [(None, True)]
+    assert unchanged is True
+    assert submissions == []
+
+
+def test_clear候选启动失败时保留当前session并清理候选(tmp_path):
+    async def run():
+        current = ControlledService()
+        current.session_id = "current"
+        current.session_status["session_id"] = current.session_id
+        current.history = SessionHistoryModel(
+            records=(
+                RuntimeUpdateModel(
+                    workspace_key="workspace",
+                    session_id="current",
+                    task_id="task",
+                    type="user.message",
+                    payload={"text": "keep me", "resources": []},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=1,
+                ),
+            ),
+            history_cursor=1,
+        )
+        failed = ControlledService(start_error=RuntimeError("start failed"))
+        failed.session_id = "failed-candidate"
+        app, calls = make_session_app(current, {None: failed}, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "/clear")
+            await wait_until(
+                pilot,
+                lambda: (
+                    app._session_operation_worker is not None
+                    and app._session_operation_worker.is_finished
+                ),
+            )
+            result = (
+                calls,
+                app.service is current,
+                [item.message_text for item in app.query(UserMessage)],
+                app.chat_state.phase,
+                current.stopped,
+                failed.stopped,
+                tuple(current.discarded_sessions),
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: current.stopped)
+            return result
+
+    (
+        calls,
+        unchanged,
+        messages,
+        phase,
+        current_stopped,
+        candidate_stopped,
+        discarded,
+    ) = asyncio.run(run())
+    assert calls == [(None, True), (None, True)]
+    assert unchanged is True
+    assert messages == ["keep me"]
+    assert phase == RuntimePhase.READY
+    assert current_stopped is False
+    assert candidate_stopped is True
+    assert discarded == ("failed-candidate",)
+
+
+def test_session命令在运行中拒绝且不发送给agent(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "first")
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.RUNNING
+            )
+            await enter_text(pilot, "/clear")
+            await pilot.pause()
+            result = service.submissions[:], app.chat_state.pending_items
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    submissions, pending = asyncio.run(run())
+    assert submissions == ["first"]
+    assert pending == ()
+
+
+def test_session命令带图片时恢复完整草稿(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        image_path = tmp_path / "image.png"
+        image_path.write_bytes(b"image")
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            composer = app.query_one(PersistentComposer)
+            composer.load_text("/resume")
+            image = composer.attach_image(image_path)
+            await pilot.press("enter")
+            await pilot.pause()
+            result = composer.text, composer.images, service.submissions
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result, image
+
+    (text, images, submissions), image = asyncio.run(run())
+    assert text.replace(image.marker, "") == "/resume"
+    assert images == (image,)
+    assert submissions == []
+
+
+@pytest.mark.parametrize(
+    ("target_status", "start_error"),
+    [
+        ({"lifecycle": "running"}, None),
+        ({"lifecycle": "ready"}, RuntimeError("missing Session")),
+    ],
+)
+def test_resume目标失败时保留当前session和conversation(
+    tmp_path, target_status, start_error
+):
+    async def run():
+        current = ControlledService()
+        current.session_id = "current"
+        current.session_status["session_id"] = current.session_id
+        current.session_summaries = (
+            SessionSummaryModel(
+                session_id="target", first_user_input="target question"
+            ),
+        )
+        current.history = SessionHistoryModel(
+            records=(
+                RuntimeUpdateModel(
+                    workspace_key="workspace",
+                    session_id="current",
+                    task_id="current-task",
+                    type="user.message",
+                    payload={"text": "current question", "resources": []},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=1,
+                ),
+            ),
+            history_cursor=1,
+        )
+        target = ControlledService(start_error=start_error)
+        target.session_id = "target"
+        target.session_status.update(target_status)
+        target.session_status["session_id"] = target.session_id
+        app, calls = make_session_app(current, {"target": target}, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "/resume")
+            await wait_until(pilot, lambda: isinstance(app.screen, SessionPicker))
+            await pilot.press("enter")
+            await wait_until(
+                pilot,
+                lambda: (
+                    app._session_operation_worker is not None
+                    and app._session_operation_worker.is_finished
+                ),
+            )
+            result = (
+                calls,
+                app.service is current,
+                [item.message_text for item in app.query(UserMessage)],
+                app.chat_state.phase,
+                current.stopped,
+                target.stopped,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: current.stopped)
+            return result
+
+    calls, unchanged, messages, phase, current_stopped, target_stopped = (
+        asyncio.run(run())
+    )
+    assert calls == [(None, True), ("target", False)]
+    assert unchanged is True
+    assert messages == ["current question"]
+    assert phase == RuntimePhase.READY
+    assert current_stopped is False
+    assert target_stopped is True
+
+
+def test_切换后忽略旧subscription迟到的失败消息(tmp_path):
+    async def run():
+        current = ControlledService()
+        current.session_id = "current-empty"
+        current.session_status["session_id"] = current.session_id
+        current.session_summaries = (
+            SessionSummaryModel(
+                session_id="target", first_user_input="target question"
+            ),
+        )
+        old_subscription = current.subscription
+        target = ReconnectingService()
+        target.session_id = "target"
+        target.session_status["session_id"] = target.session_id
+        target.history = SessionHistoryModel(
+            records=(
+                RuntimeUpdateModel(
+                    workspace_key="workspace",
+                    session_id="target",
+                    task_id="target-task",
+                    type="user.message",
+                    payload={"text": "target question", "resources": []},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=1,
+                ),
+            ),
+            history_cursor=1,
+        )
+        app, _ = make_session_app(current, {"target": target}, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "/resume")
+            await wait_until(pilot, lambda: isinstance(app.screen, SessionPicker))
+            await pilot.press("enter")
+            await wait_until(pilot, lambda: app.service is target)
+
+            app.post_message(
+                RuntimeSubscriptionFailed(
+                    ConnectionError("old stream closed"), old_subscription
+                )
+            )
+            await pilot.pause()
+            result = (
+                app.service is target,
+                "reconnect" in target.actions,
+                app.chat_state.phase,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: target.stopped)
+            return result
+
+    unchanged, reconnected, phase = asyncio.run(run())
+    assert unchanged is True
+    assert reconnected is False
+    assert phase == RuntimePhase.READY
 
 
 def test_app恢复session退出时的消息工具错误和中断状态(tmp_path):
@@ -664,7 +1123,8 @@ def test图片提交失败后ctrl_c恢复文字和附件(monkeypatch, tmp_path):
 
 def test_factory失败前保持静默且提交后保留队首并显示错误(tmp_path):
     async def run():
-        async def failing_factory():
+        async def failing_factory(session_id, create_if_missing):
+            del session_id, create_if_missing
             raise RuntimeError("factory broken")
 
         app = IcarusTextualApp(

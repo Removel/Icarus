@@ -129,6 +129,40 @@ def test_conversation分割文本工具文本并更新工具状态(tmp_path):
     assert status_count == 0
 
 
+def test_conversation_reset清空session投影并恢复欢迎内容(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.append_user_message("old message")
+            await view.apply_action(
+                AppendAssistantDelta(task_id="task-1", text="partial")
+            )
+            await view.apply_action(
+                AppendToolStarted(
+                    task_id="task-1",
+                    call_id="call-1",
+                    tool_name="read",
+                    arguments_json="{}",
+                )
+            )
+
+            await view.reset()
+            await pilot.pause()
+            return (
+                len(view.query(WelcomeMessage)),
+                len(view.query(UserMessage)),
+                len(view.query(AssistantMessage)),
+                len(view.query(ToolMessage)),
+                view._active_assistant,
+                view._tools,
+                view._restoring_history,
+            )
+
+    result = asyncio.run(run())
+    assert result == (1, 0, 0, 0, None, {}, False)
+
+
 def test_streaming_markdown替换后旧节点不会触发鼠标选择崩溃(
     monkeypatch, tmp_path
 ):
