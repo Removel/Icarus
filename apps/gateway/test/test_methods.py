@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import pytest
 
 from apps.agent.src.agent_orchestration.plugins.user_input import InputAccepted
+from apps.agent.src.application import DiscardSessionResult, SessionSummary
 from apps.gateway.src.protocol.errors import BUSINESS_ERROR, GatewayRpcError
 from apps.gateway.src.protocol.methods import GatewayMethods
 from apps.agent.src.runtime_update import RuntimeUpdate
@@ -23,9 +24,15 @@ class RuntimeStub:
             "lifecycle": "ready",
         }
 
-    def list_session_statuses(self, workspace_path):
+    def list_session_summaries(self, workspace_path):
         del workspace_path
-        return ()
+        return (SessionSummary("session", "first message"),)
+
+    async def discard_empty_session(self, workspace_path, session_id):
+        self.discarded = (workspace_path, session_id)
+        return DiscardSessionResult(
+            "workspace", session_id, "discarded"
+        )
 
     async def submit(
         self,
@@ -135,6 +142,34 @@ def test_gateway_methods读取session历史():
     assert result["history_cursor"] == 1
     assert result["records"][0]["type"] == "user.message"
     assert result["records"][0]["sequence"] == 1
+
+
+def test_gateway_methods列出摘要并清理空session():
+    async def run():
+        runtime = RuntimeStub()
+        methods = GatewayMethods(runtime)
+        sessions = await methods.dispatch(
+            "session.list", {"workspace_path": "/workspace"}, set()
+        )
+        discarded = await methods.dispatch(
+            "session.discard_empty",
+            {"workspace_path": "/workspace", "session_id": "session"},
+            set(),
+        )
+        return runtime, sessions, discarded
+
+    runtime, sessions, discarded = asyncio.run(run())
+    assert sessions == {
+        "sessions": [
+            {"session_id": "session", "first_user_input": "first message"}
+        ]
+    }
+    assert discarded == {
+        "workspace_key": "workspace",
+        "session_id": "session",
+        "status": "discarded",
+    }
+    assert runtime.discarded == ("/workspace", "session")
 
 
 def test_gateway_methods非法参数和业务错误不泄漏内部异常():
