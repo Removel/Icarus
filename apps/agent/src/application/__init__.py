@@ -18,7 +18,10 @@ from apps.agent.src.application.resource_ref import (
     ResourceUnavailableError,
 )
 from apps.agent.src.application.runtime_status import (
+    DiscardSessionResult,
+    DiscardSessionStatus,
     SessionStatus,
+    SessionSummary,
     TaskStatus,
     UnloadResult,
 )
@@ -32,11 +35,14 @@ __all__ = [
     "AgentRuntime",
     "AgentRuntimeStoppingError",
     "ConversationHistoryCorruptError",
+    "DiscardSessionResult",
+    "DiscardSessionStatus",
     "TaskOperationResult",
     "SessionRuntime",
     "SessionAlreadyExistsError",
     "SessionNotFoundError",
     "SessionStatus",
+    "SessionSummary",
     "SubmissionConflictError",
     "ResourceRef",
     "InvalidResourceError",

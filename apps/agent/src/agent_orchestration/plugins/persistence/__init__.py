@@ -2,6 +2,7 @@
 
 from apps.agent.src.agent_orchestration.plugins.persistence.conversation_store import (
     ConversationHistoryCorruptError,
+    ConversationSummary,
     ConversationStore,
 )
 
@@ -39,6 +40,7 @@ from apps.agent.src.agent_orchestration.plugins.persistence.trace_writer import 
 
 __all__ = [
     "ConversationHistoryCorruptError",
+    "ConversationSummary",
     "ConversationStore",
     "DataPathResolver",
     "FileTraceHook",
