@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from apps.agent.src.runtime_update import RuntimeUpdate
+    from apps.agent.src.application.runtime_status import (
+        DiscardSessionResult,
+        SessionSummary,
+    )
 
 
 class StrictWireModel(BaseModel):
@@ -45,3 +49,35 @@ class RuntimeUpdateModel(StrictWireModel):
 class SessionHistoryModel(StrictWireModel):
     records: tuple[RuntimeUpdateModel, ...]
     history_cursor: int = Field(ge=0)
+
+
+class SessionSummaryModel(StrictWireModel):
+    session_id: str
+    first_user_input: str
+
+    @classmethod
+    def from_domain(cls, summary: "SessionSummary") -> "SessionSummaryModel":
+        return cls(
+            session_id=summary.session_id,
+            first_user_input=summary.first_user_input,
+        )
+
+
+class SessionListModel(StrictWireModel):
+    sessions: tuple[SessionSummaryModel, ...]
+
+
+class DiscardEmptySessionResultModel(StrictWireModel):
+    workspace_key: str
+    session_id: str
+    status: Literal["discarded", "not_empty", "busy", "not_found"]
+
+    @classmethod
+    def from_domain(
+        cls, result: "DiscardSessionResult"
+    ) -> "DiscardEmptySessionResultModel":
+        return cls(
+            workspace_key=result.workspace_key,
+            session_id=result.session_id,
+            status=result.status,
+        )
