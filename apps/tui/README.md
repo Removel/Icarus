@@ -81,10 +81,10 @@ icarus --session-id demo-session
 - `Ctrl+J`：在所有支持终端中插入换行；
 - `Ctrl+V`：macOS 剪贴板存在图片时，在光标处插入 `[#imageN]`；没有图片时回退为普通
   文本粘贴。Windows/Linux 暂未实现系统剪贴板图片读取；
-- Composer 聚焦时，左右键、上下键和 `Home` / `End` 在 TextArea 中移动光标，滚轮不控制
-  Conversation；
-- Conversation 聚焦时，上下键、`Home` / `End` 和滚轮浏览对话；用户上滚后流式输出不会
-  把阅读位置拉回底部；
+- Composer 聚焦时，左右键、上下键和 `Home` / `End` 在 TextArea 中移动光标；
+- 鼠标位于 Conversation 时，滚轮和右侧 ScrollBar 始终用于浏览对话，不要求先切换键盘焦点；
+  用户上滚后流式输出不会把阅读位置拉回底部；
+- Conversation 聚焦时，上下键和 `Home` / `End` 浏览对话；
 - `PageUp` / `PageDown`：无论当前焦点在哪，都按页浏览 Conversation，同时保留 Composer
   草稿、光标和焦点；
 - `Ctrl+End`：回到 Conversation 底部并恢复自动跟随；
