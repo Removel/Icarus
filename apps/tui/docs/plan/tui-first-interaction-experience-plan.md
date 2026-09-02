@@ -253,8 +253,9 @@ apps/agent/.venv/bin/python -m pytest \
   - `PageUp` → Conversation page up；
   - `PageDown` → Conversation page down；
   - `Ctrl+End` → Conversation end + resume anchor；
-- 不增加全局 wheel handler；Conversation 的滚轮处理先检查自身焦点，只有获得焦点时才
-  调用原生滚动；Composer 获得焦点时滚轮不得改变 Conversation；
+- 不增加全局 wheel handler；后续实现由
+  `apps/tui/docs/arch/tui-streaming-markdown-scroll-design.md` 修正为按指针所在区域路由，
+  Conversation 不再要求自己持有键盘焦点；
 - Conversation 聚焦时方向键和 Home / End 使用 VerticalScroll 原生行为；
 - Composer 聚焦时方向键和 Home / End 继续编辑文本。
 
@@ -265,8 +266,8 @@ apps/agent/.venv/bin/python -m pytest \
 - Conversation 聚焦后 Up / Down 可滚动，流式 Delta 不抢回底部；
 - Composer 聚焦时 Up / Down 只移动编辑光标；
 - `Ctrl+End` 恢复跟随，下一 Delta 到达后仍位于新底部；
-- Conversation 聚焦时滚轮滚动 Conversation；Composer 聚焦时，即使指针位于对话区域，
-  滚轮也不改变 Conversation。
+- 指针位于 Conversation 时滚轮滚动 Conversation，即使 Composer 保持焦点；指针位于
+  Composer 时不改变 Conversation。
 
 **检查点**
 

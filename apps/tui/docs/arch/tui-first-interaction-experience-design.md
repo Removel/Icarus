@@ -2,6 +2,8 @@
 
 > 本文的首帧、布局和滚动设计仍有效；AgentRuntimeService 初始化链属于迁移前历史。当前后台启动
 > 动作为连接本机 Agent Gateway，不再在 TUI 进程内构造 Agent Runtime。
+> 鼠标滚轮和流式 Markdown 的后续实现由 `tui-streaming-markdown-scroll-design.md` 替代本文的
+> 焦点门禁规则：滚轮按指针所在区域路由，不再要求 Conversation 持有键盘焦点。
 
 ## 文档定位
 
@@ -230,12 +232,12 @@ DETACHED
 | 当前交互对象 | `↑ / ↓` | `PageUp / PageDown` | 滚轮 | `Home / End` |
 | --- | --- | --- | --- | --- |
 | Conversation | 按行滚动对话 | 按页滚动对话 | 滚动对话 | 对话首尾 |
-| Composer | 移动编辑光标 | 跨焦点滚动对话 | 不改变 Conversation | 编辑行首尾 |
+| Composer | 移动编辑光标 | 跨焦点滚动对话 | 指针在 Conversation 时滚动对话 | 编辑行首尾 |
 
 `Ctrl+End` 是全局恢复跟随动作：滚动到 Conversation 底部并恢复 anchor，同时保持 Composer
-的焦点、文本、Selection 和 Cursor。Conversation 只有在自己获得焦点时才响应滚轮；
-Composer 获得焦点时，TUI 不把滚轮转发给 Conversation。实现保持 Widget 局部处理，不增加
-App 全局滚轮路由。
+的焦点、文本、Selection 和 Cursor。滚轮按指针位置由 Textual 路由：指针位于 Conversation 时
+直接滚动对话，即使 Composer 仍持有键盘焦点；指针位于 Composer 时不转发。实现保持 Widget
+局部处理，不增加 App 全局滚轮路由。
 
 本阶段不增加“有 N 条新内容”提示；这是独立的后续增强，不是解决无法上滚的必要条件。
 
