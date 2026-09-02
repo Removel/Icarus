@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -19,6 +20,7 @@ from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.agent.src.application.agent_runtime import (
     AgentRuntime,
     SessionAlreadyExistsError,
+    SessionNotFoundError,
     SubmissionConflictError,
 )
 from apps.agent.src.application.resource_ref import ResourceRef
@@ -552,3 +554,148 @@ def test_agent_runtime已加载session不把排队task误判为interrupted(tmp_p
     records, cursor = asyncio.run(run())
     assert [item.type for item in records] == ["user.message"]
     assert cursor == 1
+
+
+def test_agent_runtime列出非空session摘要且不加载runtime(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        resolver = DataPathResolver(config.icarus_data_dir)
+        empty = SessionIdentity.create(tmp_path, "empty")
+        older = SessionIdentity.create(tmp_path, "older")
+        newer = SessionIdentity.create(tmp_path, "newer")
+        for identity in (empty, older, newer):
+            resolver.ensure_session(identity)
+        store = runtime._history_store()
+        old_time = datetime(2026, 1, 1, tzinfo=UTC)
+        new_time = old_time + timedelta(minutes=1)
+        store.append(
+            older,
+            RuntimeUpdate(
+                workspace_key=older.workspace_key,
+                session_id=older.session_id,
+                task_id="old",
+                type="user.message",
+                payload={"text": "  old\n session ", "resources": []},
+                occurred_at=old_time,
+            ),
+        )
+        store.append(
+            newer,
+            RuntimeUpdate(
+                workspace_key=newer.workspace_key,
+                session_id=newer.session_id,
+                task_id="new",
+                type="user.message",
+                payload={"text": "new session", "resources": []},
+                occurred_at=new_time,
+            ),
+        )
+        summaries = runtime.list_session_summaries(tmp_path)
+        entries = dict(runtime._entries)
+        await runtime.stop()
+        return summaries, entries, factory
+
+    summaries, entries, factory = asyncio.run(run())
+    assert [(item.session_id, item.first_user_input) for item in summaries] == [
+        ("newer", "new session"),
+        ("older", "old session"),
+    ]
+    assert entries == {}
+    assert factory.created == []
+
+
+def test_agent_runtime只丢弃空session(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        loaded = await runtime.create_session(tmp_path, "loaded")
+        busy = await runtime.create_session(tmp_path, "busy")
+        non_empty = await runtime.create_session(tmp_path, "non-empty")
+        factory.created[1].busy = True
+        await runtime.submit(
+            tmp_path, non_empty, "hello", submission_id="message"
+        )
+        loaded_result = await runtime.discard_empty_session(tmp_path, loaded)
+        busy_result = await runtime.discard_empty_session(tmp_path, busy)
+        non_empty_result = await runtime.discard_empty_session(
+            tmp_path, non_empty
+        )
+        missing_result = await runtime.discard_empty_session(
+            tmp_path, "missing"
+        )
+        resolver = DataPathResolver(config.icarus_data_dir)
+        exists = {
+            session_id: resolver.session_exists(
+                SessionIdentity.create(tmp_path, session_id)
+            )
+            for session_id in (loaded, busy, non_empty)
+        }
+        factory.created[1].busy = False
+        await runtime.stop()
+        return (
+            loaded_result,
+            busy_result,
+            non_empty_result,
+            missing_result,
+            exists,
+            factory.created[0].stop_reasons,
+        )
+
+    loaded, busy, non_empty, missing, exists, stop_reasons = asyncio.run(run())
+    assert loaded.status == "discarded"
+    assert busy.status == "busy"
+    assert non_empty.status == "not_empty"
+    assert missing.status == "not_found"
+    assert exists == {"loaded": False, "busy": True, "non-empty": True}
+    assert stop_reasons == ["discard_empty"]
+
+
+def test_agent_runtime丢弃期间并发submit不会复活旧entry(tmp_path, monkeypatch):
+    async def run():
+        config = make_config(tmp_path / "data")
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=RuntimeFactory()
+        )
+        await runtime.start()
+        identity = SessionIdentity.create(tmp_path, "session")
+        DataPathResolver(config.icarus_data_dir).ensure_session(identity)
+        started = threading.Event()
+        release = threading.Event()
+        original = DataPathResolver.discard_session
+
+        def blocking_discard(resolver, target):
+            started.set()
+            assert release.wait(timeout=2)
+            return original(resolver, target)
+
+        monkeypatch.setattr(DataPathResolver, "discard_session", blocking_discard)
+        discard = asyncio.create_task(
+            runtime.discard_empty_session(tmp_path, identity.session_id)
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        submit = asyncio.create_task(
+            runtime.submit(
+                tmp_path, identity.session_id, "late", submission_id="late"
+            )
+        )
+        await asyncio.sleep(0)
+        release.set()
+        result = await discard
+        with pytest.raises(SessionNotFoundError):
+            await submit
+        entry_exists = (identity.workspace_key, identity.session_id) in runtime._entries
+        await runtime.stop()
+        return result, entry_exists
+
+    result, entry_exists = asyncio.run(run())
+    assert result.status == "discarded"
+    assert entry_exists is False

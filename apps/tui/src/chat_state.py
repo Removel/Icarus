@@ -16,6 +16,7 @@ class RuntimePhase(str, Enum):
     READY = "ready"
     RUNNING = "running"
     CANCELLING = "cancelling"
+    SWITCHING = "switching"
     STOPPING = "stopping"
     FAILED = "failed"
 
@@ -53,6 +54,15 @@ class ChatState:
         )
 
     @property
+    def can_run_session_command(self) -> bool:
+        return (
+            self.phase == RuntimePhase.READY
+            and self.active_task_id is None
+            and not self.dispatch_in_progress
+            and not self.pending
+        )
+
+    @property
     def pending_items(self) -> tuple[str, ...]:
         """Return an immutable UI projection of the pending queue."""
 
@@ -74,6 +84,11 @@ class ChatState:
     def mark_failed(self) -> None:
         self.dispatch_in_progress = False
         self.phase = RuntimePhase.FAILED
+
+    def begin_switching(self) -> None:
+        if not self.can_run_session_command:
+            raise RuntimeError("Session command requires an idle runtime")
+        self.phase = RuntimePhase.SWITCHING
 
     def begin_stopping(self) -> None:
         self.dispatch_in_progress = False

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 import json
 import logging
@@ -18,10 +18,17 @@ from apps.agent.src.runtime_update import RuntimeUpdate
 
 
 logger = logging.getLogger(__name__)
+_SUMMARY_MAX_LENGTH = 256
 
 
 class ConversationHistoryCorruptError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ConversationSummary:
+    first_user_input: str
+    last_public_activity_at: datetime
 
 
 class ConversationStore:
@@ -93,6 +100,31 @@ class ConversationStore:
                 and record.sequence > after_sequence
             ),
             cursor,
+        )
+
+    def read_summary(
+        self, identity: SessionIdentity
+    ) -> ConversationSummary | None:
+        records, _ = self._read(
+            self.resolver.conversation_file(identity),
+            identity=identity,
+            repair_tail=False,
+        )
+        first_user = next(
+            (record for record in records if record.type == "user.message"),
+            None,
+        )
+        if first_user is None:
+            return None
+        return ConversationSummary(
+            first_user_input=_user_message_summary(first_user),
+            last_public_activity_at=records[-1].occurred_at,
+        )
+
+    def clear_session_cache(self, identity: SessionIdentity) -> None:
+        self._last_sequences.pop(
+            self.resolver.conversation_file(identity),
+            None,
         )
 
     def _read(
@@ -169,3 +201,16 @@ class ConversationStore:
             occurred_at=datetime.fromisoformat(str(value["occurred_at"])),
             sequence=sequence,
         )
+
+
+def _user_message_summary(update: RuntimeUpdate) -> str:
+    value = update.payload.get("text")
+    text = " ".join(value.split()) if isinstance(value, str) else ""
+    if text:
+        if len(text) > _SUMMARY_MAX_LENGTH:
+            return text[: _SUMMARY_MAX_LENGTH - 1] + "…"
+        return text
+    resources = update.payload.get("resources")
+    if isinstance(resources, list) and resources:
+        return "[Image]"
+    return "[Message]"

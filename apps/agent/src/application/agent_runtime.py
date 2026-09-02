@@ -22,8 +22,10 @@ from apps.agent.src.agent_orchestration.plugins.user_input import InputAccepted
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.agent.src.application.resource_ref import ResourceRef
 from apps.agent.src.application.runtime_status import (
+    DiscardSessionResult,
     SessionLifecycle,
     SessionStatus,
+    SessionSummary,
     TaskStatus,
     UnloadResult,
 )
@@ -65,6 +67,7 @@ class _SessionEntry:
     runtime: SessionRuntime | None = None
     load_task: asyncio.Task[SessionRuntime] | None = None
     unload_task: asyncio.Task[None] | None = None
+    discarding: bool = False
     lifecycle: SessionLifecycle = "unloaded"
     ready_at: datetime | None = None
     last_task_activity_at: datetime | None = None
@@ -159,6 +162,7 @@ class AgentRuntime:
         entry = await self._entry(identity)
         async with entry.mutation_lock:
             self._require_accepting()
+            self._require_not_discarding(entry)
             exists = self._session_exists(identity)
             if exists or entry.lifecycle in {
                 "loading", "ready", "running", "unloading"
@@ -190,6 +194,7 @@ class AgentRuntime:
             wait_for: asyncio.Task | None = None
             async with entry.mutation_lock:
                 self._require_accepting()
+                self._require_not_discarding(entry)
                 record = entry.submissions.get(submission_id)
                 if record is not None:
                     if record.fingerprint != fingerprint:
@@ -272,6 +277,10 @@ class AgentRuntime:
             return TaskOperationResult(task_id=task_id, status="not_running")
         async with entry.mutation_lock:
             self._require_accepting()
+            if entry.discarding:
+                return TaskOperationResult(
+                    task_id=task_id, status="not_running"
+                )
             if entry.runtime is None or entry.lifecycle in {"loading", "unloading"}:
                 return TaskOperationResult(task_id=task_id, status="not_running")
             result = await entry.runtime.cancel_task(task_id, reason)
@@ -291,6 +300,7 @@ class AgentRuntime:
             wait_for = None
             async with entry.mutation_lock:
                 self._require_accepting()
+                self._require_not_discarding(entry)
                 if entry.load_task is not None:
                     wait_for = entry.load_task
                 elif entry.unload_task is not None:
@@ -320,6 +330,7 @@ class AgentRuntime:
             if not self._session_exists(identity):
                 raise SessionNotFoundError(session_id)
             return SessionStatus(identity.workspace_key, session_id, "unloaded")
+        self._require_not_discarding(entry)
         return self._status(entry)
 
     def list_session_statuses(
@@ -337,6 +348,88 @@ class AgentRuntime:
             self.get_session_status(workspace_path, session_id)
             for session_id in sorted(session_ids)
         )
+
+    def list_session_summaries(
+        self, workspace_path: str | Path
+    ) -> tuple[SessionSummary, ...]:
+        workspace_identity = SessionIdentity.create(workspace_path, "workspace")
+        resolver = self._resolver(workspace_path)
+        summaries = []
+        for session_id in resolver.list_session_ids(workspace_identity):
+            identity = SessionIdentity.create(workspace_path, session_id)
+            summary = self._history_store().read_summary(identity)
+            if summary is None:
+                continue
+            summaries.append(
+                (
+                    summary.last_public_activity_at,
+                    session_id,
+                    SessionSummary(session_id, summary.first_user_input),
+                )
+            )
+        summaries.sort(key=lambda item: item[1])
+        summaries.sort(key=lambda item: item[0], reverse=True)
+        return tuple(item[2] for item in summaries)
+
+    async def discard_empty_session(
+        self, workspace_path: str | Path, session_id: str
+    ) -> DiscardSessionResult:
+        self._require_accepting()
+        identity = SessionIdentity.create(workspace_path, session_id)
+        key = _key(identity)
+        entry = self._entries.get(key)
+        if entry is None and not self._session_exists(identity):
+            return DiscardSessionResult(
+                identity.workspace_key, session_id, "not_found"
+            )
+        entry = await self._entry(identity)
+        while True:
+            wait_for: asyncio.Task[None] | None = None
+            async with entry.mutation_lock:
+                self._require_accepting()
+                if entry.discarding:
+                    return DiscardSessionResult(
+                        identity.workspace_key, session_id, "busy"
+                    )
+                if entry.load_task is not None or entry.unload_task is not None:
+                    return DiscardSessionResult(
+                        identity.workspace_key, session_id, "busy"
+                    )
+                if entry.runtime is not None and entry.runtime.snapshot().has_work:
+                    return DiscardSessionResult(
+                        identity.workspace_key, session_id, "busy"
+                    )
+                if self._history_store().read_summary(identity) is not None:
+                    return DiscardSessionResult(
+                        identity.workspace_key, session_id, "not_empty"
+                    )
+                if entry.runtime is not None:
+                    wait_for = self._begin_unload_locked(
+                        entry, "discard_empty"
+                    )
+                else:
+                    if not self._session_exists(identity):
+                        return DiscardSessionResult(
+                            identity.workspace_key, session_id, "not_found"
+                        )
+                    entry.discarding = True
+                    try:
+                        await asyncio.to_thread(
+                            self._resolver(workspace_path).discard_session,
+                            identity,
+                        )
+                        self._history_store().clear_session_cache(identity)
+                        async with self._entries_lock:
+                            if self._entries.get(key) is entry:
+                                self._entries.pop(key)
+                    except BaseException:
+                        entry.discarding = False
+                        raise
+                    return DiscardSessionResult(
+                        identity.workspace_key, session_id, "discarded"
+                    )
+            assert wait_for is not None
+            await asyncio.shield(wait_for)
 
     def get_task_status(
         self, workspace_path: str | Path, session_id: str, task_id: str
@@ -360,6 +453,7 @@ class AgentRuntime:
             raise SessionNotFoundError(session_id)
         entry = await self._entry(identity)
         async with entry.mutation_lock:
+            self._require_not_discarding(entry)
             store = self._history_store()
             all_records, cursor = store.read(identity)
             terminal_task_ids = {
@@ -850,6 +944,11 @@ class AgentRuntime:
     def _require_accepting(self) -> None:
         if not self.is_running:
             raise AgentRuntimeStoppingError("AgentRuntime is not accepting calls")
+
+    @staticmethod
+    def _require_not_discarding(entry: _SessionEntry) -> None:
+        if entry.discarding:
+            raise SessionNotFoundError(entry.identity.session_id)
 
 
 def _key(identity: SessionIdentity) -> tuple[str, str]:
