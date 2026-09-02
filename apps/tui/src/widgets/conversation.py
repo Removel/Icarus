@@ -23,6 +23,7 @@ from apps.tui.src.widgets.messages import (
     TurnStatusMessage,
     UserMessage,
     WelcomeMessage,
+    StreamingMarkdown,
 )
 
 
@@ -182,15 +183,13 @@ class ConversationView(VerticalScroll):
             self._anchor_pending = False
             self.anchor()
 
-    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
-        if not self.has_focus:
-            event.stop()
-            return
-        super()._on_mouse_scroll_up(event)
+    def on_streaming_markdown_content_appended(
+        self, event: StreamingMarkdown.ContentAppended
+    ) -> None:
+        event.stop()
+        if not self._restoring_history:
+            self._activate_anchor_after_layout()
 
     def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
-        if not self.has_focus:
-            event.stop()
-            return
         super()._on_mouse_scroll_down(event)
         self.call_after_refresh(self._restore_follow_if_at_end)

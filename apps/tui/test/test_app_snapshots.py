@@ -19,7 +19,11 @@ from apps.tui.src.gateway_client.models import (
 )
 from apps.tui.src.app import IcarusTextualApp
 from apps.tui.src.chat_state import RuntimePhase
-from apps.tui.src.event_pipeline import AppendToolStarted, UpdateToolCompleted
+from apps.tui.src.event_pipeline import (
+    AppendAssistantDelta,
+    AppendToolStarted,
+    UpdateToolCompleted,
+)
 from apps.tui.src.screens import SessionPicker
 from apps.tui.src.widgets import (
     AssistantMessage,
@@ -32,6 +36,7 @@ from apps.tui.src.widgets import (
     UserMessage,
     WelcomeMessage,
 )
+from apps.tui.src.widgets.messages import StreamingMarkdown
 
 
 WORKSPACE = "/workspace/icarus-demo"
@@ -409,12 +414,59 @@ def test_snapshot_streaming_markdown_with_draft(snap_compare):
         await wait_until(
             pilot,
             lambda: len(pilot.app.query(AssistantMessage)) == 1
-            and pilot.app.query_one(AssistantMessage).markdown_text == markdown,
+            and pilot.app.query_one(AssistantMessage).markdown_text == markdown
+            and pilot.app.query_one(StreamingMarkdown).source == markdown
+            and len(pilot.app.query_one(StreamingMarkdown).children) >= 4
+            and pilot.app.query_one(StreamingMarkdown).children[-1].region.height
+            > 0,
         )
+        await pilot.pause()
 
     assert snap_compare(
         make_app(),
         terminal_size=(100, 34),
+        run_before=prepare,
+    )
+
+
+def test_snapshot_streaming_markdown_detached_from_bottom(snap_compare):
+    async def prepare(pilot) -> None:
+        await wait_ready(pilot)
+        conversation = pilot.app.query_one(ConversationView)
+        for index in range(24):
+            await conversation.append_user_message(
+                f"History message {index:02d} remains readable while output grows"
+            )
+        await pilot.pause()
+        conversation.resume_follow()
+        await pilot.pause()
+        conversation.page_up()
+        await pilot.pause()
+        detached_scroll = conversation.scroll_y
+
+        streamed = "".join(
+            f"\n\nStreaming paragraph {index} grows below the viewport."
+            for index in range(8)
+        )
+        await conversation.apply_action(
+            AppendAssistantDelta(task_id="task-1", text=streamed)
+        )
+        await wait_until(
+            pilot,
+            lambda: (
+                pilot.app.query_one(StreamingMarkdown).source == streamed
+                and pilot.app.query_one(StreamingMarkdown).children
+                and pilot.app.query_one(StreamingMarkdown).children[-1].region.height
+                > 0
+                and conversation.max_scroll_y > detached_scroll
+            ),
+        )
+        await pilot.pause()
+        assert conversation.scroll_y == detached_scroll
+
+    assert snap_compare(
+        make_app(),
+        terminal_size=(80, 24),
         run_before=prepare,
     )
 
@@ -606,8 +658,14 @@ def test_snapshot_narrow_running_layout(snap_compare):
                 and len(pilot.app.query(AssistantMessage)) == 1
                 and pilot.app.query_one(AssistantMessage).markdown_text
                 == expected_markdown
+                and pilot.app.query_one(StreamingMarkdown).source
+                == expected_markdown
+                and len(pilot.app.query_one(StreamingMarkdown).children) >= 1
+                and pilot.app.query_one(StreamingMarkdown).children[-1].region.height
+                > 0
             ),
         )
+        await pilot.pause()
 
     assert snap_compare(
         make_app(),
