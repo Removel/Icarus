@@ -12,7 +12,7 @@
   状态无法恢复或缺少回归保护的问题。
 - P1：滚动、长内容、输入、队列和诊断体验。
 - P1：继续完善任务控制和异常恢复体验。
-- P2：Windows/Linux 图片输入、Session 历史、恢复和切换。
+- P2：Windows/Linux 图片输入，以及 Session 搜索、筛选等后续管理能力。
 
 ## 基础交互能力
 
@@ -81,8 +81,10 @@
   已覆盖 TUI 功能测试和视觉快照。详细设计见
   `apps/tui/docs/arch/tui-clipboard-image-paste-design.md`，实施步骤见
   `apps/tui/docs/plan/tui-clipboard-image-paste-development-plan.md`。
-- [ ] `TUI-16` 支持 Session 历史浏览、恢复和切换；TUI 只展示并发起应用服务操作，不自行
-  重建 Blackboard 业务历史。
+- [x] `TUI-16` 支持 Session 历史浏览、恢复和切换；TUI 只展示并发起应用服务操作，不自行
+  重建 Blackboard 业务历史。当前 `/resume` 在空闲态列出当前 Workspace 的非空 Session，并通过
+  Gateway 恢复公共会话历史；`/clear` 保留非空当前 Session 并创建新对话。空 Session 不展示，
+  在正常切走或退出时请求 AgentRuntime 安全清理。本期不含搜索、筛选和主动 Compact。
 - [x] `TUI-17` 缩短命令到首帧可见的时间。打开页面时只加载轻量 Textual 壳层，不创建
   Runtime，也不展示虚假的初始化或 Ready 状态；页面挂载后立即在后台连接 Agent Gateway。首次
   有效提交时，若连接与 Session 已 Ready 则正常发送；若尚在初始化则显示

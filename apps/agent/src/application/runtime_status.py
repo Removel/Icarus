@@ -53,6 +53,27 @@ class SessionStatus:
 
 
 @dataclass(frozen=True)
+class SessionSummary:
+    session_id: str
+    first_user_input: str
+
+
+DiscardSessionStatus: TypeAlias = Literal[
+    "discarded",
+    "not_empty",
+    "busy",
+    "not_found",
+]
+
+
+@dataclass(frozen=True)
+class DiscardSessionResult:
+    workspace_key: str
+    session_id: str
+    status: DiscardSessionStatus
+
+
+@dataclass(frozen=True)
 class UnloadResult:
     workspace_key: str
     session_id: str

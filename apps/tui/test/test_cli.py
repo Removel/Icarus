@@ -14,26 +14,37 @@ def test_run_app_使用启动目录透传session_id并返回textual结果(monkey
 
     service = object()
 
-    async def create_gateway_client(workspace_path, session_id, gateway_url):
+    async def create_gateway_client(
+        workspace_path, session_id, gateway_url, create_if_missing
+    ):
         assert captured["app_run_entered"] is True
         captured["service_workspace"] = workspace_path
         captured["session_id"] = session_id
         captured["gateway_url"] = gateway_url
+        captured["create_if_missing"] = create_if_missing
         return service
 
     class AppStub:
         return_code = None
 
-        def __init__(self, *, runtime_factory, workspace_path, resource_root):
+        def __init__(
+            self,
+            *,
+            runtime_factory,
+            initial_session_id,
+            workspace_path,
+            resource_root,
+        ):
             captured["runtime_factory"] = runtime_factory
             captured["app_workspace"] = workspace_path
+            captured["initial_session_id"] = initial_session_id
             captured["resource_root"] = resource_root
             captured["app_run_entered"] = False
 
         def run(self):
             captured["app_run_entered"] = True
             captured["app_service"] = asyncio.run(
-                captured["runtime_factory"]()
+                captured["runtime_factory"]("selected", False)
             )
             return 7
 
@@ -53,7 +64,9 @@ def test_run_app_使用启动目录透传session_id并返回textual结果(monkey
     assert result == 7
     assert captured["service_workspace"] == tmp_path.resolve()
     assert captured["app_workspace"] == tmp_path.resolve()
-    assert captured["session_id"] == "demo"
+    assert captured["initial_session_id"] == "demo"
+    assert captured["session_id"] == "selected"
+    assert captured["create_if_missing"] is False
     assert captured["gateway_url"] == "ws://test/rpc"
     assert captured["resource_root"] == (tmp_path / "data" / "incoming")
     assert captured["app_service"] is service

@@ -175,6 +175,10 @@ make tui ARGS="--session-id my-session"
 Conversation，包括用户消息、助手文本、Tool、错误和中断终态，然后继续接收实时流。旧 Session
 不会从内部 Trace 迁移展示历史；它们从升级后产生的新任务开始记录。
 
+Runtime 完全空闲时可以输入 `/resume`，从当前 Workspace 的非空 Session 列表中选择并恢复；输入
+`/clear` 会保留当前非空 Session 并开始新对话。两者都是 TUI 本地命令，不发送给 Agent；当前有任务、
+提交握手或待发送消息时会直接拒绝，不会排队。
+
 `Enter` 把消息提交到 TUI 本地队列；Agent 运行期间输入框仍可编辑，待发送消息会显示在输入框上方，
 并在当前轮次结束后按 FIFO 自动发送。受支持终端可用 `Shift+Enter` 换行，所有支持的终端都可用
 `Ctrl+J` 换行。
@@ -210,6 +214,7 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 - 提交文本以及 macOS 剪贴板图片；
 - 持久化会话内容和模型上下文；
 - 使用相同 Session ID 恢复退出时的 Conversation，并继续之前的对话；
+- 使用 `/resume` 列出并切换当前 Workspace 的非空 Session，使用 `/clear` 开始新对话；
 - 恢复异常退出前已经产生的部分回复和 Tool 状态，并标记中断任务；
 - Gateway 断线后重新连接并对账当前任务状态；
 - 自动卸载长时间空闲的 Session，同时保留本地数据供下次恢复。
@@ -225,7 +230,7 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 
 - Gateway 作为独立进程运行；`make start` 可以统一启动 Gateway 与 TUI，单独运行 TUI 时不会隐式
   创建本地 Runtime；
-- TUI 尚未提供 Session 列表和切换界面，需要通过 `--session-id` 记住并指定会话；
+- Session 列表暂不支持搜索、筛选、重命名或删除非空 Session；
 - Gateway 首次不可用时不会持续后台重连；
 - TUI 未被 Runtime 接受的 Pending Queue 不跨 TUI 进程持久化；
 - 长会话历史暂未分页；

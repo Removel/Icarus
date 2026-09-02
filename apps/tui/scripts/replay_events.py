@@ -47,7 +47,8 @@ def main(argv: list[str] | None = None) -> int:
         scenario, events_per_second=args.speed
     )
 
-    async def runtime_factory():
+    async def runtime_factory(session_id, create_if_missing):
+        del session_id, create_if_missing
         return service
 
     app = IcarusTextualApp(

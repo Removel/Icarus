@@ -33,6 +33,11 @@ from apps.gateway.src.protocol.models import (
     RuntimeUpdateModel,
     StrictModel,
 )
+from packages.gateway_protocol import (
+    DiscardEmptySessionResultModel,
+    SessionListModel,
+    SessionSummaryModel,
+)
 
 
 class WorkspaceParams(StrictModel):
@@ -94,6 +99,7 @@ class GatewayMethods:
             "runtime.get_status": self._runtime_status,
             "session.create": self._session_create,
             "session.list": self._session_list,
+            "session.discard_empty": self._session_discard_empty,
             "session.get": self._session_get,
             "session.submit": self._session_submit,
             "session.cancel": self._session_cancel,
@@ -147,12 +153,24 @@ class GatewayMethods:
 
     async def _session_list(self, params):
         value = self._validate(WorkspaceParams, params)
-        return {
-            "sessions": [
-                _wire(item)
-                for item in self.runtime.list_session_statuses(value.workspace_path)
-            ]
-        }
+        result = SessionListModel(
+            sessions=tuple(
+                SessionSummaryModel.from_domain(item)
+                for item in self.runtime.list_session_summaries(
+                    value.workspace_path
+                )
+            )
+        )
+        return result.model_dump(mode="json")
+
+    async def _session_discard_empty(self, params):
+        value = self._validate(SessionParams, params)
+        result = await self.runtime.discard_empty_session(
+            value.workspace_path, value.session_id
+        )
+        return DiscardEmptySessionResultModel.from_domain(result).model_dump(
+            mode="json"
+        )
 
     async def _session_get(self, params):
         value = self._validate(SessionParams, params)

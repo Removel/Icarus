@@ -12,7 +12,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from packages.gateway_protocol import RuntimeUpdateModel, SessionHistoryModel
+from packages.gateway_protocol import (
+    DiscardEmptySessionResultModel,
+    RuntimeUpdateModel,
+    SessionHistoryModel,
+)
 from apps.tui.src.gateway_client.models import (
     SubmitAccepted,
     TaskOperationResult,
@@ -115,6 +119,7 @@ class ReplayRuntimeService:
         self.scenario = scenario
         self.events_per_second = events_per_second
         self.session_id = session_id
+        self.workspace_key = "replay-workspace"
         self._subscription = UpdateSubscription()
         self._emit_tasks = set()
         self._next_turn = 0
@@ -132,6 +137,23 @@ class ReplayRuntimeService:
 
     async def get_session_history(self, *, after_sequence=0):
         return SessionHistoryModel(records=(), history_cursor=after_sequence)
+
+    async def list_sessions(self):
+        return ()
+
+    async def get_session_status(self):
+        return {
+            "workspace_key": self.workspace_key,
+            "session_id": self.session_id,
+            "lifecycle": "ready",
+        }
+
+    async def discard_empty_session(self, session_id):
+        return DiscardEmptySessionResultModel(
+            workspace_key=self.workspace_key,
+            session_id=session_id,
+            status="discarded",
+        )
 
     async def submit(
         self,
