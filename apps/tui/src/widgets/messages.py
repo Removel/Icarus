@@ -6,7 +6,9 @@ from pathlib import Path
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.await_complete import AwaitComplete
 from textual.containers import Vertical
+from textual.message import Message
 from textual.widgets import Label, Markdown, Static
 
 
@@ -65,10 +67,29 @@ def render_icarus_logo() -> Text:
 class StreamingMarkdown(Markdown):
     """Keep stale blocks out of Textual's mouse-selection path."""
 
+    class ContentAppended(Message):
+        """The streamed fragment has been rendered into Markdown blocks."""
+
     def update(self, markdown: str):
         for child in self.walk_children():
             child.ALLOW_SELECT = False
         return super().update(markdown)
+
+    def append(self, markdown: str) -> AwaitComplete:
+        previous_tail = self.children[-1] if self.children else None
+        if previous_tail is not None:
+            previous_tail.ALLOW_SELECT = False
+        append = super().append(markdown)
+
+        async def await_append() -> None:
+            try:
+                await append
+            finally:
+                if previous_tail is not None and previous_tail.parent is not None:
+                    previous_tail.ALLOW_SELECT = True
+            self.post_message(self.ContentAppended())
+
+        return AwaitComplete(await_append())
 
 
 class WelcomeMessage(Vertical):
@@ -109,6 +130,7 @@ class AssistantMessage(Vertical):
         super().__init__(classes="message assistant-message")
         self._markdown_parts: list[str] = []
         self._segment_finished = False
+        self._markdown_stream = None
 
     @property
     def markdown_text(self) -> str:
@@ -124,12 +146,22 @@ class AssistantMessage(Vertical):
         if not text:
             return
         self._markdown_parts.append(text)
-        await self.query_one(StreamingMarkdown).update(self.markdown_text)
+        if self._markdown_stream is None:
+            markdown = self.query_one(StreamingMarkdown)
+            self._markdown_stream = Markdown.get_stream(markdown)
+        await self._markdown_stream.write(text)
 
     async def finish(self) -> None:
         if self._segment_finished:
             return
         self._segment_finished = True
+        stream = self._markdown_stream
+        self._markdown_stream = None
+        if stream is not None:
+            await stream.stop()
+
+    async def on_unmount(self) -> None:
+        await self.finish()
 
 
 class ToolMessage(Vertical):
