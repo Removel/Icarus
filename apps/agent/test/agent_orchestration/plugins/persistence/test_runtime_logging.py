@@ -52,10 +52,8 @@ def test_persistence_runtime_session_scope_写元数据trace和日志(tmp_path):
     assert "workspace log" in runtime.resolver.workspace_log(identity).read_text(
         encoding="utf-8"
     )
-    session = json.loads(
-        runtime.resolver.session_metadata(identity).read_text(encoding="utf-8")
-    )
-    assert session["status"] == "closed"
+    assert not (runtime.resolver.workspace_dir(identity) / "workspace.json").exists()
+    assert not (runtime.resolver.session_dir(identity) / "session.json").exists()
 
 
 def test_persistence_runtime_重启不重复注册hook(tmp_path):

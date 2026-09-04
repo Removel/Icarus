@@ -3,13 +3,14 @@
 from apps.agent.src.application.agent_runtime import AgentRuntime
 from apps.agent.src.application.agent_runtime import (
     AgentRuntimeStoppingError,
-    SessionAlreadyExistsError,
-    SessionNotFoundError,
     SubmissionConflictError,
 )
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
-from apps.agent.src.agent_orchestration.plugins.persistence import (
+from apps.agent.src.application.session_store import (
     ConversationHistoryCorruptError,
+    SessionAlreadyExistsError,
+    SessionNotFoundError,
+    SessionStore,
 )
 from apps.agent.src.application.session_runtime import SessionRuntime
 from apps.agent.src.application.resource_ref import (
@@ -42,6 +43,7 @@ __all__ = [
     "SessionAlreadyExistsError",
     "SessionNotFoundError",
     "SessionStatus",
+    "SessionStore",
     "SessionSummary",
     "SubmissionConflictError",
     "ResourceRef",

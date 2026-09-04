@@ -4,3 +4,5 @@ packaging
 pydantic
 python-dotenv
 PyYAML
+SQLAlchemy[asyncio]>=2,<3
+aiosqlite>=0.20,<1

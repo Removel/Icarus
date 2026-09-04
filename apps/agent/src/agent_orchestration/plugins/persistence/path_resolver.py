@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import re
-import shutil
 
 from apps.agent.src.agent_orchestration.plugins.persistence.session_identity import (
     SessionIdentity,
@@ -35,9 +34,6 @@ class DataPathResolver:
         self._validate_id(identity.workspace_key, "workspace_key")
         return self.workspaces_dir / identity.workspace_key
 
-    def workspace_metadata(self, identity: SessionIdentity) -> Path:
-        return self.workspace_dir(identity) / "workspace.json"
-
     def workspace_log(self, identity: SessionIdentity) -> Path:
         return self.workspace_dir(identity) / "runtime.log"
 
@@ -48,14 +44,8 @@ class DataPathResolver:
         self._validate_id(identity.session_id, "session_id")
         return self.sessions_dir(identity) / identity.session_id
 
-    def session_metadata(self, identity: SessionIdentity) -> Path:
-        return self.session_dir(identity) / "session.json"
-
     def trace_file(self, identity: SessionIdentity) -> Path:
         return self.session_dir(identity) / "trace.jsonl"
-
-    def conversation_file(self, identity: SessionIdentity) -> Path:
-        return self.session_dir(identity) / "conversation.jsonl"
 
     def session_log(self, identity: SessionIdentity) -> Path:
         return self.session_dir(identity) / "runtime.log"
@@ -74,32 +64,6 @@ class DataPathResolver:
         self._mkdir(session_directory)
         self._mkdir(self.assets_dir(identity))
         return session_directory
-
-    def session_exists(self, identity: SessionIdentity) -> bool:
-        return self.session_dir(identity).is_dir()
-
-    def list_session_ids(self, identity: SessionIdentity) -> tuple[str, ...]:
-        directory = self.sessions_dir(identity)
-        if not directory.is_dir():
-            return ()
-        return tuple(
-            child.name
-            for child in sorted(directory.iterdir(), key=lambda item: item.name)
-            if child.is_dir() and _SAFE_ID.fullmatch(child.name)
-        )
-
-    def discard_session(self, identity: SessionIdentity) -> bool:
-        directory = self.session_dir(identity)
-        if directory.parent != self.sessions_dir(identity):
-            raise ValueError("Session directory escaped its Workspace")
-        if directory.is_symlink():
-            raise ValueError("Session directory cannot be a symlink")
-        if not directory.exists():
-            return False
-        if not directory.is_dir():
-            raise ValueError("Session path is not a directory")
-        shutil.rmtree(directory)
-        return True
 
     @staticmethod
     def _validate_id(value: str, name: str) -> None:
