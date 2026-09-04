@@ -149,14 +149,16 @@ class GatewayMethods:
         session_id = await self.runtime.create_session(
             value.workspace_path, value.session_id
         )
-        return _wire(self.runtime.get_session_status(value.workspace_path, session_id))
+        return _wire(
+            await self.runtime.get_session_status(value.workspace_path, session_id)
+        )
 
     async def _session_list(self, params):
         value = self._validate(WorkspaceParams, params)
         result = SessionListModel(
             sessions=tuple(
                 SessionSummaryModel.from_domain(item)
-                for item in self.runtime.list_session_summaries(
+                for item in await self.runtime.list_session_summaries(
                     value.workspace_path
                 )
             )
@@ -175,7 +177,9 @@ class GatewayMethods:
     async def _session_get(self, params):
         value = self._validate(SessionParams, params)
         return _wire(
-            self.runtime.get_session_status(value.workspace_path, value.session_id)
+            await self.runtime.get_session_status(
+                value.workspace_path, value.session_id
+            )
         )
 
     async def _session_submit(self, params):

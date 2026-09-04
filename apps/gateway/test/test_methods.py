@@ -17,14 +17,14 @@ class RuntimeStub:
         self.created = (workspace_path, session_id)
         return session_id or "generated"
 
-    def get_session_status(self, workspace_path, session_id):
+    async def get_session_status(self, workspace_path, session_id):
         return {
             "workspace_key": "workspace",
             "session_id": session_id,
             "lifecycle": "ready",
         }
 
-    def list_session_summaries(self, workspace_path):
+    async def list_session_summaries(self, workspace_path):
         del workspace_path
         return (SessionSummary("session", "first message"),)
 
