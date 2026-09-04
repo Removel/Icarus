@@ -14,12 +14,13 @@
 - Token、耗时和错误分析；
 - Agent 技术回放。
 
-本层不作为业务对话的权威数据源，也不参与正常对话恢复。用户消息、风格化后的助手消息和业务会话历史由未来 Backend 数据库保存与恢复。
+本层不作为业务对话的权威数据源，也不参与正常对话恢复。Session 元数据和公共 Conversation 由
+Agent Application 的 `SessionStore` 在本地保存；Backend 只能通过 Gateway 观察或请求 Agent 操作。
 
 ## 核心边界
 
 ```text
-Backend Database
+Agent SessionStore
 └── 业务对话
     ├── 用户输入
     ├── 风格化助手回复
@@ -37,7 +38,7 @@ Agent Local Files
 正常会话恢复流程：
 
 ```text
-Backend Database
+Agent SessionStore
 → History
 → UserInput
 → BlackboardPlugin
@@ -76,17 +77,17 @@ workspace_key = sha256(
 ).hexdigest()[:16]
 ```
 
-绝对路径不直接作为目录名。真实路径保存在 `workspace.json`。
+绝对路径不直接作为目录名。Workspace 身份和真实路径保存在 SessionStore。
 
 ### Session
 
 Session 是一组技术执行轨迹的归档身份。
 
-- 后端可提供 `session_id`；
+- AgentRuntime 或调用方可提供 `session_id`；
 - 未提供时 Agent Runtime 生成 UUID；
 - 工作目录已有历史 Session 时，默认仍创建新 Session；
 - 只有未来 InputPlugin 显式指定已有 Session 时才选择旧 Session；
-- Agent 本地文件不用于恢复 History。
+- Agent 文件层不用于恢复 History；公共 History 从 SessionStore 恢复。
 
 当前 UserInputPlugin 绑定一个长期 PersistenceSession；每次输入只创建新的 Task Scope 和 task_id。
 
@@ -110,39 +111,15 @@ session_id
 $ICARUS_DATA_DIR/
 └── workspaces/
     └── <workspace_key>/
-        ├── workspace.json
         ├── runtime.log
         └── sessions/
             └── <session_id>/
-                ├── session.json
                 ├── trace.jsonl
                 ├── runtime.log
+                ├── runtime-snapshot.json
+                ├── plugin-state/
                 └── assets/
 ```
-
-### workspace.json
-
-```json
-{
-  "workspace_key": "workspace-hash",
-  "workspace_path": "/absolute/workspace/path",
-  "created_at": "UTC timestamp",
-  "last_seen_at": "UTC timestamp"
-}
-```
-
-### session.json
-
-```json
-{
-  "session_id": "session-uuid",
-  "created_at": "UTC timestamp",
-  "updated_at": "UTC timestamp",
-  "status": "active"
-}
-```
-
-`session.json` 只保存 Agent 技术 Session 元数据，不保存业务消息历史。
 
 ### assets/
 
@@ -452,7 +429,8 @@ Agent 负责技术日志：
 - Runtime 监测；
 - Tool、LLM 和 Plugin 明细。
 
-后端不直接读取 Agent 本地文件。正常对话恢复只从后端数据库获得 History，再传给 Agent。
+Backend 不直接读取 Agent 本地文件或数据库。正常对话恢复由 Gateway 调用 AgentRuntime，再由
+SessionStore 读取公共 History。
 
 ## 本期实现范围
 
@@ -461,7 +439,7 @@ Agent 负责技术日志：
 - `ICARUS_DATA_DIR` 配置；
 - SessionIdentity；
 - Workspace/Session PathResolver；
-- workspace/session 元数据；
+- Plugin State 和 Runtime Snapshot 的原子 JSON 保存；
 - 可合并 HookContext；
 - Redactor；
 - FileTraceWriter Thread；
@@ -474,8 +452,7 @@ Agent 负责技术日志：
 
 ### 不实现
 
-- SQLite；
-- 业务消息库；
+- SessionStore 业务数据实现（由 Agent Application 负责）；
 - `messages.jsonl`；
 - 本地会话恢复；
 - TUI 特殊存储；

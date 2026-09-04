@@ -1,5 +1,9 @@
 # File Persistence and Observability Development Plan｜文件持久化与监测层开发计划
 
+> 历史计划：本文记录文件观测层的初始实现。Workspace/Session 业务元数据和公共 Conversation
+> 已迁移到 Agent Application 的 SessionStore；文件层当前只负责 Plugin State、Runtime Snapshot、
+> Asset、Trace 和 Log。
+
 ## 目标
 
 实现 Agent Runtime 的本地技术轨迹和运行日志持久化：

@@ -145,7 +145,7 @@ session_id
 first_user_input
 ```
 
-`first_user_input` 来源于公共会话 journal 中第一条 `user.message`，优先使用用户当时看到并提交的
+`first_user_input` 来源于 SessionStore 中第一条 `user.message`，优先使用用户当时看到并提交的
 `payload.text`，而不是内部 Prompt、System Prompt 或 Blackboard Message。纯图片输入使用固定摘要。
 Agent 层在内部使用最后一条公共记录时间完成排序，该时间不进入 Session 摘要协议，也不进入 TUI。
 
@@ -166,7 +166,7 @@ TUI 对启动、`/resume` 和 `/clear` 使用同一套 Session 激活语义：
 → 启动实时事件消费
 ```
 
-恢复历史只读取公共 conversation journal，不从 Trace 推断产品历史。浏览或恢复已卸载 Session 不主动
+恢复历史只读取 SessionStore 的公共 Conversation，不从 Trace 推断产品历史。浏览或恢复已卸载 Session 不主动
 加载 SessionRuntime；用户提交下一条消息时，由 AgentRuntime 按现有机制自动恢复 Plugin、Blackboard
 和执行环境。
 
@@ -175,7 +175,7 @@ Session、Conversation、订阅和游标保持不变。
 
 ## 空 Session 生命周期
 
-Session 是否为空由 AgentRuntime 根据公共会话历史判断，TUI 不读取或删除本地目录。
+Session 是否为空由 AgentRuntime 和 SessionStore 根据公共会话历史判断，TUI 不读取本地数据库或目录。
 
 空 Session 在下列时机请求清理：
 
@@ -183,7 +183,7 @@ Session 是否为空由 AgentRuntime 根据公共会话历史判断，TUI 不读
 - TUI 在空 Session 中正常退出时。
 
 AgentRuntime 只在确认 Session 没有用户输入、没有活动 Task、没有排队工作且没有 Plugin 后台工作时
-执行清理。非空、忙碌或状态无法确认时拒绝清理。异常退出遗留的空目录不作为用户会话展示；后续可由
+执行软删除。非空、忙碌或状态无法确认时拒绝清理。异常退出遗留的空 Session 不作为用户会话展示；后续可由
 独立维护机制回收，本期不把扫描删除副作用放进 `session.list`。
 
 ## 跨应用职责
@@ -191,7 +191,7 @@ AgentRuntime 只在确认 Session 没有用户输入、没有活动 Task、没�
 | 应用 | 本期职责 | 明确不负责 |
 |---|---|---|
 | Agent | Session 摘要、非空判定、排序、权威 Busy 检查、安全丢弃空 Session | TUI 布局、命令解析、网络协议 |
-| Gateway | 暴露摘要列表和空 Session 清理 RPC，转换稳定错误 | 读取持久化目录、解释 Blackboard、实现切换状态机 |
+| Gateway | 暴露摘要列表和空 Session 清理 RPC，转换稳定错误 | 读取本地数据库或持久化目录、解释 Blackboard、实现切换状态机 |
 | TUI | `/resume`、`/clear`、空闲门禁、选择器、候选 Client、界面重建 | 判断磁盘 Session 是否为空、直接管理 SessionRuntime |
 
 Gateway 不新增 `session.switch`。切换是客户端从一个 Session 投影切换到另一个 Session 投影，不是
@@ -214,7 +214,7 @@ Gateway 不新增 `session.switch`。切换是客户端从一个 Session 投影�
 - 保留现有 `session.get_history`、`session.subscribe`、`session.submit` 和 RuntimeUpdate 类型。
 - `session.list` 从尚未被 TUI 使用的运行状态列表收敛为产品 Session 摘要列表；单 Session 运行状态
   继续由 `session.get` 提供。
-- 已有 Session 不迁移，不修改其 conversation journal 和 Blackboard State 格式。
+- 旧 JSONL Session 不迁移、不兼容读取，也不修改其 Blackboard State 格式。
 - TUI 仍然只依赖共享 Gateway 协议，不导入 Agent 实现。
 
 ## 验收标准

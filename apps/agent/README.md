@@ -11,7 +11,8 @@
 - Blackboard 上下文、历史提交和自动 Compact；
 - 设备级 AgentRuntime 与多个相互隔离的 SessionRuntime；
 - Session 创建、恢复、提交、取消、状态查询和卸载；
-- 会话记录、Plugin State、Trace、日志和图片 Asset 持久化；
+- 使用 `SessionStore` 持久化 Session 元数据和公共 Conversation；
+- 使用文件保存 Plugin State、Trace、日志和图片 Asset；
 - Skill 发现、搜索、生产和演化。
 
 ## 安装依赖
@@ -41,6 +42,10 @@ ICARUS_DATA_DIR=/absolute/path/to/icarus-data
 ```
 
 只需配置当前协议使用的 API Key。模型、Plugin 目录与运行参数在 `apps/agent/settings.json` 中设置。
+
+Session 与公共 Conversation 保存在 `ICARUS_DATA_DIR/icarus.db`。Plugin State、Runtime Snapshot、
+Trace、日志和 Asset 继续按 Workspace/Session 保存为文件。旧 `conversation.jsonl` 不迁移、不兼容
+读取，也不与数据库双写；首次启用该版本需要使用不包含旧 Session 数据的新目录。
 
 ## 测试
 

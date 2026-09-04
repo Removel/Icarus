@@ -1,5 +1,9 @@
 # Session Conversation History Development Plan｜Session 会话历史实施计划
 
+> 历史计划：本文记录旧 `conversation.jsonl` 实现。当前实现已由
+> `apps/agent/docs/arch/session-store-design.md` 和
+> `apps/agent/docs/plan/session-store-development-plan.md` 替代。
+
 ## 目标
 
 基于设备级 Runtime 设计，为新产生的 Session 记录稳定的公共会话 journal，使客户端能够恢复用户

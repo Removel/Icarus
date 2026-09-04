@@ -30,8 +30,8 @@ Agent 基础能力已经完成，当前进入设备级 Runtime、Session 和 UI 
      `SessionRuntime`；每个 Session 继续使用一套独立 PluginRuntimeHost、Plugin 实例和 EventBus；
    - [x] 同一 SessionIdentity 只允许一个活动 SessionRuntime，并发 resume 共用同一次恢复；
      Plugin/配置在 SessionRuntime 生命周期内冻结，下一次 SessionRuntime 启动时读取变化；
-   - [ ] 完善对话索引、业务历史持久化和恢复；
-   - [ ] 提供对话列表与切换能力，并由 TUI、GUI 和 WebUI 封装 Agent 基础接口。
+   - [x] 通过 `SessionStore` 完善对话索引、业务历史持久化和恢复；
+   - [x] 提供对话列表与切换能力，并由 TUI 率先封装 Agent 基础接口；GUI 和 WebUI 后续接入。
 
 已完成的基础能力顺序为：ReAct 去重 → 256 Step Harness → 统一错误 Event → Blackboard Compact →
 本地图片引用。当前先推进设备级 AgentRuntime、SessionRuntime 与 Gateway 边界，再完成 Session
@@ -206,9 +206,9 @@ Agent 基础能力已经完成，当前进入设备级 Runtime、Session 和 UI 
   SessionRuntime 上限，也不按数量或内存压力淘汰。
 - [x] 在 Agent 应用层完成内部 Plugin Event 到公共 RuntimeUpdate 的投影与多 Session 聚合；
   Gateway 和 UI 不直接解释 `source_plugin_id + Event`。
-- [ ] 持久化对话元数据和原始业务消息，支持枚举、选择和恢复；Blackboard 继续拥有当前
+- [x] 通过 `SessionStore` 持久化对话元数据和原始业务消息，支持枚举、选择和恢复；Blackboard 继续拥有当前
   Session 的有效模型历史，不把历史状态放入无状态 ReActAgent。
-- [ ] 提供对话切换的应用层契约，处理运行中任务、状态保存、订阅/UI 投影切换和目标对话恢复；
+- [x] 提供对话切换的应用层契约，处理运行中任务、状态保存、订阅/UI 投影切换和目标对话恢复；
   不把多对话管理职责塞进 Agent Kernel。
 - [ ] 在 TUI、GUI 和 WebUI 中展示 Token、Compact、图片与错误信息，并补齐产品端到端测试。
   TUI 已接入 macOS `Ctrl+V` 图片输入并显示 `[#imageN]` 引用；图片历史展示、其他平台输入以及

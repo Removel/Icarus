@@ -1,5 +1,9 @@
 # Agent Session Management Development Plan｜Agent Session 管理实施计划
 
+> 历史计划：Session 摘要和空 Session 清理的产品语义继续有效；底层 ConversationStore、目录枚举和
+> 物理删除已由 SessionStore、数据库索引和软删除替代。当前实现见
+> `apps/agent/docs/arch/session-store-design.md`。
+
 ## 目标
 
 为跨应用 Session 管理功能提供非空 Session 摘要和安全空 Session 丢弃接口，同时保持列表读取轻量、
