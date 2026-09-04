@@ -58,11 +58,15 @@ class PersistentComposer(TextArea):
         if event.text_area is self:
             self._sync_height()
 
+    def _on_resize(self) -> None:
+        super()._on_resize()
+        self.call_after_refresh(self._sync_height)
+
     def _sync_height(self) -> None:
-        """Grow with logical lines and scroll after the configured cap."""
+        """Grow with visual wrapped lines and scroll after the cap."""
 
         self.styles.height = min(
-            max(1, self.document.line_count),
+            max(1, self.wrapped_document.height),
             self.MAX_VISIBLE_LINES,
         )
 

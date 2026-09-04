@@ -132,6 +132,59 @@ def test输入框从单行增长并在八行封顶():
     assert capped_height == PersistentComposer.MAX_VISIBLE_LINES
 
 
+def test长单行按视觉软换行增长且提交文本不插入换行():
+    async def run():
+        app = ComposerTestApp()
+        async with app.run_test(size=(30, 20)) as pilot:
+            composer = app.query_one(PersistentComposer)
+            composer.load_text("a" * 70)
+            await pilot.pause()
+            visual_height = composer.region.height
+            wrapped_height = composer.wrapped_document.height
+            text_before_submit = composer.text
+            await pilot.press("enter")
+            await pilot.pause()
+            return (
+                visual_height,
+                wrapped_height,
+                text_before_submit,
+                app.submissions,
+            )
+
+    visual_height, wrapped_height, text, submissions = asyncio.run(run())
+
+    assert wrapped_height > 1
+    assert visual_height == min(
+        wrapped_height, PersistentComposer.MAX_VISIBLE_LINES
+    )
+    assert "\n" not in text
+    assert submissions == [text]
+
+
+def test窗口resize后按新的视觉换行数调整高度():
+    async def run():
+        app = ComposerTestApp()
+        async with app.run_test(size=(80, 20)) as pilot:
+            composer = app.query_one(PersistentComposer)
+            composer.load_text("软换行内容" * 12)
+            await pilot.pause()
+            wide = (composer.region.height, composer.wrapped_document.height)
+            await pilot.resize_terminal(30, 20)
+            await pilot.pause()
+            narrow = (composer.region.height, composer.wrapped_document.height)
+            await pilot.resize_terminal(80, 20)
+            await pilot.pause()
+            restored = (composer.region.height, composer.wrapped_document.height)
+            return wide, narrow, restored, composer.text
+
+    wide, narrow, restored, text = asyncio.run(run())
+
+    assert narrow[1] > wide[1]
+    assert narrow[0] == min(narrow[1], PersistentComposer.MAX_VISIBLE_LINES)
+    assert restored == wide
+    assert "\n" not in text
+
+
 def test_attach_image在光标处插入marker并随提交发送(tmp_path):
     async def run():
         app = ComposerTestApp()
