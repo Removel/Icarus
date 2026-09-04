@@ -338,11 +338,11 @@ Update。
 
 ### 13.1 持久化会话记录与状态 Checkpoint
 
-为了让 TUI、Backend、GUI 和 WebUI 在打开已有 Session 时恢复完整展示，Agent 应用层为每个 Session
-持久化一份公共会话记录：
+为了让 TUI、Backend、GUI 和 WebUI 在打开已有 Session 时恢复完整展示，Agent 应用层通过
+`SessionStore` 把 Session 元数据和公共会话记录持久化到：
 
 ```text
-sessions/<session_id>/conversation.jsonl
+ICARUS_DATA_DIR/icarus.db
 ```
 
 它是客户端会话展示的持久化事实源，使用 RuntimeUpdate 的公共语义，不保存内部
@@ -353,11 +353,11 @@ sessions/<session_id>/conversation.jsonl
 | 数据 | 用途 | 是否作为 TUI 历史来源 |
 |---|---|---|
 | Blackboard State | 下一轮模型上下文 | 否 |
-| `conversation.jsonl` | 跨客户端会话展示 | 是 |
+| SessionStore Conversation | 跨客户端会话展示 | 是 |
 | `trace.jsonl` | Hook 观测与故障诊断 | 否 |
 
-每条持久化记录包含 `schema_version=1`、RuntimeUpdate 的 SessionIdentity、`task_id`、`type`、
-`payload`、`occurred_at`，并增加当前 Session 内单调递增的 `sequence`。公共 RuntimeUpdate 对会话记录
+每条持久化记录包含 RuntimeUpdate 的 SessionIdentity、`task_id`、`type`、`payload`、`occurred_at`，
+并增加当前 Session 内单调递增的 `sequence`。公共 RuntimeUpdate 对会话记录
 类型携带该 sequence，
 用于按序读取、去重以及历史与实时 Update 的无缝交接；它不承诺跨 Session 全局有序。Session 生命周期
 Update 不写入会话记录，也不占用会话 sequence。
@@ -383,9 +383,9 @@ Queue 的 `task.accepted` 等待同一 mutation lock，随后才会持久化和�
 AgentRuntime 在调用 SessionRuntime 前生成 `task_id` 并先持久化 `user.message`；SessionRuntime 和
 UserInputPlugin 接受该 task_id，避免应用层与 Plugin 各自生成任务身份。RuntimeUpdatePlugin 继续负责
 内部执行 Event 的公共投影；AgentRuntime 负责为可展示 Update 分配
-sequence，并通过当前 Session 的 PersistenceRuntime 追加会话记录。所有可展示记录都必须先成功
-追加并 flush，再进入设备级广播。同一 Session 的 append、sequence 分配和历史读取边界串行，不影响
-不同 Session 并发。写入失败必须成为明确的 Session 持久化错误，不能静默广播一条无法恢复的
+sequence，并通过 SessionStore ORM 事务追加会话记录。所有可展示记录都必须先成功提交事务，再进入
+设备级广播。同一 Session 的 append、sequence 分配和历史读取使用数据库事务与现有 mutation lock，
+不同 Session 可以并发。写入失败必须成为明确的 Session 持久化错误，不能静默广播一条无法恢复的
 Update。
 
 如果持久化记录中某个 Task 已有任意记录，但没有 `task.finished`，并且当前 AgentRuntime 中也不存在
@@ -393,9 +393,8 @@ Update。
 `task.finished(status="interrupted", recovered=true)` 记录。已产生的用户消息、助手文本、Tool 和错误
 继续保留；未完成 Tool 由客户端在该终态下标记为 interrupted，不伪造成功或失败结果。
 
-本功能不读取或迁移旧 Session 的 `trace.jsonl`。没有 `conversation.jsonl` 的旧 Session 返回空展示
-历史；它仍可按现有 Blackboard State 恢复模型上下文。旧 Session 升级后的新 Task 从新的 journal
-起点开始记录。
+本功能不读取或迁移旧 Session 的 `conversation.jsonl` 或 `trace.jsonl`。首次启用 SessionStore 需要使用
+不包含旧 Session 数据的新数据目录，避免新 Session 误用旧 Plugin State 或 Asset。
 
 会话展示持久化不能代替 Plugin State 持久化。AgentRuntime 处理 `task.finished` 时要求所属
 SessionRuntime 先执行 Blackboard checkpoint；SessionRuntime 等待 Blackboard Plugin inbox drain，再由

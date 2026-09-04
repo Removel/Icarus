@@ -1,5 +1,9 @@
 # Agent Runtime Service and Textual TUI Integration Design｜Agent 应用服务与 Textual TUI 集成设计
 
+> 历史设计：当前设备级 Runtime 与 Gateway 边界见
+> `apps/agent/docs/arch/device-agent-runtime-session-design.md`；Session/Conversation 数据存储见
+> `apps/agent/docs/arch/session-store-design.md`。本文不再作为当前数据流事实源。
+
 > 本文记录迁移前的单 Session、TUI 进程内直连 `AgentRuntimeService` 历史架构。设备级多 Session
 > 目标架构见 `apps/agent/docs/arch/device-agent-runtime-session-design.md`；Gateway 网络边界见
 > `apps/gateway/docs/arch/agent-gateway-positioning-design.md`。目标架构落地后，本文中的直连关系将
@@ -315,7 +319,7 @@ AgentCompletedEvent 更新 Blackboard，下一轮上下文快照自动携带已�
 ToolCall、ToolResult 和已实际应用的 Plugin Context 进入跨轮业务 History；Reasoning 和原始
 Plugin Event 不进入。取消 Task 只提交最近的协议完整消息前缀。
 
-正式业务历史继续由后端数据库保存。恢复会话时，上层从后端数据库读取业务消息，
+正式业务历史由本地 Agent SessionStore 保存。恢复会话时，上层通过 Gateway 从 AgentRuntime 读取，
 并在 Agent Runtime 初始化时一次性注入 Blackboard；本地 Trace 不用于恢复 History。
 
 ## 错误处理

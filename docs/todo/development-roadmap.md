@@ -168,8 +168,10 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
 - [ ] 将 Agent 基础层已有的 Usage、Compact、Error Event 和图片引用继续封装为产品可理解的状态
   与交互，不在 UI 中重复实现基础逻辑。TUI 已完成 macOS `Ctrl+V` 图片输入首期闭环；Usage、
   Compact、错误详情、图片历史展示以及 GUI/WebUI 接入仍待完成。
-- [ ] 完善对话元数据、消息历史和索引持久化，支持进程重启后枚举并恢复已有对话。
-- [ ] 增加对话切换的应用层接口和 TUI 交互，明确运行中任务收束、状态保存、Runtime/Blackboard
+- [x] 通过 Agent Application 的 `SessionStore` 持久化 Workspace、Session 元数据和公共
+  Conversation；支持进程重启后枚举、恢复和增量读取，Session/Conversation 以本地数据库为事实源，
+  Plugin State、Asset、Trace 和日志继续保留文件边界。
+- [x] 增加对话切换的应用层接口和 TUI 交互，明确运行中任务收束、状态保存、Runtime/Blackboard
   恢复以及输出订阅和 UI 投影切换。
 - [ ] 覆盖新建、恢复、切换、Compact 展示、错误展示、跨会话图片交互和异常退出的端到端验证；
   当前 TUI 图片草稿、排队、提交和清理已有自动化回归。

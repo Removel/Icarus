@@ -63,6 +63,11 @@ Makefile         根目录统一命令入口
 公共会话记录保存用户在界面中看到的消息、助手文本、Tool、错误和任务终态。使用相同 Session ID
 重启后，TUI 会一次性恢复退出时的 Conversation，再继续接收新的实时输出。
 
+Session 元数据和公共 Conversation 由 Agent Application 的 `SessionStore` 统一保存到
+`ICARUS_DATA_DIR/icarus.db`。SQLAlchemy 负责表映射、查询、连接与事务；Plugin State、图片 Asset、
+Trace 和日志继续保存在 Session 文件目录中。Gateway、TUI 和未来 Backend 都不直接访问数据库，
+只通过 AgentRuntime 的应用接口使用 Session 数据。
+
 ### 可扩展的 Plugin 与 Skill
 
 Plugin 通过 Manifest 声明 Capability、Tool、Event 和状态范围，并由运行时解析依赖关系和生命周期。
@@ -132,8 +137,9 @@ ANTHROPIC_API_KEY=your-api-key
 ICARUS_DATA_DIR=/Users/you/.icarus
 ```
 
-只需填写当前协议实际使用的 API Key。`ICARUS_DATA_DIR` 用于保存 Workspace、Session、会话记录、
-Plugin State、Trace 和图片 Asset。Gateway 与 TUI 都会读取 `apps/agent/.env`。
+只需填写当前协议实际使用的 API Key。`ICARUS_DATA_DIR` 用于保存 `icarus.db`、Plugin State、Trace
+和图片 Asset。Gateway 与 TUI 都会读取 `apps/agent/.env`。本版本不迁移旧 JSONL Session 数据；首次
+使用需要配置不包含旧 Session 目录的新数据目录。
 
 同时启动本机 Gateway 和 TUI：
 
@@ -171,9 +177,9 @@ make gateway
 make tui ARGS="--session-id my-session"
 ```
 
-使用同一 Workspace 和 Session ID 再次启动时，TUI 会在进入 Ready 前一次性恢复已持久化的
-Conversation，包括用户消息、助手文本、Tool、错误和中断终态，然后继续接收实时流。旧 Session
-不会从内部 Trace 迁移展示历史；它们从升级后产生的新任务开始记录。
+使用同一 Workspace 和 Session ID 再次启动时，TUI 会在进入 Ready 前从 SessionStore 一次性恢复
+已持久化的 Conversation，包括用户消息、助手文本、Tool、错误和中断终态，然后继续接收实时流。
+旧 JSONL Session 不读取、不迁移，也不从内部 Trace 推断展示历史。
 
 Runtime 完全空闲时可以输入 `/resume`，从当前 Workspace 的非空 Session 列表中选择并恢复；输入
 `/clear` 会保留当前非空 Session 并开始新对话。两者都是 TUI 本地命令，不发送给 Agent；当前有任务、
