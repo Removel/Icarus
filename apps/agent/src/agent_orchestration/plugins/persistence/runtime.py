@@ -13,8 +13,8 @@ from apps.agent.src.agent_orchestration.hooks.hook_registry import HookRegistry
 from apps.agent.src.agent_orchestration.plugins.persistence.log_handler import (
     WorkspaceSessionFileHandler,
 )
-from apps.agent.src.agent_orchestration.plugins.persistence.metadata_store import (
-    MetadataStore,
+from apps.agent.src.agent_orchestration.plugins.persistence.json_state_store import (
+    JsonStateStore,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence.path_resolver import (
     DataPathResolver,
@@ -61,7 +61,7 @@ class PersistenceRuntime:
             workspace_path=workspace_path,
             session_id="workspace",
         )
-        self.metadata_store = MetadataStore(self.resolver)
+        self.state_store = JsonStateStore()
         self.redactor = Redactor()
         self.trace_writer = FileTraceWriter(
             self.resolver,
@@ -142,12 +142,8 @@ class PersistenceRuntime:
             workspace_path=self.workspace_identity.workspace_path,
             session_id=session_id,
         )
-        self.metadata_store.initialize(identity)
         session = PersistenceSession(self, identity)
-        try:
-            yield session
-        finally:
-            self.metadata_store.update_session_status(identity, "closed")
+        yield session
 
     @contextmanager
     def session_scope(
@@ -160,7 +156,6 @@ class PersistenceRuntime:
             workspace_path=self.workspace_identity.workspace_path,
             session_id=session_id,
         )
-        self.metadata_store.initialize(identity)
         with hook_context(
             {
                 "workspace_path": str(identity.workspace_path),
@@ -170,10 +165,7 @@ class PersistenceRuntime:
             },
             run_id=None,
         ):
-            try:
-                yield identity
-            finally:
-                self.metadata_store.update_session_status(identity, "closed")
+            yield identity
 
 
 class PersistenceSession:
@@ -199,7 +191,6 @@ class PersistenceSession:
 
     @contextmanager
     def task_scope(self, task_id: str) -> Iterator[SessionIdentity]:
-        self.runtime.metadata_store.initialize(self.identity)
         with hook_context(
             {
                 "workspace_path": str(self.identity.workspace_path),

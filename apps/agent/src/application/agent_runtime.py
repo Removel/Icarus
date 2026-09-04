@@ -14,7 +14,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.plugins.persistence import (
-    ConversationStore,
     DataPathResolver,
     SessionIdentity,
 )
@@ -34,16 +33,13 @@ from apps.agent.src.application.runtime_update_stream import (
     RuntimeUpdateSubscription,
 )
 from apps.agent.src.application.session_runtime import SessionRuntime
+from apps.agent.src.application.session_store import (
+    SessionAlreadyExistsError,
+    SessionNotFoundError,
+    SessionStore,
+)
 from apps.agent.src.model_config import ConfigModel, get_config
 from apps.agent.src.runtime_update import RuntimeUpdate
-
-
-class SessionNotFoundError(KeyError):
-    pass
-
-
-class SessionAlreadyExistsError(ValueError):
-    pass
 
 
 class SubmissionConflictError(ValueError):
@@ -72,6 +68,7 @@ class _SessionEntry:
     ready_at: datetime | None = None
     last_task_activity_at: datetime | None = None
     error: str | None = None
+    persistence_failed: bool = False
     submissions: OrderedDict[str, _SubmissionRecord] = field(
         default_factory=OrderedDict
     )
@@ -91,6 +88,7 @@ class AgentRuntime:
         data_dir: str | Path | None = None,
         clock: Callable[[], datetime] | None = None,
         session_factory=SessionRuntime,
+        session_store: SessionStore | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         if idle_timeout.total_seconds() <= 0:
@@ -106,6 +104,7 @@ class AgentRuntime:
         self.task_history_limit = task_history_limit
         self._clock = clock or (lambda: datetime.now(UTC))
         self._session_factory = session_factory
+        self._session_store = session_store
         self._data_dir = (
             Path(data_dir).expanduser().resolve()
             if data_dir is not None
@@ -114,7 +113,7 @@ class AgentRuntime:
         self.logger = logger or logging.getLogger("icarus.agent.runtime")
         self._entries: dict[tuple[str, str], _SessionEntry] = {}
         self._entries_lock = asyncio.Lock()
-        self._conversation_store: ConversationStore | None = None
+        self._path_resolver: DataPathResolver | None = None
         self._updates = RuntimeUpdateStream(update_queue_capacity)
         self._update_queue: asyncio.Queue[RuntimeUpdate] = asyncio.Queue()
         self._update_task: asyncio.Task[None] | None = None
@@ -137,9 +136,10 @@ class AgentRuntime:
             if config.icarus_data_dir is None:
                 raise RuntimeError("ICARUS_DATA_DIR is required")
             self._data_dir = config.icarus_data_dir.expanduser().resolve()
-        self._conversation_store = ConversationStore(
-            DataPathResolver(self._data_dir)
-        )
+        self._path_resolver = DataPathResolver(self._data_dir)
+        if self._session_store is None:
+            self._session_store = SessionStore(self._data_dir)
+        await self._session_store.start()
         self._started = True
         self._stopping = False
         self._update_task = asyncio.create_task(
@@ -159,15 +159,22 @@ class AgentRuntime:
     ) -> str:
         self._require_accepting()
         identity = SessionIdentity.create(workspace_path, session_id or uuid4().hex)
+        if self._entries.get(_key(identity)) is None and await self._store().session_exists(
+            identity, include_deleted=True
+        ):
+            raise SessionAlreadyExistsError(identity.session_id)
         entry = await self._entry(identity)
         async with entry.mutation_lock:
             self._require_accepting()
             self._require_not_discarding(entry)
-            exists = self._session_exists(identity)
+            exists = await self._store().session_exists(
+                identity, include_deleted=True
+            )
             if exists or entry.lifecycle in {
                 "loading", "ready", "running", "unloading"
             }:
                 raise SessionAlreadyExistsError(identity.session_id)
+            await self._store().create_session(identity)
             task = self._begin_load_locked(entry)
         await asyncio.shield(task)
         return identity.session_id
@@ -195,6 +202,7 @@ class AgentRuntime:
             async with entry.mutation_lock:
                 self._require_accepting()
                 self._require_not_discarding(entry)
+                self._require_persistence_available(entry)
                 record = entry.submissions.get(submission_id)
                 if record is not None:
                     if record.fingerprint != fingerprint:
@@ -204,7 +212,7 @@ class AgentRuntime:
                     wait_for = entry.unload_task
                 elif entry.runtime is None:
                     if entry.load_task is None:
-                        if not self._session_exists(identity):
+                        if not await self._store().session_exists(identity):
                             raise SessionNotFoundError(identity.session_id)
                         entry.load_task = self._begin_load_locked(entry)
                     wait_for = entry.load_task
@@ -220,9 +228,6 @@ class AgentRuntime:
                     )
                     now = self._clock()
                     entry.last_task_activity_at = now
-                    self._remember_submission(
-                        entry, submission_id, fingerprint, accepted
-                    )
                     self._remember_task(
                         entry,
                         TaskStatus(
@@ -234,29 +239,48 @@ class AgentRuntime:
                             updated_at=now,
                         ),
                     )
-                    user_update = self._history_store().append(
-                        identity,
-                        RuntimeUpdate(
-                            workspace_key=identity.workspace_key,
-                            session_id=identity.session_id,
-                            task_id=accepted.task_id,
-                            type="user.message",
-                            payload={
-                                "text": (
-                                    prompt
-                                    if display_text is None
-                                    else display_text
-                                ),
-                                "resources": [
-                                    {
-                                        "resource_id": image.source,
-                                        "media_type": image.media_type,
-                                    }
-                                    for image in (images or [])
-                                ],
-                            },
-                            occurred_at=now,
-                        ),
+                    try:
+                        user_update = await self._store().append_update(
+                            identity,
+                            RuntimeUpdate(
+                                workspace_key=identity.workspace_key,
+                                session_id=identity.session_id,
+                                task_id=accepted.task_id,
+                                type="user.message",
+                                payload={
+                                    "text": (
+                                        prompt
+                                        if display_text is None
+                                        else display_text
+                                    ),
+                                    "resources": [
+                                        {
+                                            "resource_id": image.source,
+                                            "media_type": image.media_type,
+                                        }
+                                        for image in (images or [])
+                                    ],
+                                },
+                                occurred_at=now,
+                            ),
+                        )
+                    except BaseException as error:
+                        await entry.runtime.cancel_task(
+                            accepted.task_id, "persistence_failed"
+                        )
+                        entry.persistence_failed = True
+                        entry.lifecycle = "failed"
+                        entry.error = _safe_error(error)
+                        await self._updates.publish(
+                            self._lifecycle_update(entry, "failed")
+                        )
+                        if entry.unload_task is None:
+                            self._begin_unload_locked(
+                                entry, "persistence_failed"
+                            )
+                        raise
+                    self._remember_submission(
+                        entry, submission_id, fingerprint, accepted
                     )
                     await self._updates.publish(user_update)
                     return accepted
@@ -321,55 +345,42 @@ class AgentRuntime:
                     identity.workspace_key, session_id, "unloaded"
                 )
 
-    def get_session_status(
+    async def get_session_status(
         self, workspace_path: str | Path, session_id: str
     ) -> SessionStatus:
         identity = SessionIdentity.create(workspace_path, session_id)
         entry = self._entries.get(_key(identity))
         if entry is None:
-            if not self._session_exists(identity):
+            if not await self._store().session_exists(identity):
                 raise SessionNotFoundError(session_id)
             return SessionStatus(identity.workspace_key, session_id, "unloaded")
         self._require_not_discarding(entry)
         return self._status(entry)
 
-    def list_session_statuses(
+    async def list_session_statuses(
         self, workspace_path: str | Path
     ) -> tuple[SessionStatus, ...]:
         workspace_identity = SessionIdentity.create(workspace_path, "workspace")
-        resolver = self._resolver(workspace_path)
-        session_ids = set(resolver.list_session_ids(workspace_identity))
+        session_ids = set(
+            await self._store().list_session_ids(workspace_identity.workspace_key)
+        )
         session_ids.update(
             entry.identity.session_id
             for entry in self._entries.values()
             if entry.identity.workspace_key == workspace_identity.workspace_key
         )
         return tuple(
-            self.get_session_status(workspace_path, session_id)
+            await self.get_session_status(workspace_path, session_id)
             for session_id in sorted(session_ids)
         )
 
-    def list_session_summaries(
+    async def list_session_summaries(
         self, workspace_path: str | Path
     ) -> tuple[SessionSummary, ...]:
         workspace_identity = SessionIdentity.create(workspace_path, "workspace")
-        resolver = self._resolver(workspace_path)
-        summaries = []
-        for session_id in resolver.list_session_ids(workspace_identity):
-            identity = SessionIdentity.create(workspace_path, session_id)
-            summary = self._history_store().read_summary(identity)
-            if summary is None:
-                continue
-            summaries.append(
-                (
-                    summary.last_public_activity_at,
-                    session_id,
-                    SessionSummary(session_id, summary.first_user_input),
-                )
-            )
-        summaries.sort(key=lambda item: item[1])
-        summaries.sort(key=lambda item: item[0], reverse=True)
-        return tuple(item[2] for item in summaries)
+        return await self._store().list_session_summaries(
+            workspace_identity.workspace_key
+        )
 
     async def discard_empty_session(
         self, workspace_path: str | Path, session_id: str
@@ -378,7 +389,7 @@ class AgentRuntime:
         identity = SessionIdentity.create(workspace_path, session_id)
         key = _key(identity)
         entry = self._entries.get(key)
-        if entry is None and not self._session_exists(identity):
+        if entry is None and not await self._store().session_exists(identity):
             return DiscardSessionResult(
                 identity.workspace_key, session_id, "not_found"
             )
@@ -399,26 +410,21 @@ class AgentRuntime:
                     return DiscardSessionResult(
                         identity.workspace_key, session_id, "busy"
                     )
-                if self._history_store().read_summary(identity) is not None:
-                    return DiscardSessionResult(
-                        identity.workspace_key, session_id, "not_empty"
-                    )
                 if entry.runtime is not None:
                     wait_for = self._begin_unload_locked(
                         entry, "discard_empty"
                     )
                 else:
-                    if not self._session_exists(identity):
-                        return DiscardSessionResult(
-                            identity.workspace_key, session_id, "not_found"
-                        )
                     entry.discarding = True
                     try:
-                        await asyncio.to_thread(
-                            self._resolver(workspace_path).discard_session,
-                            identity,
+                        status = await self._store().soft_delete_empty_session(
+                            identity, reason="empty_cleanup"
                         )
-                        self._history_store().clear_session_cache(identity)
+                        if status != "discarded":
+                            entry.discarding = False
+                            return DiscardSessionResult(
+                                identity.workspace_key, session_id, status
+                            )
                         async with self._entries_lock:
                             if self._entries.get(key) is entry:
                                 self._entries.pop(key)
@@ -449,13 +455,13 @@ class AgentRuntime:
     ) -> tuple[tuple[RuntimeUpdate, ...], int]:
         self._require_accepting()
         identity = SessionIdentity.create(workspace_path, session_id)
-        if not self._session_exists(identity):
+        if not await self._store().session_exists(identity):
             raise SessionNotFoundError(session_id)
         entry = await self._entry(identity)
         async with entry.mutation_lock:
             self._require_not_discarding(entry)
-            store = self._history_store()
-            all_records, cursor = store.read(identity)
+            store = self._store()
+            all_records, cursor = await store.read_updates(identity)
             terminal_task_ids = {
                 item.task_id
                 for item in all_records
@@ -485,7 +491,7 @@ class AgentRuntime:
                 seen_task_ids - terminal_task_ids - active_task_ids
             )
             for task_id in sorted(interrupted_task_ids):
-                interrupted = store.append(
+                interrupted = await store.append_update(
                     identity,
                     RuntimeUpdate(
                         workspace_key=identity.workspace_key,
@@ -558,6 +564,12 @@ class AgentRuntime:
             update_task.cancel()
             await asyncio.gather(update_task, return_exceptions=True)
         self._updates.close()
+        store = self._session_store
+        if store is not None:
+            try:
+                await store.close()
+            except BaseException as error:
+                errors.append(error)
         self._started = False
         self._closed = True
         if errors:
@@ -686,10 +698,12 @@ class AgentRuntime:
         finally:
             async with entry.mutation_lock:
                 entry.runtime = None
-                entry.lifecycle = "unloaded"
+                entry.lifecycle = (
+                    "failed" if entry.persistence_failed else "unloaded"
+                )
                 if entry.unload_task is asyncio.current_task():
                     entry.unload_task = None
-            await self._publish_lifecycle(entry, "unloaded")
+            await self._publish_lifecycle(entry, entry.lifecycle)
 
     async def _handle_update(self, update: RuntimeUpdate) -> None:
         await self._update_queue.put(update)
@@ -701,6 +715,18 @@ class AgentRuntime:
                 entry = self._entries.get(
                     (update.workspace_key, update.session_id)
                 )
+                if (
+                    entry is not None
+                    and entry.persistence_failed
+                    and update.type != "session.lifecycle"
+                ):
+                    self.logger.warning(
+                        "Ignoring RuntimeUpdate after persistence failure: "
+                        "session_id=%s type=%s",
+                        entry.identity.session_id,
+                        update.type,
+                    )
+                    continue
                 lifecycle_update: SessionLifecycle | None = None
                 recorded_update = update
                 checkpoint_error_update: RuntimeUpdate | None = None
@@ -783,11 +809,11 @@ class AgentRuntime:
                                         "Task accepted Update arrived before submit commit"
                                     )
                             if checkpoint_error_update is not None:
-                                recorded_error = self._history_store().append(
+                                recorded_error = await self._store().append_update(
                                     entry.identity, checkpoint_error_update
                                 )
                                 await self._updates.publish(recorded_error)
-                            recorded_update = self._history_store().append(
+                            recorded_update = await self._store().append_update(
                                 entry.identity, update
                             )
                 elif update.type != "session.lifecycle":
@@ -796,9 +822,40 @@ class AgentRuntime:
                     )
                 await self._updates.publish(recorded_update)
                 if entry is not None and lifecycle_update is not None:
-                    await self._publish_lifecycle(entry, lifecycle_update)
-            except Exception:
+                    await self._updates.publish(
+                        self._lifecycle_update(entry, lifecycle_update)
+                    )
+            except Exception as error:
                 self.logger.exception("RuntimeUpdate processing failed")
+                if entry is not None:
+                    async with entry.mutation_lock:
+                        entry.persistence_failed = True
+                        entry.lifecycle = "failed"
+                        entry.error = _safe_error(error)
+                        runtime = entry.runtime
+                        task_ids = tuple(
+                            status.task_id
+                            for status in entry.tasks.values()
+                            if status.lifecycle in {"accepted", "running"}
+                        )
+                    if runtime is not None:
+                        for task_id in task_ids:
+                            try:
+                                await runtime.cancel_task(
+                                    task_id, "persistence_failed"
+                                )
+                            except Exception:
+                                self.logger.exception(
+                                    "Task cancellation after persistence failure failed"
+                                )
+                    await self._updates.publish(
+                        self._lifecycle_update(entry, "failed")
+                    )
+                    async with entry.mutation_lock:
+                        if entry.runtime is not None and entry.unload_task is None:
+                            self._begin_unload_locked(
+                                entry, "persistence_failed"
+                            )
             finally:
                 self._update_queue.task_done()
 
@@ -849,15 +906,18 @@ class AgentRuntime:
     async def _publish_lifecycle(
         self, entry: _SessionEntry, lifecycle: SessionLifecycle
     ) -> None:
-        await self._handle_update(
-            RuntimeUpdate(
-                workspace_key=entry.identity.workspace_key,
-                session_id=entry.identity.session_id,
-                task_id=None,
-                type="session.lifecycle",
-                payload={"status": lifecycle, "error": entry.error},
-                occurred_at=self._clock(),
-            )
+        await self._handle_update(self._lifecycle_update(entry, lifecycle))
+
+    def _lifecycle_update(
+        self, entry: _SessionEntry, lifecycle: SessionLifecycle
+    ) -> RuntimeUpdate:
+        return RuntimeUpdate(
+            workspace_key=entry.identity.workspace_key,
+            session_id=entry.identity.session_id,
+            task_id=None,
+            type="session.lifecycle",
+            payload={"status": lifecycle, "error": entry.error},
+            occurred_at=self._clock(),
         )
 
     def _status(self, entry: _SessionEntry) -> SessionStatus:
@@ -888,26 +948,19 @@ class AgentRuntime:
             error=entry.error,
         )
 
-    def _session_exists(self, identity: SessionIdentity) -> bool:
-        return self._resolver(identity.workspace_path).session_exists(identity)
-
-    def _resolver(self, workspace_path: str | Path) -> DataPathResolver:
-        del workspace_path
-        if self._data_dir is None:
+    def _store(self) -> SessionStore:
+        if self._session_store is None:
             raise RuntimeError("AgentRuntime is not started")
-        return DataPathResolver(self._data_dir)
-
-    def _history_store(self) -> ConversationStore:
-        if self._conversation_store is None:
-            raise RuntimeError("AgentRuntime is not started")
-        return self._conversation_store
+        return self._session_store
 
     async def _import_resources(
         self, runtime: SessionRuntime, resources: tuple[ResourceRef, ...]
     ):
         if not resources:
             return None
-        resolver = self._resolver(runtime.identity.workspace_path)
+        resolver = self._path_resolver
+        if resolver is None:
+            raise RuntimeError("AgentRuntime is not started")
         paths = [
             (resource.resolve(resolver.incoming_dir), resource.media_type)
             for resource in resources
@@ -949,6 +1002,11 @@ class AgentRuntime:
     def _require_not_discarding(entry: _SessionEntry) -> None:
         if entry.discarding:
             raise SessionNotFoundError(entry.identity.session_id)
+
+    @staticmethod
+    def _require_persistence_available(entry: _SessionEntry) -> None:
+        if entry.persistence_failed:
+            raise RuntimeError("Session persistence is unavailable")
 
 
 def _key(identity: SessionIdentity) -> tuple[str, str]:

@@ -1,10 +1,8 @@
-import json
-
 import pytest
 
 from apps.agent.src.agent_orchestration.plugins.persistence import (
     DataPathResolver,
-    MetadataStore,
+    JsonStateStore,
     SessionIdentity,
 )
 
@@ -37,24 +35,22 @@ def test_path_resolver_拒绝相对路径和路径穿越(tmp_path):
         resolver.session_dir(identity)
 
 
-def test_metadata_store_创建并更新workspace和session(tmp_path):
+def test_json_state_store原子读写plugin状态(tmp_path):
     resolver = DataPathResolver(tmp_path)
-    store = MetadataStore(resolver)
+    store = JsonStateStore()
     identity = SessionIdentity.create(
         tmp_path / "workspace",
         session_id="session-1",
     )
+    path = resolver.session_dir(identity) / "plugin-state" / "plugin.json"
 
-    store.initialize(identity)
-    store.update_session_status(identity, "closed")
+    store.write(path, {"state_version": 1, "state": {"value": 1}})
+    first = store.read(path)
+    store.write(path, {"state_version": 1, "state": {"value": 2}})
 
-    workspace = json.loads(
-        resolver.workspace_metadata(identity).read_text(encoding="utf-8")
-    )
-    session = json.loads(
-        resolver.session_metadata(identity).read_text(encoding="utf-8")
-    )
-    assert workspace["workspace_path"] == str(identity.workspace_path)
-    assert workspace["workspace_key"] == identity.workspace_key
-    assert session["session_id"] == "session-1"
-    assert session["status"] == "closed"
+    assert first == {"state_version": 1, "state": {"value": 1}}
+    assert store.read(path) == {
+        "state_version": 1,
+        "state": {"value": 2},
+    }
+    assert not tuple(path.parent.glob(".*.tmp"))

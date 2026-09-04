@@ -1,13 +1,7 @@
 """Agent 本地文件持久化与监测。"""
 
-from apps.agent.src.agent_orchestration.plugins.persistence.conversation_store import (
-    ConversationHistoryCorruptError,
-    ConversationSummary,
-    ConversationStore,
-)
-
-from apps.agent.src.agent_orchestration.plugins.persistence.metadata_store import (
-    MetadataStore,
+from apps.agent.src.agent_orchestration.plugins.persistence.json_state_store import (
+    JsonStateStore,
 )
 from apps.agent.src.agent_orchestration.plugins.persistence.log_handler import (
     WorkspaceSessionFileHandler,
@@ -39,14 +33,11 @@ from apps.agent.src.agent_orchestration.plugins.persistence.trace_writer import 
 )
 
 __all__ = [
-    "ConversationHistoryCorruptError",
-    "ConversationSummary",
-    "ConversationStore",
     "DataPathResolver",
     "FileTraceHook",
     "FileTraceWriter",
     "ImageAssetError",
-    "MetadataStore",
+    "JsonStateStore",
     "PersistenceRuntime",
     "PersistencePlugin",
     "PersistenceSession",

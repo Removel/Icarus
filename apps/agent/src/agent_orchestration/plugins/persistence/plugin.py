@@ -34,25 +34,19 @@ class PersistencePlugin(BasePlugin):
             self.logger,
             session_identity=self.identity,
         )
-        self.runtime.metadata_store.initialize(self.identity)
 
     async def consume(self, source_plugin_id: str, event: Event) -> None:
         del source_plugin_id, event
 
     async def stop(self) -> None:
         if self.runtime.is_running:
-            try:
-                self.runtime.metadata_store.update_session_status(
-                    self.identity, "closed"
-                )
-            finally:
-                self.runtime.stop(drain=True, logger=self.logger)
+            self.runtime.stop(drain=True, logger=self.logger)
 
     def load_plugin_state(
         self, plugin_id: str, scope: str
     ) -> Mapping[str, object] | None:
         path = self._state_path(plugin_id, scope)
-        return self.runtime.metadata_store.read_json(path)
+        return self.runtime.state_store.read(path)
 
     def save_plugin_state(
         self,
@@ -63,7 +57,7 @@ class PersistencePlugin(BasePlugin):
         state_version: int,
         state: Mapping[str, object],
     ) -> None:
-        self.runtime.metadata_store.write_json(
+        self.runtime.state_store.write(
             self._state_path(plugin_id, scope),
             {
                 "plugin_id": plugin_id,
@@ -75,7 +69,7 @@ class PersistencePlugin(BasePlugin):
         )
 
     def save_runtime_snapshot(self, snapshot: Mapping[str, object]) -> None:
-        self.runtime.metadata_store.write_json(
+        self.runtime.state_store.write(
             self.runtime.resolver.session_dir(self.identity)
             / "runtime-snapshot.json",
             dict(snapshot),
