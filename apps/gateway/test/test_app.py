@@ -27,7 +27,7 @@ class RuntimeStub:
     def subscribe_updates(self):
         return self.stream.subscribe()
 
-    def get_session_status(self, workspace_path, session_id):
+    async def get_session_status(self, workspace_path, session_id):
         del workspace_path
         return {
             "workspace_key": "workspace",
