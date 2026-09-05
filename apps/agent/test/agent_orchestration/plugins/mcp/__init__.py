@@ -1,0 +1,1 @@
+"""MCPPlugin tests."""

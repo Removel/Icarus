@@ -13,6 +13,7 @@ from apps.agent.src.agent_orchestration.tools import (
     ToolRegistry,
 )
 from apps.agent.src.model_provider.types import ToolCall, ToolDefinition
+from apps.agent.src.model_provider.types import ImagePart
 
 
 class EchoTool(BaseTool):
@@ -100,6 +101,26 @@ def test_tool_executor_统一包装成功未知工具和非法返回():
     assert "not registered" in missing.error
     assert invalid.success is False
     assert "invalid result" in invalid.error
+
+
+def test_tool_execution_result只在有图片时序列化asset引用():
+    plain = ToolExecutionResult(success=True, output="ok")
+    image = ToolExecutionResult(
+        success=True,
+        output="captured",
+        images=(ImagePart("assets/a.png", "asset", "image/png"),),
+    )
+
+    assert plain.as_dict() == {
+        "success": True, "output": "ok", "error": None
+    }
+    assert image.as_dict()["images"] == [
+        {
+            "source": "assets/a.png",
+            "source_type": "asset",
+            "media_type": "image/png",
+        }
+    ]
 
 
 def test_tool_executor_同步批量并发且保持原始顺序():

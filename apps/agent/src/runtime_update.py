@@ -18,6 +18,7 @@ RuntimeUpdateType: TypeAlias = Literal[
     "task.finished",
     "task.usage",
     "assistant.text_delta",
+    "assistant.message",
     "tool.started",
     "tool.completed",
     "task.error",

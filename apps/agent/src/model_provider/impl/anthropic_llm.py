@@ -256,13 +256,28 @@ class AnthropicLLM(BaseLLM):
         if message.role == "tool":
             if not message.tool_call_id:
                 raise ValueError("Anthropic tool message requires tool_call_id")
+            parts: list[dict[str, Any]] = []
+            for part in message.content:
+                if isinstance(part, TextPart):
+                    parts.append({"type": "text", "text": part.text})
+                else:
+                    parts.append(self._convert_image(part))
+            tool_content: str | list[dict[str, Any]]
+            if all(isinstance(part, TextPart) for part in message.content):
+                tool_content = "".join(
+                    part.text
+                    for part in message.content
+                    if isinstance(part, TextPart)
+                )
+            else:
+                tool_content = parts
             return {
                 "role": "user",
                 "content": [
                     {
                         "type": "tool_result",
                         "tool_use_id": message.tool_call_id,
-                        "content": self._text_content(message),
+                        "content": tool_content,
                     }
                 ],
             }

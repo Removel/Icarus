@@ -349,6 +349,41 @@ def test_blackboard图片状态兼容旧url并写入稳定source字段():
     }
 
 
+def test_blackboard_tool结果图片保持call关联并可恢复():
+    image = ImagePart("assets/tool.png", "asset", "image/png")
+
+    async def run():
+        plugin = BlackboardPlugin("blackboard", required_context_sources=set())
+        await plugin.restore_session_state(
+            {
+                "messages": [
+                    {
+                        "role": "tool",
+                        "content": [
+                            {"type": "text", "text": "captured"},
+                            {
+                                "type": "image",
+                                "source": image.source,
+                                "source_type": image.source_type,
+                                "media_type": image.media_type,
+                            },
+                        ],
+                        "tool_calls": [],
+                        "tool_call_id": "call-image",
+                    }
+                ]
+            },
+            state_version=1,
+        )
+        return plugin.get_messages()[0], await plugin.snapshot_session_state()
+
+    message, snapshot = asyncio.run(run())
+    assert message.role == "tool"
+    assert message.tool_call_id == "call-image"
+    assert message.content == [TextPart("captured"), image]
+    assert snapshot["messages"][0]["tool_call_id"] == "call-image"
+
+
 def test_blackboard_plugin_等待固定来源并只发布一次context():
     async def run():
         manager = PluginManager()

@@ -12,6 +12,7 @@ from apps.agent.src.agent_orchestration.plugins.persistence import (
 from apps.agent.src.agent_orchestration.plugins.user_input import InputAccepted
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentResponse,
     AgentTextDeltaEvent,
 )
@@ -131,6 +132,7 @@ class AgentStub:
         prompt = kwargs["input_prompt"]
         message = Message("assistant", [TextPart("done")])
         yield AgentTextDeltaEvent(step=1, text="done")
+        yield AgentMessageCompletedEvent(step=1, message=message)
         yield AgentCompletedEvent(
             step=1,
             response=AgentResponse(
@@ -433,6 +435,7 @@ def test_agent_runtime真实session提交不重入锁且终态回到ready(tmp_pa
         "session.lifecycle",
         "task.started",
         "assistant.text_delta",
+        "assistant.message",
         "task.usage",
         "task.finished",
         "session.lifecycle",
@@ -522,12 +525,13 @@ def test_agent_runtime持久化公共历史并在终态checkpoint(tmp_path):
         "user.message",
         "task.accepted",
         "task.started",
-        "assistant.text_delta",
+        "assistant.message",
         "task.usage",
         "task.finished",
     ]
     assert records[0].task_id == accepted.task_id
     assert records[0].payload["text"] == "visible prompt"
+    assert records[3].payload == {"step": 1, "text": "done"}
     assert [item.sequence for item in records] == list(range(1, 7))
     assert cursor == 6
     assert "model prompt" in blackboard
@@ -607,13 +611,66 @@ def test_agent_runtime历史查询收束异常退出task且不加载session(tmp_
 
     records, cursor, loaded = asyncio.run(run())
     assert [item.type for item in records] == [
-        "assistant.text_delta",
+        "assistant.message",
         "task.finished",
     ]
+    assert records[0].payload["text"] == "partial"
     assert records[-1].payload["status"] == "interrupted"
     assert records[-1].payload["recovered"] is True
     assert cursor == 2
     assert loaded is None
+
+
+def test_agent_runtime读取旧历史时按step聚合完整assistant消息(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        runtime = AgentRuntime(config_loader=lambda: config)
+        await runtime.start()
+        identity = SessionIdentity.create(tmp_path, "legacy-deltas")
+        await runtime._store().create_session(identity)
+        now = datetime.now(UTC)
+        old_updates = (
+            RuntimeUpdate(
+                workspace_key=identity.workspace_key,
+                session_id=identity.session_id,
+                task_id="task",
+                type="assistant.text_delta",
+                payload={"step": 1, "text": "完整"},
+                occurred_at=now,
+            ),
+            RuntimeUpdate(
+                workspace_key=identity.workspace_key,
+                session_id=identity.session_id,
+                task_id="task",
+                type="assistant.text_delta",
+                payload={"step": 1, "text": "回答"},
+                occurred_at=now + timedelta(microseconds=1),
+            ),
+            RuntimeUpdate(
+                workspace_key=identity.workspace_key,
+                session_id=identity.session_id,
+                task_id="task",
+                type="task.finished",
+                payload={"status": "completed", "run_id": "run"},
+                occurred_at=now + timedelta(microseconds=2),
+            ),
+        )
+        for item in old_updates:
+            await runtime._store().append_update(identity, item)
+        records, cursor = await runtime.get_session_history(
+            tmp_path, identity.session_id
+        )
+        await runtime.stop()
+        return records, cursor
+
+    records, cursor = asyncio.run(run())
+    assert [item.type for item in records] == [
+        "assistant.message",
+        "task.finished",
+    ]
+    assert records[0].payload == {"step": 1, "text": "完整回答"}
+    assert records[0].sequence == 2
+    assert cursor == 3
 
 
 def test_agent_runtime已加载session不把排队task误判为interrupted(tmp_path):

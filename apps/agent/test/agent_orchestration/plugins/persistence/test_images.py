@@ -36,6 +36,27 @@ def test_import_image按内容稳定存储且不依赖原路径(tmp_path):
     assert session.resolve_image(first).read_bytes() == PNG
 
 
+def test_import_image_bytes复用相同asset存储(tmp_path):
+    session = make_session(tmp_path)
+    source = tmp_path / "picture.png"
+    source.write_bytes(PNG)
+
+    from_path = session.import_image(source)
+    from_bytes = session.import_image_bytes(PNG, "image/png")
+
+    assert from_bytes == from_path
+    assert session.resolve_image(from_bytes).read_bytes() == PNG
+
+
+def test_import_image_bytes拒绝类型不符和超限内容(tmp_path):
+    session = make_session(tmp_path)
+
+    with pytest.raises(ImageAssetError, match="does not match"):
+        session.import_image_bytes(PNG, "image/jpeg")
+    with pytest.raises(ImageAssetError, match="maximum"):
+        session.import_image_bytes(b"x" * (20 * 1024 * 1024 + 1))
+
+
 def test_resolve_image拒绝非asset和路径逃逸(tmp_path):
     session = make_session(tmp_path)
 

@@ -18,8 +18,22 @@
       "user-input",
       "skill",
       "blackboard",
-      "runtime-update"
+      "runtime-update",
+      "mcp"
     ]
+  },
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.80",
+        "--headless",
+        "--isolated",
+        "--browser",
+        "chrome"
+      ]
+    }
   },
   "model_settings": {
     "thinking": {

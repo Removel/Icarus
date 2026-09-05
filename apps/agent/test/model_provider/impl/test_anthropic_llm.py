@@ -201,6 +201,32 @@ def test_invoke_携带助手工具调用和工具结果历史():
     assert result.message.content == [TextPart("晴天")]
 
 
+def test_tool结果图片保留在anthropic_tool_result中(tmp_path):
+    path = tmp_path / "asset.png"
+    path.write_bytes(b"png-data")
+    llm = make_anthropic_llm()
+    llm._image_resolver = lambda image: path
+
+    converted = llm._convert_message(
+        Message(
+            "tool",
+            [TextPart('{"success":true}'), ImagePart("assets/a.png", "asset", "image/png")],
+            tool_call_id="tool_1",
+        )
+    )
+
+    content = converted["content"][0]["content"]
+    assert content[0] == {"type": "text", "text": '{"success":true}'}
+    assert content[1] == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "cG5nLWRhdGE=",
+        },
+    }
+
+
 def test_stream_仅向上层返回完整工具调用():
     llm = make_anthropic_llm()
     llm._client.messages.create.return_value = iter(anthropic_events())

@@ -5,6 +5,7 @@ from apps.agent.src.agent_orchestration.capability.react_agent import ReActAgent
 from apps.agent.src.agent_orchestration.capability.types import (
     AgentCancelledEvent,
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentResponse,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
@@ -14,6 +15,7 @@ from apps.agent.src.agent_orchestration.capability.types import (
 __all__ = [
     "AgentCancelledEvent",
     "AgentCompletedEvent",
+    "AgentMessageCompletedEvent",
     "AgentResponse",
     "AgentTextDeltaEvent",
     "AgentToolCompletedEvent",

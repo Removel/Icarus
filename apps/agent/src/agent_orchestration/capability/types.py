@@ -42,6 +42,14 @@ class AgentTextDeltaEvent(Event):
 
 
 @dataclass(frozen=True, kw_only=True)
+class AgentMessageCompletedEvent(Event):
+    """One complete model response, emitted after its stream is assembled."""
+
+    step: int
+    message: Message
+
+
+@dataclass(frozen=True, kw_only=True)
 class AgentToolStartedEvent(Event):
     trace_event_flow: ClassVar[bool] = False
 

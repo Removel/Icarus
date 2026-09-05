@@ -5,6 +5,7 @@ import pytest
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
@@ -116,10 +117,12 @@ def test_stream_完成多轮工具调用且不流出reasoning():
     assert [type(event) for event in events] == [
         AgentTextDeltaEvent,
         AgentTextDeltaEvent,
+        AgentMessageCompletedEvent,
         AgentToolStartedEvent,
         AgentToolCompletedEvent,
         AgentTextDeltaEvent,
         AgentTextDeltaEvent,
+        AgentMessageCompletedEvent,
         AgentCompletedEvent,
     ]
     assert [event.text for event in events if isinstance(event, AgentTextDeltaEvent)] == [
@@ -127,6 +130,14 @@ def test_stream_完成多轮工具调用且不流出reasoning():
         "调用工具",
         "最终",
         "回答",
+    ]
+    assert [
+        event.message.content
+        for event in events
+        if isinstance(event, AgentMessageCompletedEvent)
+    ] == [
+        [TextPart("让我调用工具")],
+        [TextPart("最终回答")],
     ]
     assert {event.task_id for event in events} == {None}
     started = next(event for event in events if isinstance(event, AgentToolStartedEvent))
@@ -234,10 +245,12 @@ def test_astream_与同步流保持相同事件语义():
     assert [type(event) for event in events] == [
         AgentTextDeltaEvent,
         AgentTextDeltaEvent,
+        AgentMessageCompletedEvent,
         AgentToolStartedEvent,
         AgentToolCompletedEvent,
         AgentTextDeltaEvent,
         AgentTextDeltaEvent,
+        AgentMessageCompletedEvent,
         AgentCompletedEvent,
     ]
     assert events[-1].response.finish_reason == "stop"

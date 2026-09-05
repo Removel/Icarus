@@ -135,6 +135,33 @@ def test_react_agent_完成toolcall回填并继续对话():
     }
 
 
+def test_react_agent将tool返回图片保留在对应tool消息():
+    image = ImagePart("assets/screenshot.png", "asset", "image/png")
+
+    class ImageTool(EchoTool):
+        def invoke(self, arguments):
+            return ToolExecutionResult(True, {"captured": True}, images=(image,))
+
+    registry = ToolRegistry()
+    registry.register(ImageTool())
+    llm = QueueLLM([tool_response(), final_response()])
+    agent = ReActAgent("thinking", llm, ToolExecutor(registry))
+
+    agent.invoke("", [], "capture")
+
+    tool_message = llm.calls[1][0][-1]
+    assert tool_message.role == "tool"
+    assert tool_message.tool_call_id == "call-1"
+    assert tool_message.content[1] == image
+    assert json.loads(tool_message.content[0].text)["images"] == [
+        {
+            "source": "assets/screenshot.png",
+            "source_type": "asset",
+            "media_type": "image/png",
+        }
+    ]
+
+
 def test_react_agent向tool透传当前task身份和消息快照():
     received = {}
 

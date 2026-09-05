@@ -45,6 +45,7 @@ _IMAGE_SIGNATURES = (
     (b"GIF87a", "image/gif", "gif"),
     (b"GIF89a", "image/gif", "gif"),
 )
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 
 class PersistenceRuntime:
@@ -205,10 +206,20 @@ class PersistenceSession:
     def import_image(self, path: str | Path) -> ImagePart:
         source = Path(path).expanduser()
         try:
-            data = source.read_bytes()
+            with source.open("rb") as file:
+                data = file.read(MAX_IMAGE_BYTES + 1)
         except OSError as error:
             raise ImageAssetError("image file is unavailable") from error
-        media_type, extension = _detect_image_type(data)
+        return self.import_image_bytes(data)
+
+    def import_image_bytes(
+        self, data: bytes, media_type: str | None = None
+    ) -> ImagePart:
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ImageAssetError("image exceeds the maximum supported size")
+        detected_media_type, extension = _detect_image_type(data)
+        if media_type is not None and media_type != detected_media_type:
+            raise ImageAssetError("image media type does not match file content")
         assets_dir = self.runtime.resolver.assets_dir(self.identity)
         assets_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         filename = f"{sha256(data).hexdigest()}.{extension}"
@@ -234,7 +245,7 @@ class PersistenceSession:
         return ImagePart(
             source=f"assets/{filename}",
             source_type="asset",
-            media_type=media_type,
+            media_type=detected_media_type,
         )
 
     def resolve_image(self, image: ImagePart) -> Path:
