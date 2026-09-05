@@ -72,6 +72,7 @@ class TaskParams(SessionParams):
 
 class HistoryParams(SessionParams):
     after_sequence: int = Field(default=0, ge=0)
+    limit: int = Field(default=200, ge=1, le=500)
 
 
 class SubscriptionParams(StrictModel):
@@ -239,12 +240,18 @@ class GatewayMethods:
             value.session_id,
             after_sequence=value.after_sequence,
         )
+        page = records[: value.limit]
+        next_after_sequence = (
+            page[-1].sequence if page else value.after_sequence
+        )
         return {
             "records": [
                 RuntimeUpdateModel.from_domain(item).model_dump(mode="json")
-                for item in records
+                for item in page
             ],
             "history_cursor": cursor,
+            "next_after_sequence": next_after_sequence,
+            "has_more": len(records) > len(page),
         }
 
     @staticmethod

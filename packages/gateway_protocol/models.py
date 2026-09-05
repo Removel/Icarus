@@ -49,6 +49,8 @@ class RuntimeUpdateModel(StrictWireModel):
 class SessionHistoryModel(StrictWireModel):
     records: tuple[RuntimeUpdateModel, ...]
     history_cursor: int = Field(ge=0)
+    next_after_sequence: int = Field(default=0, ge=0)
+    has_more: bool = False
 
 
 class SessionSummaryModel(StrictWireModel):
