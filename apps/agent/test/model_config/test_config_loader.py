@@ -63,6 +63,33 @@ def test_config_model_skill_permissions_default_disabled():
     assert config.skill.allow_produce is False
     assert config.skill.allow_evolve is False
     assert config.agent.max_steps == 256
+    assert config.mcp_servers == {}
+    assert "mcp" in config.runtime.required_plugin_ids
+
+
+def test_config_model读取通用mcp_servers并保留server字段():
+    config = ConfigModel(
+        openai_base_url="https://openai.example.com/v1",
+        anthropic_base_url="https://anthropic.example.com",
+        mcpServers={
+            "local": {
+                "command": "npx",
+                "args": ["-y", "example-mcp"],
+                "customField": "preserved",
+            },
+            "remote": {
+                "url": "https://example.com/mcp",
+                "headers": {"Authorization": "Bearer ${MCP_TOKEN}"},
+            },
+        },
+        model_settings=model_settings(),
+    )
+
+    assert config.mcp_servers["local"]["command"] == "npx"
+    assert config.mcp_servers["local"]["customField"] == "preserved"
+    assert config.mcp_servers["remote"]["headers"] == {
+        "Authorization": "Bearer ${MCP_TOKEN}"
+    }
 
 
 def test_config_model拒绝非法agent_step和context_window():

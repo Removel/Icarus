@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
@@ -20,6 +21,8 @@ from apps.agent.src.agent_orchestration.plugins.user_input import (
     InputQueuedEvent,
     InputStartedEvent,
 )
+from apps.agent.src.agent_orchestration.plugins.persistence.redactor import Redactor
+from apps.agent.src.model_provider.types import TextPart
 from apps.agent.src.runtime_update import RuntimeUpdate
 
 
@@ -34,11 +37,13 @@ class RuntimeUpdatePlugin(BasePlugin):
         workspace_key: str,
         session_id: str,
         publish_update: UpdatePublisher,
+        redactor: Redactor | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.workspace_key = workspace_key
         self.session_id = session_id
         self._publish_update = publish_update
+        self._redactor = redactor or Redactor()
 
     async def consume(self, source_plugin_id: str, event: Event) -> None:
         update = self._project(source_plugin_id, event)
@@ -64,13 +69,25 @@ class RuntimeUpdatePlugin(BasePlugin):
                 return None
             update_type = "assistant.text_delta"
             payload = {"step": event.step, "text": event.text}
+        elif isinstance(event, AgentMessageCompletedEvent):
+            text = "".join(
+                part.text
+                for part in event.message.content
+                if isinstance(part, TextPart)
+            )
+            if not text:
+                return None
+            update_type = "assistant.message"
+            payload = {"step": event.step, "text": text}
         elif isinstance(event, AgentToolStartedEvent):
             update_type = "tool.started"
             payload = {
                 "step": event.step,
                 "call_id": event.tool_call.id,
                 "tool_name": event.tool_call.name,
-                "arguments": dict(event.tool_call.arguments),
+                "arguments": self._redactor.redact(
+                    dict(event.tool_call.arguments)
+                ),
             }
         elif isinstance(event, AgentToolCompletedEvent):
             update_type = "tool.completed"
@@ -80,7 +97,10 @@ class RuntimeUpdatePlugin(BasePlugin):
                 "tool_name": event.tool_call.name,
                 "success": event.result.success,
                 "error": (
-                    event.result.error if not event.result.success else None
+                    self._redactor.redact_text(event.result.error)
+                    if not event.result.success
+                    and event.result.error is not None
+                    else None
                 ),
             }
         elif isinstance(event, AgentCompletedEvent):
@@ -101,7 +121,9 @@ class RuntimeUpdatePlugin(BasePlugin):
                 "fatal": event.fatal,
                 "code": event.code,
                 "error_type": event.error_type,
-                "message": event.error_message,
+                "message": self._redactor.redact_text(
+                    event.error_message
+                ),
                 "step": event.step,
                 "run_id": event.run_id,
             }

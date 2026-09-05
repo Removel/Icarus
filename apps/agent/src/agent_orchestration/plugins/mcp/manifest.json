@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "plugin_id": "mcp",
+  "plugin_version": "1.0.0",
+  "entrypoint": "apps.agent.src.agent_orchestration.plugins.mcp.factory:create_plugin",
+  "python_requires": [
+    "fastmcp-slim[client]==4.0.3",
+    "jsonschema>=4,<5"
+  ],
+  "required_capabilities": [
+    {"plugin_id": "persistence", "capability_id": "runtime", "version_spec": ">=1,<2"},
+    {"plugin_id": "persistence", "capability_id": "session", "version_spec": ">=1,<2"},
+    {"plugin_id": "persistence", "capability_id": "redactor", "version_spec": ">=1,<2"}
+  ],
+  "provided_capabilities": [],
+  "provided_tools": [
+    "mcp_tool_list",
+    "mcp_tool_search",
+    "mcp_tool_execute"
+  ],
+  "published_events": [],
+  "consumed_events": [],
+  "state_scopes": []
+}

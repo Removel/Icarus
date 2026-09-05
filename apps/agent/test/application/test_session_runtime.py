@@ -2,6 +2,7 @@ import asyncio
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentResponse,
     AgentTextDeltaEvent,
 )
@@ -39,6 +40,7 @@ class AgentStub:
         prompt = kwargs["input_prompt"]
         message = Message("assistant", [TextPart(f"answer:{prompt}")])
         yield AgentTextDeltaEvent(step=1, text="answer")
+        yield AgentMessageCompletedEvent(step=1, message=message)
         yield AgentCompletedEvent(
             step=1,
             response=AgentResponse(
@@ -90,6 +92,7 @@ def test_session_runtime使用runtime_update并保留单session行为(tmp_path):
         "task.accepted",
         "task.started",
         "assistant.text_delta",
+        "assistant.message",
         "task.usage",
         "task.finished",
     ]
@@ -97,7 +100,70 @@ def test_session_runtime使用runtime_update并保留单session行为(tmp_path):
     assert snapshot.has_work is False
     assert graph is not None
     assert "runtime-update" in {item.plugin_id for item in graph.plugins}
+    assert "mcp" in {item.plugin_id for item in graph.plugins}
     assert runtime.is_running is False
+
+
+def test_session_runtime将mcp作为标准内置plugin并透传配置(tmp_path):
+    config = make_config(tmp_path / "data")
+    config.mcp_servers = {
+        "blender": {"url": "http://127.0.0.1:9876/mcp"}
+    }
+    identity = SessionIdentity.create(tmp_path, "session-1")
+    runtime = SessionRuntime(
+        identity,
+        config=config,
+        publish_update=lambda update: asyncio.sleep(0),
+    )
+
+    assert "mcp" in runtime.runtime_host.required_plugin_ids
+    assert runtime.runtime_host.graph.plugin_configs["mcp"]["servers"] == (
+        config.mcp_servers
+    )
+
+
+def test_session_runtime无mcp_server时仍注册稳定入口(tmp_path):
+    async def run():
+        runtime = SessionRuntime(
+            SessionIdentity.create(tmp_path, "session-empty-mcp"),
+            config=make_config(tmp_path / "data"),
+            publish_update=lambda update: asyncio.sleep(0),
+        )
+        await runtime.start()
+        names = runtime.tool_registry.names()
+        await runtime.stop("test", timeout=1)
+        return names
+
+    names = asyncio.run(run())
+    assert "mcp_tool_list" in names
+    assert "mcp_tool_search" in names
+    assert "mcp_tool_execute" in names
+
+
+def test_session_runtime配置mcp后注册三个固定工具(tmp_path):
+    config = make_config(tmp_path / "data")
+    config.mcp_servers = {
+        "blender": {"url": "http://127.0.0.1:9876/mcp"}
+    }
+
+    async def run():
+        runtime = SessionRuntime(
+            SessionIdentity.create(tmp_path, "session-mcp"),
+            config=config,
+            publish_update=lambda update: asyncio.sleep(0),
+        )
+        await runtime.start()
+        plugin = runtime.runtime_host.get_plugin("mcp")
+        names = runtime.tool_registry.names()
+        bridge_started = plugin.bridge.is_running
+        await runtime.stop("test", timeout=1)
+        return names, bridge_started
+
+    names, bridge_started = asyncio.run(run())
+    assert "mcp_tool_list" in names
+    assert "mcp_tool_search" in names
+    assert "mcp_tool_execute" in names
+    assert bridge_started is False
 
 
 def test_session_runtime_stop可重复调用(tmp_path):

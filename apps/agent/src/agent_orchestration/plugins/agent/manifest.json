@@ -15,6 +15,7 @@
   "provided_tools": [],
   "published_events": [
     "apps.agent.src.agent_orchestration.capability.types.AgentTextDeltaEvent",
+    "apps.agent.src.agent_orchestration.capability.types.AgentMessageCompletedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentToolStartedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentToolCompletedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCompletedEvent",

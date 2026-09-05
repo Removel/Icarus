@@ -3,6 +3,7 @@ import json
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
@@ -67,6 +68,14 @@ def test_runtime_update_plugin投影首期公共事件并保留时间顺序():
             ("user-input", InputQueuedEvent(task_id="task", queue_position=0)),
             ("user-input", InputStartedEvent(task_id="task")),
             ("agent", AgentTextDeltaEvent(task_id="task", step=1, text="hi")),
+            (
+                "agent",
+                AgentMessageCompletedEvent(
+                    task_id="task",
+                    step=1,
+                    message=Message("assistant", [TextPart("hi")]),
+                ),
+            ),
             ("agent", AgentToolStartedEvent(task_id="task", step=1, tool_call=call)),
             (
                 "agent",
@@ -87,21 +96,90 @@ def test_runtime_update_plugin投影首期公共事件并保留时间顺序():
         "task.accepted",
         "task.started",
         "assistant.text_delta",
+        "assistant.message",
         "tool.started",
         "tool.completed",
         "context.compacted",
         "task.usage",
         "task.finished",
     ]
-    assert updates[3].payload["arguments"] == {"path": "a"}
-    assert updates[6].payload == {
+    assert updates[3].payload == {"step": 1, "text": "hi"}
+    assert updates[4].payload["arguments"] == {"path": "a"}
+    assert updates[7].payload == {
         "input_tokens": 10,
         "output_tokens": 3,
         "total_tokens": 13,
     }
-    assert updates[6].occurred_at == completed.occurred_at
-    assert updates[7].occurred_at == finished.occurred_at
-    json.dumps(dict(updates[3].payload))
+    assert updates[7].occurred_at == completed.occurred_at
+    assert updates[8].occurred_at == finished.occurred_at
+    json.dumps(dict(updates[4].payload))
+
+
+def test_runtime_update_plugin对工具参数递归脱敏():
+    updates = project(
+        [
+            (
+                "agent",
+                AgentToolStartedEvent(
+                    task_id="task",
+                    step=1,
+                    tool_call=ToolCall(
+                        "call-1",
+                        "mcp_tool_execute",
+                        {
+                            "tool_ref": "remote/login",
+                            "arguments": {"password": "secret"},
+                        },
+                    ),
+                ),
+            )
+        ]
+    )
+
+    assert updates[0].payload["arguments"] == {
+        "tool_ref": "remote/login",
+        "arguments": {"password": "[REDACTED]"},
+    }
+
+
+def test_runtime_update_plugin对工具错误文本脱敏():
+    updates = project(
+        [
+            (
+                "agent",
+                AgentToolCompletedEvent(
+                    task_id="task",
+                    step=1,
+                    tool_call=ToolCall("call-1", "mcp_tool_execute", {}),
+                    result=ToolExecutionResult(
+                        success=False,
+                        error="Authorization: Bearer top-secret failed",
+                    ),
+                ),
+            )
+        ]
+    )
+
+    assert updates[0].payload["error"] == "Authorization: [REDACTED]"
+
+
+def test_runtime_update_plugin对task错误文本脱敏():
+    updates = project(
+        [
+            (
+                "agent",
+                TaskErrorEvent(
+                    task_id="task",
+                    fatal=True,
+                    code="failed",
+                    error_type="RuntimeError",
+                    error_message="token=top-secret",
+                ),
+            )
+        ]
+    )
+
+    assert updates[0].payload["message"] == "token=[REDACTED]"
 
 
 def test_runtime_update_plugin过滤内部事件空delta和重复tool错误():

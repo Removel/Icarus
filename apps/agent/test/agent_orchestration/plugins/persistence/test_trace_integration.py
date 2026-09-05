@@ -5,6 +5,7 @@ import logging
 from apps.agent.src.agent_orchestration import AgentFactory
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentTextDeltaEvent,
 )
 from apps.agent.src.agent_orchestration.events import Event
@@ -137,6 +138,7 @@ def test_persistence_记录完整agent和plugin_hook链路(tmp_path):
     assert [type(event) for event in events] == [
         AgentTextDeltaEvent,
         AgentTextDeltaEvent,
+        AgentMessageCompletedEvent,
         AgentCompletedEvent,
     ]
     event_flow_records = [

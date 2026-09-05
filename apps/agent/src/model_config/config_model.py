@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pydantic
-from pydantic import StrictBool
+from pydantic import ConfigDict, StrictBool
 
 
 class ThinkMode(str, enum.Enum):
@@ -49,6 +49,7 @@ class RuntimeSettings(pydantic.BaseModel):
             "skill",
             "blackboard",
             "runtime-update",
+            "mcp",
         ]
     )
 
@@ -58,6 +59,8 @@ LLMRole = Literal["thinking", "perception"]
 
 
 class ConfigModel(pydantic.BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     openai_base_url: str
     anthropic_base_url: str
     openai_api_key: str = ""
@@ -66,5 +69,9 @@ class ConfigModel(pydantic.BaseModel):
     skill: SkillSettings = pydantic.Field(default_factory=SkillSettings)
     agent: AgentSettings = pydantic.Field(default_factory=AgentSettings)
     runtime: RuntimeSettings = pydantic.Field(default_factory=RuntimeSettings)
+    mcp_servers: dict[str, dict[str, Any]] = pydantic.Field(
+        default_factory=dict,
+        alias="mcpServers",
+    )
     model_settings: ModelSettings
     use_protocol: LLMProtocol = "openai"

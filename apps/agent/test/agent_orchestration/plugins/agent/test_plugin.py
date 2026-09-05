@@ -3,6 +3,7 @@ import asyncio
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentResponse,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
@@ -153,7 +154,7 @@ def test_agent_plugin_只消费context并原样发布stream_event():
 
     assert factory.roles == ["thinking"]
     assert factory.closed is True
-    assert sources == ["agent", "agent"]
+    assert sources == ["agent", "agent", "agent"]
     assert factory.agent.calls[0]["system_prompt"] == "system"
     assert "<plugin_context>" in factory.agent.calls[0]["input_prompt"]
     assert "composed context" in factory.agent.calls[0]["input_prompt"]
@@ -162,11 +163,13 @@ def test_agent_plugin_只消费context并原样发布stream_event():
     ]
     assert [type(event) for event in events] == [
         AgentTextDeltaEvent,
+        AgentMessageCompletedEvent,
         AgentCompletedEvent,
     ]
     assert {event.task_id for event in events} == {"task-1"}
     assert events[0].text == "hello"
-    assert events[1].response.message.content == [TextPart("hello")]
+    assert events[1].message.content == [TextPart("hello")]
+    assert events[2].response.message.content == [TextPart("hello")]
 
 
 def test_blackboard_context_event_保持扁平agent参数():
@@ -432,6 +435,51 @@ def test_agent_plugin为直接异常发布failed终态():
     assert errors[0].code == "agent_run_failed"
     assert errors[0].error_message == "agent exploded"
     assert channel.status.value == "failed"
+
+
+def test_agent_plugin异常前已流出的文本发布为完整部分消息():
+    class PartialFailingAgent(StubAgent):
+        async def astream(self, *args, **kwargs):
+            del args, kwargs
+            yield AgentTextDeltaEvent(step=1, text="partial")
+            raise RuntimeError("agent exploded")
+
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        factory.agent = PartialFailingAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+        await agent_plugin.consume(
+            "blackboard",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            ),
+        )
+        await agent_plugin.drain()
+        await manager.event_bus.drain()
+        await sink.drain()
+        events = list(sink.events)
+        await manager.stop(timeout=1)
+        return events
+
+    events = asyncio.run(run())
+    assert [type(event) for event in events] == [
+        AgentTextDeltaEvent,
+        AgentMessageCompletedEvent,
+        TaskErrorEvent,
+    ]
+    assert events[1].message.content == [TextPart("partial")]
 
 
 def test_agent_plugin最终关闭后异常仍发布failed终态():

@@ -8,6 +8,7 @@ import json
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.capability.types import (
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
     AgentResponse,
     AgentTextDeltaEvent,
     AgentToolCompletedEvent,
@@ -210,6 +211,10 @@ class ReActAgent(BaseAgent):
 
             response = self._aggregate_stream_chunks(chunks)
             self._accept_response(state, response)
+            yield AgentMessageCompletedEvent(
+                step=state.steps,
+                message=deepcopy(response.message),
+            )
 
             if not response.message.tool_calls:
                 if not self._close_or_continue(
@@ -299,6 +304,10 @@ class ReActAgent(BaseAgent):
 
             response = self._aggregate_stream_chunks(chunks)
             self._accept_response(state, response)
+            yield AgentMessageCompletedEvent(
+                step=state.steps,
+                message=deepcopy(response.message),
+            )
 
             if not response.message.tool_calls:
                 if not self._close_or_continue(
@@ -467,7 +476,8 @@ class ReActAgent(BaseAgent):
                         ensure_ascii=False,
                         default=str,
                     )
-                )
+                ),
+                *result.images,
             ],
             tool_call_id=tool_call_id,
         )

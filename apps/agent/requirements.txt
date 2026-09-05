@@ -6,3 +6,5 @@ python-dotenv
 PyYAML
 SQLAlchemy[asyncio]>=2,<3
 aiosqlite>=0.20,<1
+fastmcp-slim[client]==4.0.3
+jsonschema>=4,<5

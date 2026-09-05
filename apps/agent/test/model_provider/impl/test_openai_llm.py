@@ -202,6 +202,66 @@ def test_invoke_携带助手工具调用和工具结果历史():
     assert result.message.content == [TextPart("晴天")]
 
 
+def test_tool结果图片仅在openai请求中追加为user消息(tmp_path):
+    path = tmp_path / "asset.png"
+    path.write_bytes(b"png-data")
+    llm = make_openai_llm()
+    llm._image_resolver = lambda image: path
+    messages = [
+        Message(
+            "assistant", [],
+            tool_calls=[ToolCall("call_1", "capture", {})],
+        ),
+        Message(
+            "tool",
+            [TextPart('{"success":true}'), ImagePart("assets/a.png", "asset", "image/png")],
+            tool_call_id="call_1",
+        ),
+    ]
+
+    converted = llm._convert_messages(messages)
+
+    assert converted[1] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": '{"success":true}',
+    }
+    assert converted[2]["role"] == "user"
+    assert converted[2]["content"][2]["image_url"]["url"] == (
+        "data:image/png;base64,cG5nLWRhdGE="
+    )
+
+
+def test_并行tool结果先完成全部配对再追加图片消息(tmp_path):
+    path = tmp_path / "asset.png"
+    path.write_bytes(b"png-data")
+    llm = make_openai_llm()
+    llm._image_resolver = lambda image: path
+    image = ImagePart("assets/a.png", "asset", "image/png")
+    messages = [
+        Message(
+            "assistant", [],
+            tool_calls=[
+                ToolCall("call_1", "capture", {}),
+                ToolCall("call_2", "capture", {}),
+            ],
+        ),
+        Message("tool", [TextPart("one"), image], tool_call_id="call_1"),
+        Message("tool", [TextPart("two"), image], tool_call_id="call_2"),
+    ]
+
+    converted = llm._convert_messages(messages)
+
+    assert [item["role"] for item in converted] == [
+        "assistant", "tool", "tool", "user"
+    ]
+    assert converted[1]["tool_call_id"] == "call_1"
+    assert converted[2]["tool_call_id"] == "call_2"
+    assert sum(
+        item["type"] == "image_url" for item in converted[3]["content"]
+    ) == 2
+
+
 def test_stream_仅向上层返回完整工具调用():
     llm = make_openai_llm()
     llm._client.chat.completions.create.return_value = iter(

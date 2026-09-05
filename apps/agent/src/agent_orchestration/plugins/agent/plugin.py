@@ -1,6 +1,7 @@
 """ReActAgent 的 Plugin 系统适配层。"""
 
 import asyncio
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import partial
 import logging
@@ -10,7 +11,10 @@ from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
     AgentCompletedEvent,
+    AgentMessageCompletedEvent,
+    AgentTextDeltaEvent,
     AgentToolCompletedEvent,
+    AgentToolStartedEvent,
 )
 from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
 from apps.agent.src.agent_orchestration.hooks import HookDispatcher, hook_context
@@ -29,7 +33,11 @@ from apps.agent.src.agent_orchestration.run_control import (
     TaskOperationResult,
     MaxStepsExceededError,
 )
-from apps.agent.src.model_provider.types import ImageAssetUnavailableError
+from apps.agent.src.model_provider.types import (
+    ImageAssetUnavailableError,
+    Message,
+    TextPart,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -218,6 +226,9 @@ class AgentPlugin(BasePlugin):
         channel: TaskChannel,
         execution_started: asyncio.Event,
     ) -> None:
+        partial_step = 0
+        partial_text: list[str] = []
+        completed_message_steps: set[int] = set()
         try:
             execution_started.set()
             channel.raise_if_cancelled()
@@ -231,7 +242,42 @@ class AgentPlugin(BasePlugin):
                 run_control=channel,
             ):
                 channel.raise_if_cancelled()
+                if isinstance(stream_event, AgentTextDeltaEvent):
+                    if partial_step != stream_event.step:
+                        await self._publish_partial_message(
+                            event.task_id,
+                            channel,
+                            partial_step,
+                            partial_text,
+                        )
+                        partial_step = stream_event.step
+                    partial_text.append(stream_event.text)
+                elif isinstance(stream_event, AgentToolStartedEvent):
+                    await self._publish_partial_message(
+                        event.task_id, channel, partial_step, partial_text
+                    )
                 if isinstance(stream_event, AgentCompletedEvent):
+                    if partial_step != stream_event.step:
+                        await self._publish_partial_message(
+                            event.task_id,
+                            channel,
+                            partial_step,
+                            partial_text,
+                        )
+                    if stream_event.step not in completed_message_steps:
+                        await self._publish_run_event(
+                            event.task_id,
+                            channel,
+                            AgentMessageCompletedEvent(
+                                task_id=event.task_id,
+                                step=stream_event.step,
+                                message=deepcopy(
+                                    stream_event.response.message
+                                ),
+                            ),
+                        )
+                        completed_message_steps.add(stream_event.step)
+                        partial_text.clear()
                     if not channel.mark_completed():
                         channel.raise_if_cancelled()
                         return
@@ -240,6 +286,9 @@ class AgentPlugin(BasePlugin):
                     channel,
                     replace(stream_event, task_id=event.task_id),
                 )
+                if isinstance(stream_event, AgentMessageCompletedEvent):
+                    completed_message_steps.add(stream_event.step)
+                    partial_text.clear()
                 if isinstance(stream_event, AgentToolCompletedEvent):
                     if not stream_event.result.success:
                         await self._publish_run_event(
@@ -264,6 +313,9 @@ class AgentPlugin(BasePlugin):
         except asyncio.CancelledError:
             if channel.status == TaskChannelStatus.CANCELLING:
                 if channel.mark_cancelled():
+                    await self._publish_partial_message(
+                        event.task_id, channel, partial_step, partial_text
+                    )
                     await self._publish_run_event(
                         event.task_id,
                         channel,
@@ -280,6 +332,9 @@ class AgentPlugin(BasePlugin):
         except Exception as error:
             if channel.mark_failed():
                 code, message = self._error_details(error)
+                await self._publish_partial_message(
+                    event.task_id, channel, partial_step, partial_text
+                )
                 await self._publish_run_event(
                     event.task_id,
                     channel,
@@ -306,6 +361,9 @@ class AgentPlugin(BasePlugin):
                 return
             if channel.status == TaskChannelStatus.CANCELLING:
                 if channel.mark_cancelled():
+                    await self._publish_partial_message(
+                        event.task_id, channel, partial_step, partial_text
+                    )
                     await self._publish_run_event(
                         event.task_id,
                         channel,
@@ -321,6 +379,27 @@ class AgentPlugin(BasePlugin):
             raise
         finally:
             self._trace_applied_context(event.task_id, channel)
+
+    async def _publish_partial_message(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        step: int,
+        parts: list[str],
+    ) -> None:
+        text = "".join(parts)
+        if not text:
+            return
+        parts.clear()
+        await self._publish_run_event(
+            task_id,
+            channel,
+            AgentMessageCompletedEvent(
+                task_id=task_id,
+                step=step,
+                message=Message("assistant", [TextPart(text)]),
+            ),
+        )
 
     @staticmethod
     def _error_details(error: Exception) -> tuple[str, str]:

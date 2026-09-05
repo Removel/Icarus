@@ -4,7 +4,9 @@
   "plugin_version": "1.0.0",
   "entrypoint": "apps.agent.src.agent_orchestration.plugins.runtime_update.factory:create_plugin",
   "python_requires": [],
-  "required_capabilities": [],
+  "required_capabilities": [
+    {"plugin_id": "persistence", "capability_id": "redactor", "version_spec": ">=1,<2"}
+  ],
   "provided_capabilities": [],
   "provided_tools": [],
   "published_events": [],
@@ -14,6 +16,7 @@
     "apps.agent.src.agent_orchestration.plugins.user_input.events.InputFinishedEvent",
     "apps.agent.src.agent_orchestration.plugins.blackboard.events.BlackboardCompactedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentTextDeltaEvent",
+    "apps.agent.src.agent_orchestration.capability.types.AgentMessageCompletedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentToolStartedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentToolCompletedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCompletedEvent",

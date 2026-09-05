@@ -176,7 +176,7 @@ class OpenAILLM(BaseLLM):
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "model": self.model_name,
-            "messages": [self._convert_message(message) for message in messages],
+            "messages": self._convert_messages(messages),
         }
         if tools:
             params["tools"] = [self._convert_tool(tool) for tool in tools]
@@ -202,7 +202,7 @@ class OpenAILLM(BaseLLM):
             return {
                 "role": "tool",
                 "tool_call_id": message.tool_call_id,
-                "content": self._text_content(message),
+                "content": self._text_parts(message),
             }
 
         if message.role == "assistant":
@@ -250,6 +250,48 @@ class OpenAILLM(BaseLLM):
                 )
         return {"role": message.role, "content": content}
 
+    def _convert_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
+        converted: list[dict[str, Any]] = []
+        pending_tool_images: list[tuple[str, ImagePart]] = []
+
+        def flush_images() -> None:
+            if not pending_tool_images:
+                return
+            content: list[dict[str, Any]] = [
+                {
+                    "type": "text",
+                    "text": "Images returned by the preceding tool calls.",
+                }
+            ]
+            for tool_call_id, image in pending_tool_images:
+                content.extend(
+                    (
+                        {
+                            "type": "text",
+                            "text": f"Image from tool call {tool_call_id}.",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": self._image_url(image)},
+                        },
+                    )
+                )
+            converted.append({"role": "user", "content": content})
+            pending_tool_images.clear()
+
+        for message in messages:
+            if message.role != "tool":
+                flush_images()
+            converted.append(self._convert_message(message))
+            if message.role == "tool":
+                pending_tool_images.extend(
+                    (message.tool_call_id or "unknown", part)
+                    for part in message.content
+                    if isinstance(part, ImagePart)
+                )
+        flush_images()
+        return converted
+
     def _image_url(self, image: ImagePart) -> str:
         if image.source_type == "url":
             return image.source
@@ -279,6 +321,12 @@ class OpenAILLM(BaseLLM):
                 raise ValueError(f"{message.role} message only supports text content")
             texts.append(part.text)
         return "".join(texts)
+
+    @staticmethod
+    def _text_parts(message: Message) -> str:
+        return "".join(
+            part.text for part in message.content if isinstance(part, TextPart)
+        )
 
     @staticmethod
     def _convert_tool(tool: ToolDefinition) -> dict[str, Any]:

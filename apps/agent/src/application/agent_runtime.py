@@ -509,10 +509,11 @@ class AgentRuntime:
                 all_records = (*all_records, interrupted)
                 cursor = interrupted.sequence or cursor
                 await self._updates.publish(interrupted)
+            compacted_records = _coalesce_legacy_assistant_deltas(all_records)
             return (
                 tuple(
                     item
-                    for item in all_records
+                    for item in compacted_records
                     if item.sequence is not None
                     and item.sequence > after_sequence
                 ),
@@ -801,7 +802,10 @@ class AgentRuntime:
                             entry.lifecycle = projected
                             if projected != previous:
                                 lifecycle_update = projected
-                        if update.type != "session.lifecycle":
+                        if update.type not in {
+                            "session.lifecycle",
+                            "assistant.text_delta",
+                        }:
                             if update.type == "task.accepted":
                                 accepted = entry.tasks.get(update.task_id or "")
                                 if accepted is None:
@@ -816,7 +820,10 @@ class AgentRuntime:
                             recorded_update = await self._store().append_update(
                                 entry.identity, update
                             )
-                elif update.type != "session.lifecycle":
+                elif update.type not in {
+                    "session.lifecycle",
+                    "assistant.text_delta",
+                }:
                     raise RuntimeError(
                         "RuntimeUpdate belongs to an unknown Session"
                     )
@@ -1011,6 +1018,63 @@ class AgentRuntime:
 
 def _key(identity: SessionIdentity) -> tuple[str, str]:
     return identity.workspace_key, identity.session_id
+
+
+def _coalesce_legacy_assistant_deltas(
+    records: tuple[RuntimeUpdate, ...],
+) -> tuple[RuntimeUpdate, ...]:
+    """Project legacy persisted stream chunks as complete assistant messages."""
+
+    complete_keys = {
+        (record.task_id, record.payload.get("step"))
+        for record in records
+        if record.type == "assistant.message"
+    }
+    compacted: list[RuntimeUpdate] = []
+    index = 0
+    while index < len(records):
+        record = records[index]
+        if record.type != "assistant.text_delta":
+            compacted.append(record)
+            index += 1
+            continue
+
+        key = (record.task_id, record.payload.get("step"))
+        chunks: list[str] = []
+        last = record
+        while index < len(records):
+            candidate = records[index]
+            candidate_key = (
+                candidate.task_id,
+                candidate.payload.get("step"),
+            )
+            if (
+                candidate.type != "assistant.text_delta"
+                or candidate_key != key
+            ):
+                break
+            text = candidate.payload.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+            last = candidate
+            index += 1
+
+        if key not in complete_keys and chunks:
+            compacted.append(
+                RuntimeUpdate(
+                    workspace_key=last.workspace_key,
+                    session_id=last.session_id,
+                    task_id=last.task_id,
+                    type="assistant.message",
+                    payload={
+                        "step": last.payload.get("step"),
+                        "text": "".join(chunks),
+                    },
+                    occurred_at=last.occurred_at,
+                    sequence=last.sequence,
+                )
+            )
+    return tuple(compacted)
 
 
 def _submission_fingerprint(
