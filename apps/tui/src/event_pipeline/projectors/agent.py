@@ -5,6 +5,7 @@ import json
 from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
+    CompleteAssistantMessage,
     AppendError,
     AppendToolStarted,
     UiAction,
@@ -23,6 +24,9 @@ class AgentProjector:
         if update.type == "assistant.text_delta":
             text = str(payload.get("text", ""))
             return (AppendAssistantDelta(task_id, text),) if text else ()
+        if update.type == "assistant.message":
+            text = str(payload.get("text", ""))
+            return (CompleteAssistantMessage(task_id, text),) if text else ()
         if update.type == "tool.started":
             return (
                 AppendToolStarted(

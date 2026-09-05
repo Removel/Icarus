@@ -151,6 +151,24 @@ class AssistantMessage(Vertical):
             self._markdown_stream = Markdown.get_stream(markdown)
         await self._markdown_stream.write(text)
 
+    async def complete_text(self, text: str) -> None:
+        """Reconcile streamed content with one complete assistant message."""
+
+        if self._segment_finished:
+            raise RuntimeError("Assistant message is already closed")
+        current = self.markdown_text
+        if current == text:
+            return
+        if text.startswith(current):
+            await self.append_delta(text[len(current) :])
+            return
+        stream = self._markdown_stream
+        self._markdown_stream = None
+        if stream is not None:
+            await stream.stop()
+        self._markdown_parts = [text]
+        await self.query_one(StreamingMarkdown).update(text)
+
     async def finish(self) -> None:
         if self._segment_finished:
             return

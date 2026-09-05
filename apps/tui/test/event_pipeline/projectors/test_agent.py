@@ -3,6 +3,7 @@ from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
     AppendError,
     AppendToolStarted,
+    CompleteAssistantMessage,
     UpdateToolCompleted,
 )
 from apps.tui.src.event_pipeline.projectors.agent import AgentProjector
@@ -24,6 +25,11 @@ def test_agent_projector映射文本和稳定工具参数():
     assert projector.project(
         update("assistant.text_delta", {"step": 1, "text": "检查中"})
     ) == (AppendAssistantDelta(task_id="task-1", text="检查中"),)
+    assert projector.project(
+        update("assistant.message", {"step": 1, "text": "检查完成"})
+    ) == (
+        CompleteAssistantMessage(task_id="task-1", text="检查完成"),
+    )
     assert projector.project(
         update(
             "tool.started",

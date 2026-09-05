@@ -795,7 +795,7 @@ def test_app恢复session退出时的消息工具错误和中断状态(tmp_path)
     )
 
 
-def test_app历史sequence缺口不进入ready(tmp_path):
+def test_app聚合历史允许sequence跳号(tmp_path):
     async def run():
         service = ControlledService()
         service.history = SessionHistoryModel(
@@ -806,13 +806,16 @@ def test_app历史sequence缺口不进入ready(tmp_path):
         )
         app = make_app(service, tmp_path)
         async with app.run_test() as pilot:
-            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.FAILED)
-            result = str(app.query_one(RuntimeStatusBar).render())
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            result = (
+                app.query_one(UserMessage).message_text,
+                app._last_sequence,
+            )
             app.request_shutdown(return_code=0)
             await wait_until(pilot, lambda: service.stopped)
             return result
 
-    assert "sequence gap" in asyncio.run(run())
+    assert asyncio.run(run()) == ("gap", 2)
 
 
 def test_app历史在隐藏conversation和batch中完整构建后一次显示(

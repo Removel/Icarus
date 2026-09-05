@@ -222,6 +222,7 @@ class IcarusTextualApp(App[int]):
         self.chat_state = ChatState()
         self.projector_registry = projector_registry
         self._last_sequence = 0
+        self._completed_assistant_steps: set[tuple[str, int]] = set()
         self.subscription: UpdateSubscription | None = None
         self._runtime_start_worker: Worker[Any] | None = None
         self._event_worker: Worker[Any] | None = None
@@ -689,6 +690,7 @@ class IcarusTextualApp(App[int]):
         self.subscription = prepared.subscription
         self.chat_state = ChatState()
         self._last_sequence = 0
+        self._completed_assistant_steps.clear()
         self._early_updates.clear()
         self._dispatch_scheduled = False
         self._fatal_failure = False
@@ -949,6 +951,18 @@ class IcarusTextualApp(App[int]):
             return
         if update.type == "user.message":
             self._session_has_user_input = True
+        raw_step = update.payload.get("step")
+        assistant_key = (
+            update.task_id,
+            raw_step,
+        )
+        if (
+            update.type == "assistant.text_delta"
+            and update.task_id is not None
+            and isinstance(raw_step, int)
+            and assistant_key in self._completed_assistant_steps
+        ):
+            return
         if (
             update.sequence is not None
             and update.sequence <= self._last_sequence
@@ -956,7 +970,13 @@ class IcarusTextualApp(App[int]):
             return
         if (
             update.sequence is not None
-            and update.sequence != self._last_sequence + 1
+            and (
+                update.sequence <= self._last_sequence
+                or (
+                    not historical
+                    and update.sequence != self._last_sequence + 1
+                )
+            )
         ):
             self._enter_fatal(
                 "RuntimeUpdate sequence",
@@ -1005,6 +1025,13 @@ class IcarusTextualApp(App[int]):
             except Exception as error:
                 self._enter_fatal("UI action routing", error)
                 break
+        if (
+            not self._fatal_failure
+            and update.type == "assistant.message"
+            and update.task_id is not None
+            and isinstance(raw_step, int)
+        ):
+            self._completed_assistant_steps.add(assistant_key)
         if not self._fatal_failure and update.sequence is not None:
             self._last_sequence = update.sequence
 
