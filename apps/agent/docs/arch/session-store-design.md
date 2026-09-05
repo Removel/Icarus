@@ -99,7 +99,7 @@ Gateway → AgentRuntime → SessionStore
 - 创建或更新 Workspace 记录；
 - 创建、查询和枚举 Session；
 - 保存 Session 摘要、最近活动时间和 Conversation cursor；
-- 为公共 `RuntimeUpdate` 分配单 Session 连续 sequence；
+- 为需要长期恢复的完整 `RuntimeUpdate` 分配单 Session 连续 sequence；
 - 追加并读取完整或增量 Conversation；
 - 判断 Session 是否已有用户内容；
 - 对空 Session 执行持久化层二次校验和软删除；
@@ -232,7 +232,8 @@ workspace_key + deleted_at + last_public_activity_at
 
 ### 7.3 ConversationUpdate
 
-每条公共 `RuntimeUpdate` 一条记录：
+每条需要长期恢复的完整 `RuntimeUpdate` 一条记录。`assistant.text_delta` 只用于实时显示，不进入
+Conversation 历史；每个模型 Step 在流结束后以一条 `assistant.message` 保存完整文本：
 
 | 字段 | 含义 |
 |---|---|
@@ -381,6 +382,8 @@ SessionRuntime 启动失败时保留 Session 记录，AgentRuntime 将运行状�
 ```text
 RuntimeUpdatePlugin 生成无 sequence 的 RuntimeUpdate
 → AgentRuntime 按当前 Update Loop 和 mutation_lock 处理运行态
+→ assistant.text_delta 仅实时发布，不写 SessionStore
+→ assistant.message、user.message、Tool 摘要和 Task 状态进入持久化流程
 → SessionStore 开启事务
 → 查询未软删除 Session
 → last_sequence + 1
@@ -392,8 +395,10 @@ RuntimeUpdatePlugin 生成无 sequence 的 RuntimeUpdate
 → AgentRuntime 发布给订阅者
 ```
 
-只有事务成功后才能发布带 sequence 的公共 Update。Sequence 由 Session 行和 Conversation 唯一约束
-共同保护，不使用 journal 扫描或进程内 sequence cache。
+只有事务成功后才能发布带 sequence 的持久化 Update。实时 `assistant.text_delta` 不带 sequence，
+完成时的 `assistant.message` 是恢复对话的事实记录。Sequence 由 Session 行和 Conversation 唯一约束
+共同保护，不使用 journal 扫描或进程内 sequence cache。取消或异常前已流出的部分文本也收束成一条
+`assistant.message`，避免恢复时丢失用户已经看到的内容。
 
 第一条用户输入的摘要规则沿用现有设计：归一化空白，最多 256 个 Unicode 字符；纯图片使用
 `[Image]`，无法识别内容时使用 `[Message]`。后续用户消息不修改 `first_user_input`。
@@ -405,11 +410,13 @@ RuntimeUpdatePlugin 生成无 sequence 的 RuntimeUpdate
 → 查询 sequence > after_sequence 的 ConversationUpdate
 → 按 sequence 升序
 → 转换为 RuntimeUpdate
+→ 将旧版本连续 assistant.text_delta 按 task_id + step 聚合为 assistant.message
 → cursor 返回 Session.last_sequence
 ```
 
-`after_sequence` 必须大于等于 0。不存在或已软删除 Session 返回 `SessionNotFoundError`。首期继续返回
-当前 Gateway 所需的完整结果，不在本次改造中增加分页协议。
+`after_sequence` 必须大于等于 0。不存在或已软删除 Session 返回 `SessionNotFoundError`。旧历史聚合后
+保留最后一个 delta 的 sequence，因此逻辑历史允许 sequence 跳号；数据库物理记录仍严格连续。Gateway
+在该结果上分页，TUI 循环读取到 `history_cursor`，完整恢复不依赖单条 WebSocket 消息大小。
 
 ### 10.4 Session 列表
 
@@ -571,6 +578,8 @@ Migration Framework。业务 CRUD 不使用手写 SQL；仅允许数据库连接
 - Conversation sequence 从 1 连续递增；
 - Update payload、时间和身份往返一致；
 - `after_sequence` 增量读取和 cursor；
+- 实时 delta 不持久化，完整 Assistant 消息持久化；
+- 旧 delta 历史按 Task Step 无损聚合；
 - 第一条文本、纯图片和降级消息摘要；
 - 追加 Update 与摘要更新同事务回滚；
 - 空 Session 软删除、非空拒绝、重复删除和不存在；

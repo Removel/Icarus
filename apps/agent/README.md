@@ -13,7 +13,8 @@
 - Session 创建、恢复、提交、取消、状态查询和卸载；
 - 使用 `SessionStore` 持久化 Session 元数据和公共 Conversation；
 - 使用文件保存 Plugin State、Trace、日志和图片 Asset；
-- Skill 发现、搜索、生产和演化。
+- Skill 发现、搜索、生产和演化；
+- 通过 FastMCP 连接外部 MCP Server，并以固定的 list/search/execute 工具发现和调用其 Tools。
 
 ## 安装依赖
 
@@ -42,6 +43,29 @@ ICARUS_DATA_DIR=/absolute/path/to/icarus-data
 ```
 
 只需配置当前协议使用的 API Key。模型、Plugin 目录与运行参数在 `apps/agent/settings.json` 中设置。
+
+### MCP Server
+
+在 `settings.json` 顶层添加常见的 `mcpServers` 配置即可启用 MCP。stdio Server 使用
+`command`，Streamable HTTP Server 使用 `url`；`enabled` 省略时默认为 `true`。
+
+```json
+{
+  "mcpServers": {
+    "browser": {
+      "command": "npx",
+      "args": ["-y", "browser-mcp"]
+    },
+    "blender": {
+      "url": "http://127.0.0.1:9876/mcp"
+    }
+  }
+}
+```
+
+Server 在 Session 启动时不会被连接。Agent 首次调用 `mcp_tool_list`、`mcp_tool_search` 或
+`mcp_tool_execute` 时才按需连接；Server 未运行会作为本次 Tool 失败反馈，不阻止其他 Session
+能力启动。Header 和环境变量中的 Secret 应写成 `${ENV_NAME}`，不要直接提交到 settings。
 
 Session 与公共 Conversation 保存在 `ICARUS_DATA_DIR/icarus.db`。Plugin State、Runtime Snapshot、
 Trace、日志和 Asset 继续按 Workspace/Session 保存为文件。旧 `conversation.jsonl` 不迁移、不兼容

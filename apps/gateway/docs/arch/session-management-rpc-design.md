@@ -108,7 +108,7 @@ TUI 准备候选 Session 时继续使用：
 ```text
 session.get
 → session.subscribe
-→ session.get_history(after_sequence=0)
+→ session.get_history(after_sequence=0, limit=200)
 → session.get 再次确认无工作
 ```
 
@@ -139,6 +139,10 @@ Session Lease 或多客户端所有权协议。命令行指定 Session 的启动
 Gateway 不需要知道哪个连接是“当前 TUI”。连接断开不取消 Task、不卸载 Session。慢连接继续使用现有
 有界发送队列和关闭策略。
 
+`session.get_history` 使用 `after_sequence + limit` 分页，单页最多 500 条，默认 200 条。响应额外返回
+`next_after_sequence` 和 `has_more`；`history_cursor` 始终表示请求时 Session 的持久化游标。这样 TUI
+仍恢复完整对话，但不会把整个长 Session 塞入一条 WebSocket 消息。
+
 ## 错误映射
 
 沿用现有安全错误：
@@ -153,8 +157,8 @@ Gateway 不需要知道哪个连接是“当前 TUI”。连接断开不取消 T
 
 ## 兼容性
 
-- 不修改 `session.create`、`session.get`、`session.subscribe`、`session.get_history` 和实时
-  `runtime.update` 结构；
+- `session.create`、`session.get`、`session.subscribe` 和实时 `runtime.update` 保持兼容；
+- `session.get_history` 增加可选 `limit` 及分页游标字段，旧调用参数仍有效；
 - `session.list` 的列表项从运行状态转为产品摘要，需要同步当前测试；
 - 运行诊断仍使用 `session.get`，未来如需设备级 Runtime 管理列表应定义独立诊断 RPC；
 - Gateway 与 AgentRuntime 继续同进程运行，但协议不依赖该部署方式；
