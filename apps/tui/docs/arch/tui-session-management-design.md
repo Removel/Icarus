@@ -216,7 +216,7 @@ async def _prepare_session(
 Client Factory
 → client.start()
 → 获得已经开始缓冲的 subscription
-→ client.get_session_history(after_sequence=0)
+→ client.get_session_history(after_sequence=0)，内部自动分批读取到 history_cursor
 → client.get_session_status() 二次确认目标无工作
 → 返回候选 Client、Subscription 和 History
 ```
@@ -252,8 +252,13 @@ Client Factory
 选择当前 Session 也执行完整准备与激活，不走特殊 no-op，从而与 `--session-id` 启动保持同一恢复
 语义。
 
-候选历史与实时缓冲仍沿用现有 sequence 交接规则：历史投影至 `history_cursor` 后，实时 Event Worker
-忽略或对账不大于该 cursor 的记录，再继续处理新记录。
+候选历史与实时缓冲仍沿用 sequence 交接规则：GatewayClient 每批读取最多 200 条，直到
+`has_more=false`，再一次性提交给界面。历史中的完整逻辑消息允许 sequence 跳号，因为旧版 delta
+聚合后保留最后一个物理 sequence；实时持久化 Update 仍严格要求逐条连续。历史投影至
+`history_cursor` 后，实时 Event Worker 忽略或对账不大于该 cursor 的记录，再继续处理新记录。
+
+实时 `assistant.text_delta` 用于增量 Markdown；随后的 `assistant.message` 用最终完整文本校准同一
+Task Step，不重复追加。Session 恢复只需要完整消息，旧 Session 的 delta 由 Agent 读取端聚合。
 
 ## ConversationView 重置
 

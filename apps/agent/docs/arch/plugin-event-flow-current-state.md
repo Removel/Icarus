@@ -32,7 +32,12 @@
 | `blackboard` | 维护跨轮对话和当前任务状态，发布主 Agent 调用快照 |
 | `agent` | 适配无状态 ReActAgent，执行 Run，处理运行中 Context 与取消请求 |
 | `skill` | 提供显式 Skill 发现、搜索、生产、演化和 Job 查询 |
-| `output-bridge` | 把用户输入状态、Agent Stream 和控制结果广播给应用订阅者 |
+| `mcp` | 按需连接配置的 MCP Server，通过固定的 list/search/execute Tool 提供外部能力 |
+| `runtime-update` | 把用户输入状态、Agent Stream 和控制结果投影为公共 RuntimeUpdate |
+
+Agent 文本具有两种明确语义：`assistant.text_delta` 是低延迟实时投影，不进入 Session Conversation；
+`assistant.message` 是一个模型 Step 完成后的完整文本，作为恢复历史持久化。取消或失败前已经显示的
+部分文本同样会收束为完整消息。旧版本持久化的 delta 在读取时兼容聚合，不修改原始数据库记录。
 
 `ReActAgent`、Skill Catalog、Producer、Evolver、JobManager、Repository 和 WriteCoordinator
 都是所属 Plugin 内的普通组件，不注册为子 Plugin。
@@ -48,7 +53,7 @@ flowchart LR
     A["AgentPlugin / ReActAgent"]
     S["SkillPlugin"]
     O["OutputBridgePlugin"]
-    Registry["共享 ToolRegistry\n基础 Tool + 五个 Skill Tool"]
+    Registry["共享 ToolRegistry\n基础 Tool + 五个 Skill Tool + 三个 MCP Tool"]
     Catalog["SkillCatalog"]
     Jobs["SkillJobManager"]
     Generator["Producer / Evolver\n独立受控工具 Agent"]

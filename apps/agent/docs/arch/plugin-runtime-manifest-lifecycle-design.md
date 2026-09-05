@@ -11,7 +11,7 @@ SkillPlugin 的工具化重构不属于本文实现范围。它将在本文定�
 
 ## 当前实现状态
 
-- 7 个内置 Plugin 已经提供 `manifest.json` 和 Factory；
+- 8 个内置 Plugin 已经提供 `manifest.json` 和 Factory；
 - `PluginRuntimeHost` 已负责发现、校验、Capability 注入、Tool 注册和 Event 自动订阅；
 - `AgentRuntimeService` 已改为应用入口并委托 Host，不再手写具体 Plugin 拓扑；
 - 默认 Tool 已由 `builtin-tools` Plugin 提供；
