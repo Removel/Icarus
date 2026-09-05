@@ -140,6 +140,8 @@ def test_gateway_methods读取session历史():
 
     result = asyncio.run(run())
     assert result["history_cursor"] == 1
+    assert result["next_after_sequence"] == 1
+    assert result["has_more"] is False
     assert result["records"][0]["type"] == "user.message"
     assert result["records"][0]["sequence"] == 1
 
