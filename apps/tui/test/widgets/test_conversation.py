@@ -11,6 +11,7 @@ from apps.tui.src.event_pipeline import (
     AppendError,
     AppendToolStarted,
     AppendUserMessage,
+    CompleteAssistantMessage,
     FinishTurn,
     SetRuntimeStatus,
     UpdateToolCompleted,
@@ -168,6 +169,30 @@ def test_conversation分割文本工具文本并更新工具状态(tmp_path):
     assert assistant_texts == ["before", "after"]
     assert tool_success is True
     assert status_count == 0
+
+
+def test_conversation完整消息校准流式文本且不重复(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                AppendAssistantDelta(task_id="task-1", text="部分")
+            )
+            await view.apply_action(
+                CompleteAssistantMessage(
+                    task_id="task-1", text="部分完整"
+                )
+            )
+            await view.apply_action(
+                CompleteAssistantMessage(
+                    task_id="task-1", text="部分完整"
+                )
+            )
+            await pilot.pause()
+            return view.query_one(AssistantMessage).markdown_text
+
+    assert asyncio.run(run()) == "部分完整"
 
 
 def test_conversation_reset清空session投影并恢复欢迎内容(tmp_path):

@@ -26,6 +26,10 @@ from apps.tui.src.gateway_client.models import (
 )
 
 
+async def _connect_gateway(url: str):
+    return await connect(url, max_size=16 * 1024 * 1024)
+
+
 class GatewayClientError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -40,7 +44,7 @@ class GatewayClient:
         workspace_path: str | Path,
         session_id: str | None = None,
         create_if_missing: bool = True,
-        connector: Callable[[str], Awaitable[Any]] = connect,
+        connector: Callable[[str], Awaitable[Any]] = _connect_gateway,
     ) -> None:
         self.url = url
         self.workspace_path = str(Path(workspace_path).expanduser().resolve())
@@ -130,16 +134,32 @@ class GatewayClient:
     async def get_session_history(
         self, *, after_sequence: int = 0
     ) -> SessionHistoryModel:
-        result = await self.request(
-            "session.get_history",
-            {
-                "workspace_path": self.workspace_path,
-                "session_id": self._require_session_id(),
-                "after_sequence": after_sequence,
-            },
-        )
-        history = SessionHistoryModel.model_validate(result)
-        return history
+        records = []
+        next_after_sequence = after_sequence
+        history_cursor = after_sequence
+        while True:
+            result = await self.request(
+                "session.get_history",
+                {
+                    "workspace_path": self.workspace_path,
+                    "session_id": self._require_session_id(),
+                    "after_sequence": next_after_sequence,
+                    "limit": 200,
+                },
+            )
+            history = SessionHistoryModel.model_validate(result)
+            records.extend(history.records)
+            history_cursor = history.history_cursor
+            if not history.has_more:
+                return SessionHistoryModel(
+                    records=tuple(records),
+                    history_cursor=history_cursor,
+                    next_after_sequence=history_cursor,
+                    has_more=False,
+                )
+            if history.next_after_sequence <= next_after_sequence:
+                raise RuntimeError("Session history pagination did not advance")
+            next_after_sequence = history.next_after_sequence
 
     async def list_sessions(self) -> tuple[SessionSummaryModel, ...]:
         result = await self.request(

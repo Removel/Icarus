@@ -9,6 +9,7 @@ from textual.containers import VerticalScroll
 
 from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
+    CompleteAssistantMessage,
     AppendError,
     AppendToolStarted,
     AppendUserMessage,
@@ -75,6 +76,9 @@ class ConversationView(VerticalScroll):
         elif isinstance(action, AppendAssistantDelta):
             assistant = await self._ensure_assistant_segment()
             await assistant.append_delta(action.text)
+        elif isinstance(action, CompleteAssistantMessage):
+            assistant = await self._ensure_assistant_segment()
+            await assistant.complete_text(action.text)
         elif isinstance(action, AppendToolStarted):
             await self._finish_assistant_segment()
             tool = ToolMessage(

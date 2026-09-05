@@ -196,6 +196,59 @@ def test_gateway_client读取session历史并保留缓冲实时update():
     assert live.sequence == 2
 
 
+def test_gateway_client分批读取完整session历史():
+    async def run():
+        socket = SocketStub()
+        client = GatewayClient(
+            url="ws://gateway/rpc",
+            workspace_path="/workspace",
+            session_id="session",
+            connector=lambda url: asyncio.sleep(0, result=socket),
+        )
+        client._socket = socket
+        client._reader = asyncio.create_task(client._read_loop())
+        history_task = asyncio.create_task(client.get_session_history())
+        while len(socket.sent) < 1:
+            await asyncio.sleep(0)
+        first = socket.sent[-1]
+        await socket.incoming.put(
+            {
+                "jsonrpc": "2.0",
+                "id": first["id"],
+                "result": {
+                    "records": [],
+                    "history_cursor": 5,
+                    "next_after_sequence": 3,
+                    "has_more": True,
+                },
+            }
+        )
+        while len(socket.sent) < 2:
+            await asyncio.sleep(0)
+        second = socket.sent[-1]
+        await socket.incoming.put(
+            {
+                "jsonrpc": "2.0",
+                "id": second["id"],
+                "result": {
+                    "records": [],
+                    "history_cursor": 5,
+                    "next_after_sequence": 5,
+                    "has_more": False,
+                },
+            }
+        )
+        history = await history_task
+        await client.close()
+        return socket.sent, history
+
+    sent, history = asyncio.run(run())
+    assert sent[0]["params"]["after_sequence"] == 0
+    assert sent[1]["params"]["after_sequence"] == 3
+    assert all(item["params"]["limit"] == 200 for item in sent)
+    assert history.history_cursor == 5
+
+
 def test_gateway_client_existing_only不会创建缺失session():
     async def run():
         socket = SocketStub()

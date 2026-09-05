@@ -80,6 +80,7 @@ def create_default_projector_registry(
     agent = AgentProjector()
     for update_type in (
         "assistant.text_delta",
+        "assistant.message",
         "tool.started",
         "tool.completed",
         "task.error",

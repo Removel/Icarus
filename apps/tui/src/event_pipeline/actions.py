@@ -17,6 +17,12 @@ class AppendAssistantDelta:
 
 
 @dataclass(frozen=True)
+class CompleteAssistantMessage:
+    task_id: str
+    text: str
+
+
+@dataclass(frozen=True)
 class AppendToolStarted:
     task_id: str
     call_id: str
@@ -62,6 +68,7 @@ class FinishTurn:
 UiAction: TypeAlias = (
     AppendUserMessage
     | AppendAssistantDelta
+    | CompleteAssistantMessage
     | AppendToolStarted
     | UpdateToolCompleted
     | AppendError

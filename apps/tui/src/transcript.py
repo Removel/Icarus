@@ -7,6 +7,7 @@ from apps.tui.src.event_pipeline import (
     AppendError,
     AppendToolStarted,
     AppendUserMessage,
+    CompleteAssistantMessage,
     FinishTurn,
     SetRuntimeStatus,
     ShowNotification,
@@ -35,6 +36,9 @@ class TranscriptRecorder:
             return
         if isinstance(action, AppendAssistantDelta):
             self._assistant_parts.append(action.text)
+            return
+        if isinstance(action, CompleteAssistantMessage):
+            self._assistant_parts = [action.text]
             return
 
         self._flush_assistant()
