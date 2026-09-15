@@ -7,6 +7,11 @@ from typing import Any, Literal
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.model_config import LLMRole
 from apps.agent.src.model_provider.types import ImagePart, Message
+from apps.agent.src.agent_orchestration.plugins.blackboard.regions import (
+    RegionInput,
+    RegionOutput,
+    RegionState,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -47,3 +52,13 @@ class BlackboardContextReadyEvent(Event):
 class BlackboardCompactedEvent(Event):
     before_tokens: int
     after_tokens: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class BlackboardRegionUpdatedEvent(Event):
+    region: str
+    input_id: str | None
+    input: RegionInput | None
+    output: RegionOutput | None
+    state: RegionState
+    complete_for_input: bool | None

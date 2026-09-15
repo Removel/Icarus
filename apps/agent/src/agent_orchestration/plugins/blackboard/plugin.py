@@ -1,6 +1,7 @@
 """汇聚 Agent 上下文的 BlackboardPlugin。"""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from math import ceil
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
@@ -15,6 +16,7 @@ from apps.agent.src.agent_orchestration.plugins.blackboard.state import (
 from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
     BlackboardCompactedEvent,
     BlackboardContextReadyEvent,
+    BlackboardRegionUpdatedEvent,
     ContextContributionEvent,
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard.history_compactor import (
@@ -22,6 +24,10 @@ from apps.agent.src.agent_orchestration.plugins.blackboard.history_compactor imp
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard.prompt_composer import (
     BlackboardPromptComposer,
+)
+from apps.agent.src.agent_orchestration.plugins.blackboard.regions import (
+    RegionRegistry,
+    RegionStore,
 )
 from apps.agent.src.agent_orchestration.plugins.user_input.events import (
     InputFinishedEvent,
@@ -32,7 +38,6 @@ from apps.agent.src.model_provider.types import (
     Message,
     TextPart,
     ToolCall,
-    Usage,
 )
 
 
@@ -51,6 +56,8 @@ class BlackboardPlugin(BasePlugin):
         prompt_composer: BlackboardPromptComposer | None = None,
         context_window: int | None = None,
         history_compactor: HistoryCompactor | None = None,
+        region_registry: RegionRegistry | None = None,
+        region_store: RegionStore | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.required_context_sources = frozenset(required_context_sources)
@@ -61,15 +68,34 @@ class BlackboardPlugin(BasePlugin):
         self.prompt_composer = prompt_composer or BlackboardPromptComposer()
         self.context_window = context_window
         self.history_compactor = history_compactor
+        self.region_registry = region_registry or RegionRegistry()
+        self.region_store = region_store or RegionStore(self.region_registry)
         self._messages = list(initial_messages or [])
         self._context_tokens: int | None = None
         self._tasks: dict[str, BlackboardTaskState] = {}
+
+    async def start(self) -> None:
+        self.region_registry.freeze()
+        self.region_store.initialize()
 
     async def consume(
         self,
         source_plugin_id: str,
         event: Event,
     ) -> None:
+        if isinstance(event, BlackboardRegionUpdatedEvent) and event.task_id is None:
+            self.region_store.apply(
+                source_plugin_id=source_plugin_id,
+                task_id=None,
+                current_task_id=None,
+                region=event.region,
+                input_id=event.input_id,
+                input_value=event.input,
+                output=event.output,
+                state=event.state,
+                complete_for_input=event.complete_for_input,
+            )
+            return
         task_id = self._require_task_id(event)
         if isinstance(event, InputFinishedEvent):
             state = self._tasks.get(task_id)
@@ -86,46 +112,37 @@ class BlackboardPlugin(BasePlugin):
             if state is None:
                 return
             if isinstance(event, AgentCompletedEvent):
-                task_messages = event.response.task_messages
-                if not task_messages:
-                    task_messages = self._fallback_completed_messages(
-                        state,
-                        event,
-                    )
-                committed = self._commit_task_messages(state, task_messages)
-                await self._update_context_tokens(
-                    state.task_id,
-                    event.response.last_usage,
-                    committed,
+                committed = self._commit_product_conversation(
+                    state, event.response.message
                 )
+                self._update_context_tokens(committed)
                 state.agent_finished = True
             elif isinstance(event, TaskErrorEvent) and event.fatal:
-                committed = self._commit_task_messages(
-                    state, event.task_messages
+                assistant = _last_visible_assistant(event.task_messages)
+                committed = (
+                    self._commit_product_conversation(state, assistant)
+                    if assistant is not None
+                    else False
                 )
-                await self._update_context_tokens(
-                    state.task_id,
-                    event.last_usage,
-                    committed,
-                )
+                self._update_context_tokens(committed)
                 state.agent_finished = True
             elif isinstance(event, AgentCancelledEvent):
-                committed = self._commit_task_messages(
-                    state, event.task_messages
-                )
-                await self._update_context_tokens(
-                    state.task_id,
-                    event.last_usage,
-                    committed,
-                )
+                assistant = _last_visible_assistant(event.task_messages)
+                committed = self._commit_product_conversation(state, assistant)
+                self._update_context_tokens(committed)
                 state.agent_finished = True
             self._remove_task_if_finished(state)
             return
 
-        state = self._tasks.setdefault(
-            task_id,
-            BlackboardTaskState(task_id=task_id),
-        )
+        state = self._tasks.get(task_id)
+        if isinstance(event, BlackboardRegionUpdatedEvent) and state is None:
+            await self._publish_region_rejection(
+                task_id, ValueError("Region update requires an active Task")
+            )
+            return
+        if state is None:
+            state = BlackboardTaskState(task_id=task_id)
+            self._tasks[task_id] = state
 
         if isinstance(event, UserInputEvent):
             if state.user_input is not None:
@@ -133,7 +150,13 @@ class BlackboardPlugin(BasePlugin):
                     f"User input already exists: task_id={task_id}"
                 )
             state.user_input = event
+            state.input_id = event.event_id
+            state.required_regions = self.region_store.begin_input(event.event_id)
             await self._publish_if_ready(state)
+            return
+
+        if isinstance(event, BlackboardRegionUpdatedEvent):
+            await self._consume_region_update(state, source_plugin_id, event)
             return
 
         if isinstance(event, ContextContributionEvent):
@@ -184,11 +207,12 @@ class BlackboardPlugin(BasePlugin):
 
     def remove_task(self, task_id: str) -> BlackboardTaskState:
         try:
-            return self._tasks.pop(task_id)
+            state = self._tasks.pop(task_id)
         except KeyError as error:
             raise KeyError(
                 f"Blackboard task is not found: {task_id}"
             ) from error
+        return state
 
     def get_messages(self) -> list[Message]:
         return list(self._messages)
@@ -205,7 +229,7 @@ class BlackboardPlugin(BasePlugin):
     async def restore_session_state(
         self, state: Mapping[str, object], *, state_version: int
     ) -> None:
-        if state_version != 1:
+        if state_version not in {1, 2}:
             raise ValueError("Unsupported Blackboard session state version")
         messages = state.get("messages")
         if not isinstance(messages, list):
@@ -219,6 +243,7 @@ class BlackboardPlugin(BasePlugin):
         ):
             raise ValueError("Blackboard context_tokens must be non-negative")
         self._context_tokens = context_tokens
+        self.region_store.restore_session_snapshots(state.get("session_regions"))
 
     async def snapshot_workspace_state(self) -> Mapping[str, object] | None:
         return None
@@ -227,6 +252,7 @@ class BlackboardPlugin(BasePlugin):
         return {
             "messages": [_serialize_message(item) for item in self._messages],
             "context_tokens": self._context_tokens,
+            "session_regions": self.region_store.session_snapshot_values(),
         }
 
     async def stop(self) -> None:
@@ -293,6 +319,7 @@ class BlackboardPlugin(BasePlugin):
             prompt=user_input.prompt,
             context_blocks=context_blocks,
             context_errors=context_errors,
+            region_view=self.region_store.compact_view(),
         )
         state.input_prompt = input_prompt
         context_event = BlackboardContextReadyEvent(
@@ -336,57 +363,76 @@ class BlackboardPlugin(BasePlugin):
             )
         )
 
-    async def _update_context_tokens(
-        self,
-        task_id: str,
-        usage: Usage | None,
-        history_committed: bool,
-    ) -> None:
-        if not history_committed or self.context_window is None:
+    def _update_context_tokens(self, history_committed: bool) -> None:
+        if not history_committed:
             return
-        if usage is not None:
-            self._context_tokens = usage.total_tokens
-            return
-        await self.publish(
-            TaskErrorEvent(
-                task_id=task_id,
-                fatal=False,
-                code="usage_unavailable",
-                error_type="UsageUnavailableError",
-                error_message="model response did not include usage",
-            )
-        )
+        self._context_tokens = _estimate_messages_tokens(self._messages)
 
-    def _commit_task_messages(
+    def _commit_product_conversation(
         self,
         state: BlackboardTaskState,
-        messages: Sequence[Message],
+        assistant: Message | None,
     ) -> bool:
-        if state.history_committed or not messages:
+        if state.history_committed or state.user_input is None:
             return False
+        messages = [
+            Message(
+                "user",
+                [TextPart(state.user_input.prompt), *state.user_input.input_images],
+            )
+        ]
+        if assistant is not None and assistant.role == "assistant":
+            messages.append(
+                Message(
+                    "assistant",
+                    list(assistant.content),
+                )
+            )
         self._messages.extend(messages)
         state.history_committed = True
         return True
 
-    @staticmethod
-    def _fallback_completed_messages(
-        state: BlackboardTaskState,
-        event: AgentCompletedEvent,
-    ) -> tuple[Message, ...]:
-        if state.user_input is None or state.input_prompt is None:
-            return ()
-        user_content = [
-            TextPart(state.input_prompt),
-            *state.user_input.input_images,
-        ]
-        return (
-            Message("user", user_content),
-            event.response.message,
-        )
-
     def _remove_task_if_finished(self, state: BlackboardTaskState) -> None:
         if state.agent_finished and state.input_finished:
             self._tasks.pop(state.task_id, None)
+
+    async def _consume_region_update(
+        self,
+        state: BlackboardTaskState,
+        source_plugin_id: str,
+        event: BlackboardRegionUpdatedEvent,
+    ) -> None:
+        try:
+            snapshot = self.region_store.apply(
+                source_plugin_id=source_plugin_id,
+                task_id=event.task_id,
+                current_task_id=state.task_id if state.user_input else None,
+                region=event.region,
+                input_id=event.input_id,
+                input_value=event.input,
+                output=event.output,
+                state=event.state,
+                complete_for_input=event.complete_for_input,
+            )
+        except (KeyError, PermissionError, ValueError) as error:
+            await self._publish_region_rejection(state.task_id, error)
+            return
+        if snapshot.complete_for_input:
+            state.completed_regions.add(snapshot.region)
+        await self._publish_if_ready(state)
+
+    async def _publish_region_rejection(
+        self, task_id: str, error: Exception
+    ) -> None:
+        await self.publish(
+            TaskErrorEvent(
+                task_id=task_id,
+                fatal=False,
+                code="region_update_rejected",
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+        )
 
     @staticmethod
     def _require_task_id(event: Event) -> str:
@@ -426,6 +472,27 @@ def _serialize_message(message: Message) -> dict[str, object]:
         ],
         "tool_call_id": message.tool_call_id,
     }
+
+
+def _last_visible_assistant(messages: tuple[Message, ...]) -> Message | None:
+    for message in reversed(messages):
+        if message.role == "assistant" and message.content:
+            return message
+    return None
+
+
+def _estimate_messages_tokens(messages: list[Message]) -> int:
+    """Conservative provider-neutral estimate for persisted conversation."""
+
+    characters = 0
+    for message in messages:
+        characters += len(message.role) + 8
+        for part in message.content:
+            if isinstance(part, TextPart):
+                characters += len(part.text.encode("utf-8"))
+            elif isinstance(part, ImagePart):
+                characters += 1024
+    return ceil(characters / 3)
 
 
 def _deserialize_message(value: object) -> Message:

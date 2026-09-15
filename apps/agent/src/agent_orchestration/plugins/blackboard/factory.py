@@ -10,6 +10,13 @@ from apps.agent.src.agent_orchestration.plugins.blackboard.history_compactor imp
 from apps.agent.src.agent_orchestration.plugins.blackboard.plugin import (
     BlackboardPlugin,
 )
+from apps.agent.src.agent_orchestration.plugins.blackboard.regions import (
+    RegionRegistry,
+    RegionStore,
+)
+from apps.agent.src.agent_orchestration.plugins.blackboard.tools import (
+    create_blackboard_tools,
+)
 from apps.agent.src.agent_orchestration.plugins.persistence.runtime import (
     PersistenceRuntime,
     PersistenceSession,
@@ -49,6 +56,8 @@ def create_plugin(
             HookDispatcher(hook_registry),
         )
     )
+    region_registry = RegionRegistry()
+    region_store = RegionStore(region_registry)
     plugin = BlackboardPlugin(
         plugin_id,
         required_context_sources=set(
@@ -62,11 +71,15 @@ def create_plugin(
             config_model.model_settings, model_role
         ).context_window,
         history_compactor=compactor,
+        region_registry=region_registry,
+        region_store=region_store,
     )
     return PluginRegistration(
         plugin=plugin,
         capabilities=(
             ProvidedCapability("conversation", "1.0.0", plugin),
+            ProvidedCapability("region_registry", "1.0.0", region_registry),
         ),
+        tools=create_blackboard_tools(region_store),
         state_provider=plugin,
     )
