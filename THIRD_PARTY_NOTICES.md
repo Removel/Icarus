@@ -10,3 +10,14 @@
 
 The project name and trademarks belong to their respective owners. Inclusion does not
 imply upstream endorsement of Icarus.
+
+## OpenKB
+
+- Upstream: https://github.com/VectifyAI/OpenKB
+- Local source: `apps/openkb`
+- Imported commit: `ff54396e575ee6feb0113b631a34caa082b441cc`
+- License: Apache License 2.0; see `apps/openkb/LICENSE`
+- Icarus modifications: `apps/openkb/MODIFICATIONS.md`
+
+The project name and trademarks belong to their respective owners. Inclusion does not
+imply upstream endorsement of Icarus.

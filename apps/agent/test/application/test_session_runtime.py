@@ -38,7 +38,8 @@ def make_config(data_dir) -> ConfigModel:
         icarus_data_dir=data_dir,
         runtime={
             "plugin_config": {
-                "memory": {"user_id": "test-user", "agent_id": "test-agent"}
+                "memory": {"user_id": "test-user", "agent_id": "test-agent"},
+                "knowledge": {"knowledge_base": "test-kb"},
             }
         },
         model_settings=ModelSettings(thinking=model, perception=model),
@@ -154,6 +155,7 @@ def test_session_runtime使用runtime_update并保留单session行为(tmp_path):
     assert "runtime-update" in {item.plugin_id for item in graph.plugins}
     assert "mcp" in {item.plugin_id for item in graph.plugins}
     assert "memory" in {item.plugin_id for item in graph.plugins}
+    assert "knowledge" in {item.plugin_id for item in graph.plugins}
     assert runtime.is_running is False
 
 
@@ -193,6 +195,10 @@ def test_session_runtime无mcp_server时仍注册稳定入口(tmp_path):
     assert "mcp_tool_execute" in names
     assert "blackboard_list" in names
     assert "blackboard_read" in names
+    assert {
+        "knowledge_query", "knowledge_list", "knowledge_read",
+        "knowledge_upload", "knowledge_recompile",
+    }.issubset(names)
 
 
 def test_session_runtime配置mcp后注册三个固定工具(tmp_path):
@@ -348,3 +354,87 @@ def test_session_runtime_e2e自动记忆先注入再放行且不进入conversati
         "memory_remember", "memory_correct", "memory_stop_reference",
         "memory_restore_reference", "memory_delete",
     }.issubset(tools)
+
+
+def test_session_runtime_e2e知识工具按需执行且不注册region(tmp_path, monkeypatch):
+    from apps.agent.src.agent_orchestration.plugins.knowledge.models import (
+        KnowledgeCatalog,
+        KnowledgeDocument,
+        KnowledgePage,
+        KnowledgeQueryResult,
+        KnowledgeRecompileDocument,
+        KnowledgeRecompileResult,
+        KnowledgeUploadItem,
+        KnowledgeUploadResult,
+    )
+
+    class KnowledgeBackendStub:
+        def __init__(self):
+            self.calls = []
+
+        def query(self, question):
+            self.calls.append(("query", question))
+            return KnowledgeQueryResult("Icarus uses plugin-owned capabilities.")
+
+        def list(self):
+            self.calls.append(("list",))
+            return KnowledgeCatalog(
+                (KnowledgeDocument("knowledge-document:h1", "guide.md", "md", "Markdown"),),
+                ("summaries/guide",), (), (), (),
+            )
+
+        def read(self, path):
+            self.calls.append(("read", path))
+            return KnowledgePage(path, "Icarus architecture guide")
+
+        def upload(self, sources):
+            self.calls.append(("upload", tuple(source.name for source in sources)))
+            return KnowledgeUploadResult(
+                (KnowledgeUploadItem("guide.md", "added", "compiled"),), 1, 0, 0
+            )
+
+        def recompile(self, *, document, all_documents, refresh_schema):
+            self.calls.append(("recompile", document, all_documents, refresh_schema))
+            return KnowledgeRecompileResult(
+                "done", 1, 1, 0,
+                (KnowledgeRecompileDocument("guide.md", "guide", "md", "recompiled"),),
+            )
+
+        def close(self):
+            pass
+
+    async def run():
+        backend = KnowledgeBackendStub()
+        monkeypatch.setattr(
+            "apps.agent.src.agent_orchestration.plugins.knowledge.factory.OpenKBHttpAdapter",
+            lambda *args, **kwargs: backend,
+        )
+        runtime = SessionRuntime(
+            SessionIdentity.create(tmp_path / "workspace", "session-knowledge"),
+            config=make_config(tmp_path / "data"),
+            publish_update=lambda update: asyncio.sleep(0),
+        )
+        runtime.workspace_path.mkdir(parents=True)
+        (runtime.workspace_path / "guide.md").write_text("guide", encoding="utf-8")
+        await runtime.start()
+        tools = {name: runtime.tool_registry.get(name) for name in runtime.tool_registry.names()}
+        outputs = [
+            tools["knowledge_upload"].invoke({"paths": ["guide.md"]}),
+            tools["knowledge_list"].invoke({}),
+            tools["knowledge_read"].invoke({"path": "summaries/guide"}),
+            tools["knowledge_query"].invoke({"question": "What is Icarus?"}),
+            tools["knowledge_recompile"].invoke({"document": "guide"}),
+        ]
+        region_names = {
+            item.region
+            for item in runtime.runtime_host.get_plugin("blackboard").region_store.snapshots()
+        }
+        await runtime.stop("test", timeout=1)
+        return backend.calls, outputs, region_names
+
+    calls, outputs, region_names = asyncio.run(run())
+    assert all(output.success for output in outputs)
+    assert [call[0] for call in calls] == [
+        "upload", "list", "read", "query", "recompile"
+    ]
+    assert "knowledge" not in region_names

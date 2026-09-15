@@ -14,6 +14,9 @@
       "memory": {
         "user_id": "removel",
         "agent_id": "icarus"
+      },
+      "knowledge": {
+        "knowledge_base": "icarus-project"
       }
     },
     "required_plugin_ids": [
@@ -25,7 +28,8 @@
       "blackboard",
       "runtime-update",
       "mcp",
-      "memory"
+      "memory",
+      "knowledge"
     ]
   },
   "mcpServers": {

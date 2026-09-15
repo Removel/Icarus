@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "plugin_id": "knowledge",
+  "plugin_version": "1.0.0",
+  "entrypoint": "apps.agent.src.agent_orchestration.plugins.knowledge.factory:create_plugin",
+  "python_requires": ["httpx>=0.27,<1"],
+  "required_capabilities": [],
+  "provided_capabilities": [],
+  "provided_tools": [
+    "knowledge_query",
+    "knowledge_list",
+    "knowledge_read",
+    "knowledge_upload",
+    "knowledge_recompile"
+  ],
+  "published_events": [],
+  "consumed_events": [],
+  "state_scopes": []
+}

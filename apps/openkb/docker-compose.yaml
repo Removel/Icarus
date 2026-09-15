@@ -1,0 +1,28 @@
+name: openkb-dev
+
+services:
+  openkb:
+    build:
+      context: .
+      dockerfile: Dockerfile.icarus
+    ports:
+      - "7566:7566"
+    environment:
+      OPENKB_API_TOKEN: ${ICARUS_OPENKB_API_TOKEN:?Set ICARUS_OPENKB_API_TOKEN}
+      OPENKB_CONFIG_DIR: /data/config
+      OPENKB_KB_ROOT: /data/kbs
+      OPENKB_ICARUS_DEFAULT_KB: ${ICARUS_OPENKB_KNOWLEDGE_BASE:-icarus-project}
+      OPENKB_ICARUS_MODEL: ${ICARUS_OPENKB_LLM_MODEL:-deepseek/deepseek-v4-flash}
+      LLM_API_KEY: ${ICARUS_OPENKB_LLM_API_KEY:?Set ICARUS_OPENKB_LLM_API_KEY}
+      OPENAI_API_BASE: ${ICARUS_OPENKB_OPENAI_BASE_URL:-https://api.deepseek.com}
+      PAGEINDEX_API_KEY: ${ICARUS_OPENKB_PAGEINDEX_API_KEY:-}
+    volumes:
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/openkb/config:/data/config
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/openkb/kbs:/data/kbs
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/openkb/backups:/data/backups
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7566/openapi.json', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s

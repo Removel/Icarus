@@ -50,7 +50,8 @@ def make_config(data_dir):
         icarus_data_dir=data_dir,
         runtime={
             "plugin_config": {
-                "memory": {"user_id": "test-user", "agent_id": "test-agent"}
+                "memory": {"user_id": "test-user", "agent_id": "test-agent"},
+                "knowledge": {"knowledge_base": "test-kb"},
             }
         },
         model_settings=ModelSettings(thinking=model, perception=model),

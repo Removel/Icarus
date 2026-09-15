@@ -66,6 +66,7 @@ def test_config_model_skill_permissions_default_disabled():
     assert config.mcp_servers == {}
     assert "mcp" in config.runtime.required_plugin_ids
     assert "memory" in config.runtime.required_plugin_ids
+    assert "knowledge" in config.runtime.required_plugin_ids
 
 
 def test_config_model读取通用mcp_servers并保留server字段():

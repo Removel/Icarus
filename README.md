@@ -9,7 +9,7 @@ Icarus 希望通过长期共处逐渐理解用户、用户正在经历的事情�
 
 项目当前处于本地 TUI 技术预览阶段，已经可以创建和恢复多个 Session，发送文本或图片，让 Agent
 调用本地工具完成任务，并在退出后恢复对话内容与上下文。长期 Memory 的 Agent 侧能力已经接入，
-使用时需要另行启动仓库内的自建 Mem0；持续环境感知、多端产品和更完整的自主成长仍属于后续方向。
+使用时需要另行启动仓库内的自建 Mem0 与 OpenKB；持续环境感知、多端产品和更完整的自主成长仍属于后续方向。
 
 ## 产品方向
 
@@ -32,7 +32,8 @@ apps/
 ├── tui/         Textual 终端客户端
     ├── requirements.txt
     └── scripts/
-└── mem0/        Apache-2.0 Mem0 源码与 Icarus 自建服务修改
+├── mem0/        Apache-2.0 Mem0 源码与 Icarus 自建服务修改
+└── openkb/      Apache-2.0 OpenKB 源码与 Icarus 自建服务修改
 packages/        应用间共享的数据模型和环境配置
 docs/            项目定位、路线图和待办
 scripts/         整个仓库的安装、启动和测试编排
@@ -74,7 +75,8 @@ Trace 和日志继续保存在 Session 文件目录中。Gateway、TUI 和未来
 Plugin 通过 Manifest 声明 Capability、Tool、Event 和状态范围，并由运行时解析依赖关系和生命周期。
 配置与 Plugin 拓扑在单个 SessionRuntime 生命周期内保持稳定，新建或重新加载 Session 时读取最新
 配置。Skill 支持发现、搜索、生产和演化，并保持明确的本地权限与持久化边界。MemoryPlugin
-每轮先做有界自动召回，再启动主 Agent；主 Agent 还可以显式读取、写入和维护记忆。
+每轮先做有界自动召回，再启动主 Agent；主 Agent还可以显式读取、写入和维护记忆。KnowledgePlugin
+提供按需查询、列举、读取、上传与重编译，不开放删除能力。
 
 ### 稳定的模型与客户端边界
 
@@ -142,10 +144,12 @@ ICARUS_MEM0_POSTGRES_PASSWORD=your-database-password
 ICARUS_MEM0_JWT_SECRET=your-jwt-secret
 ICARUS_MEM0_LLM_API_KEY=your-memory-model-key
 ICARUS_MEM0_AUTH_DISABLED=false
+ICARUS_OPENKB_API_TOKEN=your-local-service-token
+ICARUS_OPENKB_LLM_API_KEY=your-knowledge-model-key
 ```
 
 只需填写当前协议实际使用的 API Key。`ICARUS_DATA_DIR` 用于保存 `icarus.db`、Plugin State、Trace
-和图片 Asset。Agent、Gateway、TUI、Mem0 和后续外部服务都读取仓库根 `.env`。本版本不迁移旧 JSONL Session 数据；首次
+和图片 Asset。Agent、Gateway、TUI、Mem0 和 OpenKB 都读取仓库根 `.env`。本版本不迁移旧 JSONL Session 数据；首次
 使用需要配置不包含旧 Session 目录的新数据目录。
 
 首次使用 Memory 前启动自建服务：
@@ -159,6 +163,17 @@ make mem0-up
 `OPENAI_API_KEY`；默认 LLM 使用 OpenAI-compatible DeepSeek Endpoint 与
 `deepseek-v4-flash`，Embedding 使用本地 FastEmbed；可在 `.env` 覆盖 provider、model 和维度。
 `make mem0-down` 停止服务但不删除数据。
+
+首次使用 Knowledge 前启动自建服务：
+
+```bash
+make openkb-up
+```
+
+该命令读取仓库根 `.env`，把 config、知识库与备份放在
+`$ICARUS_DATA_DIR/services/openkb`，并按 `settings.json` 的
+`runtime.plugin_config.knowledge.knowledge_base` 创建默认知识库。专用 LLM Key 为空时复用
+`OPENAI_API_KEY`；默认使用 `deepseek/deepseek-v4-flash`。`make openkb-down` 停止服务但不删除数据。
 
 同时启动本机 Gateway 和 TUI：
 
@@ -244,6 +259,7 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 - Gateway 断线后重新连接并对账当前任务状态；
 - 自动卸载长时间空闲的 Session，同时保留本地数据供下次恢复。
 - 自动召回全局和当前 Workspace 记忆，并由主 Agent 显式维护 Mem0 记忆。
+- 按需查询、读取、上传和重编译 OpenKB 知识，不向 Agent 开放删除接口。
 
 当前已经形成可完整体验的本机闭环：
 
@@ -262,6 +278,7 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 - 长会话历史暂未分页；
 - Backend、WebUI、GUI 和远程认证尚未接入。
 - Memory 依赖本机 Mem0；服务不可用时当前轮在 1 秒内降级为无记忆运行。
+- Knowledge 依赖本机 OpenKB；服务不可用时当前 Tool 失败，但 Session 保持可用。
 
 ## 第三方源码
 
