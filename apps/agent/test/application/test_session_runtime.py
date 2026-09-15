@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
@@ -16,7 +17,7 @@ from apps.agent.src.model_config import (
     ModelSettings,
     ThinkMode,
 )
-from apps.agent.src.model_provider.types import Message, TextPart, Usage
+from apps.agent.src.model_provider.types import Message, TextPart, ToolCall, Usage
 
 
 def make_config(data_dir) -> ConfigModel:
@@ -138,6 +139,8 @@ def test_session_runtime无mcp_server时仍注册稳定入口(tmp_path):
     assert "mcp_tool_list" in names
     assert "mcp_tool_search" in names
     assert "mcp_tool_execute" in names
+    assert "blackboard_list" in names
+    assert "blackboard_read" in names
 
 
 def test_session_runtime配置mcp后注册三个固定工具(tmp_path):
@@ -180,3 +183,68 @@ def test_session_runtime_stop可重复调用(tmp_path):
         return runtime
 
     assert asyncio.run(run()).is_running is False
+
+
+def test_session_runtime_e2e只持久化product_conversation(tmp_path):
+    class ToolTranscriptAgent:
+        async def astream(self, **kwargs):
+            prompt = kwargs["input_prompt"]
+            tool_call = ToolCall("call-1", "read", {"path": "settings.json"})
+            final = Message("assistant", [TextPart("final answer")])
+            yield AgentCompletedEvent(
+                step=2,
+                response=AgentResponse(
+                    message=final,
+                    last_usage=Usage(999, 100),
+                    messages=[
+                        Message("user", [TextPart(prompt)]),
+                        Message("assistant", [], tool_calls=[tool_call]),
+                        Message("tool", [TextPart("tool result")], tool_call_id="call-1"),
+                        Message("user", [TextPart("<runtime_context>secret context</runtime_context>")]),
+                        final,
+                    ],
+                    task_message_start=0,
+                    steps=2,
+                ),
+            )
+
+    async def run():
+        identity = SessionIdentity.create(tmp_path, "session-product")
+        runtime = SessionRuntime(
+            identity,
+            config=make_config(tmp_path / "data"),
+            publish_update=lambda update: asyncio.sleep(0),
+        )
+        await runtime.start()
+        runtime.runtime_host.get_plugin("agent").agent_factory.get_agent = (
+            lambda role: ToolTranscriptAgent()
+        )
+        accepted = await runtime.submit("original user text")
+        for _ in range(200):
+            if not runtime.snapshot().has_work:
+                break
+            await asyncio.sleep(0.01)
+        await runtime.checkpoint()
+        state_path = (
+            runtime.persistence.resolver.session_dir(identity)
+            / "plugin-state"
+            / "blackboard.json"
+        )
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        messages = runtime.runtime_host.get_plugin("blackboard").get_messages()
+        tools = set(runtime.tool_registry.names())
+        await runtime.stop("test", timeout=1)
+        return accepted, messages, state, tools
+
+    accepted, messages, state, tools = asyncio.run(run())
+    assert accepted.task_id
+    assert messages == [
+        Message("user", [TextPart("original user text")]),
+        Message("assistant", [TextPart("final answer")]),
+    ]
+    stored = state["state"]["messages"]
+    assert [item["role"] for item in stored] == ["user", "assistant"]
+    serialized = json.dumps(state, ensure_ascii=False)
+    assert "tool result" not in serialized
+    assert "secret context" not in serialized
+    assert {"blackboard_list", "blackboard_read"}.issubset(tools)

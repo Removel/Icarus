@@ -11,6 +11,7 @@ from apps.agent.src.agent_orchestration.plugins.user_input.events import UserInp
 @dataclass
 class BlackboardTaskState:
     task_id: str
+    input_id: str | None = None
     user_input: UserInputEvent | None = None
     contributions: dict[str, ContextContributionEvent] = field(
         default_factory=dict
@@ -21,9 +22,12 @@ class BlackboardTaskState:
     agent_finished: bool = False
     input_finished: bool = False
     reported_context_errors: set[str] = field(default_factory=set)
+    required_regions: frozenset[str] = frozenset()
+    completed_regions: set[str] = field(default_factory=set)
 
     def is_context_ready(self, required_sources: frozenset[str]) -> bool:
         return (
             self.user_input is not None
             and required_sources.issubset(self.contributions)
+            and self.required_regions.issubset(self.completed_regions)
         )

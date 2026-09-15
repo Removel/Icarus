@@ -10,9 +10,13 @@
     {"plugin_id": "persistence", "capability_id": "session", "version_spec": ">=1,<2"}
   ],
   "provided_capabilities": [
-    {"capability_id": "conversation", "version": "1.0.0"}
+    {"capability_id": "conversation", "version": "1.0.0"},
+    {"capability_id": "region_registry", "version": "1.0.0"}
   ],
-  "provided_tools": [],
+  "provided_tools": [
+    "blackboard_list",
+    "blackboard_read"
+  ],
   "published_events": [
     "apps.agent.src.agent_orchestration.plugins.blackboard.events.BlackboardContextReadyEvent",
     "apps.agent.src.agent_orchestration.plugins.blackboard.events.BlackboardCompactedEvent",
