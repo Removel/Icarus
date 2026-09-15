@@ -11,6 +11,12 @@
 `plugin-runtime-manifest-lifecycle-design.md`，SkillPlugin 细节见 `skill-plugin-design.md`。
 本文以当前 Manifest、Factory 和测试生成的冻结运行图为准。
 
+Blackboard 的多 Region 状态板、Region owner、`input / output / state`、只读
+`blackboard_list / blackboard_read` 和 Product Conversation 投影已经实现。当前标准运行图尚无
+Region owner，因此 Registry 为空，不阻塞普通输入；MemoryPlugin 接入后会注册第一阶段唯一的
+required Region。完整设计见 `plugin-eventbus-blackboard-design.md`，Memory Region 接入见
+`memory-knowledge-plugin-design.md`。
+
 ## 当前 Runtime 组件
 
 | 组件 | 当前职责 |
@@ -29,7 +35,7 @@
 | `persistence` | Trace、日志、Session 元数据，以及 Workspace / Session Plugin 状态 |
 | `builtin-tools` | 注册 `read`、`write`、`insert`、`bash` |
 | `user-input` | FIFO 接收输入，发布排队、开始、输入和结束 Event |
-| `blackboard` | 维护跨轮对话和当前任务状态，发布主 Agent 调用快照 |
+| `blackboard` | 维护 Product Conversation、Plugin Region 和当前任务状态，发布主 Agent 调用快照并提供只读 Region Tool |
 | `agent` | 适配无状态 ReActAgent，执行 Run，处理运行中 Context 与取消请求 |
 | `skill` | 提供显式 Skill 发现、搜索、生产、演化和 Job 查询 |
 | `mcp` | 按需连接配置的 MCP Server，通过固定的 list/search/execute Tool 提供外部能力 |
@@ -231,5 +237,5 @@ Job 状态为 `queued → running → succeeded|failed|interrupted`。终态保�
 
 ## 当前未接入能力
 
-Memory、Knowledge、Style、Character、TTS、Emotion / L2D 等 Plugin 尚未接入当前 Runtime。
+Memory、Knowledge、Style、Character、TTS、Emotion / L2D 等 Plugin 尚未接入当前 Runtime。Blackboard Region 框架已经存在，但在 MemoryPlugin 接入前标准运行图没有已注册 Region。
 正式 WebUI/TUI 也不是 Runtime Plugin；当前由应用内部 `OutputBridgePlugin` 提供实时订阅边界。
