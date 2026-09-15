@@ -25,11 +25,21 @@ Gateway 只负责连接、协议校验、调用路由和消息分发，不承担
 
 ## 启动
 
+推荐通过仓库控制命令在后台启动并登记状态：
+
+```bash
+icarus start gateway
+icarus status gateway
+icarus stop gateway
+```
+
+以下 App 私有脚本保留用于开发时以前台方式调试：
+
 ```bash
 ./apps/gateway/scripts/start.sh
 ```
 
-在仓库根目录执行过 `make install` 或 `make install-commands` 后，也可以直接运行：
+兼容命令 `icarus-gateway` 仍以前台方式运行，并支持直接传入监听参数：
 
 ```bash
 icarus-gateway

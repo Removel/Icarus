@@ -6,7 +6,7 @@
 
 > **Icarus managed copy.** This source was imported at commit
 > `c7ee362aff94a369af70f13f2b4f853f6793ff4c`. From the Icarus repository,
-> use `make mem0-up` / `make mem0-down`. Durable data is bind-mounted under
+> use `icarus start mem0` / `icarus stop mem0`. Durable data is bind-mounted under
 > `$ICARUS_DATA_DIR/services/mem0`; see `MODIFICATIONS.md`.
 <p align="center" style="display: flex; justify-content: center; gap: 20px; align-items: center;">
   <a href="https://trendshift.io/repositories/11194" target="blank">

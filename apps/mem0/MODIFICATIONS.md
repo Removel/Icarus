@@ -10,13 +10,17 @@ Current modifications:
 
 - `server/docker-compose.yaml` stores PostgreSQL and history data under
   `$ICARUS_DATA_DIR/services/mem0` through explicit bind mounts.
-- `scripts/icarus-compose.sh` and `scripts/icarus_compose.py` safely load the
-  repository-root `.env`, validate variables, create data directories, and
-  invoke Docker Compose without shell-evaluating Secret values.
+- `scripts/icarus-compose.sh` and `scripts/icarus_compose.py` use only the system
+  Python standard library to safely load the repository-root `.env`, validate
+  variables, create data directories, and invoke Docker Compose without
+  shell-evaluating Secret values. The root `icarus` command is the public
+  lifecycle entrypoint.
 - The server image installs and runs the imported repository source instead of
   replacing it with the latest PyPI package at container startup.
 - The managed default uses an OpenAI-compatible Flash LLM and local FastEmbed
   embeddings; the configured embedding dimension is also passed to pgvector.
+- The REST add endpoint accepts `preserve_input_language`; Icarus enables it by
+  default so inferred memories keep the language and script of the input.
 - FastEmbed model files are bind-mounted under
   `$ICARUS_DATA_DIR/services/mem0/models` instead of remaining in an ephemeral
   container cache.

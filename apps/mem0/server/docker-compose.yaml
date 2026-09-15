@@ -7,9 +7,6 @@ services:
       dockerfile: server/dev.Dockerfile
     ports:
       - "8888:8000"
-    env_file:
-      # Icarus uses one Secret source for the Agent and managed services.
-      - ../../../.env
     networks:
       - mem0_network
     volumes:

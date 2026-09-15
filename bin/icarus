@@ -12,4 +12,15 @@ while [ -L "$script_path" ]; do
 done
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$script_path")/.." && pwd)
-exec "$repo_root/apps/tui/scripts/start.sh" "$@"
+python_bin=${PYTHON:-python3}
+
+if ! command -v "$python_bin" >/dev/null 2>&1; then
+  echo "Icarus requires Python 3.11 or newer" >&2
+  exit 1
+fi
+if ! "$python_bin" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+  echo "Icarus requires Python 3.11 or newer" >&2
+  exit 1
+fi
+
+exec "$python_bin" "$repo_root/scripts/icarus/main.py" "$@"

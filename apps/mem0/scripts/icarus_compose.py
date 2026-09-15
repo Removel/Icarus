@@ -7,20 +7,44 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
-from dotenv import dotenv_values
+SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "icarus"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from environment import read_env_file
 
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[3]
     env_file = repo_root / ".env"
     compose_file = repo_root / "apps" / "mem0" / "server" / "docker-compose.yaml"
-    values = {
-        key: value or ""
-        for key, value in dotenv_values(env_file, interpolate=False).items()
-        if key
-    }
+    values = read_env_file(env_file)
     environment = {**os.environ, **values}
+    action = sys.argv[1] if len(sys.argv) > 1 else ""
+    passive = action in {
+        "build", "down", "stop", "logs", "ps", "kill", "rm"
+    }
+    if passive:
+        environment["ICARUS_DATA_DIR"] = environment.get(
+            "ICARUS_DATA_DIR"
+        ) or str(Path(tempfile.gettempdir()) / "icarus-compose")
+        environment["ICARUS_MEM0_POSTGRES_PASSWORD"] = environment.get(
+            "ICARUS_MEM0_POSTGRES_PASSWORD"
+        ) or "not-used"
+        environment["ICARUS_MEM0_JWT_SECRET"] = environment.get(
+            "ICARUS_MEM0_JWT_SECRET"
+        ) or "not-used"
+        environment["ICARUS_MEM0_LLM_API_KEY"] = environment.get(
+            "ICARUS_MEM0_LLM_API_KEY"
+        ) or "not-used"
+    else:
+        _validate_start_environment(environment, repo_root)
+    return _run_compose(environment, env_file, compose_file)
+
+
+def _validate_start_environment(environment: dict[str, str], repo_root: Path) -> None:
     data_dir = Path(environment.get("ICARUS_DATA_DIR", ""))
     if not data_dir.is_absolute():
         raise SystemExit("ICARUS_DATA_DIR must be an absolute path.")
@@ -61,14 +85,24 @@ def main() -> int:
         (data_dir / "services" / "mem0" / relative).mkdir(
             parents=True, exist_ok=True
         )
+
+
+def _run_compose(
+    environment: dict[str, str], env_file: Path, compose_file: Path
+) -> int:
+    compose = shutil.which("docker-compose")
+    docker = shutil.which("docker")
+    if compose is None and docker is None:
+        raise SystemExit("Mem0 requires Docker with the compose plugin.")
     command = (
         [compose]
         if compose is not None
         else [docker, "compose"]
     )
+    env_args = ["--env-file", str(env_file) if env_file.is_file() else os.devnull]
     completed = subprocess.run(
         [
-            *command, "--env-file", str(env_file), "-f",
+            *command, *env_args, "-f",
             str(compose_file), *sys.argv[1:],
         ],
         env=environment,

@@ -53,11 +53,13 @@ ICARUS_OPENKB_LLM_API_KEY=your-knowledge-model-key
 ```
 
 只需配置当前协议使用的 API Key。模型、Plugin 目录与运行参数在 `apps/agent/settings.json` 中设置。
-Mem0 服务通过根目录 `make mem0-up` 启动，数据位于 `$ICARUS_DATA_DIR/services/mem0`。
+Mem0 服务通过 `icarus start mem0` 启动，数据位于 `$ICARUS_DATA_DIR/services/mem0`。
 `runtime.plugin_config.memory` 的必填项只有稳定 `user_id` 和 `agent_id`；endpoint、top_k、threshold、
-上下文预算与 1 秒 deadline 有默认值。Mem0 服务在专用 Key 为空时复用现有 `OPENAI_API_KEY`，使用
+上下文预算与 1 秒 deadline 有默认值。`preserve_input_language` 默认开启，使 Mem0 在保持
+`infer=true` 抽取的同时使用输入语言保存事实。显式 `memory_recall` 省略召回参数时继承同一套配置。
+Mem0 服务在专用 Key 为空时复用现有 `OPENAI_API_KEY`，使用
 `deepseek-v4-flash` 与本地 FastEmbed Embedding。
-OpenKB 服务通过根目录 `make openkb-up` 启动，数据位于
+OpenKB 服务通过 `icarus start openkb` 启动，数据位于
 `$ICARUS_DATA_DIR/services/openkb`。`runtime.plugin_config.knowledge` 只要求配置
 `knowledge_base`；Endpoint、上传容量限制有默认值。Knowledge 只提供 query/list/read/upload/recompile，
 不使用 OpenKB `/chat`，也不注册删除 Tool。

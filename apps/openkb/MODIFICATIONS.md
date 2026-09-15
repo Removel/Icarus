@@ -27,9 +27,11 @@ Current modifications:
   top-level execution of generated artifact HTML while keeping sandboxed previews.
 - Knowledge mutation and session paths add canonical locks, transactional recompile,
   staged upload publication, locked watcher snapshots, and serialized chat turns.
-- The launcher reads the repository-root `.env`, then Compose maps only the credentials
-  OpenKB needs instead of injecting every Icarus secret into the container. Secrets are
-  not committed in this directory.
+- The launcher uses only the system Python standard library to read the
+  repository-root `.env`, then Compose maps only the credentials OpenKB needs
+  instead of injecting every Icarus secret into the container. The root
+  `icarus` command is the public lifecycle entrypoint. Secrets are not committed
+  in this directory.
 - The upstream app-local `.env.example` is omitted so the Monorepo root
   `.example.env` remains the single Icarus configuration template.
 

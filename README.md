@@ -96,32 +96,34 @@ Event 用于业务通信，Blackboard 表达当前上下文状态，Hook 只负�
 
 ## 快速开始
 
-安装全部 App 的运行依赖：
+首次从源码安装全部 App 的运行依赖：
 
 ```bash
-make install
+./bin/icarus install
 ```
+
+如果根 `.env` 不存在，安装命令会从 `.example.env` 创建一个权限受限的空模板；安装完成后需要填写
+运行所需配置。安装不会覆盖已有 `.env`，也不会启动任何服务。
 
 安装完成后会在 `${ICARUS_BIN_DIR:-~/.local/bin}` 创建 `icarus` 和 `icarus-gateway` 软链接。需要使用
 其他命令目录时可以执行：
 
 ```bash
-ICARUS_BIN_DIR=/your/bin make install
+ICARUS_BIN_DIR=/your/bin ./bin/icarus install
 ```
 
 需要运行测试时，安装各 App 的开发依赖：
 
 ```bash
-make install-dev
+icarus install --dev
 ```
 
 也可以只安装一个 App：
 
 ```bash
-make install-agent
-make install-gateway
-make install-tui
-make install-commands
+icarus install agent
+icarus install gateway
+icarus install tui
 ```
 
 上述命令分别创建：
@@ -131,6 +133,10 @@ apps/agent/.venv
 apps/gateway/.venv
 apps/tui/.venv
 ```
+
+依赖始终属于各自 App；仓库根目录不会创建共享 `.venv`。Mem0 和 OpenKB 的服务端依赖通过
+`icarus install mem0` 与 `icarus install openkb` 构建到各自 Docker 镜像中。`make install`、
+`make install-dev` 和 `make install APP=<name>` 保留为开发兼容入口。
 
 从根目录示例创建 `.env`，配置模型 API Key、外部服务 Secret 和绝对数据目录，并在
 `apps/agent/settings.json` 中选择模型：
@@ -152,47 +158,56 @@ ICARUS_OPENKB_LLM_API_KEY=your-knowledge-model-key
 和图片 Asset。Agent、Gateway、TUI、Mem0 和 OpenKB 都读取仓库根 `.env`。本版本不迁移旧 JSONL Session 数据；首次
 使用需要配置不包含旧 Session 目录的新数据目录。
 
-首次使用 Memory 前启动自建服务：
+启动全部能力：
 
 ```bash
-make mem0-up
+icarus start
 ```
 
-该命令要求本机已安装 Docker Compose，读取仓库根 `.env`，并把 PostgreSQL、history 和备份
-放在 `$ICARUS_DATA_DIR/services/mem0`。`ICARUS_MEM0_LLM_API_KEY` 为空时复用现有
-`OPENAI_API_KEY`；默认 LLM 使用 OpenAI-compatible DeepSeek Endpoint 与
-`deepseek-v4-flash`，Embedding 使用本地 FastEmbed；可在 `.env` 覆盖 provider、model 和维度。
-`make mem0-down` 停止服务但不删除数据。
-
-首次使用 Knowledge 前启动自建服务：
+该命令按 Mem0、OpenKB、Gateway 的顺序启动后台项目并等待健康检查，随后在当前终端打开 TUI。
+TUI 退出后后台项目继续运行。使用统一状态和停止命令管理它们：
 
 ```bash
-make openkb-up
+icarus status
+icarus stop
 ```
 
-该命令读取仓库根 `.env`，把 config、知识库与备份放在
-`$ICARUS_DATA_DIR/services/openkb`，并按 `settings.json` 的
-`runtime.plugin_config.knowledge.knowledge_base` 创建默认知识库。专用 LLM Key 为空时复用
-`OPENAI_API_KEY`；默认使用 `deepseek/deepseek-v4-flash`。`make openkb-down` 停止服务但不删除数据。
-
-同时启动本机 Gateway 和 TUI：
+也可以单独管理一个项目：
 
 ```bash
-make start
+icarus start mem0
+icarus start openkb
+icarus start gateway
+
+icarus stop mem0
+icarus stop openkb
+icarus stop gateway
+icarus stop tui
+
+icarus status mem0
 ```
 
-也可以继续使用独立命令：
+`agent` 是 Gateway 进程内加载的能力，不是独立进程，因此随 Gateway 启停。Mem0 作为一个项目管理
+其 API、PostgreSQL 和 Dashboard 服务组。停止命令不会删除 `$ICARUS_DATA_DIR` 下的 Memory、
+Knowledge、Session 或日志数据。
+
+服务已经启动时，可以只打开 TUI：
 
 ```bash
-# 终端一
-icarus-gateway
-
-# 终端二
 cd /path/to/workspace
+icarus tui --session-id my-session
+```
+
+`icarus tui` 不会隐式启动 Gateway。Gateway 不可用时会提示使用 `icarus start gateway` 或
+`icarus start`。不传 `--session-id` 时生成一个新 Session ID；建议在需要后续恢复时显式指定 ID。
+无子命令的旧形式暂时兼容：
+
+```bash
 icarus --session-id my-session
 ```
 
-`make start` 会把命令执行时的当前目录作为 Agent Workspace。可以用 `ARGS` 传递 TUI 参数：
+统一命令不会改变调用者当前目录；执行 `icarus start` 或 `icarus tui` 时的目录就是 Agent
+Workspace。Makefile 继续作为开发快捷入口：
 
 ```bash
 cd /path/to/workspace
@@ -200,16 +215,14 @@ make -f /absolute/path/to/Icarus/Makefile \
   start ARGS="--session-id my-session"
 ```
 
-当前目录会作为 Agent Workspace；不传 `--session-id` 时生成一个新 Session ID。建议在需要后续恢复
-时显式指定 ID。也可以从仓库根目录分别启动两个 App：
+Mem0 要求 Docker Compose，读取仓库根 `.env`，并把 PostgreSQL、history、模型缓存和备份放在
+`$ICARUS_DATA_DIR/services/mem0`。`ICARUS_MEM0_LLM_API_KEY` 为空时复用 `OPENAI_API_KEY`；默认 LLM
+使用 OpenAI-compatible DeepSeek Endpoint 与 `deepseek-v4-flash`，Embedding 使用本地 FastEmbed。
 
-```bash
-# 终端一
-make gateway
-
-# 终端二
-make tui ARGS="--session-id my-session"
-```
+OpenKB 读取同一个根 `.env`，把 config、知识库与备份放在
+`$ICARUS_DATA_DIR/services/openkb`，并按 `settings.json` 的
+`runtime.plugin_config.knowledge.knowledge_base` 创建默认知识库。专用 LLM Key 为空时复用
+`OPENAI_API_KEY`；默认使用 `deepseek/deepseek-v4-flash`。
 
 使用同一 Workspace 和 Session ID 再次启动时，TUI 会在进入 Ready 前从 SessionStore 一次性恢复
 已持久化的 Conversation，包括用户消息、助手文本、Tool、错误和中断终态，然后继续接收实时流。
@@ -231,7 +244,7 @@ Asset。Windows/Linux 的系统剪贴板图片读取暂未实现。
 退出。取消过程中会显示 `Cancelling`，并保留已经输出的内容；收到取消终态后才继续调度队列。
 输入 `exit`、`quit`，或在空输入时按 `Ctrl+D` 也会退出。Textual 退出后恢复启动前的终端画面。
 
-各 App 的直接启动脚本：
+各 App 的底层脚本仍保留用于开发和调试，但不是推荐的用户入口：
 
 ```bash
 ./apps/gateway/scripts/start.sh
@@ -270,7 +283,7 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 
 ## 当前边界
 
-- Gateway 作为独立进程运行；`make start` 可以统一启动 Gateway 与 TUI，单独运行 TUI 时不会隐式
+- Gateway 作为独立后台进程运行；`icarus start` 启动完整能力，`icarus tui` 单独打开 TUI 且不会隐式
   创建本地 Runtime；
 - Session 列表暂不支持搜索、筛选、重命名或删除非空 Session；
 - Gateway 首次不可用时不会持续后台重连；

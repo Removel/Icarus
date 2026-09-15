@@ -16,5 +16,3 @@ for app in agent gateway tui; do
     "$repo_root/apps/$app/scripts/install.sh"
   fi
 done
-
-"$repo_root/scripts/install-commands.sh"
