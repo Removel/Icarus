@@ -51,6 +51,7 @@ class RuntimeSettings(pydantic.BaseModel):
             "runtime-update",
             "mcp",
             "memory",
+            "knowledge",
         ]
     )
 

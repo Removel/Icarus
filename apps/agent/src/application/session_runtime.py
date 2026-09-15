@@ -81,6 +81,7 @@ class SessionRuntime:
         required.add("runtime-update")
         required.add("mcp")
         required.add("memory")
+        required.add("knowledge")
         self.runtime_host = PluginRuntimeHost(
             identity.workspace_path,
             identity.session_id,
@@ -125,6 +126,9 @@ class SessionRuntime:
                 },
                 "memory": {
                     **config.runtime.plugin_config.get("memory", {}),
+                },
+                "knowledge": {
+                    **config.runtime.plugin_config.get("knowledge", {}),
                 },
             },
             plugin_manager=self.plugin_manager,
