@@ -8,6 +8,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[6]
 SCRIPT = REPO_ROOT / "apps" / "mem0" / "scripts" / "icarus_compose.py"
 COMPOSE = REPO_ROOT / "apps" / "mem0" / "server" / "docker-compose.yaml"
+RUNTIME_SMOKE = REPO_ROOT / "apps" / "agent" / "scripts" / "smoke_memory_runtime.py"
 
 
 def load_module():
@@ -97,3 +98,8 @@ def test_mem0_compose脚本缺少docker时给出明确错误(tmp_path, monkeypat
     monkeypatch.setattr(module.shutil, "which", lambda name: None)
     with pytest.raises(SystemExit, match="requires Docker"):
         module.main()
+
+
+def test_memory_runtime_smoke包含标准必需knowledge配置():
+    text = RUNTIME_SMOKE.read_text(encoding="utf-8")
+    assert '"knowledge": {"knowledge_base": "icarus-project"}' in text

@@ -82,7 +82,8 @@ async def run() -> dict:
                         "memory": {
                             "user_id": user_id, "agent_id": "icarus-smoke",
                             "recall": {"threshold": 0, "deadline_ms": 1000},
-                        }
+                    },
+                    "knowledge": {"knowledge_base": "icarus-project"},
                     }
                 },
                 model_settings=ModelSettings(thinking=model, perception=model),
