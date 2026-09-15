@@ -770,6 +770,7 @@ class Memory(MemoryBase):
         infer: bool = True,
         memory_type: Optional[str] = None,
         prompt: Optional[str] = None,
+        preserve_input_language: bool = False,
     ):
         """
         Create a new memory.
@@ -795,6 +796,8 @@ class Memory(MemoryBase):
                 creating procedural memories (typically requires 'agent_id'). Otherwise, memories
                 are treated as general conversational/factual memories.
             prompt (str, optional): Prompt to use for the memory creation. Defaults to None.
+            preserve_input_language (bool, optional): Preserve the input language and script in
+                LLM-extracted memories. Defaults to False.
 
         Note:
             `search()` and `get_all()` scope queries via `filters={"user_id": "...", "agent_id": "...", "run_id": "..."}` —
@@ -866,7 +869,10 @@ class Memory(MemoryBase):
         else:
             messages = parse_vision_messages(messages)
 
-        vector_store_result = self._add_to_vector_store(messages, processed_metadata, effective_filters, infer, prompt=prompt)
+        vector_store_result = self._add_to_vector_store(
+            messages, processed_metadata, effective_filters, infer,
+            prompt=prompt, preserve_input_language=preserve_input_language,
+        )
         scale_threshold_notice = detect_scale_threshold_from_add_result(self, vector_store_result)
         if temporal_usage_notice:
             display_temporal_usage_notice(self, "sync", "add", *temporal_usage_notice)
@@ -876,7 +882,10 @@ class Memory(MemoryBase):
             display_first_run_notice(self, "sync", "add")
         return {"results": vector_store_result}
 
-    def _add_to_vector_store(self, messages, metadata, filters, infer, prompt=None):
+    def _add_to_vector_store(
+        self, messages, metadata, filters, infer, prompt=None,
+        preserve_input_language=False,
+    ):
         if not infer:
             returned_memories = []
             for message_dict in messages:
@@ -950,6 +959,7 @@ class Memory(MemoryBase):
             new_messages=parsed_messages,
             last_k_messages=last_messages,
             custom_instructions=custom_instr,
+            use_input_language=preserve_input_language,
         )
 
         try:
@@ -2444,6 +2454,7 @@ class AsyncMemory(MemoryBase):
         infer: bool = True,
         memory_type: Optional[str] = None,
         prompt: Optional[str] = None,
+        preserve_input_language: bool = False,
         llm=None,
     ):
         """
@@ -2462,6 +2473,8 @@ class AsyncMemory(MemoryBase):
             memory_type (str, optional): Type of memory to create. Defaults to None.
                                          Pass "procedural_memory" to create procedural memories.
             prompt (str, optional): Prompt to use for the memory creation. Defaults to None.
+            preserve_input_language (bool, optional): Preserve the input language and script in
+                LLM-extracted memories. Defaults to False.
             llm (BaseChatModel, optional): LLM class to use for generating procedural memories. Defaults to None. Useful when user is using LangChain ChatModel.
 
         Note:
@@ -2520,7 +2533,10 @@ class AsyncMemory(MemoryBase):
         else:
             messages = parse_vision_messages(messages)
 
-        vector_store_result = await self._add_to_vector_store(messages, processed_metadata, effective_filters, infer, prompt=prompt)
+        vector_store_result = await self._add_to_vector_store(
+            messages, processed_metadata, effective_filters, infer,
+            prompt=prompt, preserve_input_language=preserve_input_language,
+        )
         scale_threshold_notice = await asyncio.to_thread(detect_scale_threshold_from_add_result, self, vector_store_result)
         if temporal_usage_notice:
             await display_temporal_usage_notice_async(self, "async", "add", *temporal_usage_notice)
@@ -2537,6 +2553,7 @@ class AsyncMemory(MemoryBase):
         effective_filters: dict,
         infer: bool,
         prompt: Optional[str] = None,
+        preserve_input_language: bool = False,
     ):
         if not infer:
             returned_memories = []
@@ -2612,6 +2629,7 @@ class AsyncMemory(MemoryBase):
             new_messages=parsed_messages,
             last_k_messages=last_messages,
             custom_instructions=custom_instr,
+            use_input_language=preserve_input_language,
         )
 
         try:

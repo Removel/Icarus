@@ -27,6 +27,7 @@ class Mem0HttpAdapter:
         user_id: str,
         agent_id: str,
         api_key: str = "",
+        preserve_input_language: bool = True,
         timeout_seconds: float = 30,
         client: httpx.Client | None = None,
         async_client: httpx.AsyncClient | None = None,
@@ -42,6 +43,7 @@ class Mem0HttpAdapter:
         self.endpoint = endpoint
         self.user_id = user_id.strip()
         self.agent_id = agent_id.strip()
+        self.preserve_input_language = preserve_input_language
         self._headers = headers
         self._timeout_seconds = timeout_seconds
         self.client = client or httpx.Client(
@@ -136,6 +138,7 @@ class Mem0HttpAdapter:
             "run_id": run_id,
             "metadata": metadata,
             "infer": True,
+            "preserve_input_language": self.preserve_input_language,
         }
         value = self._request("POST", "/memories", json=payload)
         rows = value.get("results", []) if isinstance(value, dict) else []

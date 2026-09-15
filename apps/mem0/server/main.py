@@ -194,6 +194,10 @@ class MemoryCreate(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
     expiration_date: Optional[str] = Field(None, description="Expiration date in YYYY-MM-DD format.")
     infer: Optional[bool] = Field(None, description="Whether to extract facts from messages. Defaults to True.")
+    preserve_input_language: Optional[bool] = Field(
+        None,
+        description="Whether inferred memories should preserve the input language and script.",
+    )
     memory_type: Optional[str] = Field(None, description="Type of memory to store (e.g. 'core').")
     prompt: Optional[str] = Field(None, description="Custom prompt to use for fact extraction.")
 

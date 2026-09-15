@@ -81,7 +81,10 @@ def record(ref="memory:1", *, user="u", agent="a", run="global"):
     return MemoryRecord(item(ref), user, agent, run)
 
 
-def plugin(backend, *, deadline_ms=1000, max_context_chars=6000):
+def plugin(
+    backend, *, deadline_ms=1000, max_context_chars=6000,
+    top_k=3, threshold=0.65,
+):
     registry = RegionRegistry()
     handle = registry.register(RegionDefinition(
         "memory", "memory", "input", required_for_start=True,
@@ -90,7 +93,7 @@ def plugin(backend, *, deadline_ms=1000, max_context_chars=6000):
     return MemoryPlugin(
         "memory", backend, workspace_key="wk", user_id="u", agent_id="a",
         session_id="s", region_registration=handle, deadline_ms=deadline_ms,
-        max_context_chars=max_context_chars,
+        max_context_chars=max_context_chars, top_k=top_k, threshold=threshold,
     )
 
 

@@ -59,9 +59,9 @@ class MemoryRecallTool(_MemoryTool):
                     "query": {"type": "string", "minLength": 1},
                     "is_workspace": {"type": ["boolean", "null"], "default": None},
                     "include_stopped": {"type": "boolean", "default": False},
-                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20, "default": 3},
-                    "threshold": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.65},
-                    "max_context_chars": {"type": "integer", "minimum": 100, "maximum": 24000, "default": 6000},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20, "default": self.plugin.top_k},
+                    "threshold": {"type": "number", "minimum": 0, "maximum": 1, "default": self.plugin.threshold},
+                    "max_context_chars": {"type": "integer", "minimum": 100, "maximum": 24000, "default": self.plugin.max_context_chars},
                 },
                 "required": ["query"],
                 "additionalProperties": False,
@@ -74,8 +74,8 @@ class MemoryRecallTool(_MemoryTool):
             scope_value = arguments.get("is_workspace")
             if scope_value is not None and not isinstance(scope_value, bool):
                 raise ValueError("is_workspace must be a boolean or null")
-            top_k = arguments.get("top_k", 3)
-            threshold = arguments.get("threshold", 0.65)
+            top_k = arguments.get("top_k", self.plugin.top_k)
+            threshold = arguments.get("threshold", self.plugin.threshold)
             max_context_chars = arguments.get(
                 "max_context_chars", self.plugin.max_context_chars
             )

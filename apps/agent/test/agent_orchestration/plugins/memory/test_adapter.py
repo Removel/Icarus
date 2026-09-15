@@ -7,7 +7,7 @@ from apps.agent.src.agent_orchestration.plugins.memory import (
 )
 
 
-def make_adapter(handler):
+def make_adapter(handler, *, preserve_input_language=True):
     client = httpx.Client(
         transport=httpx.MockTransport(handler), base_url="http://mem0.test",
         headers={"X-API-Key": "test-key"},
@@ -18,6 +18,7 @@ def make_adapter(handler):
     )
     return Mem0HttpAdapter(
         "http://mem0.test", user_id="removel", agent_id="icarus",
+        preserve_input_language=preserve_input_language,
         client=client, async_client=async_client,
     )
 
@@ -108,7 +109,25 @@ def test_remember使用infer_true并保留作用域元数据():
     assert payload["messages"] == [{"role": "user", "content": "fact"}]
     assert payload["run_id"] == "workspace:wk"
     assert payload["infer"] is True
+    assert payload["preserve_input_language"] is True
     assert records[0].run_id == "workspace:wk"
+
+
+def test_remember可关闭输入语言保持():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    adapter = make_adapter(handler, preserve_input_language=False)
+    adapter.remember(
+        "fact", workspace_key="wk", scope="global", metadata={},
+    )
+
+    payload = __import__("json").loads(requests[0].content)
+    assert payload["infer"] is True
+    assert payload["preserve_input_language"] is False
 
 
 def test_correct_stop_restore_delete使用精确id():

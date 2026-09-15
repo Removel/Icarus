@@ -13,6 +13,7 @@ Adding memory is how Mem0 captures useful details from a conversation so your ag
 
 - **Messages**: The ordered list of user/assistant turns you send to `add`.
 - **Infer**: Controls whether Mem0 extracts structured memories (`infer=True`, default) or stores raw messages.
+- **Preserve input language**: With `preserve_input_language=True`, inferred memories keep the language and script used by the input.
 - **Metadata**: Optional filters (e.g., `{"category": "movie_recommendations"}`) that improve retrieval later.
 - **User / Session identifiers**: `user_id`, `agent_id`, `app_id`, or `run_id` that scope the memory for future searches.
 - **expiration_date**: Optional `YYYY-MM-DD` date after which the memory is treated as expired. Use `expirationDate` in the JavaScript SDKs. Expired memories are hidden from `search` and `get_all` unless you pass `show_expired` (`showExpired` in JavaScript); fetching by ID still returns them.
@@ -147,6 +148,9 @@ messages = [
 
 # Store inferred memories (default behavior)
 result = m.add(messages, user_id="alice", metadata={"category": "movie_recommendations"})
+
+# Keep inferred memories in the input language and script
+result = m.add(messages, user_id="alice", preserve_input_language=True)
 
 # Optionally store raw messages without inference
 result = m.add(messages, user_id="alice", metadata={"category": "movie_recommendations"}, infer=False)
