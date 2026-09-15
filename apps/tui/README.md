@@ -41,34 +41,34 @@ ICARUS_DATA_DIR=/Users/you/.icarus
 ./apps/tui/scripts/install.sh --dev
 ```
 
-Gateway 使用独立虚拟环境，需要单独安装和启动：
+Gateway 使用独立虚拟环境，需要先安装和启动：
 
 ```bash
-./apps/gateway/scripts/install.sh
-./apps/gateway/scripts/start.sh
+icarus install gateway
+icarus start gateway
 ```
 
 进入任意 Workspace 启动一次新会话：
 
 ```bash
 cd /path/to/workspace
-/absolute/path/to/Icarus/apps/tui/scripts/start.sh
+icarus tui
 ```
 
-在仓库根目录执行过 `make install` 或 `make install-commands` 后，也可以直接运行：
+也可以在首次安装前直接使用 App 私有脚本：
 
 ```bash
 cd /path/to/workspace
-icarus
+/absolute/path/to/Icarus/apps/tui/scripts/start.sh
 ```
 
 可选指定 Session ID；已有 Session 会恢复历史，不存在时创建：
 
 ```bash
-/absolute/path/to/Icarus/apps/tui/scripts/start.sh --session-id demo-session
+icarus tui --session-id demo-session
 ```
 
-对应的全局命令是：
+旧命令形式暂时兼容：
 
 ```bash
 icarus --session-id demo-session

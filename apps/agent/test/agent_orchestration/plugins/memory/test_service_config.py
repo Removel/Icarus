@@ -24,6 +24,7 @@ def test_mem0_compose使用可见数据目录且运行导入源码():
     mem0 = config["services"]["mem0"]
     postgres = config["services"]["postgres"]
     assert "volumes" not in config
+    assert "env_file" not in mem0
     assert any(
         "services/mem0/history:/app/history" in value
         for value in mem0["volumes"]
@@ -98,6 +99,30 @@ def test_mem0_compose脚本缺少docker时给出明确错误(tmp_path, monkeypat
     monkeypatch.setattr(module.shutil, "which", lambda name: None)
     with pytest.raises(SystemExit, match="requires Docker"):
         module.main()
+
+
+def test_mem0_compose停止不依赖agent环境或完整运行配置(tmp_path, monkeypatch):
+    module = load_module()
+    fake_repo = tmp_path / "repo"
+    script = fake_repo / "apps" / "mem0" / "scripts" / "icarus_compose.py"
+    script.parent.mkdir(parents=True)
+    monkeypatch.setattr(module, "__file__", str(script))
+    monkeypatch.setattr(
+        module.shutil, "which",
+        lambda name: "/fake/docker-compose" if name == "docker-compose" else None,
+    )
+    recorded = {}
+
+    def run(command, *, env, check):
+        recorded.update({"command": command, "env": env, "check": check})
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    monkeypatch.setattr(module.sys, "argv", [str(script), "down"])
+
+    assert module.main() == 0
+    assert recorded["command"][-1] == "down"
+    assert recorded["env"]["ICARUS_MEM0_LLM_API_KEY"] == "not-used"
 
 
 def test_memory_runtime_smoke包含标准必需knowledge配置():

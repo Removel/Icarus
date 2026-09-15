@@ -14,16 +14,11 @@
 # OpenKB: Open LLM Knowledge Base
 
 > Icarus vendors this Apache-2.0 project as ordinary Monorepo source at a locked
-> upstream commit. For the Icarus-managed service, use `make openkb-up` from the
+> upstream commit. For the Icarus-managed service, use `icarus start openkb` from the
 > repository root. Runtime data is bind-mounted from
 > `$ICARUS_DATA_DIR/services/openkb`; see `MODIFICATIONS.md`. The standalone
 > upstream examples below may use local `.env` files, but Icarus-managed startup
 > uses only the repository-root `.env`.
-
-> Icarus vendors this Apache-2.0 project as ordinary Monorepo source at a locked
-> upstream commit. For the Icarus-managed service, use `make openkb-up` from the
-> repository root. Runtime data is bind-mounted from
-> `$ICARUS_DATA_DIR/services/openkb`; see `MODIFICATIONS.md`.
 
 <p align="center"><i>Scale to long documents  •  Reasoning-based retrieval  •  Native multi-modality  •  No Vector DB</i></p>
 

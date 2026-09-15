@@ -20,11 +20,14 @@ install_command() {
   fi
 
   if [ -e "$target_path" ]; then
-    expected_entry="apps.tui.src.main"
+    expected_entry="scripts/icarus/main.py"
+    legacy_entry="apps.tui.src.main"
     if [ "$command_name" = "icarus-gateway" ]; then
       expected_entry="apps.gateway.src.main"
+      legacy_entry="apps.gateway.src.main"
     fi
-    if grep -q "$expected_entry" "$target_path" 2>/dev/null; then
+    if grep -q "$expected_entry" "$target_path" 2>/dev/null || \
+       grep -q "$legacy_entry" "$target_path" 2>/dev/null; then
       rm "$target_path"
     else
       echo "Refusing to replace unrelated command: $target_path" >&2

@@ -93,3 +93,27 @@ def test_openkb_compose脚本缺少docker时给出明确错误(tmp_path, monkeyp
     monkeypatch.setattr(module.shutil, "which", lambda name: None)
     with pytest.raises(SystemExit, match="requires Docker"):
         module.main()
+
+
+def test_openkb_compose停止不依赖agent环境或完整运行配置(tmp_path, monkeypatch):
+    module = load_module()
+    fake_repo = tmp_path / "repo"
+    script = fake_repo / "apps" / "openkb" / "scripts" / "icarus_compose.py"
+    script.parent.mkdir(parents=True)
+    monkeypatch.setattr(module, "__file__", str(script))
+    monkeypatch.setattr(
+        module.shutil, "which",
+        lambda name: "/fake/docker-compose" if name == "docker-compose" else None,
+    )
+    recorded = {}
+
+    def run(command, *, env, check):
+        recorded.update({"command": command, "env": env, "check": check})
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    monkeypatch.setattr(module.sys, "argv", [str(script), "down"])
+
+    assert module.main() == 0
+    assert recorded["command"][-1] == "down"
+    assert recorded["env"]["ICARUS_OPENKB_LLM_API_KEY"] == "not-used"

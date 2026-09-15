@@ -194,7 +194,7 @@ docker compose down -v
 
 > **Icarus note:** this managed copy uses
 > `$ICARUS_DATA_DIR/services/mem0/postgres` as a bind mount instead of the
-> upstream `postgres_db` named volume. Use the root `make mem0-down`; deleting
+> upstream `postgres_db` named volume. Use `icarus stop mem0`; deleting
 > data is a separate explicit operation.
 
 **3. Update your `.env`**

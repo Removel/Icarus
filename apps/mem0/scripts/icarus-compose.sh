@@ -2,15 +2,14 @@
 set -euo pipefail
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-env_file="$repo_root/.env"
-python_bin="$repo_root/apps/agent/.venv/bin/python"
+python_bin=${PYTHON:-python3}
 
-if [ ! -f "$env_file" ]; then
-  echo "Mem0 requires $env_file; copy .example.env first." >&2
+if ! command -v "$python_bin" >/dev/null 2>&1; then
+  echo "Mem0 lifecycle requires Python 3.11 or newer" >&2
   exit 2
 fi
-if [ ! -x "$python_bin" ]; then
-  echo "Agent environment is missing. Run: make install-agent" >&2
+if ! "$python_bin" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+  echo "Mem0 lifecycle requires Python 3.11 or newer" >&2
   exit 2
 fi
 
