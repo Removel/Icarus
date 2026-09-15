@@ -10,6 +10,10 @@ from apps.agent.src.agent_orchestration.capability import (
 from apps.agent.src.agent_orchestration.plugins.persistence import (
     SessionIdentity,
 )
+from apps.agent.src.agent_orchestration.plugins.memory.models import (
+    MemoryItem,
+    MemoryRecallResult,
+)
 from apps.agent.src.application.session_runtime import SessionRuntime
 from apps.agent.src.model_config import (
     ConfigModel,
@@ -32,6 +36,11 @@ def make_config(data_dir) -> ConfigModel:
         openai_base_url="https://openai.example.com/v1",
         anthropic_base_url="https://anthropic.example.com",
         icarus_data_dir=data_dir,
+        runtime={
+            "plugin_config": {
+                "memory": {"user_id": "test-user", "agent_id": "test-agent"}
+            }
+        },
         model_settings=ModelSettings(thinking=model, perception=model),
     )
 
@@ -51,6 +60,48 @@ class AgentStub:
                 finish_reason="stop",
                 steps=1,
                 messages=[Message("user", [TextPart(prompt)]), message],
+                task_message_start=0,
+            ),
+        )
+
+
+class MemoryBackendStub:
+    def __init__(self, items=()):
+        self.items = tuple(items)
+        self.calls = []
+        self.closed = False
+
+    def recall(self, query, **kwargs):
+        self.calls.append((query, kwargs))
+        return MemoryRecallResult(self.items, query)
+
+    async def arecall(self, query, **kwargs):
+        return self.recall(query, **kwargs)
+
+    def close(self):
+        self.closed = True
+
+    async def aclose(self):
+        pass
+
+
+class MemoryAwareAgent:
+    def __init__(self):
+        self.context = None
+        self.input_prompt = None
+
+    async def astream(self, **kwargs):
+        self.input_prompt = kwargs["input_prompt"]
+        self.context = kwargs["run_control"].drain_context(
+            applied_before_step=1
+        )
+        message = Message("assistant", [TextPart("used memory")])
+        yield AgentCompletedEvent(
+            step=1,
+            response=AgentResponse(
+                message=message, usage=Usage(10, 2), last_usage=Usage(10, 2),
+                finish_reason="stop", steps=1,
+                messages=[Message("user", [TextPart(kwargs["input_prompt"])]), message],
                 task_message_start=0,
             ),
         )
@@ -102,6 +153,7 @@ def test_session_runtime使用runtime_update并保留单session行为(tmp_path):
     assert graph is not None
     assert "runtime-update" in {item.plugin_id for item in graph.plugins}
     assert "mcp" in {item.plugin_id for item in graph.plugins}
+    assert "memory" in {item.plugin_id for item in graph.plugins}
     assert runtime.is_running is False
 
 
@@ -248,3 +300,51 @@ def test_session_runtime_e2e只持久化product_conversation(tmp_path):
     assert "tool result" not in serialized
     assert "secret context" not in serialized
     assert {"blackboard_list", "blackboard_read"}.issubset(tools)
+
+
+def test_session_runtime_e2e自动记忆先注入再放行且不进入conversation(tmp_path, monkeypatch):
+    async def run():
+        backend = MemoryBackendStub(
+            [MemoryItem("memory:1", "user prefers concise docs", 0.95, "global")]
+        )
+        config = make_config(tmp_path / "data")
+        monkeypatch.setattr(
+            "apps.agent.src.agent_orchestration.plugins.memory.factory.Mem0HttpAdapter",
+            lambda *args, **kwargs: backend,
+        )
+        identity = SessionIdentity.create(tmp_path, "session-memory")
+        runtime = SessionRuntime(
+            identity, config=config,
+            publish_update=lambda update: asyncio.sleep(0),
+        )
+        await runtime.start()
+        agent = MemoryAwareAgent()
+        runtime.runtime_host.get_plugin("agent").agent_factory.get_agent = lambda role: agent
+        await runtime.submit("write a design")
+        for _ in range(200):
+            if not runtime.snapshot().has_work:
+                break
+            await asyncio.sleep(0.01)
+        blackboard = runtime.runtime_host.get_plugin("blackboard")
+        region = blackboard.region_store.get("memory")
+        messages = blackboard.get_messages()
+        tools = set(runtime.tool_registry.names())
+        await runtime.stop("test", timeout=1)
+        return backend, agent, region, messages, tools
+
+    backend, agent, region, messages, tools = asyncio.run(run())
+    assert len(backend.calls) == 1
+    assert agent.context is not None
+    assert "user prefers concise docs" in agent.context.message.content[0].text
+    assert '"memory":' in agent.input_prompt
+    assert region.complete_for_input is True
+    assert region.state.status == "idle"
+    assert messages == [
+        Message("user", [TextPart("write a design")]),
+        Message("assistant", [TextPart("used memory")]),
+    ]
+    assert {
+        "memory_recall", "memory_get", "memory_history",
+        "memory_remember", "memory_correct", "memory_stop_reference",
+        "memory_restore_reference", "memory_delete",
+    }.issubset(tools)

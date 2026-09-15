@@ -50,6 +50,7 @@ class RuntimeSettings(pydantic.BaseModel):
             "blackboard",
             "runtime-update",
             "mcp",
+            "memory",
         ]
     )
 

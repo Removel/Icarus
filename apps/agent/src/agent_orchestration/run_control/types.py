@@ -26,6 +26,7 @@ TaskOperationStatus: TypeAlias = Literal[
     "already_cancelling",
     "already_finished",
     "invalid_content",
+    "expired",
 ]
 
 

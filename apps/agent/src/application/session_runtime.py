@@ -80,6 +80,7 @@ class SessionRuntime:
         required.discard("output-bridge")
         required.add("runtime-update")
         required.add("mcp")
+        required.add("memory")
         self.runtime_host = PluginRuntimeHost(
             identity.workspace_path,
             identity.session_id,
@@ -121,6 +122,9 @@ class SessionRuntime:
                 "mcp": {
                     **config.runtime.plugin_config.get("mcp", {}),
                     "servers": config.mcp_servers,
+                },
+                "memory": {
+                    **config.runtime.plugin_config.get("memory", {}),
                 },
             },
             plugin_manager=self.plugin_manager,

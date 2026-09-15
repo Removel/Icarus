@@ -16,3 +16,22 @@ def test_get_icarus_data_dir拒绝相对路径(monkeypatch):
 
     with pytest.raises(RuntimeError, match="absolute"):
         runtime_environment.get_icarus_data_dir()
+
+
+def test_load_icarus_environment固定读取仓库根env(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runtime_environment,
+        "load_dotenv",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    runtime_environment.load_icarus_environment()
+
+    assert calls == [
+        {
+            "dotenv_path": Path(runtime_environment.__file__).resolve().parents[1]
+            / ".env",
+            "override": False,
+        }
+    ]

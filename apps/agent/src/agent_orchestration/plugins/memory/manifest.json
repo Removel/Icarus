@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "plugin_id": "memory",
+  "plugin_version": "1.0.0",
+  "entrypoint": "apps.agent.src.agent_orchestration.plugins.memory.factory:create_plugin",
+  "python_requires": ["httpx>=0.27,<1"],
+  "required_capabilities": [
+    {"plugin_id": "persistence", "capability_id": "session", "version_spec": ">=1,<2"},
+    {"plugin_id": "blackboard", "capability_id": "region_registry", "version_spec": ">=1,<2"}
+  ],
+  "provided_capabilities": [],
+  "provided_tools": [
+    "memory_recall",
+    "memory_get",
+    "memory_history",
+    "memory_remember",
+    "memory_correct",
+    "memory_stop_reference",
+    "memory_restore_reference",
+    "memory_delete"
+  ],
+  "published_events": [
+    "apps.agent.src.agent_orchestration.plugins.blackboard.events.BlackboardRegionUpdatedEvent",
+    "apps.agent.src.agent_orchestration.run_control.events.TaskContextInputEvent"
+  ],
+  "consumed_events": [
+    "apps.agent.src.agent_orchestration.plugins.user_input.events.UserInputEvent",
+    "apps.agent.src.agent_orchestration.run_control.events.TaskContextInputResultEvent"
+  ],
+  "state_scopes": []
+}

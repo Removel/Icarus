@@ -440,7 +440,7 @@ icarus-gateway
 → Gateway 建立一个设备级 RuntimeUpdate 订阅并开放 /health 与 /rpc
 
 icarus
-→ TUI 从 apps/agent/.env 取得 ICARUS_DATA_DIR
+→ TUI 从仓库根 .env 取得 ICARUS_DATA_DIR
 → GatewayClient 连接 ws://127.0.0.1:8765/rpc
 → 查询指定 Session；不存在时创建 SessionRuntime
 → 订阅该 Session 并开始缓冲实时 Update

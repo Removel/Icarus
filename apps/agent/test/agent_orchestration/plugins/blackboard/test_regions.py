@@ -182,7 +182,7 @@ def test_blackboard_required_region完成前不启动并在完成后只启动一
     assert plugin.get_task_state("task-1").completed_regions == {"memory"}
 
 
-def test_blackboard_region事件没有活动task时拒绝且不创建空状态():
+def test_blackboard_region事件早于user_input时有界缓存并在输入到达后处理():
     async def run():
         registry = RegionRegistry()
         registry.register(memory_definition())
@@ -203,14 +203,48 @@ def test_blackboard_region事件没有活动task时拒绝且不创建空状态()
                 state=RegionState("idle"), complete_for_input=True,
             ),
         )
+        assert events == []
         with pytest.raises(KeyError, match="not found"):
             plugin.get_task_state("task-1")
+        await plugin.consume("user-input", user_input)
         return events
 
     events = asyncio.run(run())
     assert len(events) == 1
-    assert isinstance(events[0], TaskErrorEvent)
+    assert isinstance(events[0], BlackboardContextReadyEvent)
+
+
+def test_blackboard_preinput_region缓存有界且拒绝非owner():
+    async def run():
+        registry = RegionRegistry()
+        registry.register(memory_definition())
+        plugin = BlackboardPlugin(
+            "blackboard", set(),
+            region_registry=registry, region_store=RegionStore(registry),
+        )
+        events = []
+        plugin.bind_publisher(lambda event: _append(events, event))
+        await plugin.start()
+        sample = BlackboardRegionUpdatedEvent(
+            task_id="bad", region="memory", input_id="input",
+            input=None, output=None, state=RegionState("idle"),
+            complete_for_input=False,
+        )
+        await plugin.consume("skill", sample)
+        for index in range(140):
+            await plugin.consume(
+                "memory",
+                BlackboardRegionUpdatedEvent(
+                    task_id=f"task-{index}", region="memory",
+                    input_id=f"input-{index}", input=None, output=None,
+                    state=RegionState("recalling"), complete_for_input=False,
+                ),
+            )
+        return plugin, events
+
+    plugin, events = asyncio.run(run())
     assert events[0].code == "region_update_rejected"
+    assert len(plugin._pending_region_updates) == 128
 
 
 def test_blackboard非法region更新变成非致命错误且不放行():

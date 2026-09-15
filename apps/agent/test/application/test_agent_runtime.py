@@ -48,6 +48,11 @@ def make_config(data_dir):
         openai_base_url="https://openai.example.com",
         anthropic_base_url="https://anthropic.example.com",
         icarus_data_dir=data_dir,
+        runtime={
+            "plugin_config": {
+                "memory": {"user_id": "test-user", "agent_id": "test-agent"}
+            }
+        },
         model_settings=ModelSettings(thinking=model, perception=model),
     )
 

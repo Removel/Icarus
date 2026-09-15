@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import partial
 import logging
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from apps.agent.src.agent_orchestration.agent_factory import AgentFactory
@@ -154,12 +155,19 @@ class AgentPlugin(BasePlugin):
             run_id=channel.run_id if channel is not None else None,
         )
         if isinstance(event, TaskContextInputEvent):
-            result = self._add_task_context(
-                event.task_id,
-                event.content,
-                source_id=source_id,
-                event_id=event.event_id,
-            )
+            if event.expires_at is not None and datetime.now(UTC) >= event.expires_at:
+                result = TaskOperationResult(
+                    task_id=event.task_id,
+                    status="expired",
+                    run_id=channel.run_id if channel is not None else None,
+                )
+            else:
+                result = self._add_task_context(
+                    event.task_id,
+                    event.content,
+                    source_id=source_id,
+                    event_id=event.event_id,
+                )
         else:
             result = self._cancel_task(event.task_id, event.reason)
         self._trace_operation(

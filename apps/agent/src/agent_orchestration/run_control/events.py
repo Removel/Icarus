@@ -1,6 +1,7 @@
 """来源无关的 Task 运行中操作事件。"""
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.run_control.types import (
@@ -11,6 +12,11 @@ from apps.agent.src.agent_orchestration.run_control.types import (
 @dataclass(frozen=True, kw_only=True)
 class TaskContextInputEvent(Event):
     content: str
+    expires_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.expires_at is not None and self.expires_at.tzinfo is None:
+            raise ValueError("expires_at must include timezone information")
 
 
 @dataclass(frozen=True, kw_only=True)
