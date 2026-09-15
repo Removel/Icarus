@@ -48,11 +48,69 @@ def test_factory注册memory_region和八个工具(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "config_value, expected",
+    [(None, True), (False, False)],
+)
+def test_factory传递输入语言保持配置(
+    tmp_path, monkeypatch, config_value, expected,
+):
+    captured = {}
+    backend = BackendStub()
+
+    def create_backend(*args, **kwargs):
+        captured.update(kwargs)
+        return backend
+
+    monkeypatch.setattr(
+        "apps.agent.src.agent_orchestration.plugins.memory.factory.Mem0HttpAdapter",
+        create_backend,
+    )
+    config = {"user_id": "u", "agent_id": "a"}
+    if config_value is not None:
+        config["preserve_input_language"] = config_value
+    registration = create_plugin(
+        "memory", tmp_path, "session", config,
+        dependencies(tmp_path), None,
+    )
+
+    assert captured["preserve_input_language"] is expected
+
+    asyncio.run(registration.plugin.stop())
+
+
+def test_factory显式工具超时不受自动召回deadline影响(tmp_path, monkeypatch):
+    captured = {}
+    backend = BackendStub()
+
+    def create_backend(*args, **kwargs):
+        captured.update(kwargs)
+        return backend
+
+    monkeypatch.setattr(
+        "apps.agent.src.agent_orchestration.plugins.memory.factory.Mem0HttpAdapter",
+        create_backend,
+    )
+    registration = create_plugin(
+        "memory", tmp_path, "session",
+        {
+            "user_id": "u", "agent_id": "a",
+            "recall": {"deadline_ms": 50},
+        },
+        dependencies(tmp_path), None,
+    )
+
+    assert captured["timeout_seconds"] == 60
+
+    asyncio.run(registration.plugin.stop())
+
+
+@pytest.mark.parametrize(
     "config, message",
     [
         ({"agent_id": "a"}, "user_id"),
         ({"user_id": "u"}, "agent_id"),
         ({"user_id": "u", "agent_id": "a", "unknown": 1}, "unknown fields"),
+        ({"user_id": "u", "agent_id": "a", "preserve_input_language": "yes"}, "preserve_input_language"),
         ({"user_id": "u", "agent_id": "a", "recall": {"deadline_ms": 1001}}, "deadline_ms"),
     ],
 )

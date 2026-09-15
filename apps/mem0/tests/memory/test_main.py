@@ -139,6 +139,38 @@ class TestPromptOverridesCustomInstructions:
         user_prompt = mock_memory.llm.generate_response.call_args[1]["messages"][1]["content"]
         assert "config-level instructions" in user_prompt
 
+    def test_preserve_input_language_enables_language_instruction(
+        self, mock_memory
+    ):
+        mock_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "我喜欢咖啡"}],
+            metadata={},
+            filters={},
+            infer=True,
+            preserve_input_language=True,
+        )
+
+        user_prompt = (
+            mock_memory.llm.generate_response.call_args[1]["messages"][1]["content"]
+        )
+        assert "SAME LANGUAGE and SCRIPT" in user_prompt
+
+    def test_disabled_input_language_does_not_add_language_instruction(
+        self, mock_memory
+    ):
+        mock_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "我喜欢咖啡"}],
+            metadata={},
+            filters={},
+            infer=True,
+            preserve_input_language=False,
+        )
+
+        user_prompt = (
+            mock_memory.llm.generate_response.call_args[1]["messages"][1]["content"]
+        )
+        assert "SAME LANGUAGE and SCRIPT" not in user_prompt
+
 
 class TestAsyncUpdate:
     @pytest.fixture
@@ -312,6 +344,25 @@ class TestAsyncAddToVectorStoreErrors:
                 messages=[{"role": "user", "content": "test"}], metadata={}, effective_filters={}, infer=True
             )
         assert isinstance(exc_info.value.__cause__, _ProviderError)
+
+    @pytest.mark.asyncio
+    async def test_async_preserve_input_language_enables_language_instruction(
+        self, mock_async_memory
+    ):
+        mock_async_memory.llm.generate_response.return_value = '{"memory": []}'
+
+        await mock_async_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "我喜欢咖啡"}],
+            metadata={},
+            effective_filters={},
+            infer=True,
+            preserve_input_language=True,
+        )
+
+        user_prompt = (
+            mock_async_memory.llm.generate_response.call_args[1]["messages"][1]["content"]
+        )
+        assert "SAME LANGUAGE and SCRIPT" in user_prompt
 
 
 def _build_memory_instance(mocker, memory_cls):
@@ -540,6 +591,41 @@ def test_add_without_metadata_is_unaffected(mocker):
     metadata = _captured_add_metadata(memory, mocker, user_id="u1")
 
     assert metadata == {"user_id": "u1"}
+
+
+def test_add_forwards_preserve_input_language_to_extraction(mocker):
+    memory = _build_memory_instance(mocker, Memory)
+    captured = {}
+
+    def _capture(messages, metadata, filters, infer, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    mocker.patch.object(memory, "_add_to_vector_store", side_effect=_capture)
+
+    memory.add(
+        "我喜欢咖啡", user_id="u1", preserve_input_language=True,
+    )
+
+    assert captured["preserve_input_language"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_add_forwards_preserve_input_language_to_extraction(mocker):
+    memory = _build_memory_instance(mocker, AsyncMemory)
+    captured = {}
+
+    async def _capture(messages, metadata, effective_filters, infer, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    mocker.patch.object(memory, "_add_to_vector_store", side_effect=_capture)
+
+    await memory.add(
+        "我喜欢咖啡", user_id="u1", preserve_input_language=True,
+    )
+
+    assert captured["preserve_input_language"] is True
 
 
 @pytest.mark.asyncio

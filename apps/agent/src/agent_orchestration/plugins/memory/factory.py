@@ -16,11 +16,17 @@ from apps.agent.src.agent_orchestration.plugins.memory.tools import create_memor
 from apps.agent.src.agent_orchestration.plugins.persistence import SessionIdentity
 
 
+MEMORY_TOOL_TIMEOUT_SECONDS = 60
+
+
 def create_plugin(
     plugin_id, workspace_path, session_id, config, required_capabilities, logger,
 ):
     del workspace_path, session_id, logger
-    allowed = {"user_id", "agent_id", "backend", "endpoint", "recall"}
+    allowed = {
+        "user_id", "agent_id", "backend", "endpoint",
+        "preserve_input_language", "recall",
+    }
     unknown = set(config) - allowed
     if unknown:
         raise ValueError("memory config has unknown fields: " + ", ".join(sorted(unknown)))
@@ -36,6 +42,9 @@ def create_plugin(
     host = urlsplit(endpoint).hostname
     if not api_key and host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("ICARUS_MEM0_API_KEY is required for non-loopback Mem0")
+    preserve_input_language = config.get("preserve_input_language", True)
+    if not isinstance(preserve_input_language, bool):
+        raise ValueError("memory preserve_input_language must be a boolean")
     recall = config.get("recall", {})
     if not isinstance(recall, dict):
         raise ValueError("memory recall config must be an object")
@@ -55,9 +64,8 @@ def create_plugin(
     deadline_ms = recall.get("deadline_ms", 1000)
     backend = Mem0HttpAdapter(
         endpoint, user_id=user_id, agent_id=agent_id, api_key=api_key,
-        timeout_seconds=max(
-            0.05, deadline_ms / 1000 - 0.02
-        ),
+        preserve_input_language=preserve_input_language,
+        timeout_seconds=MEMORY_TOOL_TIMEOUT_SECONDS,
     )
     try:
         plugin = MemoryPlugin(

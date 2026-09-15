@@ -192,6 +192,43 @@ class TestAddInfer:
 
 
 # ===========================================================================
+# MemoryCreate: preserve_input_language parameter
+# ===========================================================================
+
+class TestAddPreserveInputLanguage:
+    """Verify that language preservation is accepted and forwarded."""
+
+    def test_true_forwarded(self, client, mock_memory):
+        resp = client.post("/memories", json={
+            "messages": [{"role": "user", "content": "我喜欢咖啡"}],
+            "user_id": "u1",
+            "preserve_input_language": True,
+        })
+        assert resp.status_code == 200
+        _, kwargs = mock_memory.add.call_args
+        assert kwargs["preserve_input_language"] is True
+
+    def test_false_not_filtered(self, client, mock_memory):
+        resp = client.post("/memories", json={
+            "messages": [{"role": "user", "content": "我喜欢咖啡"}],
+            "user_id": "u1",
+            "preserve_input_language": False,
+        })
+        assert resp.status_code == 200
+        _, kwargs = mock_memory.add.call_args
+        assert kwargs["preserve_input_language"] is False
+
+    def test_omitted_uses_memory_default(self, client, mock_memory):
+        resp = client.post("/memories", json={
+            "messages": [{"role": "user", "content": "hello"}],
+            "user_id": "u1",
+        })
+        assert resp.status_code == 200
+        _, kwargs = mock_memory.add.call_args
+        assert "preserve_input_language" not in kwargs
+
+
+# ===========================================================================
 # MemoryCreate: memory_type parameter
 # ===========================================================================
 
@@ -373,6 +410,11 @@ class TestOpenAPISchema:
         schema = client.get("/openapi.json").json()
         add_props = schema["components"]["schemas"]["MemoryCreate"]["properties"]
         assert "infer" in add_props
+
+    def test_add_schema_includes_preserve_input_language(self, client):
+        schema = client.get("/openapi.json").json()
+        add_props = schema["components"]["schemas"]["MemoryCreate"]["properties"]
+        assert "preserve_input_language" in add_props
 
     def test_add_schema_includes_memory_type(self, client):
         schema = client.get("/openapi.json").json()

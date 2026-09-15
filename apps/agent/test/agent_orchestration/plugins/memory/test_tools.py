@@ -7,10 +7,13 @@ from apps.agent.src.agent_orchestration.plugins.memory.tools import create_memor
 from .test_plugin import BackendStub, plugin, record
 
 
-def tools_with_backend():
+def tools_with_backend(*, top_k=3, threshold=0.65, max_context_chars=6000):
     backend = BackendStub([MemoryItem("memory:1", "fact", 0.9, "global")])
     backend.records["memory:1"] = record()
-    target = plugin(backend)
+    target = plugin(
+        backend, top_k=top_k, threshold=threshold,
+        max_context_chars=max_context_chars,
+    )
     return backend, target, {tool.definition.name: tool for tool in create_memory_tools(target)}
 
 
@@ -39,6 +42,23 @@ def test_memory_recall布尔范围和停止引用参数():
     call = backend.calls[-1]
     assert call[2]["scope"] == "workspace"
     assert call[2]["include_stopped"] is True
+
+
+def test_memory_recall省略参数时继承插件召回配置():
+    backend, _, tools = tools_with_backend(
+        top_k=7, threshold=0.35, max_context_chars=9000,
+    )
+    recall = tools["memory_recall"]
+
+    result = recall.invoke({"query": "q"})
+
+    assert result.success is True
+    assert backend.calls[-1][2]["top_k"] == 7
+    assert backend.calls[-1][2]["threshold"] == 0.35
+    properties = recall.definition.input_schema["properties"]
+    assert properties["top_k"]["default"] == 7
+    assert properties["threshold"]["default"] == 0.35
+    assert properties["max_context_chars"]["default"] == 9000
 
 
 def test_memory_remember只接受明确scope并传运行上下文():

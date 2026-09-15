@@ -465,11 +465,15 @@ MemoryPlugin 注册固定 Tool：
     "source_workspace_key": "workspace-789",
     "source_operation_id": "operation-001"
   },
-  "infer": true
+  "infer": true,
+  "preserve_input_language": true
 }
 ```
 
-Icarus 不再抽取一次。Mem0 负责拆分、排重、关联和保存；返回零条新记忆表示没有抽取出新事实或内容重复，不视为调用失败。
+Icarus 不再抽取一次。Mem0 负责拆分、排重、关联和保存；返回零条新记忆表示没有抽取出新事实或内容重复，不视为调用失败。`preserve_input_language` 默认开启，要求 Mem0 抽取结果保持输入语言和文字系统；关闭后由 Mem0 的抽取模型自行决定输出语言。它不改变 `infer=true`，也不要求中英文各保存一份。
+
+显式 `memory_recall` 省略 `top_k`、`threshold` 或 `max_context_chars` 时，必须继承当前
+MemoryPlugin 的召回配置，与自动召回保持一致；调用方显式传值时才覆盖单次查询。
 
 `source_operation_id` 由 Memory Tool 每次调用时生成，并在该调用内部的网络重试中保持不变，不要求改造当前 ToolExecutor 传入 ToolCall ID。第一阶段不自动重试写请求；Mem0 尚未提供服务端幂等键，后续需要可靠重试时再增加 `idempotency_key` 契约。
 
@@ -632,6 +636,7 @@ KnowledgeWriter 只定义 `upload` 和 `recompile`。KnowledgePlugin 不注册�
 | --- | --- |
 | Memory backend | `mem0_http` |
 | Mem0 endpoint | `http://127.0.0.1:8888` |
+| Mem0 抽取保持输入语言 | `true` |
 | 自动召回 `top_k` | `3` |
 | 自动召回 `threshold` | `0.65` |
 | 自动召回 `max_context_chars` | `6000` |
@@ -652,6 +657,7 @@ KnowledgeWriter 只定义 `upload` 和 `recompile`。KnowledgePlugin 不注册�
         "agent_id": "icarus",
         "backend": "mem0_http",
         "endpoint": "http://127.0.0.1:8888",
+        "preserve_input_language": true,
         "recall": {
           "top_k": 3,
           "threshold": 0.65,
