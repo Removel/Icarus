@@ -14,6 +14,7 @@ from apps.agent.src.agent_orchestration.plugins.blackboard import (
 from apps.agent.src.agent_orchestration.plugins.skill import (
     SkillPlugin,
 )
+from apps.agent.src.agent_orchestration.plugins.memory import MemoryPlugin
 from apps.agent.src.agent_orchestration.plugins.user_input import (
     InputAccepted,
     InputFinishedEvent,
@@ -35,6 +36,7 @@ __all__ = [
     "InputAccepted",
     "InputQueuedEvent",
     "InputStartedEvent",
+    "MemoryPlugin",
     "SkillPlugin",
     "UserInputEvent",
     "UserInputPlugin",

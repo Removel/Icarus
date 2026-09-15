@@ -10,7 +10,12 @@
   },
   "runtime": {
     "plugin_dirs": [],
-    "plugin_config": {},
+    "plugin_config": {
+      "memory": {
+        "user_id": "removel",
+        "agent_id": "icarus"
+      }
+    },
     "required_plugin_ids": [
       "persistence",
       "builtin-tools",
@@ -19,7 +24,8 @@
       "skill",
       "blackboard",
       "runtime-update",
-      "mcp"
+      "mcp",
+      "memory"
     ]
   },
   "mcpServers": {

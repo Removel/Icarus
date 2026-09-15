@@ -15,6 +15,8 @@
 - 使用文件保存 Plugin State、Trace、日志和图片 Asset；
 - Skill 发现、搜索、生产和演化；
 - 通过 FastMCP 连接外部 MCP Server，并以固定的 list/search/execute 工具发现和调用其 Tools。
+- Blackboard 多 Region 当前状态、只读 Region Tool 与 Product Conversation 投影；
+- 通过 MemoryPlugin 接入自建 Mem0：每轮 1 秒内自动召回，并提供 8 个显式记忆 Tool。
 
 ## 安装依赖
 
@@ -34,15 +36,24 @@
 
 ## 配置
 
-复制并填写 `apps/agent/.example.env`：
+复制并填写仓库根 `.example.env` 为根 `.env`：
 
 ```dotenv
 OPENAI_API_KEY=your-api-key
 ANTHROPIC_API_KEY=your-api-key
 ICARUS_DATA_DIR=/absolute/path/to/icarus-data
+ICARUS_MEM0_API_KEY=your-local-service-key
+ICARUS_MEM0_POSTGRES_PASSWORD=your-database-password
+ICARUS_MEM0_JWT_SECRET=your-jwt-secret
+ICARUS_MEM0_LLM_API_KEY=your-memory-model-key
+ICARUS_MEM0_AUTH_DISABLED=false
 ```
 
 只需配置当前协议使用的 API Key。模型、Plugin 目录与运行参数在 `apps/agent/settings.json` 中设置。
+Mem0 服务通过根目录 `make mem0-up` 启动，数据位于 `$ICARUS_DATA_DIR/services/mem0`。
+`runtime.plugin_config.memory` 的必填项只有稳定 `user_id` 和 `agent_id`；endpoint、top_k、threshold、
+上下文预算与 1 秒 deadline 有默认值。Mem0 服务在专用 Key 为空时复用现有 `OPENAI_API_KEY`，使用
+`deepseek-v4-flash` 与本地 FastEmbed Embedding。
 
 ### MCP Server
 

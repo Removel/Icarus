@@ -1,6 +1,7 @@
 """汇聚 Agent 上下文的 BlackboardPlugin。"""
 
 from collections.abc import Mapping
+from collections import OrderedDict
 from math import ceil
 
 from apps.agent.src.agent_orchestration.capability import (
@@ -73,6 +74,9 @@ class BlackboardPlugin(BasePlugin):
         self._messages = list(initial_messages or [])
         self._context_tokens: int | None = None
         self._tasks: dict[str, BlackboardTaskState] = {}
+        self._pending_region_updates: OrderedDict[
+            str, list[tuple[str, BlackboardRegionUpdatedEvent]]
+        ] = OrderedDict()
 
     async def start(self) -> None:
         self.region_registry.freeze()
@@ -136,9 +140,26 @@ class BlackboardPlugin(BasePlugin):
 
         state = self._tasks.get(task_id)
         if isinstance(event, BlackboardRegionUpdatedEvent) and state is None:
-            await self._publish_region_rejection(
-                task_id, ValueError("Region update requires an active Task")
-            )
+            try:
+                definition = self.region_registry.get(event.region)
+            except KeyError as error:
+                await self._publish_region_rejection(task_id, error)
+                return
+            if (
+                definition.lifetime != "input"
+                or definition.owner_plugin_id != source_plugin_id
+                or not event.input_id
+            ):
+                await self._publish_region_rejection(
+                    task_id, ValueError("Region update requires its registered input owner")
+                )
+                return
+            pending = self._pending_region_updates.setdefault(task_id, [])
+            if len(pending) < 4:
+                pending.append((source_plugin_id, event))
+            self._pending_region_updates.move_to_end(task_id)
+            while len(self._pending_region_updates) > 128:
+                self._pending_region_updates.popitem(last=False)
             return
         if state is None:
             state = BlackboardTaskState(task_id=task_id)
@@ -152,6 +173,12 @@ class BlackboardPlugin(BasePlugin):
             state.user_input = event
             state.input_id = event.event_id
             state.required_regions = self.region_store.begin_input(event.event_id)
+            for pending_source, pending_event in self._pending_region_updates.pop(
+                task_id, ()
+            ):
+                await self._consume_region_update(
+                    state, pending_source, pending_event
+                )
             await self._publish_if_ready(state)
             return
 
@@ -395,6 +422,7 @@ class BlackboardPlugin(BasePlugin):
     def _remove_task_if_finished(self, state: BlackboardTaskState) -> None:
         if state.agent_finished and state.input_finished:
             self._tasks.pop(state.task_id, None)
+            self._pending_region_updates.pop(state.task_id, None)
 
     async def _consume_region_update(
         self,

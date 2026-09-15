@@ -1,0 +1,85 @@
+name: mem0-dev
+
+services:
+  mem0:
+    build:
+      context: ..
+      dockerfile: server/dev.Dockerfile
+    ports:
+      - "8888:8000"
+    env_file:
+      # Icarus uses one Secret source for the Agent and managed services.
+      - ../../../.env
+    networks:
+      - mem0_network
+    volumes:
+      # Modified for Icarus: durable state lives outside the source checkout.
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/mem0/history:/app/history
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/mem0/models:/root/.cache/fastembed
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+    environment:
+      # Modified for Icarus: map the parent application's fixed Secret names.
+      - ADMIN_API_KEY=${ICARUS_MEM0_API_KEY:-}
+      - OPENAI_API_KEY=${ICARUS_MEM0_LLM_API_KEY:?Set ICARUS_MEM0_LLM_API_KEY}
+      - POSTGRES_PASSWORD=${ICARUS_MEM0_POSTGRES_PASSWORD:?Set ICARUS_MEM0_POSTGRES_PASSWORD}
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=
+      - DASHBOARD_URL=http://localhost:3000
+      - APP_DB_NAME=mem0_app
+      - JWT_SECRET=${ICARUS_MEM0_JWT_SECRET:?Set ICARUS_MEM0_JWT_SECRET}
+      - AUTH_DISABLED=${ICARUS_MEM0_AUTH_DISABLED:-false}
+      - MEM0_TELEMETRY=${ICARUS_MEM0_TELEMETRY:-false}
+      - OPENAI_BASE_URL=${ICARUS_MEM0_OPENAI_BASE_URL:-}
+      - MEM0_DEFAULT_LLM_MODEL=${ICARUS_MEM0_LLM_MODEL:-deepseek-v4-flash}
+      - MEM0_DEFAULT_EMBEDDER_PROVIDER=${ICARUS_MEM0_EMBEDDER_PROVIDER:-fastembed}
+      - MEM0_DEFAULT_EMBEDDER_MODEL=${ICARUS_MEM0_EMBEDDER_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+      - MEM0_DEFAULT_EMBEDDING_DIMS=${ICARUS_MEM0_EMBEDDING_DIMS:-384}
+
+  postgres:
+      image: pgvector/pgvector:pg17
+      restart: on-failure
+      shm_size: "128mb"
+      networks:
+        - mem0_network
+      environment:
+        - POSTGRES_USER=${POSTGRES_USER:-postgres}
+        - POSTGRES_PASSWORD=${ICARUS_MEM0_POSTGRES_PASSWORD:?Set ICARUS_MEM0_POSTGRES_PASSWORD}
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -q -d postgres -U ${POSTGRES_USER:-postgres}"]
+        interval: 5s
+        timeout: 5s
+        retries: 5
+      volumes:
+        # Modified for Icarus: use a visible bind mount, not a named volume.
+        - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/mem0/postgres:/var/lib/postgresql/data
+        - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      ports:
+        - "8432:5432"
+
+  mem0-dashboard:
+    build: ./dashboard
+    ports:
+      - "3000:3000"
+    networks:
+      - mem0_network
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8888
+      - API_INTERNAL_URL=http://mem0:8000
+      - NEXT_PUBLIC_INSTANCE_NAME=Mem0
+    depends_on:
+      mem0:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  mem0_network:
+    driver: bridge

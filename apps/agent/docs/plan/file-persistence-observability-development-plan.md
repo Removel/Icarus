@@ -86,7 +86,7 @@ apps/agent/test/agent_orchestration/plugins/persistence/
 
 **更新文件**
 
-- `apps/agent/.example.env`
+- 根目录 `.example.env`
 - `apps/agent/src/model_config/config_model.py`
 - `apps/agent/src/model_config/config_loader.py`
 - `apps/agent/test/model_config/test_config_loader.py`

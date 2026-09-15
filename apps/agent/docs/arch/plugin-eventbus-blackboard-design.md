@@ -747,7 +747,7 @@ required Region 等待的是“当前输入的判断已经结束”，不是必�
 
 Region Update 不自动等于 `TaskContextInputEvent`。Blackboard 不判断某次业务更新是否值得让 Agent 多执行一步，也不把 Region 更新转换成命令。
 
-需要运行中或启动前介入的 owner Plugin 必须明确发布 `TaskContextInputEvent`。该事件与 Region Update 可以来自同一份不可变结果，但由不同消费者使用：
+需要运行中或启动前介入的 owner Plugin 必须明确发布 `TaskContextInputEvent`。该事件与 Region Update 可以来自同一份不可变结果，但由不同消费者使用。对有硬截止时间的 Context，事件可以携带通用 `expires_at`，AgentPlugin 在写入 TaskChannel 前拒绝过期内容：
 
 ```text
 Plugin result

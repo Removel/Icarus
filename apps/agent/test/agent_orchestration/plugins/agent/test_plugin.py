@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 from apps.agent.src.agent_orchestration.capability import (
     AgentCancelledEvent,
@@ -349,6 +350,23 @@ def test_agent_plugin仅为eventbus操作发布结果事件():
     assert results[0].request_event_id == request.event_id
     assert results[0].status == "accepted"
     assert not any(isinstance(event, TaskCancelResultEvent) for event in events)
+
+
+def test_agent_plugin拒绝已过期的运行时context():
+    channels = TaskChannelRegistry()
+    channel = channels.create("task-1")
+    channel.mark_preparing_context()
+    plugin = AgentPlugin("agent", StubAgentFactory(), channels)
+    event = TaskContextInputEvent(
+        task_id="task-1",
+        content="stale memory",
+        expires_at=datetime.now(UTC) - timedelta(milliseconds=1),
+    )
+
+    result = plugin.handle_task_operation("memory", event)
+
+    assert result.status == "expired"
+    assert channel.drain_context(applied_before_step=1) is None
 
 
 def test_agent_plugin记录操作结果和已应用context():

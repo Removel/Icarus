@@ -155,7 +155,7 @@
 - `apps/mem0/LICENSE`、`apps/openkb/LICENSE`；
 - 两个 `MODIFICATIONS.md`；
 - 根 `THIRD_PARTY_NOTICES.md`；
-- 根 README、`apps/agent/README.md`、`.example.env`；
+- 根 README、`apps/agent/README.md`、根 `.example.env`；
 - 普通 clone 含完整源码，无 `.gitmodules`、嵌套 `.git` 或 named volume 事实源；
 - README 区分已实现能力与未来扩展。
 

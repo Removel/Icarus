@@ -8,8 +8,8 @@ Icarus 希望通过长期共处逐渐理解用户、用户正在经历的事情�
 远程模型可以接收完成当前任务所必需的上下文，但不会成为用户长期数据和 Agent 身份的事实源。
 
 项目当前处于本地 TUI 技术预览阶段，已经可以创建和恢复多个 Session，发送文本或图片，让 Agent
-调用本地工具完成任务，并在退出后恢复对话内容与上下文。持续环境感知、长期 Memory、多端产品和
-更完整的自主成长仍属于后续方向。
+调用本地工具完成任务，并在退出后恢复对话内容与上下文。长期 Memory 的 Agent 侧能力已经接入，
+使用时需要另行启动仓库内的自建 Mem0；持续环境感知、多端产品和更完整的自主成长仍属于后续方向。
 
 ## 产品方向
 
@@ -29,9 +29,10 @@ apps/
 ├── gateway/     本机 Agent 服务入口
 │   ├── requirements.txt
 │   └── scripts/
-└── tui/         Textual 终端客户端
+├── tui/         Textual 终端客户端
     ├── requirements.txt
     └── scripts/
+└── mem0/        Apache-2.0 Mem0 源码与 Icarus 自建服务修改
 packages/        应用间共享的数据模型和环境配置
 docs/            项目定位、路线图和待办
 scripts/         整个仓库的安装、启动和测试编排
@@ -72,7 +73,8 @@ Trace 和日志继续保存在 Session 文件目录中。Gateway、TUI 和未来
 
 Plugin 通过 Manifest 声明 Capability、Tool、Event 和状态范围，并由运行时解析依赖关系和生命周期。
 配置与 Plugin 拓扑在单个 SessionRuntime 生命周期内保持稳定，新建或重新加载 Session 时读取最新
-配置。Skill 支持发现、搜索、生产和演化，并保持明确的本地权限与持久化边界。
+配置。Skill 支持发现、搜索、生产和演化，并保持明确的本地权限与持久化边界。MemoryPlugin
+每轮先做有界自动召回，再启动主 Agent；主 Agent 还可以显式读取、写入和维护记忆。
 
 ### 稳定的模型与客户端边界
 
@@ -128,18 +130,35 @@ apps/gateway/.venv
 apps/tui/.venv
 ```
 
-从示例创建 `apps/agent/.env`，配置模型 API Key 和绝对数据目录，并在
+从根目录示例创建 `.env`，配置模型 API Key、外部服务 Secret 和绝对数据目录，并在
 `apps/agent/settings.json` 中选择模型：
 
 ```dotenv
 OPENAI_API_KEY=your-api-key
 ANTHROPIC_API_KEY=your-api-key
 ICARUS_DATA_DIR=/Users/you/.icarus
+ICARUS_MEM0_API_KEY=your-local-service-key
+ICARUS_MEM0_POSTGRES_PASSWORD=your-database-password
+ICARUS_MEM0_JWT_SECRET=your-jwt-secret
+ICARUS_MEM0_LLM_API_KEY=your-memory-model-key
+ICARUS_MEM0_AUTH_DISABLED=false
 ```
 
 只需填写当前协议实际使用的 API Key。`ICARUS_DATA_DIR` 用于保存 `icarus.db`、Plugin State、Trace
-和图片 Asset。Gateway 与 TUI 都会读取 `apps/agent/.env`。本版本不迁移旧 JSONL Session 数据；首次
+和图片 Asset。Agent、Gateway、TUI、Mem0 和后续外部服务都读取仓库根 `.env`。本版本不迁移旧 JSONL Session 数据；首次
 使用需要配置不包含旧 Session 目录的新数据目录。
+
+首次使用 Memory 前启动自建服务：
+
+```bash
+make mem0-up
+```
+
+该命令要求本机已安装 Docker Compose，读取仓库根 `.env`，并把 PostgreSQL、history 和备份
+放在 `$ICARUS_DATA_DIR/services/mem0`。`ICARUS_MEM0_LLM_API_KEY` 为空时复用现有
+`OPENAI_API_KEY`；默认 LLM 使用 OpenAI-compatible DeepSeek Endpoint 与
+`deepseek-v4-flash`，Embedding 使用本地 FastEmbed；可在 `.env` 覆盖 provider、model 和维度。
+`make mem0-down` 停止服务但不删除数据。
 
 同时启动本机 Gateway 和 TUI：
 
@@ -224,6 +243,7 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 - 恢复异常退出前已经产生的部分回复和 Tool 状态，并标记中断任务；
 - Gateway 断线后重新连接并对账当前任务状态；
 - 自动卸载长时间空闲的 Session，同时保留本地数据供下次恢复。
+- 自动召回全局和当前 Workspace 记忆，并由主 Agent 显式维护 Mem0 记忆。
 
 当前已经形成可完整体验的本机闭环：
 
@@ -241,6 +261,13 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 - TUI 未被 Runtime 接受的 Pending Queue 不跨 TUI 进程持久化；
 - 长会话历史暂未分页；
 - Backend、WebUI、GUI 和远程认证尚未接入。
+- Memory 依赖本机 Mem0；服务不可用时当前轮在 1 秒内降级为无记忆运行。
+
+## 第三方源码
+
+`apps/mem0` 来自 [mem0ai/mem0](https://github.com/mem0ai/mem0)，使用 Apache License 2.0。
+导入版本、Icarus 修改和分发说明见 `THIRD_PARTY_NOTICES.md` 与
+`apps/mem0/MODIFICATIONS.md`。该目录是 Monorepo 普通源码，不是 Git submodule。
 
 ## 测试
 

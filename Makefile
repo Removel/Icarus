@@ -2,7 +2,7 @@ PYTHON ?= python3
 ARGS ?=
 REPO_ROOT := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
-.PHONY: install install-dev install-commands install-agent install-gateway install-tui start gateway tui test test-agent test-gateway test-tui
+.PHONY: install install-dev install-commands install-agent install-gateway install-tui start gateway tui mem0-up mem0-down mem0-logs test test-agent test-gateway test-tui
 
 install:
 	PYTHON="$(PYTHON)" "$(REPO_ROOT)/scripts/install.sh"
@@ -30,6 +30,15 @@ gateway:
 
 tui:
 	"$(REPO_ROOT)/apps/tui/scripts/start.sh" $(ARGS)
+
+mem0-up:
+	bash "$(REPO_ROOT)/apps/mem0/scripts/icarus-compose.sh" up -d --build
+
+mem0-down:
+	bash "$(REPO_ROOT)/apps/mem0/scripts/icarus-compose.sh" down
+
+mem0-logs:
+	bash "$(REPO_ROOT)/apps/mem0/scripts/icarus-compose.sh" logs -f
 
 test:
 	"$(REPO_ROOT)/scripts/test.sh"

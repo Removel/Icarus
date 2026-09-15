@@ -23,7 +23,7 @@ Gateway 协议与客户端库。
 
 ## 运行
 
-先在 `apps/agent/.env` 配置模型 API Key 和数据目录：
+先在仓库根 `.env` 配置模型 API Key 和数据目录：
 
 ```dotenv
 ICARUS_DATA_DIR=/Users/you/.icarus
