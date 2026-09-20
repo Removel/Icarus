@@ -169,6 +169,33 @@ class IcarusControlTest(unittest.TestCase):
             self.assertEqual(called, [])
             self.assertIn("available externally", output.getvalue())
 
+    def test_start_service_uses_existing_image_without_rebuilding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            control = self.make_control(root)
+            control.project_status = lambda project: ProjectStatus(
+                project, "stopped"
+            )
+            control._port_open = lambda port: False
+            control._require_data_dir = lambda: None
+            control._wait_until_healthy = lambda project: None
+            commands: list[list[str]] = []
+            control._run_checked = lambda command: commands.append(list(command))
+
+            control.start_background("openkb")
+
+            self.assertEqual(
+                commands,
+                [
+                    [
+                        "bash",
+                        str(root / "apps/openkb/scripts/icarus-compose.sh"),
+                        "up",
+                        "-d",
+                    ]
+                ],
+            )
+
     def test_stop_keeps_external_gateway_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             control = self.make_control(Path(directory))

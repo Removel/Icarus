@@ -189,7 +189,7 @@ Legacy 'icarus --session-id ID' still opens the TUI."""
             self._require_data_dir()
             script = self.repo_root / f"apps/{project}/scripts/icarus-compose.sh"
             print(f"{project}: starting")
-            self._run_checked(["bash", str(script), "up", "-d", "--build"])
+            self._run_checked(["bash", str(script), "up", "-d"])
         elif project == "gateway":
             self._start_gateway()
         else:

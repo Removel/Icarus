@@ -33,6 +33,10 @@ def test_mem0_compose使用可见数据目录且运行导入源码():
         "services/mem0/models:/root/.cache/fastembed" in value
         for value in mem0["volumes"]
     )
+    assert (
+        "FASTEMBED_CACHE_PATH=/root/.cache/fastembed"
+        in mem0["environment"]
+    )
     assert any(
         "services/mem0/postgres:/var/lib/postgresql/data" in value
         for value in postgres["volumes"]
