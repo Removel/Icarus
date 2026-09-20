@@ -114,6 +114,18 @@ class SessionRuntime:
                     "tool_registry": self.tool_registry,
                     "hook_registry": self.hook_registry,
                 },
+                "builtin-tools": {
+                    **config.runtime.plugin_config.get("builtin-tools", {}),
+                    "max_output_bytes": (
+                        config.agent.tool_execution.max_result_file_bytes
+                    ),
+                    "default_read_lines": (
+                        config.agent.tool_execution.default_read_lines
+                    ),
+                    "max_read_lines": (
+                        config.agent.tool_execution.max_read_lines
+                    ),
+                },
                 "blackboard": {
                     **config.runtime.plugin_config.get("blackboard", {}),
                     "model_role": "thinking",
@@ -130,12 +142,24 @@ class SessionRuntime:
                 "mcp": {
                     **config.runtime.plugin_config.get("mcp", {}),
                     "servers": config.mcp_servers,
+                    "default_page_size": (
+                        config.agent.tool_execution.default_page_size
+                    ),
+                    "max_page_size": (
+                        config.agent.tool_execution.max_page_size
+                    ),
                 },
                 "memory": {
                     **config.runtime.plugin_config.get("memory", {}),
                 },
                 "knowledge": {
                     **config.runtime.plugin_config.get("knowledge", {}),
+                    "default_page_size": (
+                        config.agent.tool_execution.default_page_size
+                    ),
+                    "max_page_size": (
+                        config.agent.tool_execution.max_page_size
+                    ),
                 },
             },
             plugin_manager=self.plugin_manager,

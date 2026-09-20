@@ -51,7 +51,16 @@ def test_get_config_default_resource_is_packaged():
     assert resource.name == "settings.json"
     assert resource.is_file()
     with resource.open("r", encoding="utf-8") as file:
-        assert json.load(file)["model_settings"]["thinking"]["model_name"]
+        settings = json.load(file)
+    assert settings["model_settings"]["thinking"]["model_name"]
+    assert settings["agent"]["tool_execution"] == {
+        "default_timeout_seconds": 120.0,
+        "default_output_tokens": 4000,
+    }
+    config = get_config()
+    assert config.agent.tool_execution.max_timeout_seconds == 600
+    assert config.agent.tool_execution.batch_output_tokens == 16000
+    assert config.agent.tool_execution.max_result_file_bytes == 16 * 1024 * 1024
 
 
 def test_config_model_skill_permissions_default_disabled():

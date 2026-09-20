@@ -14,6 +14,7 @@ from apps.agent.src.agent_orchestration.plugins.persistence.session_identity imp
 )
 from apps.agent.src.agent_orchestration.run_control import TaskChannelRegistry
 from apps.agent.src.agent_orchestration.tools import ToolRegistry
+from apps.agent.src.agent_orchestration.tools.result_store import ToolResultStore
 from apps.agent.src.model_config import ConfigModel
 
 
@@ -38,12 +39,17 @@ def create_plugin(
     if not isinstance(identity, SessionIdentity):
         raise ValueError("agent requires persistence session")
     session = PersistenceSession(persistence_runtime, identity)
+    tool_result_store = ToolResultStore(
+        persistence_runtime.resolver.tool_results_dir(identity),
+        max_file_bytes=config_model.agent.tool_execution.max_result_file_bytes,
+    )
     agent_factory = AgentFactory(
         config=config_model,
         tool_registry=tool_registry,
         hook_registry=hook_registry,
         register_builtin_tools=False,
         image_resolver=session.resolve_image,
+        tool_result_store=tool_result_store,
     )
     task_channels = config.get("task_channels") or TaskChannelRegistry(
         max_steps=config_model.agent.max_steps

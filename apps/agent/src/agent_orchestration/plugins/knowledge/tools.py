@@ -82,14 +82,38 @@ class KnowledgeListTool(_KnowledgeTool):
         return ToolDefinition(
             "knowledge_list",
             "List documents and generated wiki pages in the configured knowledge base.",
-            {"type": "object", "properties": {}, "additionalProperties": False},
+            {
+                "type": "object",
+                "properties": {
+                    "page_num": {
+                        "type": "integer", "minimum": 1, "default": 1
+                    },
+                    "page_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": self.plugin.max_page_size,
+                        "default": self.plugin.default_page_size,
+                    },
+                },
+                "additionalProperties": False,
+            },
         )
 
     def invoke(self, arguments, **execution) -> ToolExecutionResult:
         del execution
         try:
-            self._keys(arguments)
-            return ToolExecutionResult(True, output=self.plugin.list())
+            self._keys(
+                arguments, optional=frozenset({"page_num", "page_size"})
+            )
+            return ToolExecutionResult(
+                True,
+                output=self.plugin.list(
+                    page_num=arguments.get("page_num", 1),
+                    page_size=arguments.get(
+                        "page_size", self.plugin.default_page_size
+                    ),
+                ),
+            )
         except Exception as error:
             return self._failure("list", error)
 

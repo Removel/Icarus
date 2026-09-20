@@ -53,6 +53,15 @@ class DataPathResolver:
     def assets_dir(self, identity: SessionIdentity) -> Path:
         return self.session_dir(identity) / "assets"
 
+    def tool_results_dir(
+        self, identity: SessionIdentity, task_id: str | None = None
+    ) -> Path:
+        root = self.session_dir(identity) / "tool-results"
+        if task_id is None:
+            return root
+        self._validate_id(task_id, "task_id")
+        return root / task_id
+
     def ensure_workspace(self, identity: SessionIdentity) -> Path:
         directory = self.workspace_dir(identity)
         self._mkdir(directory)

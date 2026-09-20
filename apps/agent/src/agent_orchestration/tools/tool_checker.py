@@ -38,6 +38,14 @@ class ToolChecker:
                 errors.append("tool description cannot be empty")
             if not self._is_object_schema(definition.input_schema):
                 errors.append("input_schema must be an object JSON Schema")
+            else:
+                properties = definition.input_schema.get("properties")
+                if properties is not None and not isinstance(properties, dict):
+                    errors.append("input_schema properties must be an object")
+                elif self._uses_reserved_execution_key(definition.input_schema):
+                    errors.append(
+                        "input_schema cannot declare reserved _execution"
+                    )
 
         if inspect.isabstract(tool):
             errors.append("tool contains unimplemented abstract methods")
@@ -47,3 +55,13 @@ class ToolChecker:
     @staticmethod
     def _is_object_schema(schema: Any) -> bool:
         return isinstance(schema, dict) and schema.get("type") == "object"
+
+    @staticmethod
+    def _uses_reserved_execution_key(schema: dict[str, Any]) -> bool:
+        properties = schema.get("properties")
+        required = schema.get("required")
+        return (
+            isinstance(properties, dict) and "_execution" in properties
+        ) or (
+            isinstance(required, list) and "_execution" in required
+        )

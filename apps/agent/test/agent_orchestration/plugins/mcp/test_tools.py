@@ -83,7 +83,7 @@ def test_list使用默认分页并返回完整schema():
 
     assert result.success is True
     assert manager.calls == [
-        ("list", {"server": None, "page": 1, "page_size": 20})
+        ("list", {"server": None, "page": 1, "page_size": 50})
     ]
     assert result.output["tools"][0]["tool_ref"] == "blender/create"
     assert result.output["tools"][0]["input_schema"]["type"] == "object"

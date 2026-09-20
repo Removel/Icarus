@@ -6,7 +6,11 @@
     "allow_evolve": false
   },
   "agent": {
-    "max_steps": 256
+    "max_steps": 256,
+    "tool_execution": {
+      "default_timeout_seconds": 120.0,
+      "default_output_tokens": 4000
+    }
   },
   "runtime": {
     "plugin_dirs": [],

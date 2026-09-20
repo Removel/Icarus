@@ -36,6 +36,9 @@ from apps.agent.src.agent_orchestration.run_control import (
     TaskOperationResult,
     MaxStepsExceededError,
 )
+from apps.agent.src.agent_orchestration.tools import (
+    ToolContextBudgetExceededError,
+)
 from apps.agent.src.model_provider.types import (
     ImageAssetUnavailableError,
     ImagePart,
@@ -409,12 +412,18 @@ class AgentPlugin(BasePlugin):
                         error_message=message,
                         task_messages=(
                             channel.history_checkpoint
-                            if code == "max_steps_exceeded"
+                            if code in {
+                                "max_steps_exceeded",
+                                "context_budget_exhausted",
+                            }
                             else ()
                         ),
                         last_usage=(
                             channel.history_checkpoint_usage
-                            if code == "max_steps_exceeded"
+                            if code in {
+                                "max_steps_exceeded",
+                                "context_budget_exhausted",
+                            }
                             else None
                         ),
                     )
@@ -494,6 +503,8 @@ class AgentPlugin(BasePlugin):
 
     @staticmethod
     def _error_details(error: Exception) -> tuple[str, str]:
+        if isinstance(error, ToolContextBudgetExceededError):
+            return "context_budget_exhausted", str(error)
         if isinstance(error, MaxStepsExceededError):
             return "max_steps_exceeded", str(error)
         if isinstance(error, ImageAssetUnavailableError):

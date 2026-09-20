@@ -20,6 +20,8 @@ from apps.agent.src.agent_orchestration.hooks.wrappers.observable_tool_executor 
 )
 from apps.agent.src.agent_orchestration.tools.builtin import create_builtin_tools
 from apps.agent.src.agent_orchestration.tools.tool_executor import ToolExecutor
+from apps.agent.src.agent_orchestration.tools.execution_policy import ToolExecutionPolicy
+from apps.agent.src.agent_orchestration.tools.result_store import ToolResultStore
 from apps.agent.src.agent_orchestration.tools.tool_registry import ToolRegistry
 from apps.agent.src.model_config import ConfigModel, LLMRole
 from apps.agent.src.model_provider.base_llm import BaseLLM
@@ -38,6 +40,7 @@ class AgentFactory:
         hook_registry: HookRegistry | None = None,
         register_builtin_tools: bool = True,
         image_resolver: Callable[[ImagePart], Path] | None = None,
+        tool_result_store: ToolResultStore | None = None,
     ) -> None:
         self.llm_factory = llm_factory or LLMFactory(
             config=config, image_resolver=image_resolver
@@ -45,11 +48,32 @@ class AgentFactory:
         self.tool_registry = tool_registry or ToolRegistry()
         self.hook_registry = hook_registry or HookRegistry()
         self.hook_dispatcher = HookDispatcher(self.hook_registry)
+        self.config = config
+        self.tool_result_store = tool_result_store
         self._agents: dict[LLMRole, BaseAgent] = {}
         self._llms: dict[LLMRole, BaseLLM] = {}
 
         if register_builtin_tools:
-            self.tool_registry.register_many(create_builtin_tools())
+            maximum = (
+                config.agent.tool_execution.max_result_file_bytes
+                if config is not None
+                else 16 * 1024 * 1024
+            )
+            self.tool_registry.register_many(
+                create_builtin_tools(
+                    max_output_bytes=maximum,
+                    default_read_lines=(
+                        config.agent.tool_execution.default_read_lines
+                        if config is not None
+                        else 200
+                    ),
+                    max_read_lines=(
+                        config.agent.tool_execution.max_read_lines
+                        if config is not None
+                        else 2000
+                    ),
+                )
+            )
 
     def get_agent(self, model_role: LLMRole) -> BaseAgent:
         existing = self._agents.get(model_role)
@@ -58,7 +82,22 @@ class AgentFactory:
 
         llm = self.llm_factory.create_llm(role=model_role)
         observable_llm = ObservableLLM(llm, self.hook_dispatcher)
-        tool_executor = ToolExecutor(self.tool_registry)
+        tool_settings = self.config.agent.tool_execution if self.config else None
+        model_settings = (
+            getattr(self.config.model_settings, model_role)
+            if self.config is not None
+            else None
+        )
+        tool_executor = ToolExecutor(
+            self.tool_registry,
+            policy=ToolExecutionPolicy(
+                tool_settings,
+                context_window=(
+                    model_settings.context_window if model_settings else None
+                ),
+            ),
+            result_store=self.tool_result_store,
+        )
         observable_tool_executor = ObservableToolExecutor(
             tool_executor,
             self.hook_dispatcher,

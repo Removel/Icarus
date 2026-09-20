@@ -50,8 +50,8 @@ class FakeClient:
             )
         ]
 
-    async def call_tool_mcp(self, *, name, arguments):
-        self.calls.append((name, arguments))
+    async def call_tool_mcp(self, *, name, arguments, timeout=None):
+        self.calls.append((name, arguments, timeout))
         return SimpleNamespace(
             content=[
                 SimpleNamespace(type="text", text="opened"),
@@ -122,6 +122,28 @@ def test_fastmcp_backend使用公共client_api并转换边界(monkeypatch):
     assert result.structured_content == {"url": "https://example.com"}
     assert changed == [True]
     assert client.closed is True
+    assert client.calls == [("navigate", {"url": "https://example.com"}, None)]
+
+
+def test_fastmcp_backend按调用透传framework_timeout(monkeypatch):
+    install_fake_fastmcp(monkeypatch)
+    config = parse_mcp_servers({"browser": {"command": "browser-mcp"}})[0]
+    backend = FastMCPClientBackend(
+        config, workspace_path="/workspace", tools_changed=lambda: None
+    )
+
+    async def run():
+        await backend.connect()
+        await backend.call_tool(
+            "navigate", {"url": "https://example.com"}, timeout_seconds=45
+        )
+        await backend.close()
+
+    asyncio.run(run())
+
+    assert FakeClient.instances[0].calls == [
+        ("navigate", {"url": "https://example.com"}, 45)
+    ]
 
 
 def test_fastmcp_backend将server日志脱敏后交给logger(monkeypatch):

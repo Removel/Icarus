@@ -28,7 +28,8 @@ class MCPClientBackend(Protocol):
     async def list_tools(self) -> tuple[MCPToolDescriptor, ...]: ...
 
     async def call_tool(
-        self, name: str, arguments: Mapping[str, object]
+        self, name: str, arguments: Mapping[str, object],
+        *, timeout_seconds: float | None = None,
     ) -> MCPCallResult: ...
 
     async def close(self) -> None: ...
@@ -119,11 +120,16 @@ class FastMCPClientBackend:
         return tuple(self._convert_tool(tool) for tool in tools)
 
     async def call_tool(
-        self, name: str, arguments: Mapping[str, object]
+        self, name: str, arguments: Mapping[str, object],
+        *, timeout_seconds: float | None = None,
     ) -> MCPCallResult:
-        result = await self._require_client().call_tool_mcp(
-            name=name, arguments=dict(arguments)
-        )
+        call_arguments: dict[str, Any] = {
+            "name": name,
+            "arguments": dict(arguments),
+        }
+        if timeout_seconds is not None:
+            call_arguments["timeout"] = timeout_seconds
+        result = await self._require_client().call_tool_mcp(**call_arguments)
         return MCPCallResult(
             content=tuple(_convert_content(item) for item in result.content),
             structured_content=_json_value(

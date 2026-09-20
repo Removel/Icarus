@@ -123,6 +123,7 @@ def test_agent_factory_组装完整react和hook轨迹():
         "llm.invoke",
         "tool.execute",
         "tool.execute",
+        "tool.group",
         "llm.invoke",
         "llm.invoke",
         "agent.invoke",

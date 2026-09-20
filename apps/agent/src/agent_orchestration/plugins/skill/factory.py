@@ -93,6 +93,8 @@ async def create_plugin(
             allow_produce=config_model.skill.allow_produce,
             allow_evolve=config_model.skill.allow_evolve,
             hook_dispatcher=HookDispatcher(hook_registry),
+            default_page_size=config_model.agent.tool_execution.default_page_size,
+            max_page_size=config_model.agent.tool_execution.max_page_size,
         )
         return PluginRegistration(
             plugin=plugin,

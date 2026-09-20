@@ -135,10 +135,19 @@ def test_list_search_and_job_status_return_public_fields_only(tmp_path):
     finished = make_job().transition("running").transition("succeeded", path=tmp_path / "SKILL.md")
     jobs.jobs[finished.job_id] = finished
 
-    assert instance.list_skills() == [{
-        "name": "sample", "description": "description", "scope": "workspace",
-        "path": str(item.path),
-    }]
+    assert instance.list_skills() == {
+        "skills": [{
+            "name": "sample",
+            "description": "description",
+            "scope": "workspace",
+            "path": str(item.path),
+        }],
+        "page_num": 1,
+        "page_size": 50,
+        "total": 1,
+        "has_more": False,
+        "next_page_num": None,
+    }
     assert instance.search(["sample"])[0]["name"] == "sample"
     status = instance.job_status(finished.job_id)
     assert status["status"] == "succeeded"

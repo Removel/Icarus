@@ -13,6 +13,11 @@ from apps.agent.src.agent_orchestration.plugins.knowledge.backend import Knowled
 from apps.agent.src.agent_orchestration.plugins.knowledge.models import (
     KnowledgeUploadSource,
 )
+from apps.agent.src.agent_orchestration.tools.pagination import (
+    page_number,
+    page_size as validate_page_size,
+    slice_page,
+)
 
 
 SUPPORTED_EXTENSIONS = frozenset(
@@ -38,6 +43,8 @@ class KnowledgePlugin(BasePlugin):
         workspace_path: Path,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
+        default_page_size: int = 50,
+        max_page_size: int = 200,
     ) -> None:
         super().__init__(plugin_id)
         self.backend = backend
@@ -50,6 +57,12 @@ class KnowledgePlugin(BasePlugin):
             )
         self.max_file_bytes = max_file_bytes
         self.max_request_bytes = max_request_bytes
+        self.default_page_size = validate_page_size(
+            default_page_size, maximum=max_page_size
+        )
+        self.max_page_size = validate_page_size(
+            max_page_size, maximum=max_page_size
+        )
 
     def accepts_event(self, source_plugin_id: str, event: Event) -> bool:
         del source_plugin_id, event
@@ -64,8 +77,42 @@ class KnowledgePlugin(BasePlugin):
     def query(self, question: str) -> dict:
         return self.backend.query(question).as_dict()
 
-    def list(self) -> dict:
-        return self.backend.list().as_dict()
+    def list(self, *, page_num: int = 1, page_size: int | None = None) -> dict:
+        page_num = page_number(page_num)
+        page_size = validate_page_size(
+            page_size,
+            default=self.default_page_size,
+            maximum=self.max_page_size,
+        )
+        catalog = self.backend.list().as_dict()
+        collection_names = (
+            "documents",
+            "summaries",
+            "concepts",
+            "entities",
+            "reports",
+        )
+        totals: dict[str, int] = {}
+        combined: list[tuple[str, object]] = []
+        for name in collection_names:
+            values = catalog[name]
+            totals[name] = len(values)
+            combined.extend((name, value) for value in values)
+            catalog[name] = []
+        visible, has_more = slice_page(
+            combined, page_num=page_num, page_size=page_size
+        )
+        for name, value in visible:
+            catalog[name].append(value)
+        catalog["pagination"] = {
+            "page_num": page_num,
+            "page_size": page_size,
+            "has_more": has_more,
+            "next_page_num": page_num + 1 if has_more else None,
+            "total_count": len(combined),
+            "totals": totals,
+        }
+        return catalog
 
     def read(self, path: str) -> dict:
         return self.backend.read(path).as_dict()

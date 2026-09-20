@@ -37,7 +37,10 @@ from apps.agent.src.model_provider.types import (
     ToolCall,
     Usage,
 )
-from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
+from apps.agent.src.agent_orchestration.tools import (
+    ToolContextBudgetExceededError,
+    ToolExecutionResult,
+)
 
 
 class StubAgent(BaseAgent):
@@ -727,6 +730,54 @@ def test_agent_plugin最大step错误携带安全检查点():
         "assistant",
         "tool",
     ]
+
+
+def test_agent_plugin_context预算错误携带最近安全检查点():
+    class BudgetAgent(StubAgent):
+        async def astream(self, *args, run_control=None, **kwargs):
+            del args, kwargs
+            checkpoint = (Message("user", [TextPart("work")]),)
+            run_control.checkpoint_history(checkpoint, Usage(10, 2))
+            raise ToolContextBudgetExceededError("Tool Group is too large")
+            if False:
+                yield
+
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        factory.agent = BudgetAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+        await agent_plugin.consume(
+            "blackboard",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            ),
+        )
+        await agent_plugin.drain()
+        await manager.stop(timeout=1)
+        return sink.events
+
+    errors = [
+        event for event in asyncio.run(run())
+        if isinstance(event, TaskErrorEvent)
+    ]
+    assert len(errors) == 1
+    assert errors[0].code == "context_budget_exhausted"
+    assert errors[0].task_messages == (
+        Message("user", [TextPart("work")]),
+    )
+    assert errors[0].last_usage == Usage(10, 2)
 
 
 def test_agent_plugin工具失败发布非致命错误但run仍完成():

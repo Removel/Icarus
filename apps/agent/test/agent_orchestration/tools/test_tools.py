@@ -1,4 +1,6 @@
 import asyncio
+import json
+from pathlib import Path
 import threading
 import time
 from typing import Any
@@ -12,6 +14,16 @@ from apps.agent.src.agent_orchestration.tools import (
     ToolExecutor,
     ToolRegistry,
 )
+from apps.agent.src.agent_orchestration.tools.execution_policy import (
+    ToolContextBudgetExceededError,
+    ToolExecutionPolicy,
+)
+from apps.agent.src.agent_orchestration.tools.result_budget import (
+    conservative_token_count,
+    serialize_tool_result,
+)
+from apps.agent.src.agent_orchestration.tools.result_store import ToolResultStore
+from apps.agent.src.model_config import ToolExecutionSettings
 from apps.agent.src.model_provider.types import ToolCall, ToolDefinition
 from apps.agent.src.model_provider.types import ImagePart
 
@@ -75,6 +87,22 @@ def test_tool_checker和registry_跳过不合规和重复工具(caplog):
     assert "invalid tool" in caplog.text
 
 
+def test_tool_checker拒绝非对象properties避免execution注入崩溃():
+    class BrokenSchemaTool(EchoTool):
+        @property
+        def definition(self):
+            return ToolDefinition(
+                "broken",
+                "broken schema",
+                {"type": "object", "properties": []},
+            )
+
+    result = ToolChecker().check(BrokenSchemaTool())
+
+    assert result.valid is False
+    assert "properties must be an object" in result.errors[0]
+
+
 def test_tool_registry_select_不传使用全部且未知工具被忽略(caplog):
     registry = ToolRegistry()
     registry.register(EchoTool())
@@ -101,6 +129,57 @@ def test_tool_executor_统一包装成功未知工具和非法返回():
     assert "not registered" in missing.error
     assert invalid.success is False
     assert "invalid result" in invalid.error
+
+
+def test_tool_executor自动注入execution且不传给业务tool():
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    executor = ToolExecutor(registry)
+
+    definition = executor.definitions()[0]
+    result = executor.execute(
+        ToolCall(
+            "call-1",
+            "echo",
+            {
+                "value": "ok",
+                "_execution": {
+                    "timeout_seconds": 30,
+                    "max_output_tokens": 1000,
+                },
+            },
+        )
+    )
+
+    assert "_execution" in definition.input_schema["properties"]
+    assert "_execution" not in registry.definitions()[0].input_schema["properties"]
+    assert result.output == "ok"
+    assert result.metadata["effective_timeout_seconds"] == 30
+    assert result.metadata["effective_output_tokens"] == 1000
+
+
+def test_tool_executor非法execution不启动业务tool():
+    called = False
+
+    class GuardedTool(EchoTool):
+        def invoke(self, arguments):
+            nonlocal called
+            called = True
+            return super().invoke(arguments)
+
+    registry = ToolRegistry()
+    registry.register(GuardedTool())
+    result = ToolExecutor(registry).execute(
+        ToolCall(
+            "call-1",
+            "echo",
+            {"value": "ok", "_execution": {"max_output_tokens": 1}},
+        )
+    )
+
+    assert called is False
+    assert result.success is False
+    assert result.metadata["disposition"] == "invalid_execution_control"
 
 
 def test_tool_execution_result只在有图片时序列化asset引用():
@@ -229,3 +308,121 @@ def test_tool_executor_按照连续可并行调用分批():
         ["call-5"],
         ["call-6"],
     ]
+
+
+def test_tool_executor_batch超限外置并确保所有结果在预算内(tmp_path):
+    settings = ToolExecutionSettings(
+        default_output_tokens=700,
+        min_output_tokens=300,
+        max_output_tokens=1000,
+        batch_output_tokens=1000,
+        max_calls_per_batch=3,
+    )
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    executor = ToolExecutor(
+        registry,
+        policy=ToolExecutionPolicy(settings),
+        result_store=ToolResultStore(
+            tmp_path / "tool-results", max_file_bytes=1024 * 1024
+        ),
+    )
+    calls = [
+        ToolCall(f"call-{index}", "echo", {"value": str(index) * 900})
+        for index in range(3)
+    ]
+
+    results = executor.execute_many(calls, task_id="task-1")
+
+    visible = [
+        conservative_token_count(serialize_tool_result(result))
+        for _, result in results
+    ]
+    assert sum(visible) <= 1000
+    assert all(result.metadata["result_truncated"] for _, result in results)
+    assert all(result.metadata["result_file_complete"] for _, result in results)
+    assert all(
+        result.metadata["result_file"].startswith(
+            str(tmp_path / "tool-results" / "task-1")
+        )
+        for _, result in results
+    )
+    stored = json.loads(
+        Path(results[0][1].metadata["result_file"]).read_text(encoding="utf-8")
+    )
+    assert stored["output"] == "0" * 900
+
+
+def test_tool_executor超过调用上限只执行前几个并闭合全部结果():
+    settings = ToolExecutionSettings(
+        min_output_tokens=100,
+        max_calls_per_batch=2,
+        batch_output_tokens=1000,
+    )
+    calls_seen = []
+
+    class RecordingTool(EchoTool):
+        def invoke(self, arguments):
+            calls_seen.append(arguments["value"])
+            return super().invoke(arguments)
+
+    registry = ToolRegistry()
+    registry.register(RecordingTool())
+    executor = ToolExecutor(registry, policy=ToolExecutionPolicy(settings))
+    calls = [
+        ToolCall(f"call-{index}", "echo", {"value": index})
+        for index in range(4)
+    ]
+
+    results = executor.execute_many(calls)
+
+    assert calls_seen == [0, 1]
+    assert [call.id for call, _ in results] == [
+        "call-0", "call-1", "call-2", "call-3"
+    ]
+    assert [result.success for _, result in results] == [True, True, False, False]
+    assert results[-1][1].metadata["disposition"] == "budget_exhausted"
+
+
+def test_tool_executor最小结果预算无法闭合时拒绝整个group():
+    settings = ToolExecutionSettings(
+        min_output_tokens=400,
+        max_calls_per_batch=2,
+        batch_output_tokens=800,
+    )
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    executor = ToolExecutor(
+        registry,
+        policy=ToolExecutionPolicy(settings, context_window=1000),
+    )
+
+    with pytest.raises(ToolContextBudgetExceededError):
+        executor.execute_many(
+            [ToolCall("call-1", "echo", {"value": "ok"})]
+        )
+
+
+def test_tool_executor异步tool超时取消并返回配对错误():
+    cancelled = asyncio.Event()
+
+    class AsyncTool(EchoTool):
+        async def ainvoke(self, arguments):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    settings = ToolExecutionSettings(default_timeout_seconds=1)
+    registry = ToolRegistry()
+    registry.register(AsyncTool())
+    executor = ToolExecutor(registry, policy=ToolExecutionPolicy(settings))
+
+    result = asyncio.run(
+        executor.aexecute(ToolCall("call-1", "echo", {"value": "ok"}))
+    )
+
+    assert result.success is False
+    assert result.metadata["disposition"] == "timed_out"
+    assert result.metadata["cancellation_confirmed"] is True
+    assert cancelled.is_set()

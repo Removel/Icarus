@@ -3,7 +3,6 @@
 from collections.abc import AsyncIterator, Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
-import json
 
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.capability.types import (
@@ -20,6 +19,9 @@ from apps.agent.src.agent_orchestration.run_control.types import (
     AppliedContextBatch,
 )
 from apps.agent.src.agent_orchestration.tools.tool_executor import BaseToolExecutor
+from apps.agent.src.agent_orchestration.tools.result_budget import (
+    serialize_tool_result,
+)
 from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 from apps.agent.src.model_config import LLMRole
 from apps.agent.src.model_provider.base_llm import BaseLLM
@@ -98,29 +100,9 @@ class ReActAgent(BaseAgent):
                 self._checkpoint_state(state, run_control)
                 return self._build_response(response, state)
 
-            for batch in state.tool_executor.build_batches(
-                response.message.tool_calls
-            ):
-                self._raise_if_cancelled(run_control)
-                execution = self._tool_execution(
-                    state.messages,
-                    run_control,
-                    state.steps,
-                    state.task_message_start,
-                )
-                results_by_id = {
-                    tool_call.id: result
-                    for tool_call, result in state.tool_executor.iter_completed(
-                        batch, **execution
-                    )
-                }
-                for tool_call in batch:
-                    state.messages.append(
-                        self._tool_result_message(
-                            tool_call.id,
-                            results_by_id[tool_call.id],
-                        )
-                    )
+            self._execute_tool_group(
+                state, response.message.tool_calls, run_control
+            )
             self._checkpoint_state(state, run_control)
 
     async def ainvoke(
@@ -157,28 +139,9 @@ class ReActAgent(BaseAgent):
                 self._checkpoint_state(state, run_control)
                 return self._build_response(response, state)
 
-            for batch in state.tool_executor.build_batches(
-                response.message.tool_calls
-            ):
-                self._raise_if_cancelled(run_control)
-                execution = self._tool_execution(
-                    state.messages,
-                    run_control,
-                    state.steps,
-                    state.task_message_start,
-                )
-                results_by_id: dict[str, ToolExecutionResult] = {}
-                async for tool_call, result in state.tool_executor.aiter_completed(
-                    batch, **execution
-                ):
-                    results_by_id[tool_call.id] = result
-                for tool_call in batch:
-                    state.messages.append(
-                        self._tool_result_message(
-                            tool_call.id,
-                            results_by_id[tool_call.id],
-                        )
-                    )
+            await self._aexecute_tool_group(
+                state, response.message.tool_calls, run_control
+            )
             self._checkpoint_state(state, run_control)
 
     def stream(
@@ -236,10 +199,12 @@ class ReActAgent(BaseAgent):
                 return
 
             self._raise_if_cancelled(run_control)
-            batches = state.tool_executor.build_batches(
-                response.message.tool_calls
+            tool_calls = response.message.tool_calls
+            executable, results_by_id = state.tool_executor.prepare_group(
+                tool_calls
             )
-            for batch_index, batch in enumerate(batches):
+            execution_messages = list(state.messages)
+            for batch in state.tool_executor.build_batches(executable):
                 self._raise_if_cancelled(run_control)
                 for tool_call in batch:
                     yield AgentToolStartedEvent(
@@ -247,9 +212,8 @@ class ReActAgent(BaseAgent):
                         tool_call=tool_call,
                     )
 
-                results_by_id: dict[str, ToolExecutionResult] = {}
                 execution = self._tool_execution(
-                    state.messages,
+                    execution_messages,
                     run_control,
                     state.steps,
                     state.task_message_start,
@@ -258,21 +222,26 @@ class ReActAgent(BaseAgent):
                     batch, **execution
                 ):
                     results_by_id[tool_call.id] = result
-                    is_last_result = len(results_by_id) == len(batch)
-                    is_last_batch = batch_index == len(batches) - 1
-                    if is_last_result:
-                        self._append_tool_results(
-                            state.messages,
-                            batch,
-                            results_by_id,
-                        )
-                        if is_last_batch:
-                            self._checkpoint_state(state, run_control)
-                    yield AgentToolCompletedEvent(
-                        step=state.steps,
-                        tool_call=tool_call,
-                        result=result,
-                    )
+                self._append_tool_results(
+                    execution_messages, batch, results_by_id
+                )
+            execution = self._tool_execution(
+                state.messages,
+                run_control,
+                state.steps,
+                state.task_message_start,
+            )
+            finalized = state.tool_executor.finalize_group(
+                tool_calls, results_by_id, **execution
+            )
+            self._append_tool_results(state.messages, tool_calls, finalized)
+            self._checkpoint_state(state, run_control)
+            for tool_call in tool_calls:
+                yield AgentToolCompletedEvent(
+                    step=state.steps,
+                    tool_call=tool_call,
+                    result=finalized[tool_call.id],
+                )
 
     async def astream(
         self,
@@ -329,10 +298,12 @@ class ReActAgent(BaseAgent):
                 return
 
             self._raise_if_cancelled(run_control)
-            batches = state.tool_executor.build_batches(
-                response.message.tool_calls
+            tool_calls = response.message.tool_calls
+            executable, results_by_id = state.tool_executor.prepare_group(
+                tool_calls
             )
-            for batch_index, batch in enumerate(batches):
+            execution_messages = list(state.messages)
+            for batch in state.tool_executor.build_batches(executable):
                 self._raise_if_cancelled(run_control)
                 for tool_call in batch:
                     yield AgentToolStartedEvent(
@@ -340,9 +311,8 @@ class ReActAgent(BaseAgent):
                         tool_call=tool_call,
                     )
 
-                results_by_id: dict[str, ToolExecutionResult] = {}
                 execution = self._tool_execution(
-                    state.messages,
+                    execution_messages,
                     run_control,
                     state.steps,
                     state.task_message_start,
@@ -351,21 +321,103 @@ class ReActAgent(BaseAgent):
                     batch, **execution
                 ):
                     results_by_id[tool_call.id] = result
-                    is_last_result = len(results_by_id) == len(batch)
-                    is_last_batch = batch_index == len(batches) - 1
-                    if is_last_result:
-                        self._append_tool_results(
-                            state.messages,
-                            batch,
-                            results_by_id,
-                        )
-                        if is_last_batch:
-                            self._checkpoint_state(state, run_control)
-                    yield AgentToolCompletedEvent(
-                        step=state.steps,
-                        tool_call=tool_call,
-                        result=result,
-                    )
+                self._append_tool_results(
+                    execution_messages, batch, results_by_id
+                )
+            execution = self._tool_execution(
+                state.messages,
+                run_control,
+                state.steps,
+                state.task_message_start,
+            )
+            finalized = state.tool_executor.finalize_group(
+                tool_calls, results_by_id, **execution
+            )
+            self._append_tool_results(state.messages, tool_calls, finalized)
+            self._checkpoint_state(state, run_control)
+            for tool_call in tool_calls:
+                yield AgentToolCompletedEvent(
+                    step=state.steps,
+                    tool_call=tool_call,
+                    result=finalized[tool_call.id],
+                )
+
+    def _execute_tool_group(
+        self,
+        state: _RunState,
+        tool_calls: list[ToolCall],
+        run_control: AgentRunControl | None,
+    ) -> dict[str, ToolExecutionResult]:
+        self._raise_if_cancelled(run_control)
+        executable, results_by_id = state.tool_executor.prepare_group(tool_calls)
+        execution_messages = list(state.messages)
+        for batch in state.tool_executor.build_batches(executable):
+            self._raise_if_cancelled(run_control)
+            execution = self._tool_execution(
+                execution_messages,
+                run_control,
+                state.steps,
+                state.task_message_start,
+            )
+            batch_results = {
+                tool_call.id: result
+                for tool_call, result in state.tool_executor.iter_completed(
+                    batch, **execution
+                )
+            }
+            results_by_id.update(batch_results)
+            self._append_tool_results(
+                execution_messages, batch, batch_results
+            )
+        execution = self._tool_execution(
+            state.messages,
+            run_control,
+            state.steps,
+            state.task_message_start,
+        )
+        finalized = state.tool_executor.finalize_group(
+            tool_calls, results_by_id, **execution
+        )
+        self._append_tool_results(state.messages, tool_calls, finalized)
+        return finalized
+
+    async def _aexecute_tool_group(
+        self,
+        state: _RunState,
+        tool_calls: list[ToolCall],
+        run_control: AgentRunControl | None,
+    ) -> dict[str, ToolExecutionResult]:
+        self._raise_if_cancelled(run_control)
+        executable, results_by_id = state.tool_executor.prepare_group(tool_calls)
+        execution_messages = list(state.messages)
+        for batch in state.tool_executor.build_batches(executable):
+            self._raise_if_cancelled(run_control)
+            execution = self._tool_execution(
+                execution_messages,
+                run_control,
+                state.steps,
+                state.task_message_start,
+            )
+            batch_results: dict[str, ToolExecutionResult] = {}
+            async for tool_call, result in state.tool_executor.aiter_completed(
+                batch, **execution
+            ):
+                batch_results[tool_call.id] = result
+            results_by_id.update(batch_results)
+            self._append_tool_results(
+                execution_messages, batch, batch_results
+            )
+        execution = self._tool_execution(
+            state.messages,
+            run_control,
+            state.steps,
+            state.task_message_start,
+        )
+        finalized = state.tool_executor.finalize_group(
+            tool_calls, results_by_id, **execution
+        )
+        self._append_tool_results(state.messages, tool_calls, finalized)
+        return finalized
 
     @staticmethod
     def _build_messages(
@@ -474,11 +526,7 @@ class ReActAgent(BaseAgent):
             role="tool",
             content=[
                 TextPart(
-                    json.dumps(
-                        result.as_dict(),
-                        ensure_ascii=False,
-                        default=str,
-                    )
+                    serialize_tool_result(result)
                 ),
                 *result.images,
             ],

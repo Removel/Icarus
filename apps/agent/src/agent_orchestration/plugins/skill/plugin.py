@@ -20,6 +20,12 @@ from apps.agent.src.agent_orchestration.run_control import (
     TaskContextInputResultEvent,
 )
 from apps.agent.src.model_provider.types import Message
+from apps.agent.src.agent_orchestration.tools.pagination import (
+    page_number,
+    page_size as validate_page_size,
+    result_limit,
+    slice_page,
+)
 
 
 class SkillOperationError(ValueError):
@@ -43,6 +49,8 @@ class SkillPlugin(BasePlugin):
         allow_evolve: bool = False,
         agent_plugin_id: str = "agent",
         hook_dispatcher: HookDispatcher | None = None,
+        default_page_size: int = 50,
+        max_page_size: int = 200,
     ) -> None:
         super().__init__(plugin_id)
         get_messages = getattr(conversation, "get_messages", None)
@@ -62,6 +70,12 @@ class SkillPlugin(BasePlugin):
         self.allow_evolve = allow_evolve
         self.agent_plugin_id = agent_plugin_id
         self.hook_dispatcher = hook_dispatcher
+        self.default_page_size = validate_page_size(
+            default_page_size, maximum=max_page_size
+        )
+        self.max_page_size = validate_page_size(
+            max_page_size, maximum=max_page_size
+        )
         self.job_manager.bind_publisher(self.publish)
 
     async def start(self) -> None:
@@ -83,14 +97,27 @@ class SkillPlugin(BasePlugin):
             self.job_manager.record_notification_result(event)
 
     def list_skills(
-        self, scope: CatalogScope = "all"
-    ) -> list[dict[str, str]]:
+        self,
+        scope: CatalogScope = "all",
+        *,
+        page_num: int = 1,
+        page_size: int | None = None,
+    ) -> dict:
         started_at = time.monotonic()
         try:
-            items = [
+            all_items = [
                 self._skill_item(skill)
                 for skill in self.catalog.list_skills(scope)
             ]
+            page_num = page_number(page_num)
+            page_size = validate_page_size(
+                page_size,
+                default=self.default_page_size,
+                maximum=self.max_page_size,
+            )
+            items, has_more = slice_page(
+                all_items, page_num=page_num, page_size=page_size
+            )
         except Exception as error:
             self._hook(
                 "skill.list",
@@ -111,14 +138,28 @@ class SkillPlugin(BasePlugin):
                 "duration_ms": self._elapsed_ms(started_at),
             },
         )
-        return items
+        return {
+            "skills": items,
+            "page_num": page_num,
+            "page_size": page_size,
+            "total": len(all_items),
+            "has_more": has_more,
+            "next_page_num": page_num + 1 if has_more else None,
+        }
 
-    def search(self, keywords: Sequence[str]) -> list[dict[str, str]]:
+    def search(
+        self, keywords: Sequence[str], *, limit: int | None = None
+    ) -> list[dict[str, str]]:
         started_at = time.monotonic()
         try:
+            limit = result_limit(
+                limit,
+                default=self.default_page_size,
+                maximum=self.max_page_size,
+            )
             items = [
                 self._skill_item(skill) for skill in self.catalog.search(keywords)
-            ]
+            ][:limit]
         except Exception as error:
             self._hook(
                 "skill.search",

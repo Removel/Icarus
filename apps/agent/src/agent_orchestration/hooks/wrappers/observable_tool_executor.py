@@ -12,6 +12,31 @@ from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 from apps.agent.src.model_provider.types import ToolCall, ToolDefinition
 
 
+_OBSERVABLE_EXECUTION_FIELDS = frozenset(
+    {
+        "disposition",
+        "requested_timeout_seconds",
+        "requested_output_tokens",
+        "effective_timeout_seconds",
+        "effective_output_tokens",
+        "preview_tokens",
+        "duration_seconds",
+        "original_tokens",
+        "visible_tokens",
+        "original_bytes",
+        "saved_bytes",
+        "result_truncated",
+        "result_file",
+        "result_file_complete",
+        "result_file_error",
+        "context_budget_exhausted",
+        "cancellation_confirmed",
+        "output_capture_incomplete",
+        "captured_output_bytes",
+    }
+)
+
+
 class ObservableToolExecutor(BaseToolExecutor):
     """观测每个 ToolCall，同时保持 ToolExecutor 对外语义。"""
 
@@ -37,6 +62,46 @@ class ObservableToolExecutor(BaseToolExecutor):
 
     def can_run_parallel(self, tool_call: ToolCall) -> bool:
         return self._executor.can_run_parallel(tool_call)
+
+    def prepare_group(self, tool_calls):
+        return self._executor.prepare_group(tool_calls)
+
+    def finalize_group(self, tool_calls, results_by_id, **execution):
+        try:
+            finalized = self._executor.finalize_group(
+                tool_calls, results_by_id, **execution
+            )
+        except Exception as error:
+            self._dispatcher.trigger(
+                "tool.group",
+                "error",
+                {
+                    "tool_call_ids": [call.id for call in tool_calls],
+                    "error_type": type(error).__name__,
+                    "error_message": str(error),
+                },
+            )
+            raise
+        self._dispatcher.trigger(
+            "tool.group",
+            "after",
+            {
+                "tool_call_ids": [call.id for call in tool_calls],
+                "results": {
+                    call.id: self._result_observation(finalized[call.id])
+                    for call in tool_calls
+                },
+                "original_tokens": sum(
+                    int(finalized[call.id].metadata.get("original_tokens", 0))
+                    for call in tool_calls
+                ),
+                "visible_tokens": sum(
+                    int(finalized[call.id].metadata.get("visible_tokens", 0))
+                    for call in tool_calls
+                ),
+            },
+        )
+        return finalized
 
     def execute(
         self,
@@ -67,7 +132,7 @@ class ObservableToolExecutor(BaseToolExecutor):
             {
                 "tool_execution_id": tool_execution_id,
                 "tool_call": tool_call,
-                "result": result,
+                "result": self._result_observation(result),
             },
         )
         return result
@@ -101,7 +166,7 @@ class ObservableToolExecutor(BaseToolExecutor):
             {
                 "tool_execution_id": tool_execution_id,
                 "tool_call": tool_call,
-                "result": result,
+                "result": self._result_observation(result),
             },
         )
         return result
@@ -117,4 +182,17 @@ class ObservableToolExecutor(BaseToolExecutor):
             "tool_call": tool_call,
             "error_type": type(error).__name__,
             "error_message": str(error),
+        }
+
+    @staticmethod
+    def _result_observation(result: ToolExecutionResult) -> dict[str, object]:
+        return {
+            "success": result.success,
+            "has_output": result.output is not None,
+            "has_error": result.error is not None,
+            "image_count": len(result.images),
+            "execution": {
+                key: value for key, value in result.metadata.items()
+                if key in _OBSERVABLE_EXECUTION_FIELDS
+            },
         }

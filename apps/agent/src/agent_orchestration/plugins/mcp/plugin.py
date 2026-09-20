@@ -115,19 +115,35 @@ class MCPPlugin(BasePlugin):
         )
 
     def execute_tool(
-        self, *, tool_ref: str, arguments: dict[str, object]
+        self, *, tool_ref: str, arguments: dict[str, object],
+        timeout_seconds: float | None = None,
     ) -> ToolExecutionResult:
+        async def execute():
+            if timeout_seconds is None:
+                return await self.manager.call_tool(tool_ref, arguments)
+            return await self.manager.call_tool(
+                tool_ref, arguments, timeout_seconds=timeout_seconds
+            )
+
         return self._run_sync(
-            lambda: self.manager.call_tool(tool_ref, arguments),
+            execute,
             operation=f"execute MCP Tool {tool_ref}",
             transform=self.result_converter.convert,
         )
 
     async def aexecute_tool(
-        self, *, tool_ref: str, arguments: dict[str, object]
+        self, *, tool_ref: str, arguments: dict[str, object],
+        timeout_seconds: float | None = None,
     ) -> ToolExecutionResult:
+        async def execute():
+            if timeout_seconds is None:
+                return await self.manager.call_tool(tool_ref, arguments)
+            return await self.manager.call_tool(
+                tool_ref, arguments, timeout_seconds=timeout_seconds
+            )
+
         return await self._run_async(
-            lambda: self.manager.call_tool(tool_ref, arguments),
+            execute,
             operation=f"execute MCP Tool {tool_ref}",
             transform=self.result_converter.convert,
         )
@@ -178,6 +194,7 @@ def _list_output(
         "page_size": page_size,
         "total": total,
         "has_more": page * page_size < total,
+        "next_page": page + 1 if page * page_size < total else None,
         "tools": [tool.as_dict() for tool in tools],
         "server_errors": errors,
     }

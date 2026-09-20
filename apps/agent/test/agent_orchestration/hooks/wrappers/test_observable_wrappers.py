@@ -222,6 +222,21 @@ def test_observable_agent_llm_tool_共享同一个run_id():
         tool_events[0].data["tool_execution_id"]
         == tool_events[1].data["tool_execution_id"]
     )
+    assert tool_events[1].data["result"] == {
+        "success": True,
+        "has_output": True,
+        "has_error": False,
+        "image_count": 0,
+        "execution": {
+            "disposition": "completed",
+            "requested_timeout_seconds": None,
+            "requested_output_tokens": None,
+            "effective_timeout_seconds": 120,
+            "effective_output_tokens": 4000,
+            "preview_tokens": 3600,
+            "duration_seconds": tool_events[1].data["result"]["execution"]["duration_seconds"],
+        },
+    }
 
 
 def test_observable_components_异步接口保持透明():

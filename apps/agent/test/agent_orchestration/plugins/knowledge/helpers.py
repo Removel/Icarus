@@ -15,6 +15,7 @@ class KnowledgeBackendStub:
     def __init__(self) -> None:
         self.calls = []
         self.closed = False
+        self.catalog = KnowledgeCatalog((), ("summaries/guide",), (), (), ())
 
     def query(self, question):
         self.calls.append(("query", question))
@@ -22,7 +23,7 @@ class KnowledgeBackendStub:
 
     def list(self):
         self.calls.append(("list",))
-        return KnowledgeCatalog((), ("summaries/guide",), (), (), ())
+        return self.catalog
 
     def read(self, path):
         self.calls.append(("read", path))

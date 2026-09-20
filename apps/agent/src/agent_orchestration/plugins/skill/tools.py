@@ -7,6 +7,7 @@ from apps.agent.src.agent_orchestration.plugins.skill.plugin import (
     SkillPlugin,
 )
 from apps.agent.src.agent_orchestration.tools import BaseTool, ToolExecutionResult
+from apps.agent.src.agent_orchestration.tools.pagination import result_limit
 from apps.agent.src.model_provider.types import Message, ToolDefinition
 
 
@@ -63,7 +64,14 @@ class SkillsListTool(_SkillTool):
                         "type": "string",
                         "enum": ["all", "global", "workspace"],
                         "default": "all",
-                    }
+                    },
+                    "page_num": {"type": "integer", "minimum": 1, "default": 1},
+                    "page_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": self.plugin.max_page_size,
+                        "default": self.plugin.default_page_size,
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -72,14 +80,20 @@ class SkillsListTool(_SkillTool):
     def invoke(self, arguments: dict[str, Any], **execution: object) -> ToolExecutionResult:
         del execution
         try:
-            self._validate_keys(arguments, required=frozenset(), optional=frozenset({"scope"}))
+            self._validate_keys(
+                arguments,
+                required=frozenset(),
+                optional=frozenset({"scope", "page_num", "page_size"}),
+            )
             scope = arguments.get("scope", "all")
             if scope not in ("all", "global", "workspace"):
                 raise ValueError("scope must be all, global, or workspace")
-            return ToolExecutionResult(
-                success=True,
-                output={"skills": self.plugin.list_skills(scope)},
-            )
+            return ToolExecutionResult(success=True, output=self.plugin.list_skills(
+                scope, page_num=arguments.get("page_num", 1),
+                page_size=arguments.get(
+                    "page_size", self.plugin.default_page_size
+                ),
+            ))
         except Exception as error:
             return self._failure(error)
 
@@ -104,7 +118,13 @@ class SkillSearchTool(_SkillTool):
                         "items": {"type": "string", "minLength": 1},
                         "minItems": 1,
                         "maxItems": 8,
-                    }
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": self.plugin.max_page_size,
+                        "default": self.plugin.default_page_size,
+                    },
                 },
                 "required": ["keywords"],
                 "additionalProperties": False,
@@ -114,11 +134,27 @@ class SkillSearchTool(_SkillTool):
     def invoke(self, arguments: dict[str, Any], **execution: object) -> ToolExecutionResult:
         del execution
         try:
-            self._validate_keys(arguments, required=frozenset({"keywords"}))
+            self._validate_keys(
+                arguments,
+                required=frozenset({"keywords"}),
+                optional=frozenset({"limit"}),
+            )
             keywords = arguments["keywords"]
             if not isinstance(keywords, list):
                 raise ValueError("keywords must be an array")
-            return ToolExecutionResult(success=True, output={"skills": self.plugin.search(keywords)})
+            limit = result_limit(
+                arguments.get("limit"),
+                default=self.plugin.default_page_size,
+                maximum=self.plugin.max_page_size,
+            )
+            return ToolExecutionResult(
+                success=True,
+                output={
+                    "skills": self.plugin.search(
+                        keywords, limit=limit
+                    )
+                },
+            )
         except Exception as error:
             return self._failure(error)
 
@@ -132,7 +168,8 @@ class SkillProduceTool(_SkillTool):
         return ToolDefinition(
             name="skill_produce",
             description=(
-                "Create a new reusable Skill only when the current work established a concrete repeatable method. "
+                "Create a new reusable Skill only when the current work "
+                "established a concrete repeatable method. "
                 "This starts a background Job; do not call it by default every turn."
             ),
             input_schema=_write_schema(include_scope=True),
@@ -164,7 +201,8 @@ class SkillEvolveTool(_SkillTool):
         return ToolDefinition(
             name="skill_evolve",
             description=(
-                "Evolve an existing Skill only when the current work provides a concrete reusable improvement. "
+                "Evolve an existing Skill only when the current work provides "
+                "a concrete reusable improvement. "
                 "This starts a background Job; do not call it by default every turn."
             ),
             input_schema=_write_schema(include_scope=False),

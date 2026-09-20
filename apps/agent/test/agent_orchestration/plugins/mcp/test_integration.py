@@ -52,8 +52,8 @@ class ManagerStub:
             {},
         )
 
-    async def call_tool(self, tool_ref, arguments):
-        self.executions.append((tool_ref, dict(arguments)))
+    async def call_tool(self, tool_ref, arguments, *, timeout_seconds=None):
+        self.executions.append((tool_ref, dict(arguments), timeout_seconds))
         return MCPCallResult(
             content=(MCPContent("text", "created"),),
             structured_content={"count": arguments["count"]},
@@ -109,7 +109,9 @@ def test_agent通过搜索schema再用固定execute调用mcp工具():
     response = asyncio.run(run())
 
     assert response.message.content == [TextPart("done")]
-    assert manager.executions == [("blender/create_objects", {"count": 3})]
+    assert manager.executions == [
+        ("blender/create_objects", {"count": 3}, 120)
+    ]
     assert {tool.name for tool in llm.calls[0][1]} == {
         "mcp_tool_list", "mcp_tool_search", "mcp_tool_execute"
     }

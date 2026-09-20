@@ -9,15 +9,24 @@ from apps.agent.src.agent_orchestration.tools import BaseTool, ToolExecutionResu
 from apps.agent.src.model_provider.types import ToolDefinition
 
 
-DEFAULT_PAGE_SIZE = 20
-MAX_PAGE_SIZE = 100
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
 DEFAULT_SEARCH_LIMIT = 5
-MAX_SEARCH_LIMIT = 20
-
-
 class _MCPTool(BaseTool):
-    def __init__(self, plugin: MCPPlugin) -> None:
+    def __init__(
+        self,
+        plugin: MCPPlugin,
+        *,
+        default_page_size: int = DEFAULT_PAGE_SIZE,
+        max_page_size: int = MAX_PAGE_SIZE,
+    ) -> None:
+        if not 1 <= default_page_size <= max_page_size:
+            raise ValueError(
+                "default_page_size must be between 1 and max_page_size"
+            )
         self.plugin = plugin
+        self.default_page_size = default_page_size
+        self.max_page_size = max_page_size
 
     @staticmethod
     def _keys(
@@ -63,7 +72,8 @@ class MCPToolList(_MCPTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "mcp_tool_list",
-            "List configured MCP tools with their complete input schemas. Use pagination for large catalogs.",
+            "List configured MCP tools with their complete input schemas. "
+            "Use pagination for large catalogs.",
             {
                 "type": "object",
                 "properties": {
@@ -71,7 +81,8 @@ class MCPToolList(_MCPTool):
                     "page": {"type": "integer", "minimum": 1, "default": 1},
                     "page_size": {
                         "type": "integer", "minimum": 1,
-                        "maximum": MAX_PAGE_SIZE, "default": DEFAULT_PAGE_SIZE,
+                        "maximum": self.max_page_size,
+                        "default": DEFAULT_SEARCH_LIMIT,
                     },
                 },
                 "additionalProperties": False,
@@ -79,7 +90,6 @@ class MCPToolList(_MCPTool):
         )
 
     def invoke(self, arguments, **execution) -> ToolExecutionResult:
-        del execution
         try:
             values = self._values(arguments)
             return self.plugin.list_tools(**values)
@@ -87,7 +97,6 @@ class MCPToolList(_MCPTool):
             return self._failure(error)
 
     async def ainvoke(self, arguments, **execution) -> ToolExecutionResult:
-        del execution
         try:
             values = self._values(arguments)
             return await self.plugin.alist_tools(**values)
@@ -103,7 +112,10 @@ class MCPToolList(_MCPTool):
             "server": self._optional_string(arguments, "server"),
             "page": self._positive_int(arguments, "page", 1, 1_000_000),
             "page_size": self._positive_int(
-                arguments, "page_size", DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+                arguments,
+                "page_size",
+                self.default_page_size,
+                self.max_page_size,
             ),
         }
 
@@ -116,7 +128,8 @@ class MCPToolSearch(_MCPTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "mcp_tool_search",
-            "Search configured MCP tools by name and description. Returns complete input schemas for matching tools.",
+            "Search configured MCP tools by name and description. Returns "
+            "complete input schemas for matching tools.",
             {
                 "type": "object",
                 "properties": {
@@ -124,7 +137,8 @@ class MCPToolSearch(_MCPTool):
                     "server": {"type": "string", "minLength": 1},
                     "limit": {
                         "type": "integer", "minimum": 1,
-                        "maximum": MAX_SEARCH_LIMIT, "default": DEFAULT_SEARCH_LIMIT,
+                        "maximum": self.max_page_size,
+                        "default": self.default_page_size,
                     },
                 },
                 "required": ["query"],
@@ -133,7 +147,6 @@ class MCPToolSearch(_MCPTool):
         )
 
     def invoke(self, arguments, **execution) -> ToolExecutionResult:
-        del execution
         try:
             values = self._values(arguments)
             return self.plugin.search_tools(**values)
@@ -141,7 +154,6 @@ class MCPToolSearch(_MCPTool):
             return self._failure(error)
 
     async def ainvoke(self, arguments, **execution) -> ToolExecutionResult:
-        del execution
         try:
             values = self._values(arguments)
             return await self.plugin.asearch_tools(**values)
@@ -160,7 +172,10 @@ class MCPToolSearch(_MCPTool):
             "query": query.strip(),
             "server": self._optional_string(arguments, "server"),
             "limit": self._positive_int(
-                arguments, "limit", DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT
+                arguments,
+                "limit",
+                DEFAULT_SEARCH_LIMIT,
+                self.max_page_size,
             ),
         }
 
@@ -173,7 +188,9 @@ class MCPToolExecute(_MCPTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "mcp_tool_execute",
-            "Execute an MCP tool found by mcp_tool_list or mcp_tool_search. Pass the returned tool_ref unchanged and put the target tool's parameters in arguments.",
+            "Execute an MCP tool found by mcp_tool_list or mcp_tool_search. "
+            "Pass the returned tool_ref unchanged and put the target tool's "
+            "parameters in arguments.",
             {
                 "type": "object",
                 "properties": {
@@ -186,18 +203,20 @@ class MCPToolExecute(_MCPTool):
         )
 
     def invoke(self, arguments, **execution) -> ToolExecutionResult:
-        del execution
         try:
             values = self._values(arguments)
-            return self.plugin.execute_tool(**values)
+            return self.plugin.execute_tool(
+                **values, timeout_seconds=execution.get("timeout_seconds")
+            )
         except Exception as error:
             return self._failure(error)
 
     async def ainvoke(self, arguments, **execution) -> ToolExecutionResult:
-        del execution
         try:
             values = self._values(arguments)
-            return await self.plugin.aexecute_tool(**values)
+            return await self.plugin.aexecute_tool(
+                **values, timeout_seconds=execution.get("timeout_seconds")
+            )
         except Exception as error:
             return self._failure(error)
 
@@ -215,5 +234,18 @@ class MCPToolExecute(_MCPTool):
         return {"tool_ref": tool_ref, "arguments": target_arguments}
 
 
-def create_mcp_tools(plugin: MCPPlugin) -> tuple[BaseTool, ...]:
-    return MCPToolList(plugin), MCPToolSearch(plugin), MCPToolExecute(plugin)
+def create_mcp_tools(
+    plugin: MCPPlugin,
+    *,
+    default_page_size: int = DEFAULT_PAGE_SIZE,
+    max_page_size: int = MAX_PAGE_SIZE,
+) -> tuple[BaseTool, ...]:
+    options = {
+        "default_page_size": default_page_size,
+        "max_page_size": max_page_size,
+    }
+    return (
+        MCPToolList(plugin, **options),
+        MCPToolSearch(plugin, **options),
+        MCPToolExecute(plugin, **options),
+    )

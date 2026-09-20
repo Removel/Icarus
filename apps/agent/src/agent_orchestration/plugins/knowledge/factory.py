@@ -22,6 +22,7 @@ def create_plugin(
     allowed = {
         "knowledge_base", "backend", "endpoint",
         "max_file_bytes", "max_request_bytes",
+        "default_page_size", "max_page_size",
     }
     unknown = set(config) - allowed
     if unknown:
@@ -59,6 +60,10 @@ def create_plugin(
             plugin_id, backend, workspace_path=workspace_path,
             max_file_bytes=max_file_bytes,
             max_request_bytes=max_request_bytes,
+            default_page_size=_positive_integer(
+                config, "default_page_size", 50
+            ),
+            max_page_size=_positive_integer(config, "max_page_size", 200),
         )
     except BaseException:
         backend.close()

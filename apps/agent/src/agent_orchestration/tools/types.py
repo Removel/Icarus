@@ -1,6 +1,6 @@
 """Agent 工具层统一类型。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from apps.agent.src.model_provider.types import ImagePart
@@ -14,6 +14,7 @@ class ToolExecutionResult:
     output: Any | None = None
     error: str | None = None
     images: tuple[ImagePart, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict, compare=False)
 
     def as_dict(self) -> dict[str, Any]:
         value = {

@@ -48,5 +48,9 @@ def create_plugin(
     )
     return PluginRegistration(
         plugin=plugin,
-        tools=create_mcp_tools(plugin),
+        tools=create_mcp_tools(
+            plugin,
+            default_page_size=config.get("default_page_size", 50),
+            max_page_size=config.get("max_page_size", 200),
+        ),
     )

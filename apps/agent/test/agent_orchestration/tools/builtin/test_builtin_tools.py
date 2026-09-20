@@ -69,6 +69,34 @@ def test_read_文件不存在返回统一失败结果(tmp_path):
     assert result.error
 
 
+def test_read_按行分页并返回下一偏移(tmp_path):
+    path = tmp_path / "paged.txt"
+    path.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    first = ReadTool().invoke(
+        {"path": str(path), "offset": 1, "limit": 2}
+    )
+    second = ReadTool().invoke(
+        {"path": str(path), "offset": 3, "limit": 2}
+    )
+
+    assert first.output["content"] == "one\ntwo\n"
+    assert first.output["has_more"] is True
+    assert first.output["next_offset"] == 3
+    assert second.output["content"] == "three\n"
+    assert second.output["has_more"] is False
+    assert second.output["next_offset"] is None
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 2001])
+def test_read_拒绝非法limit(tmp_path, value):
+    path = tmp_path / "paged.txt"
+    path.write_text("one\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        ReadTool().invoke({"path": str(path), "limit": value})
+
+
 def test_bash_返回退出码标准输出和标准错误(tmp_path):
     success = BashTool().invoke(
         {
@@ -127,6 +155,59 @@ def test_bash_异步超时终止子进程(tmp_path):
     assert result.success is False
     assert "timed out" in result.error
     assert elapsed < 2
+
+
+def test_bash_framework超时与tool超时取较小值(tmp_path):
+    started_at = time.monotonic()
+    result = BashTool().invoke(
+        {
+            "command": "sleep 10",
+            "workdir": str(tmp_path),
+            "timeout": 5,
+        },
+        timeout_seconds=0.05,
+    )
+
+    assert result.success is False
+    assert "0.05 seconds" in result.error
+    assert time.monotonic() - started_at < 2
+
+
+def test_bash_timeout终止同进程组的后台子进程(tmp_path):
+    marker = tmp_path / "leaked.txt"
+    result = BashTool().invoke(
+        {
+            "command": (
+                f"(sleep 0.3; printf leaked > {marker.name}) & wait"
+            ),
+            "workdir": str(tmp_path),
+        },
+        timeout_seconds=0.05,
+    )
+
+    time.sleep(0.4)
+    assert result.success is False
+    assert result.metadata["disposition"] == "timed_out"
+    assert marker.exists() is False
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_bash_超过采集上限时终止并返回受限结果(tmp_path, async_mode):
+    tool = BashTool(max_output_bytes=128)
+    arguments = {
+        "command": "while true; do printf 1234567890; done",
+        "workdir": str(tmp_path),
+    }
+
+    if async_mode:
+        result = asyncio.run(tool.ainvoke(arguments))
+    else:
+        result = tool.invoke(arguments)
+
+    assert result.success is False
+    assert result.metadata["disposition"] == "output_limit_exceeded"
+    assert result.metadata["output_capture_incomplete"] is True
+    assert len(result.output["stdout"].encode()) <= 128
 
 
 def test_bash_异步取消终止子进程(tmp_path):

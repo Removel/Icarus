@@ -141,7 +141,8 @@ class MCPClientManager:
         ), errors
 
     async def call_tool(
-        self, tool_ref: str, arguments: Mapping[str, object]
+        self, tool_ref: str, arguments: Mapping[str, object],
+        *, timeout_seconds: float | None = None,
     ) -> MCPCallResult:
         server, separator, _ = tool_ref.partition("/")
         if not separator:
@@ -156,7 +157,13 @@ class MCPClientManager:
         if backend is None:
             raise RuntimeError(f"MCP server is not connected: {server}")
         try:
-            return await backend.call_tool(descriptor.name, arguments)
+            if timeout_seconds is None:
+                return await backend.call_tool(descriptor.name, arguments)
+            return await backend.call_tool(
+                descriptor.name,
+                arguments,
+                timeout_seconds=timeout_seconds,
+            )
         except Exception as error:
             runtime.last_error = f"{type(error).__name__}: {error}"
             try:

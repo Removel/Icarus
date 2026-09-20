@@ -58,8 +58,8 @@ class FakeBackend:
             ),
         )
 
-    async def call_tool(self, name, arguments):
-        self.calls.append((name, dict(arguments)))
+    async def call_tool(self, name, arguments, *, timeout_seconds=None):
+        self.calls.append((name, dict(arguments), timeout_seconds))
         return MCPCallResult(
             content=(MCPContent("text", "created"),),
             structured_content={"count": arguments["count"]},
@@ -197,7 +197,23 @@ def test_manager执行前校验并原样传递参数():
 
     result = asyncio.run(run())
     assert result.structured_content == {"count": 3}
-    assert backends["blender"].calls == [("create", {"count": 3})]
+    assert backends["blender"].calls == [("create", {"count": 3}, None)]
+
+
+def test_manager透传每次调用的framework_timeout():
+    manager, backends = make_manager()
+
+    async def run():
+        result = await manager.call_tool(
+            "blender/create", {"count": 3}, timeout_seconds=45
+        )
+        await manager.close()
+        return result
+
+    result = asyncio.run(run())
+
+    assert result.structured_content == {"count": 3}
+    assert backends["blender"].calls == [("create", {"count": 3}, 45)]
 
 
 def test_manager调用失败不自动重放并在下次重新连接():
@@ -205,8 +221,8 @@ def test_manager调用失败不自动重放并在下次重新连接():
     created = []
 
     class FailingCallBackend(FakeBackend):
-        async def call_tool(self, name, arguments):
-            self.calls.append((name, dict(arguments)))
+        async def call_tool(self, name, arguments, *, timeout_seconds=None):
+            self.calls.append((name, dict(arguments), timeout_seconds))
             raise ConnectionError("connection closed")
 
     def factory(config, changed):
@@ -225,7 +241,7 @@ def test_manager调用失败不自动重放并在下次重新连接():
     async def run():
         with pytest.raises(ConnectionError, match="closed"):
             await manager.call_tool("blender/create", {"count": 1})
-        assert created[0].calls == [("create", {"count": 1})]
+        assert created[0].calls == [("create", {"count": 1}, None)]
         result = await manager.call_tool("blender/create", {"count": 2})
         await manager.close()
         return result
@@ -242,8 +258,8 @@ def test_manager清理失败不覆盖原始调用错误():
         await manager.ensure_catalog("blender")
         backend = backends["blender"]
 
-        async def fail_call(name, arguments):
-            del name, arguments
+        async def fail_call(name, arguments, *, timeout_seconds=None):
+            del name, arguments, timeout_seconds
             raise ConnectionError("original failure")
 
         async def fail_close():
@@ -344,8 +360,8 @@ def test_manager取消调用时传播取消且不自动重放():
         await manager.ensure_catalog("blender")
         backend = backends["blender"]
 
-        async def blocked(name, arguments):
-            backend.calls.append((name, dict(arguments)))
+        async def blocked(name, arguments, *, timeout_seconds=None):
+            backend.calls.append((name, dict(arguments), timeout_seconds))
             started.set()
             await asyncio.Event().wait()
 
@@ -357,7 +373,7 @@ def test_manager取消调用时传播取消且不自动重放():
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert backend.calls == [("create", {"count": 1})]
+        assert backend.calls == [("create", {"count": 1}, None)]
         assert backend.closed is False
         await manager.close()
 

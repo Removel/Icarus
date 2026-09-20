@@ -4,8 +4,20 @@ from apps.agent.src.model_provider.types import Message, TextPart
 
 
 class PluginStub:
-    def list_skills(self, scope): return [{"name": scope}]
-    def search(self, keywords): return [{"name": keywords[0]}]
+    default_page_size = 50
+    max_page_size = 200
+
+    def list_skills(self, scope, *, page_num=1, page_size=50):
+        return {
+            "skills": [{"name": scope}],
+            "page_num": page_num,
+            "page_size": page_size,
+            "total": 1,
+            "has_more": False,
+            "next_page_num": None,
+        }
+    def search(self, keywords, *, limit=50):
+        return [{"name": keywords[0], "limit": limit}]
     def produce(self, **kwargs):
         self.produce_call = kwargs
         return {"job_id": "produce", "status": "queued"}
@@ -35,8 +47,23 @@ def test_tool_names_schemas_and_parallel_contract():
 
 def test_read_tools_validate_and_return_structured_results():
     _, tools = by_name()
-    assert tools["skills_list"].invoke({}).output == {"skills": [{"name": "all"}]}
-    assert tools["skill_search"].invoke({"keywords": ["python"]}).output == {"skills": [{"name": "python"}]}
+    assert tools["skills_list"].invoke({}).output == {
+        "skills": [{"name": "all"}],
+        "page_num": 1,
+        "page_size": 50,
+        "total": 1,
+        "has_more": False,
+        "next_page_num": None,
+    }
+    assert tools["skill_search"].invoke({"keywords": ["python"]}).output == {
+        "skills": [{"name": "python", "limit": 50}]
+    }
+    assert tools["skill_search"].invoke(
+        {"keywords": ["python"], "limit": 12}
+    ).output == {"skills": [{"name": "python", "limit": 12}]}
+    assert tools["skill_search"].invoke(
+        {"keywords": ["python"], "limit": 201}
+    ).success is False
     assert tools["skill_search"].invoke({"keywords": "python"}).success is False
     assert tools["skills_list"].invoke({"scope": "bad"}).success is False
     assert tools["skill_job_status"].invoke({"job_id": "missing"}).error.startswith("job_not_found:")
