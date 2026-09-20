@@ -1,13 +1,13 @@
 > 本文定义 Icarus Agent 第一阶段 Tool Execution Guard：统一 Tool 调用超时、单结果与 Tool Batch
-> Token 预算、结构化 Head/Tail 降级、Session 级 `.txt` Artifact，以及 List Tool 分页约束。
+> Token 预算、结构化 Head/Tail 降级、Session 级 Tool Result `.txt` 文件，以及 List Tool 分页约束。
 > Active Run 工作集、Request Assembler、历史 Compact、循环检测、HITL 与副作用恢复不在本文实现范围。
 
 ## 1. 背景
 
 **核心结论：** 当前 Tool 执行缺少统一的时间与结果预算，任意 Builtin、MCP 或 Plugin Tool 都可能
 把超大输出直接写入后续每次模型请求。本阶段在 `ToolExecutor` 建立统一 Guard，允许 Agent 申请预算，
-但由 Harness 使用默认值和硬上限裁决；超预算结果保持原有输出结构，在中间隐藏内容，并将完整文本
-保存到当前 Session。
+但由 Harness 使用默认值和硬上限裁决；超预算结果保持原有输出结构，在中间隐藏内容，并将预算处理前
+文本保存到当前 Session；超过 16 MiB 采集上限时文件会明确标记为不完整。
 
 ### 业务背景
 
@@ -27,8 +27,8 @@
 - `bash` 有自己可选的 `timeout` 参数，其他 Tool 的超时策略各自实现或不存在；模型不传参数时没有
   Kernel 级稳定默认值。
 - `read` 当前可以一次读取整个 UTF-8 文件；其他列表能力也没有统一的默认页大小和硬上限。
-- Blackboard 已保存完整、可重放的 Tool Call/Result 历史，因此发送给模型的有限工作集与磁盘上的完整
-  证据必须明确分层。
+- Blackboard 保存协议完整、可重放的 Tool Call/Result 历史，其中超预算 Tool Result 是模型可见的
+  Preview 和文件路径；长结果正文只保存在 Session Tool Result 文件中。
 
 ## 2. 对标
 
@@ -37,7 +37,7 @@
 | **业务场景** | 长会话中的 Terminal、文件、Web、MCP 和 Plugin Tool | Builtin、MCP 与 Plugin Tool 进入统一 ReAct 执行链 |
 | **单结果保护** | 普通结果 100K 字符、MCP 50K 字符后 Spillover | 无统一结果预算，完整 JSON 直接进入 Tool Message |
 | **Batch 保护** | 默认 200K 字符，最大结果优先外置 | 保持 Tool Call 顺序，但无总结果预算 |
-| **外置存储** | `$HERMES_HOME/cache/spillover`，默认 24 小时 TTL | Session 已有持久化目录和 assets，但无 Tool Result Artifact |
+| **外置存储** | `$HERMES_HOME/cache/spillover`，默认 24 小时 TTL | Session 已有持久化目录，但无 Tool Result 文件 |
 | **Preview** | 普通 Spillover 只保留前 1500 字符；部分路径使用 40/60 Head/Tail | 无 Preview |
 | **结构处理** | Tool Result 整体转成字符串，不保持 JSON 结构 | 内部仍持有 `ToolExecutionResult.output` 原始值 |
 | **分页** | `read_file` 使用 offset/limit，搜索和外部能力使用 offset 或 Cursor | 缺少统一 List 分页约束 |
@@ -48,7 +48,7 @@
 
 - Icarus 的 `ToolExecutionResult.output` 在生成 Tool Message 前仍保留结构化值，可以在不破坏原输出
   顶层形态的前提下递归裁剪 JSON，而不是先整体字符串化。
-- SessionRuntime 已有稳定的 Session 路径、权限和生命周期边界，Tool Result 可以直接归属 Session，
+- SessionRuntime 已有稳定的 Session 路径、权限和生命周期边界，Tool Result 文件可以直接归属 Session，
   为未来归档、删除和容量治理保留清晰所有权。
 - ToolExecutor 已统一承接 Builtin、MCP 与 Plugin Tool，适合集中注入控制参数和结果保护。
 
@@ -64,7 +64,7 @@
 
 借鉴 Hermes 的“单结果外置 + Batch 总量保护 + 分页继续读取”，但不照搬字符级阈值、全局 TTL
 目录、只保留开头的 Preview 和 Tool-specific 摘要器。Icarus 使用 Token 预算、字节采集硬上限、
-结构化对称 Head/Tail 和 Session 级 `.txt` Artifact。
+结构化对称 Head/Tail 和 Session 级 Tool Result `.txt` 文件。
 
 ## 3. 目标
 
@@ -87,8 +87,7 @@
 | 单 Batch Tool Call 数 | 8 | 8 |
 | 实际 Preview 目标 | 有效预算的 90% | 最终序列化结果不得超过有效预算 |
 | Head/Tail | 50% / 50% | 一侧剩余额度可转给另一侧 |
-| 单 Artifact 采集上限 | 16 MiB | 不可由 Agent 提升 |
-| 单 Session Tool Artifact 上限 | 512 MiB | 不自动删除仍被 Session 引用的文件 |
+| 单 Tool Result 文件采集上限 | 16 MiB | 不可由 Agent 提升 |
 | List 默认 page size | 50 | 最大 200 |
 | 文件行读取默认 limit | 200 行 | 最大 2,000 行 |
 
@@ -119,7 +118,7 @@ flowchart TD
     G --> H
     H --> I{单结果和 Batch 是否在预算内}
     I -- 是 --> J[原样生成 Tool Message]
-    I -- 否 --> K[原始完整文本写入 Session Artifact]
+    I -- 否 --> K[预算处理前文本写入 Session Tool Result 文件]
     K --> L[按原结构生成 Head/Tail Preview]
     L --> M[重新序列化和计量]
     M --> N{仍超预算}
@@ -137,7 +136,7 @@ flowchart TD
 | `ToolExecutor` | 注入/剥离控制参数、timeout、调用数限制、统一结果保护入口 | 理解业务字段含义 |
 | `ToolResultTokenCounter` | 对最终序列化文本计量；优先 Provider 计数器，提供保守 fallback | 决定裁剪内容 |
 | `ToolResultRenderer` | 保持类型和顺序，递归生成预算内 Preview | 保存文件、理解 Tool 业务语义 |
-| `ToolResultArtifactStore` | Session 内原子写入 `.txt`、权限、配额和路径生成 | 主动清理或归档 Session |
+| `ToolResultStore` | Session 内原子写入 `.txt`、权限和路径生成 | 主动清理或归档 Session |
 | `ToolBatchBudget` | 小结果优先完整、为大结果均衡分配额度、最终总量断言 | Active Run 和完整 Wire Request 管理 |
 | List Tool/Adapter | 实现业务正确的 Cursor 或 page_num/page_size | 绕过最终 Result Budget |
 
@@ -146,11 +145,13 @@ flowchart TD
 - `ToolRegistry` 保存的业务 Schema 不直接修改；`ToolExecutor.definitions()` 对 Run 快照中的 Schema
   副本自动注入 `_execution`。业务 Tool 不接收该字段。
 - `_execution` 是框架保留名称。业务 Tool 原始 Schema 已占用该字段时，在注册检查阶段明确拒绝。
-- `bash.timeout` 作为直接调用的兼容别名暂时保留；Agent 可见 Schema 迁移到
-  `_execution.timeout_seconds`，两者同时出现时拒绝歧义请求，不静默选择。
+- Tool 自带 timeout 参数保持兼容并继续生效；框架 timeout 是外层总时限，两者取先到者。
+  能接收 deadline 的 Adapter（包括 MCP）逐步透传同一个 effective timeout，避免隐藏的固定内层
+  timeout 提前破坏 Agent 申请值。
 - 未配置新字段时行为使用稳定默认值；不要求现有 Tool 修改 `invoke/ainvoke` 签名。
-- Result 未超预算时字节级保持现有 `ToolExecutionResult.as_dict()` 语义，不创建 Artifact，不插入提示。
-- Artifact 路径是本机真实绝对路径，供已有 `bash`/`read` 使用；不新增 `tool_result_read`。
+- Result 未超预算时字节级保持现有 `ToolExecutionResult.as_dict()` 语义，不创建 Tool Result 文件，
+  不插入提示。
+- Tool Result 文件路径是本机真实绝对路径，供已有 `bash`/`read` 使用；不新增专用读取 Tool。
 
 ### 4.2 主要功能点描述
 
@@ -158,7 +159,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | 统一执行控制 | Tool 无默认 timeout、参数不一致 | 自动注入 `_execution`，Harness 裁决并剥离 | 默认值、越界、Schema 冲突、业务参数不泄漏 |
 | 单结果预算 | 单个 Result 占满上下文 | 整体序列化计量，超限才落盘并递归裁剪 | 字符串、对象、数组、深层 JSON、重新计量 |
-| Session Artifact | 隐藏内容不可恢复 | Session 下 `.txt`、原子写入、真实路径 | 权限、路径安全、写入失败、配额、完整性 |
+| Session Tool Result 文件 | 隐藏内容不可恢复 | Session 下 `.txt`、原子写入、真实路径 | 权限、路径安全、写入失败、完整性 |
 | Batch 预算 | 多个中等 Result 累计超限 | 小结果优先完整，大结果 water-filling 分配 | 公平性、顺序、最小额度、协议闭合 |
 | List 分页 | 一次列出全部数据 | 默认 50、最大 200，动态数据优先 Cursor | 边界、稳定排序、重复 Cursor、最终 Result Budget |
 
@@ -197,10 +198,11 @@ Tool Result。
 
 - 异步 Tool 使用统一 deadline；超时后取消执行 Task，并给予短清理窗口。
 - `bash` 使用独立进程组；超时先 TERM，清理窗口结束后 KILL，返回明确超时错误。
-- 使用 `BaseTool.ainvoke` 默认线程桥接的同步 Tool 无法安全强杀线程。Harness 在 deadline 后停止等待，
-  返回 `success=false`，错误明确说明执行状态无法确认；不得自动重试。
+- 使用 `BaseTool.ainvoke` 默认线程桥接的同步 Tool 无法安全强杀线程，因此本期不允许在 timeout 到达后
+  提前返回；它继续等待真实结束。需要确定性 timeout 的 Tool 必须先改造成可取消异步实现或独立
+  进程实现。
 - Timeout、取消或拒绝都必须为原 Tool Call 生成一个 Tool Result，不能留下孤立 Tool Call。
-- 模型可见结果继续使用现有 `success/output/error` 外壳；更细的 `timed_out` 或 `unknown` 处置写入
+- 模型可见结果继续使用现有 `success/output/error` 外壳；更细的 `timed_out` 或取消处置写入
   Trace/RuntimeUpdate 元数据，不强迫所有 Tool 改变业务输出结构。
 
 #### Token 计量
@@ -213,13 +215,13 @@ Tool Result。
 3. Preview 生成以有效预算的 90% 为目标，最终仍以 100% 硬预算重新断言。
 4. Tokenizer 抛错时自动回退，不能让预算保护失效。
 
-#### Session Artifact
+#### Session Tool Result 文件
 
-Artifact 路径：
+Tool Result 文件路径：
 
 ```text
 $ICARUS_DATA_DIR/workspaces/<workspace_key>/sessions/<session_id>/
-└── artifacts/tool-results/<task_id>/<safe_tool_call_id>.txt
+└── tool-results/<task_id>/<safe_tool_call_id>.txt
 ```
 
 - 字符串原样保存；JSON 对象或数组以 UTF-8 格式化 JSON 保存；其他值使用统一稳定序列化。
@@ -227,12 +229,13 @@ $ICARUS_DATA_DIR/workspaces/<workspace_key>/sessions/<session_id>/
 - 目录权限 `0700`、文件权限 `0600`；临时文件写入、flush/fsync 后原子 rename。
 - 文件名由 Runtime 安全化；不直接信任模型产生的 Tool Call ID。
 - 写入完成后校验字节数，成功后才能在 Preview 中给出路径。
-- 单文件最多采集 16 MiB；单 Session 最多保存 512 MiB。达到 Session 上限时不自动删除旧文件，
-  新结果退化为无有效路径的内联 Preview。
-- Session unload 不删除；未来 Session archive/delete 负责整体迁移或删除。第一阶段不设置 TTL。
+- 单文件最多采集 16 MiB。第一阶段不限制 Session 累计目录大小，也不扫描或预留 Session 总配额。
+- Session unload 不删除；未来 Session archive/delete 和空间治理负责整体迁移、删除或配额。第一阶段
+  不设置 TTL。
 - 预算、原始字节/Token、是否完整、路径和写入失败原因记录到 Trace，不增加 `.meta.json`。
 
-如果通用 Tool 已经在内存中返回超过 16 MiB 的值，Guard 只能保存受限内容并标记 Artifact 不完整；
+如果通用 Tool 已经在内存中返回超过 16 MiB 的值，Guard 只能保存受限内容并标记 Tool Result 文件
+不完整；
 不能声称完整结果已保存。`bash` 应改为流式采集，达到硬上限时终止进程组并返回
 `output_limit_exceeded`。其他流式 Adapter 后续按同一接口接入。
 
@@ -240,7 +243,7 @@ $ICARUS_DATA_DIR/workspaces/<workspace_key>/sessions/<session_id>/
 
 Tool 不声明 `always_keep`、`priority_keep` 或专属摘要器。裁剪只依据原始结构、顺序和实际 Token。
 
-- 字符串：保留前后文本，中间插入隐藏 Token 数和 Artifact 路径。
+- 字符串：保留前后文本，中间插入隐藏 Token 数和 Tool Result 文件路径。
 - 数组：按累计 Token 保留前后完整元素，中间插入一个占位对象。
 - 对象：保持字段顺序，按累计 Token 保留前后字段，在中间插入占位字段。
 - 嵌套节点：若头尾中的单个节点仍过大，对该节点递归应用同一算法。
@@ -275,7 +278,7 @@ Token 选择，不按固定条数。无法完整放入的单个元素先尝试�
 5. 整个 `output` 降级为同类型的最小占位；
 6. 只保留最小、协议完整的 Tool Result 外壳。
 
-Artifact 写入失败时省略标记必须说明“完整结果未保存”，不能返回悬空路径。若最小 Tool Result
+Tool Result 文件写入失败时省略标记必须说明“完整结果未保存”，不能返回悬空路径。若最小 Tool Result
 连同 Provider 包装仍无法放入请求，本阶段闭合当前 Tool Group，不启动下一次 Provider 请求，并以
 `context_budget_exhausted` 结束 Task。
 
@@ -290,12 +293,13 @@ Artifact 写入失败时省略标记必须说明“完整结果未保存”，�
 2. 小于均分额度的结果优先原样保留，并从待分配集合移除；
 3. 每个剩余结果至少获得 512 Token 的最小展示额度；
 4. 剩余预算在大型结果之间反复均分，同时受各自 `_execution.max_output_tokens` 上限约束；
-5. 需要缩小的结果统一写 Artifact，并按分配额度生成 Preview；
+5. 需要缩小的结果统一写 Tool Result 文件，并按分配额度生成 Preview；
 6. 对完整 Batch 重新计量，仍超限则同步收紧大型 Preview；
 7. Tool Message 按原 Tool Call 顺序写回。
 
-若 `Tool Call 数 × 最小 Result 预算` 已超过 Batch 硬预算，应在执行前拒绝超出可容纳范围的调用，
-而不是执行后静默删除 Result。
+若全部 Tool Call 的最小结果外壳也无法放入 Batch 硬预算，则不执行该 Tool Group、不把 Assistant
+Tool Call 或部分 Result 加入安全检查点，并以 `context_budget_exhausted` 终止当前 Task。不能通过
+只写部分 Result、删除 Tool Call 或继续请求 Provider 来规避协议约束。
 
 #### List 分页
 
@@ -324,13 +328,14 @@ Helper，并选择以下一种协议：
 - 返回中明确包含 `has_more` 和 `next_cursor`，或总页数/下一页信息。
 - 能低成本获取时才返回 `total_count`，不能为了总数扫描整个远端数据源。
 - 每页结果仍通过单结果和 Batch Budget；分页不是绕过 Result Guard 的方式。
-- 文件读取使用 `offset + limit`，默认 200 行、最大 2,000 行。Agent 可对 Artifact 使用现有
+- 文件读取使用 `offset + limit`，默认 200 行、最大 2,000 行。Agent 可对 Tool Result 文件使用现有
   `wc`、`rg` 和有界 `sed`；这些 Bash Result 仍受相同 Guard。
 
 ### 4.3 子方案一：ToolExecutor 统一 Guard（推荐）
 
-所有生产 Agent Tool 都通过 ToolExecutor 获得控制参数、timeout、Artifact、单结果和 Batch 保护。
-Tool 不维护展示规则，新增 Tool 默认安全。代价是 ToolExecutor 需要注入 Session 级 ArtifactStore 和
+所有生产 Agent Tool 都通过 ToolExecutor 获得控制参数、timeout、Tool Result 文件、单结果和 Batch
+保护。Tool 不维护展示规则，新增 Tool 默认安全。代价是 ToolExecutor 需要注入 Session 级
+ToolResultStore 和
 模型 TokenCounter，但这一依赖与现有 SessionRuntime 和 Run 快照边界一致。
 
 ### 4.4 子方案二：具体 Tool 自行限制（不采用）
@@ -349,7 +354,7 @@ Tool 不维护展示规则，新增 Tool 默认安全。代价是 ToolExecutor �
 - 相同调用、相同结果、Cursor 不推进和无进展循环检测；
 - HITL、Tool 风险分类、Effect Journal 和副作用恢复；
 - 图片数量、分辨率和视觉 Token 预算；
-- Session archive/delete 的产品接口和自动清理策略。
+- Session archive/delete 的产品接口、累计空间上限和自动清理策略。
 
 这些能力继续保留在 `docs/todo/agent-core.md`，不阻塞本阶段建立 Tool Guard。
 
@@ -362,9 +367,9 @@ Tool 不维护展示规则，新增 Tool 默认安全。代价是 ToolExecutor �
 - Token 计量：Provider 计数器与 fallback 都可用；Tokenizer 失败不关闭保护；最终序列化结果严格
   不超过有效预算。
 - 结构裁剪：覆盖长字符串、巨大字段、海量小字段、海量小数组项、多层嵌套、Unicode、空结构、
-  `_icarus_omitted` 名称冲突和 Artifact 写入失败；裁剪后 JSON 仍合法且顺序稳定。
-- Artifact：验证路径隔离、安全文件名、0700/0600、原子写入、字节校验、16 MiB 单文件上限、
-  512 MiB Session 上限、unload 后可读和无悬空引用。
+- `_icarus_omitted` 名称冲突和 Tool Result 文件写入失败；裁剪后 JSON 仍合法且顺序稳定。
+- Tool Result 文件：验证路径隔离、安全文件名、0700/0600、原子写入、字节校验、16 MiB 单文件
+  上限、unload 后可读和无悬空引用。
 - Batch：覆盖大小混合、并行乱序完成、8 个以上调用、最小预算不足、water-filling 和最终总量断言；
   写回顺序及 Tool Call/Result 配对不变。
 - 分页：覆盖默认/最大 page size、Cursor 与 page_num、空页、末页、非法参数及一页本身仍超预算。
@@ -377,7 +382,7 @@ Tool 不维护展示规则，新增 Tool 默认安全。代价是 ToolExecutor �
 
 - **P0 阶段 1：执行控制底座。** 增加配置模型、Schema 注入/剥离、有效预算裁决、统一 timeout 和
   Tool Call 数限制。
-- **P0 阶段 2：Result 与 Artifact。** 增加 TokenCounter、Session ArtifactStore、结构化递归裁剪、
+- **P0 阶段 2：Result 与文件。** 增加 TokenCounter、Session ToolResultStore、结构化递归裁剪、
   最小降级和 Trace 指标。
 - **P0 阶段 3：Batch 与分页接入。** 增加 water-filling Batch Budget，并为现有 List/Read 能力接入
   共享分页约束，完成 Builtin/MCP/Plugin 端到端回归。
@@ -387,7 +392,7 @@ Tool 不维护展示规则，新增 Tool 默认安全。代价是 ToolExecutor �
 | 任务名称 | 任务描述 | 负责人 | 时间点 |
 | --- | --- | --- | --- |
 | 执行保护 | `_execution`、默认值/硬上限、timeout 与终态闭合 | Agent Core | 第一实施阶段 |
-| 结果保护 | Token 计量、递归 Preview、Session `.txt` Artifact | Agent Core | 第二实施阶段 |
+| 结果保护 | Token 计量、递归 Preview、Session Tool Result `.txt` 文件 | Agent Core | 第二实施阶段 |
 | 集成收口 | Batch Budget、分页、全链路与恢复测试 | Agent Core | 第三实施阶段 |
 
 ## 7. 风险
@@ -395,9 +400,9 @@ Tool 不维护展示规则，新增 Tool 默认安全。代价是 ToolExecutor �
 | 风险项 | 影响说明 | 规避/缓解动作 | 责任人 |
 | --- | --- | --- | --- |
 | Tokenizer 与 Provider 不完全一致 | Preview 本地计量合格但远端请求仍偏大 | Provider 计数优先、90% 目标、安全 fallback、发送前硬断言 | Agent Core |
-| 同步 Tool timeout 后仍运行 | 可能继续产生本地或外部副作用 | 错误明确标记状态未知、不自动重试；Bash 使用进程组终止 | Agent Core |
-| Artifact 写入失败或磁盘不足 | Agent 无法查看隐藏的完整内容 | 原子写和字节校验；失败不返回路径；仍生成预算内 Preview | Persistence |
-| Session Artifact 持续增长 | 长 Session 占用大量磁盘 | 首期 512 MiB 硬上限且不破坏旧引用；未来归档/删除统一治理 | Session Runtime |
+| 同步 Tool 无法强杀 | 统一 timeout 不能确定性中止同步副作用 | 本期不提前返回；需要 timeout 的 Tool 改造成异步或独立进程 | Agent Core |
+| Tool Result 文件写入失败或磁盘不足 | Agent 无法查看隐藏的完整内容 | 原子写和字节校验；失败不返回路径；仍生成预算内 Preview | Persistence |
+| Session Tool Result 文件持续增长 | 长 Session 可能持续占用磁盘 | 本期明确接受；未来由 Session 归档、删除和空间治理统一处理 | Session Runtime |
 | 递归裁剪算法复杂 | 极端 JSON 可能超预算或生成非法结构 | 纯函数、每轮重新计量、最大递归深度、同类型最小降级、性质测试 | Agent Core |
 | 自动注入字段与业务 Schema 冲突 | Tool 参数含义不明确 | `_execution` 设为保留命名，注册期拒绝冲突 | Tool Registry |
 | 分页后数据发生变化 | page_num 可能重复或漏项 | 动态数据优先 Cursor，page_num 只用于稳定排序的数据 | Tool Owner |

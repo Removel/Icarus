@@ -75,7 +75,8 @@ ReActAgent 不直接修改 Blackboard。Agent Run 到达终态后，Blackboard �
 - 当前用户请求；
 - 每个已经完成的 Assistant Message；
 - Assistant 发起的 Tool Call；
-- 与 Tool Call 一一匹配的 Tool Result；
+- 与 Tool Call 一一匹配、协议完整的模型可见 Tool Result；超预算正文以内联 Preview 与 Session
+  Tool Result 文件路径表达，原始长文本不重复内联到 Blackboard；
 - 已经实际应用到模型请求的 Plugin Runtime Context；
 - 已经实际应用到模型请求的用户 Steer；
 - 最终 Assistant Message；
@@ -383,18 +384,19 @@ RuntimeUpdate 和 Trace 继续承担展示与诊断职责，不成为 Blackboard
 
 ## Context 预算影响
 
-恢复完整历史后，Tool Result 会显著加快上下文增长。当前 85% Compact 阈值只计算 Blackboard
+恢复完整历史后，Tool Result 会显著加快上下文增长。Tool Execution Guard 已为新增 Tool Result
+提供单结果和 Batch 预算，并把超限正文外置到 Session 文件；当前 85% Compact 阈值仍只计算 Blackboard
 历史粗略 Token，且没有完整覆盖 System Prompt、Tool Schema、图片和输出预留。
 
-本阶段只保证历史正确性，不同时实现 Tool Result Spill、Batch Budget 或完整 Wire Budget；但不得把
-“恢复完整历史”误认为上下文预算问题已经解决。后续必须按以下顺序继续：
+历史恢复本身仍不等于完整 Context 治理。后续必须继续：
 
-1. 单 Tool Result 大小预算；
-2. Tool Batch 总预算；
-3. Active Run 工作集预算；
+1. Active Run 工作集预算；
+2. 完整 Wire Request 预算；
+3. 历史 Compact 的安全边界与质量治理；
 4. 基于实际 Provider 请求的 Context Pressure 与 Compact。
 
-在预算能力完成前，完整历史可能增加 Token、延迟和成本，这是选择完整可重放语义的明确代价。
+在完整 Wire Request 预算完成前，完整历史仍可能增加 Token、延迟和成本；Tool Execution Guard 只先
+约束新增 Tool Result，不替代后续的请求级治理。
 
 ## 代码改动范围
 
@@ -416,7 +418,7 @@ RuntimeUpdate 和 Trace 继续承担展示与诊断职责，不成为 Blackboard
 - Tool 实现；
 - SessionStore 数据库 Schema；
 - AgentRuntime、SessionRuntime、Task、Run 的层级；
-- Redirect、一个 Task 多 Run、Tool Result Budget 和完整 Request Assembler。
+- Redirect、一个 Task 多 Run、Active Run Budget 和完整 Request Assembler。
 
 ## 测试与验收
 

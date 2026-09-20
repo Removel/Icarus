@@ -67,8 +67,9 @@ Session、Blackboard State 和 Trace 元数据后，已确认更直接的问题�
 
 ### 必须守住的不变量
 
-- Blackboard 保存完整、可重放的 Agent Run Message：User、Assistant、Tool Call、Tool Result、
-  已应用 Runtime Context 和用户 Steer 跨 Run 保留；隐藏 Reasoning 和内部控制不进入消息历史；
+- Blackboard 保存协议完整、可重放的 Agent Run Message：User、Assistant、Tool Call、预算后的
+  Tool Result、已应用 Runtime Context 和用户 Steer 跨 Run 保留；长 Tool Result 正文位于 Session
+  Tool Result 文件，隐藏 Reasoning 和内部控制不进入消息历史；
 - Tool Call 是 `assistant` 发起的 Action，Tool Result 使用独立 `tool` 角色；Provider Adapter
   可以转换厂商协议，但不得改变内部语义；
 - 每个 Assistant Tool Call 必须有且只有一个匹配 `tool_call_id` 的终态 Tool Result；并发执行
@@ -102,14 +103,16 @@ Session、Blackboard State 和 Trace 元数据后，已确认更直接的问题�
 
 ### P0：约束 Tool Result 与 Active Run 工作集
 
-- [ ] 为 Tool Result 建立统一的单结果大小预算；超限内容写入 Session Asset/Spill Storage，
-  模型只接收有边界的 head/tail Preview、截断说明和稳定引用。
-- [ ] 建立单个 Tool Batch 的总结果预算；超过预算时优先外置最大结果，保证一个批次不能占满
+- [x] 为 Tool Result 建立统一的单结果大小预算；超限内容写入 Session Tool Result `.txt` 文件，
+  模型只接收有边界的 head/tail Preview、截断说明和稳定路径。
+- [x] 建立单个 Tool Batch 的总结果预算；超过预算时按大小公平分配并外置长结果，保证一个批次不能占满
   整个模型窗口。
 - [ ] 建立 Active Run 工作集预算；旧 Tool Result 可以压缩为摘要或引用，但最近完整 Tool Group、
   当前用户请求和仍待处理的操作必须保留。
-- [ ] 让 `read`、`bash`、MCP 和未来 Plugin Tool 统一经过结果预算层；具体 Tool 不各自实现一套
+- [x] 让 `read`、`bash`、MCP 和未来 Plugin Tool 统一经过结果预算层；具体 Tool 不各自实现一套
   不一致的截断逻辑。
+- [x] 为 Agent Tool 增加统一 `_execution` 超时/输出预算申请，为 Bash 增加进程组终止和 16 MiB
+  采集上限，并让 Read、MCP、Skill、Knowledge 列表能力默认有界。
 - [ ] 限制重复、无进展和异常大的 Tool Plan；在现有 Step 上限之外增加模型调用数、Tool Call 数、
   重复 Tool 指纹和无进展预算。
 
