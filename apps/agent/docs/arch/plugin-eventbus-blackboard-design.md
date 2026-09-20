@@ -1,5 +1,10 @@
 # Plugin EventBus Blackboard Design｜插件事件总线与多区域黑板设计
 
+> 历史设计更新：本文关于“Product Conversation 只保存 User 与最终 Assistant”的内容已经过时。
+> Blackboard 当前目标是保存跨 Agent Run 的完整、可重放消息历史；正常完成、停止和运行中用户
+> 纠偏的提交规则以 `agent-run-history-steering-design.md` 为准。Region 所有权、注册、快照和读取
+> 设计仍以本文为准。
+
 ## 文档定位
 
 本文描述 Agent Stream Event 完成后的编排架构，以及 Blackboard 从一次性 Context 聚合器演进为多 Region 当前状态板的设计。当前已经实现的运行图以 `plugin-event-flow-current-state.md` 为准；Region、只读 Blackboard Tool 和 Product Conversation 投影已实现，MemoryPlugin/KnowledgePlugin 仍按本文边界继续接入。

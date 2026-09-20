@@ -175,6 +175,9 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
   恢复以及输出订阅和 UI 投影切换。
 - [ ] 覆盖新建、恢复、切换、Compact 展示、错误展示、跨会话图片交互和异常退出的端到端验证；
   当前 TUI 图片草稿、排队、提交和清理已有自动化回归。
+- [ ] 按 `docs/todo/agent-core.md` 的“长对话、Tool 与中断二次收敛”逐项修复真实长会话暴露的
+  Product Conversation 投影、动态 Context 顺序、Tool Result 预算、Wire Context 计量、中断语义、
+  HITL 和副作用恢复问题；这些问题优先于继续扩大对话产品化范围。
 
 依赖顺序：Agent 基础能力先稳定；对话持久化和索引是恢复与切换的前置条件。对话生命周期由
 应用层和 Persistence/Blackboard 协作完成，ReActAgent 继续保持无状态。

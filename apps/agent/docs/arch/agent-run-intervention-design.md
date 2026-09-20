@@ -1,5 +1,9 @@
 # Agent Run Intervention Design｜Agent 运行中介入设计
 
+> 后续设计：完整 Run 历史的跨轮提交、停止后的 Assistant 闭合，以及用户 Steer 与 Plugin Runtime
+> Context 的分离，以 `agent-run-history-steering-design.md` 为准。本文其余 TaskChannel、取消传播和
+> 安全检查点设计继续有效。
+
 ## 文档定位
 
 本文定义 Icarus 的“陷入内核”机制：一次 Agent Run 执行期间，内部 Plugin 可以向目标 Task
