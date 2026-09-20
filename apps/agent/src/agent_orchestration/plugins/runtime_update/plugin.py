@@ -21,6 +21,7 @@ from apps.agent.src.agent_orchestration.plugins.user_input import (
     InputQueuedEvent,
     InputStartedEvent,
 )
+from apps.agent.src.agent_orchestration.run_control import TaskSteerAppliedEvent
 from apps.agent.src.agent_orchestration.plugins.persistence.redactor import Redactor
 from apps.agent.src.model_provider.types import TextPart
 from apps.agent.src.runtime_update import RuntimeUpdate
@@ -69,6 +70,23 @@ class RuntimeUpdatePlugin(BasePlugin):
                 return None
             update_type = "assistant.text_delta"
             payload = {"step": event.step, "text": event.text}
+        elif isinstance(event, TaskSteerAppliedEvent):
+            update_type = "user.correction"
+            payload = {
+                "text": (
+                    event.content
+                    if event.display_text is None
+                    else event.display_text
+                ),
+                "resources": [
+                    {
+                        "resource_id": image.source,
+                        "media_type": image.media_type,
+                    }
+                    for image in event.input_images
+                ],
+                "applied_before_step": event.applied_before_step,
+            }
         elif isinstance(event, AgentMessageCompletedEvent):
             text = "".join(
                 part.text

@@ -11,10 +11,11 @@ from uuid import uuid4
 from apps.agent.src.agent_orchestration.run_control.types import (
     AppliedContextBatch,
     RuntimeContextRecord,
+    RuntimeInputKind,
     TaskChannelStatus,
     TaskOperationResult,
 )
-from apps.agent.src.model_provider.types import Message, TextPart, Usage
+from apps.agent.src.model_provider.types import ImagePart, Message, TextPart, Usage
 
 
 class AgentRunCancelled(asyncio.CancelledError):
@@ -52,6 +53,7 @@ class TaskChannel:
         self._run_id: str | None = None
         self._context_records: deque[RuntimeContextRecord] = deque()
         self._applied_batches: list[AppliedContextBatch] = []
+        self._discarded_records: list[RuntimeContextRecord] = []
         self._history_checkpoint: tuple[Message, ...] = ()
         self._history_checkpoint_usage: Usage | None = None
         self._cancel_requested = asyncio.Event()
@@ -84,6 +86,11 @@ class TaskChannel:
     def applied_batches(self) -> tuple[AppliedContextBatch, ...]:
         with self._lock:
             return tuple(self._applied_batches)
+
+    @property
+    def discarded_records(self) -> tuple[RuntimeContextRecord, ...]:
+        with self._lock:
+            return tuple(self._discarded_records)
 
     @property
     def history_checkpoint(self) -> tuple[Message, ...]:
@@ -120,23 +127,27 @@ class TaskChannel:
         event_id: str | None = None,
         received_at: datetime | None = None,
     ) -> TaskOperationResult:
-        if not content.strip() or not source_id.strip():
-            return self._result("invalid_content")
-        with self._lock:
-            if self._status == TaskChannelStatus.CANCELLING:
-                return self._result("already_cancelling")
-            if not self._accepting_context or self._is_terminal():
-                return self._result("already_finished")
-            self._context_records.append(
-                RuntimeContextRecord(
-                    event_id=event_id or uuid4().hex,
-                    task_id=self.task_id,
-                    source_id=source_id,
-                    content=content,
-                    received_at=received_at or datetime.now(UTC),
-                )
-            )
-            return self._result("accepted")
+        return self._add_input(
+            content, source_id=source_id, event_id=event_id,
+            received_at=received_at, kind="context",
+        )
+
+    def add_steer(
+        self,
+        content: str,
+        *,
+        input_images: Sequence[ImagePart] = (),
+        display_text: str | None = None,
+        source_id: str = "user",
+        event_id: str | None = None,
+        received_at: datetime | None = None,
+    ) -> TaskOperationResult:
+        return self._add_input(
+            content, source_id=source_id, event_id=event_id,
+            received_at=received_at, kind="user_correction",
+            input_images=input_images,
+            display_text=display_text,
+        )
 
     def request_cancel(self, reason: str | None = None) -> TaskOperationResult:
         with self._lock:
@@ -147,6 +158,8 @@ class TaskChannel:
             self._status = TaskChannelStatus.CANCELLING
             self._accepting_context = False
             self._cancel_reason = reason
+            self._discarded_records.extend(self._context_records)
+            self._context_records.clear()
             self._cancel_requested.set()
             return self._result("accepted")
 
@@ -155,8 +168,8 @@ class TaskChannel:
             raise AgentRunCancelled(self.cancel_reason)
 
     def raise_if_step_exceeded(self, step: int) -> None:
-        if step > self.max_steps:
-            raise MaxStepsExceededError(self.max_steps, step)
+        with self._lock:
+            self._raise_if_step_exceeded_locked(step)
 
     async def wait_cancel_requested(self) -> None:
         await self._cancel_requested.wait()
@@ -188,6 +201,8 @@ class TaskChannel:
     ) -> AppliedContextBatch | None:
         with self._lock:
             self._raise_if_cancelled_locked()
+            if self._context_records:
+                self._raise_if_step_exceeded_locked(applied_before_step)
             batch = self._drain_context_locked(applied_before_step)
             if batch is not None:
                 return batch
@@ -231,25 +246,53 @@ class TaskChannel:
             return None
         records = tuple(self._context_records)
         self._context_records.clear()
-        content = "\n".join(
-            ["<runtime_context>"]
-            + [
-                f"{index}. {record.content}"
-                for index, record in enumerate(records, start=1)
-            ]
-            + ["</runtime_context>"]
+        formatted = _format_records(records)
+        content = [TextPart(formatted)] if formatted else []
+        content.extend(
+            image for record in records for image in record.input_images
         )
         batch = AppliedContextBatch(
             records=records,
-            message=Message("user", [TextPart(content)]),
+            message=Message("user", content),
             applied_before_step=applied_before_step,
         )
         self._applied_batches.append(batch)
         return batch
 
+    def _add_input(
+        self, content: str, *, source_id: str, event_id: str | None,
+        received_at: datetime | None, kind: RuntimeInputKind,
+        input_images: Sequence[ImagePart] = (),
+        display_text: str | None = None,
+    ) -> TaskOperationResult:
+        if (not content.strip() and not input_images) or not source_id.strip():
+            return self._result("invalid_content")
+        with self._lock:
+            if self._status == TaskChannelStatus.CANCELLING:
+                return self._result("already_cancelling")
+            if not self._accepting_context or self._is_terminal():
+                return self._result("already_finished")
+            self._context_records.append(
+                RuntimeContextRecord(
+                    event_id=event_id or uuid4().hex,
+                    task_id=self.task_id,
+                    source_id=source_id,
+                    content=content,
+                    received_at=received_at or datetime.now(UTC),
+                    kind=kind,
+                    input_images=tuple(input_images),
+                    display_text=display_text,
+                )
+            )
+            return self._result("accepted")
+
     def _raise_if_cancelled_locked(self) -> None:
         if self._cancel_requested.is_set():
             raise AgentRunCancelled(self._cancel_reason)
+
+    def _raise_if_step_exceeded_locked(self, step: int) -> None:
+        if step > self.max_steps:
+            raise MaxStepsExceededError(self.max_steps, step)
 
     def _is_terminal(self) -> bool:
         return self._status in {
@@ -264,3 +307,25 @@ class TaskChannel:
             status=status,
             run_id=self._run_id,
         )
+
+
+def _format_records(records: tuple[RuntimeContextRecord, ...]) -> str:
+    sections = []
+    for kind, tag in (
+        ("context", "runtime_context"),
+        ("user_correction", "user_correction"),
+    ):
+        values = [
+            record.content
+            for record in records
+            if record.kind == kind and record.content.strip()
+        ]
+        if values:
+            sections.append(
+                "\n".join(
+                    [f"<{tag}>"]
+                    + [f"{index}. {value}" for index, value in enumerate(values, 1)]
+                    + [f"</{tag}>"]
+                )
+            )
+    return "\n\n".join(sections)

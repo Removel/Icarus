@@ -15,6 +15,7 @@
     "apps.agent.src.agent_orchestration.plugins.user_input.events.InputStartedEvent",
     "apps.agent.src.agent_orchestration.plugins.user_input.events.InputFinishedEvent",
     "apps.agent.src.agent_orchestration.plugins.blackboard.events.BlackboardCompactedEvent",
+    "apps.agent.src.agent_orchestration.run_control.events.TaskSteerAppliedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentTextDeltaEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentMessageCompletedEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentToolStartedEvent",

@@ -15,7 +15,10 @@ from apps.agent.src.agent_orchestration.capability.types import (
     AgentToolStartedEvent,
 )
 from apps.agent.src.agent_orchestration.events import Event
-from apps.agent.src.agent_orchestration.run_control.types import AgentRunControl
+from apps.agent.src.agent_orchestration.run_control.types import (
+    AgentRunControl,
+    AppliedContextBatch,
+)
 from apps.agent.src.agent_orchestration.tools.tool_executor import BaseToolExecutor
 from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 from apps.agent.src.model_config import LLMRole
@@ -540,14 +543,20 @@ class ReActAgent(BaseAgent):
         if run_control is None:
             return
         run_control.raise_if_cancelled()
+        run_control.raise_if_step_exceeded(step)
         batch = run_control.drain_context(applied_before_step=step)
         if batch is not None:
-            messages.append(batch.message)
+            if step == 1 or messages[-1].role == "user":
+                target_index = task_message_start if step == 1 else len(messages) - 1
+                messages[target_index] = ReActAgent._merge_runtime_input(
+                    messages[target_index], batch
+                )
+            else:
+                messages.append(batch.message)
         run_control.checkpoint_history(
             messages[task_message_start:],
             last_usage,
         )
-        run_control.raise_if_step_exceeded(step)
 
     @staticmethod
     def _close_or_continue(
@@ -562,6 +571,56 @@ class ReActAgent(BaseAgent):
             return True
         messages.append(batch.message)
         return False
+
+    @staticmethod
+    def _merge_runtime_input(
+        user_message: Message, batch: AppliedContextBatch
+    ) -> Message:
+        if user_message.role != "user":
+            raise ValueError("initial runtime input requires a user message")
+        contexts = [
+            record.content for record in batch.records if record.kind == "context"
+        ]
+        corrections = [
+            record.content
+            for record in batch.records
+            if record.kind == "user_correction" and record.content.strip()
+        ]
+        existing_text = "".join(
+            part.text for part in user_message.content if isinstance(part, TextPart)
+        )
+        sections = []
+        if contexts:
+            sections.append(
+                "\n".join(
+                    ["<runtime_context>"]
+                    + [f"{index}. {value}" for index, value in enumerate(contexts, 1)]
+                    + ["</runtime_context>"]
+                )
+            )
+        if existing_text:
+            sections.append(existing_text)
+        if corrections:
+            sections.append(
+                "\n".join(
+                    ["<user_correction>"]
+                    + [
+                        f"{index}. {value}"
+                        for index, value in enumerate(corrections, 1)
+                    ]
+                    + ["</user_correction>"]
+                )
+            )
+        images = [
+            part for part in user_message.content if isinstance(part, ImagePart)
+        ]
+        runtime_images = [
+            image for record in batch.records for image in record.input_images
+        ]
+        return Message(
+            "user",
+            [TextPart("\n\n".join(sections)), *images, *runtime_images],
+        )
 
     @staticmethod
     def _mark_step(run_control: AgentRunControl | None, step: int) -> None:

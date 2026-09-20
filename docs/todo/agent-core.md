@@ -83,19 +83,21 @@ Session、Blackboard State 和 Trace 元数据后，已确认更直接的问题�
 
 ### P0：先恢复完整历史与运行中纠偏
 
-- [ ] 按 `apps/agent/docs/arch/agent-run-history-steering-design.md` 恢复 Blackboard 完整 Agent Run
+- [x] 按 `apps/agent/docs/arch/agent-run-history-steering-design.md` 恢复 Blackboard 完整 Agent Run
   历史，正常完成时整体提交 `AgentResponse.task_messages`，不再只保留 User 与最终 Assistant。
-- [ ] 为新 Run 增量增加严格结构校验；为旧 Session 增加只作用于请求副本的兼容修复，处理孤立
+- [x] 为新 Run 增量增加严格结构校验；为旧 Session 增加只作用于请求副本的兼容修复，处理孤立
   User、孤立 Tool Result、缺失 Tool Result、空 Assistant 和重复 Tool Call ID，不原地改写旧数据。
-- [ ] Cancelled Run 提交最近安全检查点并用 Assistant 中断消息闭合；Failed Run 只有明确携带安全
+- [x] Cancelled Run 提交最近安全检查点并用 Assistant 中断消息闭合；Failed Run 只有明确携带安全
   检查点时才提交，禁止从混合消息中猜测历史。
-- [ ] 增加 Agent 层 Steer：属于当前 Task 和 Agent Run，不创建新 Task、不停止当前 Run，在完整
+- [x] 增加 Agent 层 Steer：属于当前 Task 和 Agent Run，不创建新 Task、不停止当前 Run，在完整
   Tool Group 后的安全边界注入；已应用 Steer 进入完整历史，Stop 丢弃未应用 Steer。
-- [ ] 将自动 Memory 等 Pre-run Context 合并进 Blackboard 生成的当前 User Prompt，顺序固定为
+- [x] Gateway 增加 `session.steer`，TUI 运行中提交默认 Steer、空闲提交默认新 Task；图片复用
+  Session assets 导入链路，被拒绝的完整输入保留到本地队列。
+- [x] 将自动 Memory 等 Pre-run Context 合并进 Blackboard 生成的当前 User Prompt，顺序固定为
   `dynamic context -> current user request`，整轮初始输入只产生一条当前 User Message。
-- [ ] 区分 Plugin Runtime Context 与用户 Steer；同一安全点合并为一条 User Message，顺序固定为
+- [x] 区分 Plugin Runtime Context 与用户 Steer；同一安全点合并为一条 User Message，顺序固定为
   `runtime context -> user correction`，不得插入 Assistant Tool Call 与对应 Tool Result 之间。
-- [ ] 补充请求级结构断言和回归测试：Tool Call/Result 一一配对、当前请求锚点唯一、停止历史闭合、
+- [x] 补充请求级结构断言和回归测试：Tool Call/Result 一一配对、当前请求锚点唯一、停止历史闭合、
   Steer 不丢失且不会破坏消息协议。
 
 ### P0：约束 Tool Result 与 Active Run 工作集

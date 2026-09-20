@@ -13,6 +13,7 @@ from typing import Literal, TypeAlias
 RuntimeUpdateType: TypeAlias = Literal[
     "session.lifecycle",
     "user.message",
+    "user.correction",
     "task.accepted",
     "task.started",
     "task.finished",

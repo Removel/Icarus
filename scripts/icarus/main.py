@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import socket
@@ -169,6 +170,11 @@ Legacy 'icarus --session-id ID' still opens the TUI."""
         if status.state == "external":
             print(f"{project}: already available externally ({status.detail})")
             return
+        if status.state == "orphaned":
+            if project != "gateway":
+                raise ControlError(f"unexpected orphaned project: {project}")
+            print("gateway: replacing orphaned process from this repository")
+            self._stop_orphaned_gateway_processes()
         if status.state == "starting":
             print(f"{project}: waiting for existing startup")
             self._wait_until_healthy(project)
@@ -324,6 +330,14 @@ Legacy 'icarus --session-id ID' still opens the TUI."""
                 age = time.time() - float(record.get("created_at", 0))
                 state = "starting" if age < 30 else "unhealthy"
                 return ProjectStatus(project, state, self._gateway_log_detail())
+            orphaned = self._orphaned_gateway_records()
+            if orphaned:
+                pids = ", ".join(str(record["pid"]) for record in orphaned)
+                return ProjectStatus(
+                    project,
+                    "orphaned",
+                    f"current repository process(es): {pids}",
+                )
             if healthy:
                 return ProjectStatus(project, "external", ENDPOINTS[project])
             return ProjectStatus(project, "stopped")
@@ -388,6 +402,14 @@ Legacy 'icarus --session-id ID' still opens the TUI."""
         if record is None or not self._record_matches(record, "gateway"):
             if record is not None:
                 path.unlink(missing_ok=True)
+            orphaned = self._orphaned_gateway_records()
+            if orphaned:
+                self._terminate_gateway_records(orphaned)
+                print(
+                    "gateway: stopped "
+                    f"{len(orphaned)} orphaned current-repository process(es)"
+                )
+                return
             if self._healthy("gateway"):
                 print("gateway: external service left running")
             else:
@@ -396,6 +418,23 @@ Legacy 'icarus --session-id ID' still opens the TUI."""
         self._terminate_record(record)
         path.unlink(missing_ok=True)
         print("gateway: stopped")
+
+    def _stop_orphaned_gateway_processes(self) -> None:
+        records = self._orphaned_gateway_records()
+        if not records:
+            return
+        self._terminate_gateway_records(records)
+        if self._healthy("gateway"):
+            raise ControlError(
+                "gateway port is still served after stopping the current "
+                "repository's orphaned process"
+            )
+
+    def _terminate_gateway_records(
+        self, records: Sequence[Mapping[str, object]]
+    ) -> None:
+        for record in records:
+            self._terminate_record(record)
 
     def _stop_tui_processes(self) -> None:
         records = self._active_tui_records()
@@ -579,6 +618,125 @@ Legacy 'icarus --session-id ID' still opens the TUI."""
         recorded_start = record.get("process_started_at")
         current_start = self._process_started_at(pid)
         return not recorded_start or recorded_start == current_start
+
+    def _orphaned_gateway_records(self) -> list[dict[str, object]]:
+        try:
+            completed = subprocess.run(
+                ["ps", "-ww", "-ax", "-o", "pid=,command="],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return []
+        if completed.returncode != 0:
+            return []
+        records = []
+        for line in completed.stdout.splitlines():
+            fields = line.strip().split(maxsplit=1)
+            if len(fields) != 2:
+                continue
+            try:
+                pid = int(fields[0])
+            except ValueError:
+                continue
+            command = fields[1]
+            if (
+                pid == os.getpid()
+                or not self._is_gateway_command_on_default_port(command)
+                or self._process_cwd(pid) != self.repo_root
+                or not self._process_listens_on_port(pid, PORTS["gateway"])
+            ):
+                continue
+            records.append(
+                {
+                    "pid": pid,
+                    "project": "gateway",
+                    "marker": PROCESS_MARKERS["gateway"][0],
+                    "process_group": self._is_process_group_leader(pid),
+                    "created_at": time.time(),
+                    "process_started_at": self._process_started_at(pid),
+                }
+            )
+        return records
+
+    @staticmethod
+    def _is_gateway_command_on_default_port(command: str) -> bool:
+        try:
+            arguments = shlex.split(command)
+        except ValueError:
+            return False
+        if not any(
+            arguments[index : index + 2] == ["-m", "apps.gateway.src.main"]
+            for index in range(len(arguments) - 1)
+        ):
+            return False
+        for index, argument in enumerate(arguments):
+            if argument == "--port":
+                return index + 1 < len(arguments) and arguments[index + 1] == "8765"
+            if argument.startswith("--port="):
+                return argument.split("=", 1)[1] == "8765"
+        return True
+
+    def _process_cwd(self, pid: int) -> Path | None:
+        proc_cwd = Path(f"/proc/{pid}/cwd")
+        try:
+            if proc_cwd.exists():
+                return proc_cwd.resolve()
+        except OSError:
+            return None
+        lsof = shutil.which("lsof")
+        if lsof is None:
+            return None
+        try:
+            completed = subprocess.run(
+                [lsof, "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return None
+        if completed.returncode != 0:
+            return None
+        for line in completed.stdout.splitlines():
+            if line.startswith("n"):
+                try:
+                    return Path(line[1:]).resolve()
+                except OSError:
+                    return None
+        return None
+
+    @staticmethod
+    def _process_listens_on_port(pid: int, port: int) -> bool:
+        lsof = shutil.which("lsof")
+        if lsof is None:
+            return False
+        try:
+            completed = subprocess.run(
+                [
+                    lsof,
+                    "-nP",
+                    "-a",
+                    "-p",
+                    str(pid),
+                    f"-iTCP:{port}",
+                    "-sTCP:LISTEN",
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            return False
+        return completed.returncode == 0
+
+    @staticmethod
+    def _is_process_group_leader(pid: int) -> bool:
+        try:
+            return os.getpgid(pid) == pid
+        except (OSError, AttributeError):
+            return False
 
     def _active_tui_records(self) -> list[tuple[Path, dict[str, object]]]:
         data_dir = self._optional_data_dir()

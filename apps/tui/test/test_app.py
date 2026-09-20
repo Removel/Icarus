@@ -82,6 +82,8 @@ class ControlledService:
         subscription_close_error: BaseException | None = None,
         stop_error: BaseException | None = None,
         cancel_error: BaseException | None = None,
+        steer_error: BaseException | None = None,
+        steer_status: str = "accepted",
     ) -> None:
         self.actions = []
         self.subscription = ControlledSubscription(
@@ -98,12 +100,15 @@ class ControlledService:
         self.subscribe_error = subscribe_error
         self.stop_error = stop_error
         self.cancel_error = cancel_error
+        self.steer_error = steer_error
+        self.steer_status = steer_status
         self.submissions = []
         self.submission_images: list[tuple[Path, ...]] = []
         self.session_id = "test-session"
         self.workspace_key = "workspace"
         self.stopped = False
         self.cancelled_tasks = []
+        self.steers = []
         self.task_statuses = {}
         self.history = SessionHistoryModel(records=(), history_cursor=0)
         self.session_summaries = ()
@@ -202,6 +207,14 @@ class ControlledService:
         if self.cancel_error is not None:
             raise self.cancel_error
         return TaskOperationResult(task_id=task_id, status="accepted")
+
+    async def steer_task(
+        self, task_id, prompt, *, resources=(), display_text=None
+    ):
+        self.steers.append((task_id, prompt, tuple(resources), display_text))
+        if self.steer_error is not None:
+            raise self.steer_error
+        return TaskOperationResult(task_id=task_id, status=self.steer_status)
 
     async def get_task_status(self, task_id):
         return self.task_statuses.get(
@@ -1207,7 +1220,7 @@ def test_subscription运行中失败后忽略迟到终态且不调度队首(tmp_
                 pilot, lambda: app.chat_state.phase == RuntimePhase.READY
             )
             await enter_text(pilot, "active")
-            await enter_text(pilot, "must stay queued")
+            app.chat_state.enqueue("must stay queued")
             app.post_message(
                 RuntimeSubscriptionFailed(RuntimeError("stream exploded"))
             )
@@ -1266,7 +1279,7 @@ def test_subscription断线后重连并保留运行中task(tmp_path):
     assert "Reconnected" in status
 
 
-def test运行中输入按FIFO排队并在finish后每次只提交一条(tmp_path):
+def test运行中输入默认追加到当前task而不创建新task(tmp_path):
     async def run():
         service = ControlledService()
         app = make_app(service, tmp_path)
@@ -1278,36 +1291,115 @@ def test运行中输入按FIFO排队并在finish后每次只提交一条(tmp_pat
             await enter_text(pilot, "second")
             await enter_text(pilot, "third")
             assert service.submissions == ["first"]
-            assert app.chat_state.pending_items == ("second", "third")
-            assert app.query_one(QueuePanel).items == ("second", "third")
+            assert [item[1] for item in service.steers] == ["second", "third"]
+            assert app.chat_state.pending_items == ()
+            assert app.query_one(QueuePanel).items == ()
 
             service.subscription.publish("user-input", finish_event("task-1"))
-            await wait_until(pilot, lambda: len(service.submissions) == 2)
-            after_first = (
+            await wait_until(pilot, lambda: app.chat_state.active_task_id is None)
+            result = (
                 tuple(service.submissions),
-                app.chat_state.pending_items,
-                app.chat_state.active_task_id,
-            )
-
-            service.subscription.publish("user-input", finish_event("task-2"))
-            await wait_until(pilot, lambda: len(service.submissions) == 3)
-            after_second = (
-                tuple(service.submissions),
+                tuple(service.steers),
                 app.chat_state.pending_items,
                 app.chat_state.active_task_id,
             )
             app.request_shutdown(return_code=0)
             await wait_until(pilot, lambda: service.stopped)
-            return after_first, after_second
+            return result
 
-    after_first, after_second = asyncio.run(run())
+    submissions, steers, pending, active = asyncio.run(run())
 
-    assert after_first == (("first", "second"), ("third",), "task-2")
-    assert after_second == (
-        ("first", "second", "third"),
-        (),
-        "task-3",
+    assert submissions == ("first",)
+    assert [item[0] for item in steers] == ["task-1", "task-1"]
+    assert pending == ()
+    assert active is None
+
+
+def test运行中图片steer接受后删除临时文件(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "apps.tui.src.app.read_clipboard_image",
+        lambda: ClipboardImage(b"png-data", "image/png", "png"),
     )
+
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            await enter_text(pilot, "first")
+            await pilot.press(*"change ", "ctrl+v")
+            composer = app.query_one(PersistentComposer)
+            await wait_until(pilot, lambda: bool(composer.images))
+            image_path = composer.images[0].path
+            await pilot.press("enter")
+            await wait_until(pilot, lambda: bool(service.steers))
+            result = service.steers[0], image_path.exists(), app.chat_state.pending_items
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    steer, exists, pending = asyncio.run(run())
+
+    assert steer[0] == "task-1"
+    assert steer[1].startswith("change [#image1]")
+    assert steer[2][0].resource_id.endswith(".png")
+    assert steer[3] == "change [#image1]"
+    assert exists is False
+    assert pending == ()
+
+
+def test运行中steer遇到已结束task时保留为下一条新task(tmp_path):
+    async def run():
+        service = ControlledService(steer_status="already_finished")
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            await enter_text(pilot, "first")
+            await enter_text(pilot, "next")
+            assert app.chat_state.pending_items == ("next",)
+            service.subscription.publish("user-input", finish_event("task-1"))
+            await wait_until(pilot, lambda: service.submissions == ["first", "next"])
+            result = tuple(service.submissions), app.chat_state.active_task_id
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    assert asyncio.run(run()) == (("first", "next"), "task-2")
+
+
+def test运行中图片steer被拒绝时保留图片直到作为新task接受(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        "apps.tui.src.app.read_clipboard_image",
+        lambda: ClipboardImage(b"png-data", "image/png", "png"),
+    )
+
+    async def run():
+        service = ControlledService(steer_status="already_finished")
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            await enter_text(pilot, "first")
+            await pilot.press("ctrl+v")
+            composer = app.query_one(PersistentComposer)
+            await wait_until(pilot, lambda: bool(composer.images))
+            image_path = composer.images[0].path
+            await pilot.press("enter")
+            await wait_until(pilot, lambda: app.chat_state.pending_items == ("[#image1]",))
+            kept_after_rejection = image_path.exists()
+            service.subscription.publish("user-input", finish_event("task-1"))
+            await wait_until(pilot, lambda: len(service.submissions) == 2)
+            deleted_after_submit = not image_path.exists()
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return kept_after_rejection, deleted_after_submit, service.submission_images[1]
+
+    kept, deleted, resources = asyncio.run(run())
+
+    assert kept is True
+    assert deleted is True
+    assert resources[0].resource_id.endswith(".png")
 
 
 def test_submit返回前到达queued_event不会被误丢弃(tmp_path):
@@ -1413,7 +1505,8 @@ def test_ctrl_c依次清草稿撤回队尾取消任务并在空闲退出(tmp_pat
                 pilot, lambda: app.chat_state.phase == RuntimePhase.READY
             )
             await enter_text(pilot, "first")
-            await enter_text(pilot, "second\nline")
+            app.chat_state.enqueue("second\nline")
+            await app._refresh_queue()
 
             await pilot.press(*"draft", "ctrl+c")
             await pilot.pause()
@@ -1552,7 +1645,7 @@ def test_projector失败进入fatal并保留当前任务队列和草稿(tmp_path
                 pilot, lambda: app.chat_state.phase == RuntimePhase.READY
             )
             await enter_text(pilot, "active")
-            await enter_text(pilot, "keep queued")
+            app.chat_state.enqueue("keep queued")
             composer = app.query_one(PersistentComposer)
             composer.load_text("keep draft")
             service.subscription.publish(
@@ -1600,7 +1693,7 @@ def test_conversation更新失败后忽略后续event且不调度队首(
                 pilot, lambda: app.chat_state.phase == RuntimePhase.READY
             )
             await enter_text(pilot, "active")
-            await enter_text(pilot, "must not dispatch")
+            app.chat_state.enqueue("must not dispatch")
             service.subscription.publish(
                 "agent",
                 runtime_update(

@@ -90,6 +90,7 @@ def create_default_projector_registry(
     input_projector = UserInputProjector()
     for update_type in (
         "user.message",
+        "user.correction",
         "task.accepted",
         "task.started",
         "task.finished",

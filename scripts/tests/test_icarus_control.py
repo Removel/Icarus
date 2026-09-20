@@ -169,6 +169,25 @@ class IcarusControlTest(unittest.TestCase):
             self.assertEqual(called, [])
             self.assertIn("available externally", output.getvalue())
 
+    def test_start_replaces_orphaned_gateway_from_current_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            control = self.make_control(Path(directory))
+            statuses = iter(
+                [ProjectStatus("gateway", "orphaned", "pid 123")]
+            )
+            control.project_status = lambda project: next(statuses)
+            stopped = []
+            started = []
+            control._stop_orphaned_gateway_processes = lambda: stopped.append(True)
+            control._port_open = lambda port: False
+            control._start_gateway = lambda: started.append(True)
+            control._wait_until_healthy = lambda project: None
+
+            control.start_background("gateway")
+
+            self.assertEqual(stopped, [True])
+            self.assertEqual(started, [True])
+
     def test_start_service_uses_existing_image_without_rebuilding(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -210,6 +229,100 @@ class IcarusControlTest(unittest.TestCase):
 
             self.assertEqual(terminated, [])
             self.assertIn("external service left running", output.getvalue())
+
+    def test_stop_adopts_orphaned_gateway_from_current_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            control = self.make_control(Path(directory))
+            control._read_record = lambda path: None
+            orphan = {
+                "pid": 123,
+                "project": "gateway",
+                "process_group": True,
+            }
+            control._orphaned_gateway_records = lambda: [orphan]
+            terminated = []
+            control._terminate_gateway_records = (
+                lambda records: terminated.extend(records)
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                control.stop_project("gateway")
+
+            self.assertEqual(terminated, [orphan])
+            self.assertIn("orphaned current-repository", output.getvalue())
+
+    def test_gateway_status_reports_current_repository_orphan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            control = self.make_control(Path(directory))
+            orphan = {"pid": 123}
+            with patch.object(
+                control, "_read_record", return_value=None
+            ), patch.object(
+                control, "_healthy", return_value=True
+            ), patch.object(
+                control, "_orphaned_gateway_records", return_value=[orphan]
+            ):
+                status = control.project_status("gateway")
+
+            self.assertEqual(status.state, "orphaned")
+            self.assertIn("123", status.detail)
+
+    def test_orphan_discovery_requires_command_cwd_and_listening_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            control = self.make_control(root)
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=(
+                    "101 python -m apps.gateway.src.main\n"
+                    "102 python -m apps.gateway.src.main --port 9876\n"
+                    "103 python -m apps.gateway.src.main\n"
+                    "104 python worker.py\n"
+                ),
+                stderr="",
+            )
+            with patch.object(
+                control_module.subprocess, "run", return_value=completed
+            ), patch.object(
+                control,
+                "_process_cwd",
+                side_effect=lambda pid: root if pid in {101, 102} else root.parent,
+            ), patch.object(
+                control,
+                "_process_listens_on_port",
+                side_effect=lambda pid, port: pid == 101 and port == 8765,
+            ), patch.object(
+                control, "_process_started_at", return_value="started"
+            ), patch.object(
+                control, "_is_process_group_leader", return_value=True
+            ):
+                records = control._orphaned_gateway_records()
+
+            self.assertEqual([record["pid"] for record in records], [101])
+
+    def test_gateway_command_parser_rejects_other_ports_and_similar_text(self):
+        self.assertTrue(
+            IcarusControl._is_gateway_command_on_default_port(
+                "python -m apps.gateway.src.main"
+            )
+        )
+        self.assertTrue(
+            IcarusControl._is_gateway_command_on_default_port(
+                "python -m apps.gateway.src.main --port=8765"
+            )
+        )
+        self.assertFalse(
+            IcarusControl._is_gateway_command_on_default_port(
+                "python -m apps.gateway.src.main --port 9876"
+            )
+        )
+        self.assertFalse(
+            IcarusControl._is_gateway_command_on_default_port(
+                "python worker.py apps.gateway.src.main"
+            )
+        )
 
     def test_status_reports_agent_as_embedded_in_gateway(self):
         with tempfile.TemporaryDirectory() as directory:

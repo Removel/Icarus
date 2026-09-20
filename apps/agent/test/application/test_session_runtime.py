@@ -24,7 +24,7 @@ from apps.agent.src.model_config import (
     ModelSettings,
     ThinkMode,
 )
-from apps.agent.src.model_provider.types import Message, TextPart, ToolCall, Usage
+from apps.agent.src.model_provider.types import ImagePart, Message, TextPart, ToolCall, Usage
 
 
 def make_config(data_dir) -> ConfigModel:
@@ -120,13 +120,18 @@ class MemoryAwareAgent:
         self.context = kwargs["run_control"].drain_context(
             applied_before_step=1
         )
+        input_text = kwargs["input_prompt"]
+        if self.context is not None:
+            input_text = (
+                f"{self.context.message.content[0].text}\n\n{input_text}"
+            )
         message = Message("assistant", [TextPart("used memory")])
         yield AgentCompletedEvent(
             step=1,
             response=AgentResponse(
                 message=message, usage=Usage(10, 2), last_usage=Usage(10, 2),
                 finish_reason="stop", steps=1,
-                messages=[Message("user", [TextPart(kwargs["input_prompt"])]), message],
+                messages=[Message("user", [TextPart(input_text)]), message],
                 task_message_start=0,
             ),
         )
@@ -155,7 +160,7 @@ def test_session_runtime使用runtime_update并保留单session行为(tmp_path):
                 update.type == "task.finished"
                 and update.task_id == accepted.task_id
                 for update in updates
-            ):
+            ) and not runtime.snapshot().has_work:
                 break
             await asyncio.sleep(0.01)
         before_stop = runtime.snapshot()
@@ -267,7 +272,43 @@ def test_session_runtime_stop可重复调用(tmp_path):
     assert asyncio.run(run()).is_running is False
 
 
-def test_session_runtime_e2e只持久化product_conversation(tmp_path):
+def test_session_runtime向当前task追加用户steer(tmp_path):
+    async def run():
+        runtime = SessionRuntime(
+            SessionIdentity.create(tmp_path, "session-steer"),
+            config=make_config(tmp_path / "data"),
+            publish_update=lambda update: asyncio.sleep(0),
+        )
+        before_start = await runtime.steer_task("task-1", "before start")
+        await runtime.start()
+        agent = runtime.runtime_host.get_plugin("agent")
+        channel = agent.task_channels.create("task-1")
+        channel.mark_preparing_context()
+        channel.start_run("run-1")
+
+        image = ImagePart("assets/image.png", "asset", "image/png")
+        accepted = await runtime.steer_task(
+            "task-1", "only tests", [image], display_text="only [#image1]"
+        )
+        batch = channel.drain_context(applied_before_step=2)
+        await runtime.stop("test", timeout=1)
+        return before_start, accepted, batch
+
+    before_start, accepted, batch = asyncio.run(run())
+
+    assert before_start.status == "not_running"
+    assert accepted.status == "accepted"
+    assert accepted.run_id == "run-1"
+    assert batch is not None
+    assert batch.records[0].kind == "user_correction"
+    assert batch.records[0].content == "only tests"
+    assert batch.records[0].input_images == (
+        ImagePart("assets/image.png", "asset", "image/png"),
+    )
+    assert batch.records[0].display_text == "only [#image1]"
+
+
+def test_session_runtime_e2e持久化完整agent_run历史(tmp_path):
     class ToolTranscriptAgent:
         async def astream(self, **kwargs):
             prompt = kwargs["input_prompt"]
@@ -320,19 +361,26 @@ def test_session_runtime_e2e只持久化product_conversation(tmp_path):
 
     accepted, messages, state, tools = asyncio.run(run())
     assert accepted.task_id
-    assert messages == [
-        Message("user", [TextPart("original user text")]),
-        Message("assistant", [TextPart("final answer")]),
+    assert [message.role for message in messages] == [
+        "user", "assistant", "tool", "user", "assistant"
     ]
+    assert "original user text" in messages[0].content[0].text
+    assert messages[1].tool_calls[0].id == "call-1"
+    assert messages[2].tool_call_id == "call-1"
+    assert messages[2].content == [TextPart("tool result")]
+    assert "secret context" in messages[3].content[0].text
+    assert messages[-1] == Message("assistant", [TextPart("final answer")])
     stored = state["state"]["messages"]
-    assert [item["role"] for item in stored] == ["user", "assistant"]
+    assert [item["role"] for item in stored] == [
+        "user", "assistant", "tool", "user", "assistant"
+    ]
     serialized = json.dumps(state, ensure_ascii=False)
-    assert "tool result" not in serialized
-    assert "secret context" not in serialized
+    assert "tool result" in serialized
+    assert "secret context" in serialized
     assert {"blackboard_list", "blackboard_read"}.issubset(tools)
 
 
-def test_session_runtime_e2e自动记忆先注入再放行且不进入conversation(tmp_path, monkeypatch):
+def test_session_runtime_e2e自动记忆先注入再进入完整历史(tmp_path, monkeypatch):
     async def run():
         backend = MemoryBackendStub(
             [MemoryItem("memory:1", "user prefers concise docs", 0.95, "global")]
@@ -369,10 +417,10 @@ def test_session_runtime_e2e自动记忆先注入再放行且不进入conversati
     assert '"memory":' in agent.input_prompt
     assert region.complete_for_input is True
     assert region.state.status == "idle"
-    assert messages == [
-        Message("user", [TextPart("write a design")]),
-        Message("assistant", [TextPart("used memory")]),
-    ]
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert "user prefers concise docs" in messages[0].content[0].text
+    assert "write a design" in messages[0].content[0].text
+    assert messages[1] == Message("assistant", [TextPart("used memory")])
     assert {
         "memory_recall", "memory_get", "memory_history",
         "memory_remember", "memory_correct", "memory_stop_reference",

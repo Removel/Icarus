@@ -36,7 +36,7 @@ Icarus 第一阶段不自研记忆库、向量检索、文档解析或 Wiki 编�
 
 - Memory 是 Agent 的长期连续性能力，每轮 UserInput 到达后先自动召回，再启动主 Agent；
 - Knowledge 是主 Agent 的按需工具能力，只在 Agent 主动调用时访问 OpenKB；
-- Blackboard 保存 Product Conversation、各 Plugin 当前 Region 和当前 Task 的 Active Context，不成为长期业务事实源；
+- Blackboard 保存跨 Run 完整消息历史、各 Plugin 当前 Region 和当前 Task 的 Active Context，不成为长期业务事实源；
 - ReActAgent 继续无状态，不依赖具体 MemoryPlugin、KnowledgePlugin、Mem0 或 OpenKB。
 
 ### 1.2 技术背景
@@ -313,7 +313,9 @@ sequenceDiagram
 
 空结果、失败和超时不发布 `TaskContextInputEvent`，只发布 Memory Region 终态并启动无记忆主流程。Region Update 本身永远不会由 Blackboard 转换成第二次注入；MemoryPlugin 明确负责双投影。MemoryPlugin 不等待 `TaskContextInputResultEvent` 才释放门闩；回执仅用于 Trace 和诊断。
 
-自动召回上下文只服务当前 Run，不应随 Agent 的完整消息链写入 Blackboard Product Conversation，否则下一轮会同时得到历史中的旧 Snapshot 和 Mem0 的新召回。Blackboard 的统一 Product Conversation 投影只提交当前原始 User 输入和最终 Assistant 输出；Runtime Context、ToolCall、ToolResult 和中间 Assistant 消息都只保留在当前 Run Transcript 与 Trace。因此不需要为 Memory 修改 `TaskContextInputEvent` 协议。
+自动召回上下文通过 `TaskContextInputEvent` 进入当前 Run，并随完整、可重放的 Run 消息写入
+Blackboard。下一轮新的自动召回仍表示当前输入下的新 Snapshot；历史中的旧 Snapshot 只表示当时
+Run 实际看到的内容。后续通过 Context Budget 控制重复内容大小，本阶段不修改 Memory 事件协议。
 
 ### 4.3 MemoryPlugin 与 Mem0
 
@@ -782,7 +784,9 @@ apps/agent/src/agent_orchestration/plugins/
     └── tools.py
 ```
 
-同时修改 Blackboard 的终态提交逻辑：成功、取消和可提交失败都通过统一 Product Conversation 投影器，仅提交原始 User 输入与最终或已展示的 Assistant 文本。当前 Run 的完整 `task_messages` 继续用于协议执行、检查点和 Trace，但不直接追加到下一轮 Conversation。现有 `_context_tokens` 也必须改为按 Product Conversation 投影重新计算或保守估算，不能继续直接使用包含 Tool 与 Runtime Context 的最后一个模型 Step `last_usage.total_tokens`。
+Blackboard 的终态提交按 `agent-run-history-steering-design.md` 执行：成功时提交完整
+`task_messages`，取消时提交闭合后的安全前缀。`_context_tokens` 按实际保存的完整消息重新估算，
+不能把 Task 累计 Usage 当成单次请求大小。
 
 测试目录镜像源码目录。不会创建 `apps/memory`、`apps/knowledge` 或嵌套子 Plugin。
 
@@ -908,7 +912,7 @@ README 与示例配置只在对应源码和能力实际落地时更新，不能�
 | Stop/Restore | 默认检索先不可见，再恢复可见 |
 | Delete | 活跃记忆不可见，history 保留 DELETE |
 | 时间字段 | 自动和显式结果均返回规范化时间，不冒充事实时间 |
-| Product Conversation 投影 | Memory Snapshot、ToolCall、ToolResult 和中间消息不写入下一轮对话历史 |
+| 完整 Run History | 已应用 Memory Snapshot、ToolCall、ToolResult 和中间消息写入下一轮历史 |
 | 上下文预算与指令隔离 | 最多 3 条、序列化 items 数据包最多 6000 字符，正文只作为动态参考数据 |
 | 恢复已停止记忆 | 显式 recall 使用 `include_stopped=true` 找到 MemoryRef 后恢复 |
 | Region 注册 | Memory owner 成功注册；重复名称、非法 owner 和非法预算失败 |
@@ -916,7 +920,7 @@ README 与示例配置只在对应源码和能力实际落地时更新，不能�
 | 旧输入乱序 | 旧 `input_id` 结果不覆盖当前 Memory Region |
 | Agent 查看 Region | `blackboard_list/read` 只读返回当前投影，不调用 Mem0 |
 | Region 生命周期 | Memory 是 input Region，新输入重置，Session 恢复不带旧 Snapshot |
-| Conversation token | 按 Product Conversation 重算或估算，不复用包含 Tool 与 Runtime Context 的最后一步 usage |
+| Conversation token | 按已提交完整消息重算或估算，不复用 Task 累计 usage |
 
 ### 5.2 Knowledge
 
@@ -953,7 +957,7 @@ README 与示例配置只在对应源码和能力实际落地时更新，不能�
 
 | 优先级 | 阶段 | 交付边界 | 验收门槛 |
 | --- | --- | --- | --- |
-| P0 | Blackboard 基础 | Region Registry、更新事件、只读 Tool、Product Conversation、required Region 门闩 | Blackboard/Agent/TaskChannel 定向测试通过 |
+| P0 | Blackboard 基础 | Region Registry、更新事件、只读 Tool、完整 Run History、required Region 门闩 | Blackboard/Agent/TaskChannel 定向测试通过 |
 | P1 | MemoryPlugin + Mem0 | 导入 `apps/mem0`、数据目录改造、Adapter、自动召回、8 个 Memory Tool | 功能测试、真实 Smoke、p95 性能验收 |
 | P1 | KnowledgePlugin + OpenKB | 导入 `apps/openkb`、数据目录改造、5 个 Knowledge Tool、无删除入口 | Adapter 契约与集成测试通过 |
 | P2 | 治理收口 | `.env` 示例、README、第三方声明、上游同步记录、当前事件流文档 | Agent 全量测试与文档一致性检查通过 |

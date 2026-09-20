@@ -283,16 +283,16 @@ def test_stream和astream都在首个step前注入context():
     async_events, async_llm = asyncio.run(run_async())
 
     assert sync_llm.calls[0][0][-1].content[0].text == (
-        "<runtime_context>\n1. sync extra\n</runtime_context>"
+        "<runtime_context>\n1. sync extra\n</runtime_context>\n\noriginal"
     )
     assert async_llm.calls[0][0][-1].content[0].text == (
-        "<runtime_context>\n1. async extra\n</runtime_context>"
+        "<runtime_context>\n1. async extra\n</runtime_context>\n\noriginal"
     )
-    assert sync_events[-1].response.task_messages[1].content[0].text == (
-        "<runtime_context>\n1. sync extra\n</runtime_context>"
+    assert sync_events[-1].response.task_messages[0].content[0].text == (
+        "<runtime_context>\n1. sync extra\n</runtime_context>\n\noriginal"
     )
-    assert async_events[-1].response.task_messages[1].content[0].text == (
-        "<runtime_context>\n1. async extra\n</runtime_context>"
+    assert async_events[-1].response.task_messages[0].content[0].text == (
+        "<runtime_context>\n1. async extra\n</runtime_context>\n\noriginal"
     )
 
 

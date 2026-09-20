@@ -12,7 +12,7 @@
 本文以当前 Manifest、Factory 和测试生成的冻结运行图为准。
 
 Blackboard 的多 Region 状态板、Region owner、`input / output / state`、只读
-`blackboard_list / blackboard_read` 和 Product Conversation 投影已经实现。当前标准运行图尚无
+`blackboard_list / blackboard_read` 和完整 Agent Run 历史已经实现。当前标准运行图尚无
 Region owner，因此 Registry 为空，不阻塞普通输入；MemoryPlugin 接入后会注册第一阶段唯一的
 required Region。完整设计见 `plugin-eventbus-blackboard-design.md`，Memory Region 接入见
 `memory-knowledge-plugin-design.md`。
@@ -35,7 +35,7 @@ required Region。完整设计见 `plugin-eventbus-blackboard-design.md`，Memor
 | `persistence` | Trace、日志、Session 元数据，以及 Workspace / Session Plugin 状态 |
 | `builtin-tools` | 注册 `read`、`write`、`insert`、`bash` |
 | `user-input` | FIFO 接收输入，发布排队、开始、输入和结束 Event |
-| `blackboard` | 维护 Product Conversation、Plugin Region 和当前任务状态，发布主 Agent 调用快照并提供只读 Region Tool |
+| `blackboard` | 维护跨 Run 完整消息历史、Plugin Region 和当前任务状态，发布主 Agent 调用快照并提供只读 Region Tool |
 | `agent` | 适配无状态 ReActAgent，执行 Run，处理运行中 Context 与取消请求 |
 | `skill` | 提供显式 Skill 发现、搜索、生产、演化和 Job 查询 |
 | `mcp` | 按需连接配置的 MCP Server，通过固定的 list/search/execute Tool 提供外部能力 |

@@ -204,9 +204,9 @@ Operation interrupted.
 
 ### Failed Run
 
-普通非受控失败不从临时消息猜测可提交内容。只有终态事件明确携带
-`task_messages` 安全检查点时才允许提交，并用明确的 Assistant 失败消息闭合；没有安全检查点时不
-追加当前 Task。
+普通非受控失败不从临时消息猜测可提交内容。只有终态事件明确携带 `task_messages`，并且安全
+检查点已经由普通 Assistant Message 闭合时才允许提交。本阶段不为 Failed Run 生成新的回复文案；
+没有闭合检查点时不追加当前 Task。
 
 本阶段继续沿用 `max_steps_exceeded` 等受控截停携带安全检查点的机制，不扩展新的失败恢复系统。
 
@@ -243,13 +243,15 @@ user_correction  用户对当前任务的权威纠偏
 本阶段增加以下 Agent 应用接口：
 
 ```text
-AgentRuntime.steer_task(workspace_path, session_id, task_id, content)
-→ SessionRuntime.steer_task(task_id, content)
+AgentRuntime.steer_task(workspace_path, session_id, task_id, content, resources, display_text)
+→ 导入 resources 为当前 Session assets/ImagePart
+→ SessionRuntime.steer_task(task_id, content, input_images, display_text)
 → AgentPlugin.handle_task_operation(...)
 → TaskChannel.add_steer(...)
 ```
 
-Gateway 和 TUI 暂不接入该接口。
+Gateway 通过 `session.steer` 暴露该接口。TUI 在已有活动 Task 时把普通提交作为 Steer；空闲时仍
+通过 `session.submit` 创建新 Task。文本和图片遵循同一分流规则。
 
 ### 应用边界
 
@@ -297,8 +299,8 @@ Context 排在前面，用户 Steer 排在后面，保证用户纠偏是这一�
 ### 接受、应用与竞争
 
 `steer_task()` 只同步返回请求是否被接收；`applied` 和 `discarded_by_stop` 是请求被接收后的处置
-结果，不能由同步返回值提前承诺。首期通过现有 Hook/Trace 记录处置，不新增数据库表或公共
-RuntimeUpdate。
+结果，不能由同步返回值提前承诺。Hook/Trace 记录完整处置；只有真正 drain 的 Steer 才发布
+`user.correction` RuntimeUpdate，供 UI 展示和 Session 恢复，未应用内容不进入公共历史。
 
 | 场景 | 同步结果 | 后续处置 |
 | --- | --- | --- |
@@ -311,6 +313,11 @@ RuntimeUpdate。
 
 Agent 层不把 `already_finished` 的 Steer 自动转换为新 Task。是否排队为下一条输入属于 UI 或其他
 调用方策略。
+
+图片先复用现有 `incoming -> Session assets -> ImagePart` 导入链路，再与 Steer 文本一起进入同一条
+User Message。TUI 仅在 `session.steer` 返回 `accepted` 后删除自己拥有的临时图片；若返回
+`already_finished`、`already_cancelling`、`not_found` 或 `not_running`，完整输入保留在本地队列，
+待 Session 回到空闲后作为新 Task 提交。
 
 ## Plugin Runtime Context
 
@@ -339,7 +346,7 @@ Blackboard 只接受满足以下条件的 Run 增量：
 - 每个 Tool Call 最多对应一个 Tool Result；
 - 已提交的 Tool Call 必须有终态 Tool Result；
 - Completed Run 和闭合后的 Cancelled Run 以非空、无 Tool Call 的 Assistant Message 结束；
-- 受控 Failed Run 可以停在完整 Tool Group 后，但不能包含未闭合 Tool Call；
+- Failed Run 只有在检查点已经由普通 Assistant Message 闭合时才提交；
 - 不包含未完成的流式 Assistant；
 - 不包含未应用的 Runtime Context 或 Steer。
 
@@ -395,7 +402,7 @@ RuntimeUpdate 和 Trace 继续承担展示与诊断职责，不成为 Blackboard
 
 - `agent_orchestration/plugins/blackboard/`：恢复完整 Run 提交、取消闭合和历史校验；
 - `agent_orchestration/run_control/`：区分 Runtime Context 与 User Steer，记录接受和应用状态；
-- `agent_orchestration/plugins/agent/`：接收 Steer 并发布操作结果；
+- `agent_orchestration/plugins/agent/`：通过应用层直接入口接收 Steer 并返回操作结果；
 - `agent_orchestration/capability/react_agent.py`：在安全边界合并或追加 Steer；
 - `application/session_runtime.py` 与 `application/agent_runtime.py`：提供 Agent 层 Steer API；
 - 对应的 `apps/agent/test/`；

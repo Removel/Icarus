@@ -1,9 +1,11 @@
 """TaskChannel 的生命周期注册表。"""
 
 from collections import OrderedDict
+from collections.abc import Sequence
 
 from apps.agent.src.agent_orchestration.run_control.channel import TaskChannel
 from apps.agent.src.agent_orchestration.run_control.types import TaskOperationResult
+from apps.agent.src.model_provider.types import ImagePart
 
 
 class TaskChannelRegistry:
@@ -82,3 +84,30 @@ class TaskChannelRegistry:
                 )
             return TaskOperationResult(task_id=task_id, status="not_found")
         return channel.request_cancel(reason)
+
+    def add_steer(
+        self,
+        task_id: str,
+        content: str,
+        *,
+        input_images: Sequence[ImagePart] = (),
+        display_text: str | None = None,
+        source_id: str = "user",
+        event_id: str | None = None,
+    ) -> TaskOperationResult:
+        channel = self.get(task_id)
+        if channel is None:
+            if task_id in self._finished_run_ids:
+                return TaskOperationResult(
+                    task_id=task_id,
+                    status="already_finished",
+                    run_id=self._finished_run_ids[task_id],
+                )
+            return TaskOperationResult(task_id=task_id, status="not_found")
+        return channel.add_steer(
+            content,
+            input_images=input_images,
+            display_text=display_text,
+            source_id=source_id,
+            event_id=event_id,
+        )

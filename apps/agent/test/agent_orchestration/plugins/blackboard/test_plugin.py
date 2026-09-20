@@ -100,12 +100,15 @@ class CompactorStub:
 
 def test_blackboard达到阈值只压缩旧历史再发布当前输入():
     async def run():
-        old = Message("user", [TextPart("old history")])
+        old = [
+            Message("user", [TextPart("old history")]),
+            Message("assistant", [TextPart("old answer")]),
+        ]
         compactor = CompactorStub()
         plugin = BlackboardPlugin(
             "blackboard",
             required_context_sources=set(),
-            initial_messages=[old],
+            initial_messages=old,
             context_window=100,
             history_compactor=compactor,
         )
@@ -120,11 +123,11 @@ def test_blackboard达到阈值只压缩旧历史再发布当前输入():
             "user-input",
             UserInputEvent(task_id="task-1", prompt="new input"),
         )
-        return plugin, compactor, events
+        return plugin, compactor, events, old
 
-    plugin, compactor, events = asyncio.run(run())
+    plugin, compactor, events, old = asyncio.run(run())
 
-    assert compactor.calls == [[Message("user", [TextPart("old history")])]]
+    assert compactor.calls == [old]
     assert isinstance(events[0], BlackboardCompactedEvent)
     assert events[0].before_tokens == 85
     assert events[0].after_tokens == 20
@@ -186,11 +189,14 @@ def test_blackboard拒绝自己发布的事件避免来源路由回环():
 
 def test_blackboard_compact失败保留历史且不发布context():
     async def run():
-        old = Message("user", [TextPart("old history")])
+        old = [
+            Message("user", [TextPart("old history")]),
+            Message("assistant", [TextPart("old answer")]),
+        ]
         plugin = BlackboardPlugin(
             "blackboard",
             required_context_sources=set(),
-            initial_messages=[old],
+            initial_messages=old,
             context_window=100,
             history_compactor=CompactorStub(error=RuntimeError("failed")),
         )
@@ -205,11 +211,11 @@ def test_blackboard_compact失败保留历史且不发布context():
             "user-input",
             UserInputEvent(task_id="task-1", prompt="new input"),
         )
-        return plugin, events
+        return plugin, events, old
 
-    plugin, events = asyncio.run(run())
+    plugin, events, old = asyncio.run(run())
 
-    assert plugin.get_messages() == [Message("user", [TextPart("old history")])]
+    assert plugin.get_messages() == old
     assert plugin.context_tokens == 90
     assert len(events) == 1
     assert isinstance(events[0], TaskErrorEvent)
@@ -551,14 +557,14 @@ def test_blackboard_plugin_成功历史复用发布给agent的完整input_prompt
     assert "remember me" in context.input_prompt
     assert blackboard.get_messages()[0] == Message(
         "user",
-        [TextPart("hello")],
+        [TextPart(context.input_prompt)],
     )
     assert blackboard.get_task_state("task-1").input_prompt == (
         context.input_prompt
     )
 
 
-def test_blackboard_plugin成功时不提交已应用运行中context():
+def test_blackboard_plugin成功时提交已应用运行中context():
     async def run():
         blackboard = BlackboardPlugin(
             "blackboard",
@@ -574,13 +580,16 @@ def test_blackboard_plugin成功时不提交已应用运行中context():
             "user-input",
             UserInputEvent(task_id="task-1", prompt="original"),
         )
-        context_message = Message(
-            "user",
-            [TextPart("<runtime_context>\n1. extra\n</runtime_context>")],
-        )
         task_messages = [
-            Message("user", [TextPart("<user_request>\noriginal\n</user_request>")]),
-            context_message,
+            Message(
+                "user",
+                [
+                    TextPart(
+                        "<runtime_context>\n1. extra\n</runtime_context>\n\n"
+                        "<user_request>\noriginal\n</user_request>"
+                    )
+                ],
+            ),
             Message("assistant", [TextPart("done")]),
         ]
         await blackboard.consume(
@@ -595,17 +604,14 @@ def test_blackboard_plugin成功时不提交已应用运行中context():
                 ),
             ),
         )
-        return blackboard.get_messages()
+        return blackboard.get_messages(), task_messages
 
-    messages = asyncio.run(run())
+    messages, task_messages = asyncio.run(run())
 
-    assert messages == [
-        Message("user", [TextPart("original")]),
-        Message("assistant", [TextPart("done")]),
-    ]
+    assert messages == task_messages
 
 
-def test_blackboard_plugin成功时不提交当前task工具消息():
+def test_blackboard_plugin成功时提交当前task完整工具消息():
     async def run():
         blackboard = BlackboardPlugin("blackboard", required_context_sources=set())
         blackboard.bind_publisher(lambda event: asyncio.sleep(0))
@@ -635,14 +641,55 @@ def test_blackboard_plugin成功时不提交当前task工具消息():
                 ),
             ),
         )
-        return blackboard.get_messages()
+        return blackboard.get_messages(), full_messages[3:]
 
-    messages = asyncio.run(run())
+    messages, task_messages = asyncio.run(run())
 
-    assert messages == [
-        Message("user", [TextPart("inspect")]),
-        Message("assistant", [TextPart("done")]),
-    ]
+    assert messages == task_messages
+
+
+def test_blackboard_plugin拒绝不完整tool_group且不污染历史():
+    async def run():
+        blackboard = BlackboardPlugin("blackboard", required_context_sources=set())
+        published = []
+
+        async def publish(event):
+            published.append(event)
+
+        blackboard.bind_publisher(publish)
+        await blackboard.consume(
+            "user-input", UserInputEvent(task_id="task-1", prompt="inspect")
+        )
+        incomplete = [
+            Message("user", [TextPart("inspect")]),
+            Message(
+                "assistant", [],
+                tool_calls=[ToolCall("call-1", "read", {"path": "a"})],
+            ),
+            Message("assistant", [TextPart("done")]),
+        ]
+        await blackboard.consume(
+            "agent",
+            AgentCompletedEvent(
+                task_id="task-1",
+                step=2,
+                response=AgentResponse(
+                    message=incomplete[-1],
+                    messages=incomplete,
+                    task_message_start=0,
+                ),
+            ),
+        )
+        return blackboard, published
+
+    blackboard, published = asyncio.run(run())
+
+    assert blackboard.get_messages() == []
+    error = next(
+        event for event in published if isinstance(event, TaskErrorEvent)
+    )
+    assert error.fatal is False
+    assert error.code == "invalid_run_history"
 
 
 def test_blackboard_plugin取消时提交一次安全消息前缀():
@@ -674,12 +721,13 @@ def test_blackboard_plugin取消时提交一次安全消息前缀():
             "user-input",
             InputFinishedEvent(task_id="task-1", status="cancelled"),
         )
-        return blackboard
+        return blackboard, checkpoint
 
-    blackboard = asyncio.run(run())
+    blackboard, checkpoint = asyncio.run(run())
 
     assert blackboard.get_messages() == [
-        Message("user", [TextPart("inspect")])
+        *checkpoint,
+        Message("assistant", [TextPart("Operation interrupted.")]),
     ]
     with pytest.raises(KeyError, match="not found"):
         blackboard.get_task_state("task-1")
@@ -721,7 +769,11 @@ def test_blackboard_plugin运行中取消时input终态先到仍等待安全历�
 
     assert state_before_agent.input_finished is True
     assert blackboard.get_messages() == [
-        Message("user", [TextPart("inspect")]),
+        Message(
+            "user",
+            [TextPart("<user_request>\ninspect\n</user_request>")],
+        ),
+        Message("assistant", [TextPart("Operation interrupted.")]),
     ]
     with pytest.raises(KeyError, match="not found"):
         blackboard.get_task_state("task-1")
@@ -775,7 +827,8 @@ def test_blackboard_plugin取消后的下一task使用安全历史():
 
     assert published[1].task_id == "task-2"
     assert published[1].history_messages == [
-        Message("user", [TextPart("inspect")])
+        *checkpoint,
+        Message("assistant", [TextPart("Operation interrupted.")]),
     ]
 
 
@@ -826,7 +879,7 @@ def test_blackboard_plugin_消费agent结果更新跨轮消息并在任务完成
 
     assert len(published) == 1
     assert blackboard.get_messages() == [
-        Message("user", [TextPart("hello")]),
+        Message("user", [TextPart("<user_request>\nhello\n</user_request>")]),
         Message("assistant", [TextPart("done")]),
     ]
     with pytest.raises(KeyError, match="not found"):
@@ -888,7 +941,7 @@ def test_blackboard_plugin_下一轮自动使用已完成消息作为history():
     assert len(published) == 2
     second_context = published[1]
     assert second_context.history_messages == [
-        Message("user", [TextPart("first")]),
+        Message("user", [TextPart("<user_request>\nfirst\n</user_request>")]),
         Message("assistant", [TextPart("first-answer")]),
     ]
     assert blackboard.get_task_state("task-2").context_published is True
@@ -972,6 +1025,36 @@ def test_blackboard_plugin_失败任务不写入跨轮消息():
         blackboard.get_task_state("task-1")
 
 
+def test_blackboard_plugin失败时不提交以tool结束的检查点():
+    async def run():
+        blackboard = BlackboardPlugin("blackboard", required_context_sources=set())
+        blackboard.bind_publisher(lambda event: asyncio.sleep(0))
+        await blackboard.consume(
+            "user-input", UserInputEvent(task_id="task-1", prompt="failed")
+        )
+        await blackboard.consume(
+            "agent",
+            TaskErrorEvent(
+                task_id="task-1",
+                fatal=True,
+                code="max_steps_exceeded",
+                error_type="MaxStepsExceededError",
+                error_message="failed",
+                task_messages=(
+                    Message("user", [TextPart("failed")]),
+                    Message(
+                        "assistant", [],
+                        tool_calls=[ToolCall("call-1", "read", {})],
+                    ),
+                    Message("tool", [TextPart("done")], tool_call_id="call-1"),
+                ),
+            ),
+        )
+        return blackboard.get_messages()
+
+    assert asyncio.run(run()) == []
+
+
 def test_blackboard_plugin_input完成先到时等待agent结果再提交并清理():
     async def run():
         blackboard = BlackboardPlugin(
@@ -1013,7 +1096,7 @@ def test_blackboard_plugin_input完成先到时等待agent结果再提交并清�
 
     assert state_before_agent.input_finished is True
     assert blackboard.get_messages() == [
-        Message("user", [TextPart("hello")]),
+        Message("user", [TextPart("<user_request>\nhello\n</user_request>")]),
         Message("assistant", [TextPart("done")]),
     ]
     with pytest.raises(KeyError, match="not found"):
@@ -1050,13 +1133,13 @@ def test_blackboard_plugin_runtime连续任务自动传递跨轮history():
     assert len(contexts) == 2
     assert contexts[0].history_messages == []
     assert contexts[1].history_messages == [
-        Message("user", [TextPart("first")]),
+        Message("user", [TextPart("<user_request>\nfirst\n</user_request>")]),
         Message("assistant", [TextPart("answer:first")]),
     ]
     assert blackboard.get_messages() == [
-        Message("user", [TextPart("first")]),
+        Message("user", [TextPart("<user_request>\nfirst\n</user_request>")]),
         Message("assistant", [TextPart("answer:first")]),
-        Message("user", [TextPart("second")]),
+        Message("user", [TextPart("<user_request>\nsecond\n</user_request>")]),
         Message("assistant", [TextPart("answer:second")]),
     ]
     with pytest.raises(KeyError, match="not found"):

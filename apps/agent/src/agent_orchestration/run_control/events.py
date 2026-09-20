@@ -7,6 +7,7 @@ from apps.agent.src.agent_orchestration.events import Event
 from apps.agent.src.agent_orchestration.run_control.types import (
     TaskOperationStatus,
 )
+from apps.agent.src.model_provider.types import ImagePart
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -17,6 +18,22 @@ class TaskContextInputEvent(Event):
     def __post_init__(self) -> None:
         if self.expires_at is not None and self.expires_at.tzinfo is None:
             raise ValueError("expires_at must include timezone information")
+
+
+@dataclass(frozen=True, kw_only=True)
+class TaskSteerRequestedEvent(Event):
+    content: str
+    input_images: tuple[ImagePart, ...] = ()
+    display_text: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class TaskSteerAppliedEvent(Event):
+    request_event_id: str
+    content: str
+    input_images: tuple[ImagePart, ...] = ()
+    display_text: str | None = None
+    applied_before_step: int
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -20,8 +20,10 @@ from apps.agent.src.agent_orchestration.plugins.user_input import (
     InputQueuedEvent,
     InputStartedEvent,
 )
+from apps.agent.src.agent_orchestration.run_control import TaskSteerAppliedEvent
 from apps.agent.src.agent_orchestration.tools import ToolExecutionResult
 from apps.agent.src.model_provider.types import (
+    ImagePart,
     Message,
     TextPart,
     ToolCall,
@@ -113,6 +115,34 @@ def test_runtime_update_plugin投影首期公共事件并保留时间顺序():
     assert updates[7].occurred_at == completed.occurred_at
     assert updates[8].occurred_at == finished.occurred_at
     json.dumps(dict(updates[4].payload))
+
+
+def test_runtime_update_plugin只投影已应用steer并保留图片引用():
+    image = ImagePart("assets/image.png", "asset", "image/png")
+    updates = project(
+        [
+            (
+                "agent",
+                TaskSteerAppliedEvent(
+                    task_id="task",
+                    request_event_id="request",
+                    content="model prompt",
+                    display_text="look [#image1]",
+                    input_images=(image,),
+                    applied_before_step=2,
+                ),
+            )
+        ]
+    )
+
+    assert updates[0].type == "user.correction"
+    assert updates[0].payload == {
+        "text": "look [#image1]",
+        "resources": [
+            {"resource_id": "assets/image.png", "media_type": "image/png"}
+        ],
+        "applied_before_step": 2,
+    }
 
 
 def test_runtime_update_plugin对工具参数递归脱敏():

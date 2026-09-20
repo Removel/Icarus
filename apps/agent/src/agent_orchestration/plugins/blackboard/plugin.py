@@ -1,6 +1,6 @@
 """汇聚 Agent 上下文的 BlackboardPlugin。"""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from collections import OrderedDict
 from math import ceil
 
@@ -22,6 +22,12 @@ from apps.agent.src.agent_orchestration.plugins.blackboard.events import (
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard.history_compactor import (
     HistoryCompactor,
+)
+from apps.agent.src.agent_orchestration.plugins.blackboard.message_history import (
+    MessageHistoryError,
+    close_interrupted_run,
+    project_legacy_history,
+    validate_run_messages,
 )
 from apps.agent.src.agent_orchestration.plugins.blackboard.prompt_composer import (
     BlackboardPromptComposer,
@@ -116,23 +122,45 @@ class BlackboardPlugin(BasePlugin):
             if state is None:
                 return
             if isinstance(event, AgentCompletedEvent):
-                committed = self._commit_product_conversation(
-                    state, event.response.message
+                task_messages = event.response.task_messages
+                if not task_messages:
+                    task_messages = self._fallback_completed_messages(
+                        state, event
+                    )
+                committed = await self._commit_task_messages(
+                    state,
+                    task_messages,
+                    require_final_assistant=True,
                 )
                 self._update_context_tokens(committed)
                 state.agent_finished = True
             elif isinstance(event, TaskErrorEvent) and event.fatal:
-                assistant = _last_visible_assistant(event.task_messages)
-                committed = (
-                    self._commit_product_conversation(state, assistant)
-                    if assistant is not None
-                    else False
-                )
+                committed = False
+                if (
+                    event.task_messages
+                    and event.task_messages[-1].role == "assistant"
+                    and not event.task_messages[-1].tool_calls
+                ):
+                    committed = await self._commit_task_messages(
+                        state,
+                        event.task_messages,
+                        require_final_assistant=True,
+                    )
                 self._update_context_tokens(committed)
                 state.agent_finished = True
             elif isinstance(event, AgentCancelledEvent):
-                assistant = _last_visible_assistant(event.task_messages)
-                committed = self._commit_product_conversation(state, assistant)
+                committed = False
+                if event.task_messages:
+                    try:
+                        closed = close_interrupted_run(event.task_messages)
+                    except MessageHistoryError as error:
+                        await self._publish_history_rejection(state.task_id, error)
+                    else:
+                        committed = await self._commit_task_messages(
+                            state,
+                            closed,
+                            require_final_assistant=True,
+                        )
                 self._update_context_tokens(committed)
                 state.agent_finished = True
             self._remove_task_if_finished(state)
@@ -306,11 +334,12 @@ class BlackboardPlugin(BasePlugin):
                 message="input is too large for the configured context window",
             )
             return
-        if self._should_compact():
+        history_messages = project_legacy_history(self._messages)
+        if self._should_compact() and history_messages:
             try:
                 assert self.history_compactor is not None
                 summary, usage = await self.history_compactor.compact(
-                    self.get_messages()
+                    history_messages
                 )
             except Exception as error:
                 await self._fail_before_agent(
@@ -323,6 +352,7 @@ class BlackboardPlugin(BasePlugin):
             before_tokens = self._context_tokens
             self._messages = [summary]
             self._context_tokens = usage.output_tokens
+            history_messages = [summary]
             await self.publish(
                 BlackboardCompactedEvent(
                     task_id=state.task_id,
@@ -354,7 +384,7 @@ class BlackboardPlugin(BasePlugin):
             model_role=self.model_role,
             system_prompt=self.system_prompt,
             input_prompt=input_prompt,
-            history_messages=self.get_messages(),
+            history_messages=history_messages,
             input_images=user_input.input_images,
             tools=self.tools,
         )
@@ -395,29 +425,57 @@ class BlackboardPlugin(BasePlugin):
             return
         self._context_tokens = _estimate_messages_tokens(self._messages)
 
-    def _commit_product_conversation(
+    async def _commit_task_messages(
         self,
         state: BlackboardTaskState,
-        assistant: Message | None,
+        messages: Sequence[Message],
+        *,
+        require_final_assistant: bool,
     ) -> bool:
-        if state.history_committed or state.user_input is None:
+        if state.history_committed or not messages:
             return False
-        messages = [
-            Message(
-                "user",
-                [TextPart(state.user_input.prompt), *state.user_input.input_images],
+        try:
+            validated = validate_run_messages(
+                messages,
+                require_final_assistant=require_final_assistant,
             )
-        ]
-        if assistant is not None and assistant.role == "assistant":
-            messages.append(
-                Message(
-                    "assistant",
-                    list(assistant.content),
-                )
-            )
-        self._messages.extend(messages)
+        except MessageHistoryError as error:
+            await self._publish_history_rejection(state.task_id, error)
+            return False
+        self._messages.extend(validated)
         state.history_committed = True
         return True
+
+    @staticmethod
+    def _fallback_completed_messages(
+        state: BlackboardTaskState,
+        event: AgentCompletedEvent,
+    ) -> tuple[Message, ...]:
+        if state.input_prompt is None:
+            return ()
+        return (
+            Message(
+                "user",
+                [
+                    TextPart(state.input_prompt),
+                    *(state.user_input.input_images if state.user_input else []),
+                ],
+            ),
+            event.response.message,
+        )
+
+    async def _publish_history_rejection(
+        self, task_id: str, error: MessageHistoryError
+    ) -> None:
+        await self.publish(
+            TaskErrorEvent(
+                task_id=task_id,
+                fatal=False,
+                code="invalid_run_history",
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+        )
 
     def _remove_task_if_finished(self, state: BlackboardTaskState) -> None:
         if state.agent_finished and state.input_finished:
@@ -502,13 +560,6 @@ def _serialize_message(message: Message) -> dict[str, object]:
     }
 
 
-def _last_visible_assistant(messages: tuple[Message, ...]) -> Message | None:
-    for message in reversed(messages):
-        if message.role == "assistant" and message.content:
-            return message
-    return None
-
-
 def _estimate_messages_tokens(messages: list[Message]) -> int:
     """Conservative provider-neutral estimate for persisted conversation."""
 
@@ -520,6 +571,12 @@ def _estimate_messages_tokens(messages: list[Message]) -> int:
                 characters += len(part.text.encode("utf-8"))
             elif isinstance(part, ImagePart):
                 characters += 1024
+        for tool_call in message.tool_calls:
+            characters += len(tool_call.id.encode("utf-8"))
+            characters += len(tool_call.name.encode("utf-8"))
+            characters += len(str(tool_call.arguments).encode("utf-8"))
+        if message.tool_call_id is not None:
+            characters += len(message.tool_call_id.encode("utf-8"))
     return ceil(characters / 3)
 
 

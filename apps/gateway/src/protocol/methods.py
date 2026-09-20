@@ -61,6 +61,13 @@ class SubmitParams(SessionParams):
     resources: tuple[ResourceRefModel, ...] = ()
 
 
+class SteerParams(SessionParams):
+    task_id: str = Field(min_length=1, pattern=r".*\S.*")
+    prompt: str
+    display_text: str | None = None
+    resources: tuple[ResourceRefModel, ...] = ()
+
+
 class CancelParams(SessionParams):
     task_id: str
     reason: str | None = None
@@ -103,6 +110,7 @@ class GatewayMethods:
             "session.discard_empty": self._session_discard_empty,
             "session.get": self._session_get,
             "session.submit": self._session_submit,
+            "session.steer": self._session_steer,
             "session.cancel": self._session_cancel,
             "session.unload": self._session_unload,
             "session.get_history": self._session_history,
@@ -216,6 +224,29 @@ class GatewayMethods:
                 value.reason,
             )
         )
+
+    async def _session_steer(self, params):
+        value = self._validate(SteerParams, params)
+        try:
+            resources = tuple(
+                ResourceRef(item.resource_id, item.media_type)
+                for item in value.resources
+            )
+            result = await self.runtime.steer_task(
+                value.workspace_path,
+                value.session_id,
+                value.task_id,
+                value.prompt,
+                resources=resources,
+                display_text=value.display_text,
+            )
+        except ResourceUnavailableError as error:
+            raise _business(
+                "resource_unavailable", "Resource is unavailable"
+            ) from error
+        except InvalidResourceError as error:
+            raise _business("invalid_resource", "Resource is invalid") from error
+        return _wire(result)
 
     async def _session_unload(self, params):
         value = self._validate(SessionParams, params)

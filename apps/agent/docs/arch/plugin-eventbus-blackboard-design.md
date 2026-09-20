@@ -7,7 +7,7 @@
 
 ## 文档定位
 
-本文描述 Agent Stream Event 完成后的编排架构，以及 Blackboard 从一次性 Context 聚合器演进为多 Region 当前状态板的设计。当前已经实现的运行图以 `plugin-event-flow-current-state.md` 为准；Region、只读 Blackboard Tool 和 Product Conversation 投影已实现，MemoryPlugin/KnowledgePlugin 仍按本文边界继续接入。
+本文描述 Agent Stream Event 完成后的编排架构，以及 Blackboard 从一次性 Context 聚合器演进为多 Region 当前状态板的设计。当前已经实现的运行图以 `plugin-event-flow-current-state.md` 为准；Region、只读 Blackboard Tool 和完整 Run History 已实现，MemoryPlugin/KnowledgePlugin 仍按本文边界继续接入。
 
 系统中的 Agent、Blackboard、Skill、Knowledge、Memory、用户输入、UI、TTS、L2D 和未来自定义能力统一抽象为 Plugin。Plugin 之间通过 EventBus 异步通信，Plugin Registry 维护来源订阅关系。
 
@@ -53,7 +53,7 @@ Agent Orchestration Layer
 - SkillPlugin 与 MCPPlugin 的显式 Tool 路径；
 - 真实模型 Plugin 链路验证。
 
-Region Registry、Region Snapshot、Blackboard 只读 Tool 和 Product Conversation 投影已经实现；MemoryPlugin/KnowledgePlugin 仍属于后续阶段。当前实现事实继续以 `plugin-event-flow-current-state.md` 为准。
+Region Registry、Region Snapshot、Blackboard 只读 Tool 和完整 Run History 已经实现；MemoryPlugin/KnowledgePlugin 仍属于后续阶段。当前实现事实继续以 `plugin-event-flow-current-state.md` 为准。
 
 ## 设计目标
 
@@ -363,7 +363,7 @@ Blackboard 不是请求队列、长期业务数据库或领域协调器。Plugin
 
 | 能力 | 当前实现 | 目标设计 |
 | --- | --- | --- |
-| 跨轮历史 | `_messages` 保存完整 `task_messages` | Product Conversation 只保存 User 与最终 Assistant |
+| 跨轮历史 | `_messages` 保存完整 `task_messages` | 保持完整、协议可重放，并在提交与发送前校验 |
 | 初始上下文 | UserInput + 一次性 ContextContribution | Conversation + 当前输入 + ContextContribution + Region 紧凑投影 |
 | Plugin 当前状态 | 没有统一存放位置 | owner Plugin 持续更新自己的 Region |
 | Region 结构 | 不存在 | 统一 `input / output / state` 当前 Snapshot |
@@ -379,7 +379,7 @@ Blackboard 不是请求队列、长期业务数据库或领域协调器。Plugin
 ```text
 Blackboard
 ├── conversation
-│   └── 跨轮 Product Conversation
+│   └── 跨轮完整 Agent Run 消息历史
 ├── regions
 │   ├── memory
 │   ├── skill
@@ -392,11 +392,13 @@ Blackboard
 
 | 层 | 内容 | 生命周期 |
 | --- | --- | --- |
-| Conversation | 原始 User 输入、最终 Assistant 输出和必要附件引用 | 跨轮、可恢复 |
+| Conversation | User、Assistant、Tool Call、Tool Result、已应用运行中输入和附件引用 | 跨轮、可恢复 |
 | Regions | 各 owner Plugin 当前公开的 `input / output / state` | Input 或 Session |
 | Active Context | System、Conversation 投影、当前输入、Region 紧凑投影和运行中 Context | 当前 Task |
 
-Conversation 和 Regions 都是 Active Context 的来源，但三者不是同一份数据。完整 ReAct ToolCall、ToolResult、中间 Assistant 消息和推理属于 Run Transcript，只进入 Trace，不默认进入 Conversation。
+Conversation 和 Regions 都是 Active Context 的来源，但三者不是同一份数据。完整 ReAct
+ToolCall、ToolResult、中间 Assistant 消息和已应用运行中输入在安全终态后进入 Conversation；隐藏
+推理与内部控制状态只进入 Trace。
 
 ### Region 注册
 
@@ -672,7 +674,7 @@ Active Context 是当前 Task 的派生快照，包含：
 
 ```text
 stable System Prompt
-+ Product Conversation projection
++ complete Conversation history
 + current UserInput
 + completed required ContextContribution
 + auto-exposed Region compact views
@@ -742,8 +744,8 @@ required Region 等待的是“当前输入的判断已经结束”，不是必�
    -> 需要介入时 owner Plugin 显式发布 TaskContextInputEvent
 
 5. Task 终态
-   -> Product Conversation 投影 User + 最终 Assistant
-   -> 完整 Run Transcript 进入 Trace
+   -> 校验并提交完整 Run Message 增量
+   -> 完整 Run Transcript 同时进入 Trace
    -> 清理 TaskState 与 Active Context
    -> Region 按 input/session 生命周期保留或等待下次输入重置
 ```
@@ -764,37 +766,17 @@ Plugin result
 
 ### Conversation 与 Run Transcript
 
-Product Conversation 跨轮只保存：
+当前 Run 的 ReAct 消息链由 ReActAgent 在局部工作副本中维护。正常完成后，Blackboard 提交完整
+`task_messages`，包括 User、Assistant、ToolCall、ToolResult 与已应用 Runtime Context。取消时提交
+最近协议完整的安全前缀，并按 `agent-run-history-steering-design.md` 使用 Assistant 中断消息闭合。
 
-- 原始 User 输入；
-- 最终 Assistant 完整回复；
-- 必要的附件引用与稳定终态信息。
+隐藏模型推理、未完成流式 Assistant、未闭合 Tool Group、未应用 Runtime Context 和内部控制状态
+不进入 Conversation。旧 Blackboard Session State 继续兼容恢复但不原地改写，发送前只在请求副本
+上修复孤立或未闭合消息。
 
-不保存：
-
-- ToolCall；
-- ToolResult；
-- 中间 Assistant 消息；
-- 模型推理；
-- Runtime Context 原文；
-- Region Snapshot。
-
-完整 ReAct 消息链属于当前 Run Transcript，写入 Trace 并用于当前 Run 的工具协议与安全检查点。下一轮由 Blackboard 使用 Product Conversation 与当前 Regions 重新构造 Active Context。
-
-成功、取消和可提交失败终态都必须经过普通内部组件 `ProductConversationProjector`，不能再次把完整 `task_messages` 直接追加到 Conversation：
-
-| 终态 | Conversation 提交 |
-| --- | --- |
-| 成功 | 当前原始 UserInput + `AgentCompletedEvent.response.message` 最终 Assistant 文本 |
-| 启动前失败/取消 | 不提交虚假的 Assistant；按现有公共 Conversation 规则保存用户可见终态 |
-| 运行中取消/安全截停 | 当前原始 UserInput + 终态事件明确携带的已展示 Assistant 文本；没有则只保存用户可见终态 |
-| 非受控失败 | 不从原始 `task_messages` 猜测并提交半截协议消息 |
-
-如果现有终态事件不足以携带“已经展示给用户的 Assistant 文本”，应扩展明确字段，而不是从 ToolCall/ToolResult 混合消息中猜测。旧 Blackboard Session State 继续兼容恢复，但不原地重写；从升级后的下一轮开始只追加 Product Conversation。
-
-Product Conversation 投影不依赖 Context 消息携带“是否持久化”标记。`TaskContextInputEvent` 和 TaskChannel 保持来源无关的简单协议；所有 Runtime Context 都属于 Run Transcript，由 Blackboard 在终态提交时统一排除。
-
-当前 `_context_tokens` 不能继续直接采用最后一个模型 Step 的 `last_usage.total_tokens`，因为该值包含 Runtime Context、ToolCall 和 ToolResult，而目标 Conversation 已排除这些内容。Product Conversation 提交或压缩后应按实际投影重新计算或保守估算 token 数；上下文压缩门槛只依据下一轮真正会投影的 Product Conversation，避免运行轨迹很长但对话很短时被误触发。
+`_context_tokens` 按 Blackboard 实际保存的完整消息重新估算，覆盖 Tool Call 参数、Tool Result、
+文本、图片占位和 `tool_call_id`。这仍不等价于完整 Wire Request 压力；System Prompt、Tool Schema、
+输出预留和 Provider 实际 Usage 的统一预算属于后续 Request Assembler 工作。
 
 ### 清理与持久化
 
@@ -802,8 +784,8 @@ Product Conversation 投影不依赖 Context 消息携带“是否持久化”�
 - Active Context 随 TaskState 清理；
 - input Region 在下一次 UserInput 到来时重置，不持久化到 Session State；
 - session Region 作为当前状态写入 Blackboard Session State；
-- Conversation 与按 Product Conversation 投影计算的 context token 标记继续由 Blackboard Session State 保存；
-- Region Update 历史、完整 Run Transcript 和诊断信息进入 Trace。
+- Conversation 与按完整消息估算的 context token 标记继续由 Blackboard Session State 保存；
+- Region Update 历史、完整 Run Transcript 和诊断信息同时进入 Trace。
 
 ## AgentPlugin
 
@@ -890,7 +872,8 @@ InputQueuedEvent
 
 初版同一时间只执行一个用户任务。队列位置只在入队时发布，不为剩余任务反复更新位置。
 
-UserInputPlugin 不维护也不接收跨轮历史。当前实现和目标设计都由 BlackboardPlugin 持有该状态；目标形态保存的是 Product Conversation。恢复已有业务会话时，在 Agent Runtime 初始化阶段一次性注入已持久化的 Product Conversation。
+UserInputPlugin 不维护也不接收跨轮历史。完整跨 Run 消息由 BlackboardPlugin 持有；恢复已有业务
+会话时，在 Agent Runtime 初始化阶段一次性注入已持久化消息。
 
 当前已支持活动 Task 取消；删除排队任务、优先级、暂停和调整顺序不属于本设计。
 
@@ -1087,14 +1070,14 @@ Blackboard Event
 - input/session 生命周期和 `input_id` 乱序保护；
 - required/optional readiness；
 - `blackboard_list / blackboard_read`；
-- Product Conversation 与 Run Transcript 投影分离。
+- 完整 Run History 的提交、校验与恢复。
 
 ### 阶段二：Memory Region
 
 - MemoryPlugin 注册 required input Region；
 - 自动召回状态、紧凑视图与 1s 终态；
 - Region Update 与 TaskContextInput 双投影；
-- 临时运行时 Context 不进入 Conversation。
+- 已应用运行时 Context 随完整 Run 进入 Conversation。
 
 ### 阶段三：其他 Region
 
@@ -1118,8 +1101,8 @@ Blackboard Event
 - input Region 在新输入时重置且不跨 Session 恢复，session Region 跨输入和恢复保留；
 - 自动 Region 紧凑视图遵守 summary、refs 与 data 预算；
 - required Region 完成后 Blackboard 只发布一次 Agent Context；
-- Product Conversation 不保存完整 ToolCall、ToolResult 或 Region Snapshot；
-- Conversation context token 按 Product Conversation 投影计算，不沿用包含完整 Run Transcript 的 `last_usage.total_tokens`；
+- Conversation 保存完整、已闭合的 ToolCall、ToolResult 和运行中输入，但不保存 Region Snapshot；
+- Conversation context token 按已提交完整消息估算，不直接沿用 Task 累计 Usage；
 - Agent Stream Event 可以由 AgentPlugin 原样发布；
 - Hook 可以观测发布、路由和消费生命周期；
 - ReActAgent 不新增 Plugin/EventBus 依赖。

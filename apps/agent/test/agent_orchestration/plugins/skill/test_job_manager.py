@@ -149,8 +149,13 @@ def test_job_failure_is_safe_and_notification_failure_does_not_change_status(tmp
             step=0,
         )
         completed = await wait_terminal(job_manager, queued.job_id)
-        await asyncio.sleep(0)
-        return job_manager.require(queued.job_id)
+        assert completed.status == "failed"
+        for _ in range(100):
+            job = job_manager.require(queued.job_id)
+            if job.notification_event_id is not None:
+                return job
+            await asyncio.sleep(0.01)
+        raise AssertionError("Job notification was not attempted")
 
     job = asyncio.run(run())
     assert job.status == "failed"

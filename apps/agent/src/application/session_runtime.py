@@ -31,6 +31,7 @@ from apps.agent.src.agent_orchestration.plugins.user_input import (
 from apps.agent.src.agent_orchestration.run_control import (
     TaskCancelRequestedEvent,
     TaskOperationResult,
+    TaskSteerRequestedEvent,
 )
 from apps.agent.src.agent_orchestration.tools import ToolRegistry
 from apps.agent.src.application.runtime_status import SessionRuntimeSnapshot
@@ -217,6 +218,27 @@ class SessionRuntime:
             return self._agent_plugin.handle_task_operation(
                 "external",
                 TaskCancelRequestedEvent(task_id=task_id, reason=reason),
+            )
+
+    async def steer_task(
+        self,
+        task_id: str,
+        content: str,
+        input_images: list[ImagePart] | None = None,
+        *,
+        display_text: str | None = None,
+    ) -> TaskOperationResult:
+        if not self._started or self._agent_plugin is None:
+            return TaskOperationResult(task_id=task_id, status="not_running")
+        with self._task_context_scope(task_id):
+            return self._agent_plugin.handle_task_operation(
+                "user",
+                TaskSteerRequestedEvent(
+                    task_id=task_id,
+                    content=content,
+                    input_images=tuple(input_images or ()),
+                    display_text=display_text,
+                ),
             )
 
     def snapshot(self) -> SessionRuntimeSnapshot:

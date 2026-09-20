@@ -16,7 +16,7 @@ class UserInputProjector:
         task_id = update.task_id
         if task_id is None:
             return ()
-        if update.type == "user.message":
+        if update.type in {"user.message", "user.correction"}:
             return (
                 AppendUserMessage(
                     task_id=task_id,

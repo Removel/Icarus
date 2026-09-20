@@ -10,6 +10,8 @@ from apps.agent.src.agent_orchestration.run_control.events import (
     TaskCancelResultEvent,
     TaskContextInputEvent,
     TaskContextInputResultEvent,
+    TaskSteerAppliedEvent,
+    TaskSteerRequestedEvent,
 )
 from apps.agent.src.agent_orchestration.run_control.registry import (
     TaskChannelRegistry,
@@ -18,6 +20,7 @@ from apps.agent.src.agent_orchestration.run_control.types import (
     AgentRunControl,
     AppliedContextBatch,
     RuntimeContextRecord,
+    RuntimeInputKind,
     TaskChannelStatus,
     TaskOperationResult,
     TaskOperationStatus,
@@ -29,6 +32,7 @@ __all__ = [
     "MaxStepsExceededError",
     "AppliedContextBatch",
     "RuntimeContextRecord",
+    "RuntimeInputKind",
     "TaskCancelRequestedEvent",
     "TaskCancelResultEvent",
     "TaskChannel",
@@ -36,6 +40,8 @@ __all__ = [
     "TaskChannelStatus",
     "TaskContextInputEvent",
     "TaskContextInputResultEvent",
+    "TaskSteerAppliedEvent",
+    "TaskSteerRequestedEvent",
     "TaskOperationResult",
     "TaskOperationStatus",
 ]

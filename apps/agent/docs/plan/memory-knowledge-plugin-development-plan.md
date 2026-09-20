@@ -32,7 +32,7 @@
 
 | 现有模块 | 必要修改 | 明确不改 |
 | --- | --- | --- |
-| BlackboardPlugin | Region Store、readiness、只读 Tool、Product Conversation | EventBus 路由和 ReActAgent |
+| BlackboardPlugin | Region Store、readiness、只读 Tool、完整 Run History | EventBus 路由和 ReActAgent |
 | AgentPlugin/TaskChannel | 仅复用既有 Context 入口 | 不增加 Memory 分支 |
 | SessionRuntime | 注入 Plugin 配置并把两个 Plugin 加入标准图 | 不负责调用外部服务 |
 | Plugin Runtime | 只消费新的 Manifest 声明 | 不解释 Region 或后端协议 |
@@ -54,7 +54,7 @@
 - `blackboard/events.py`：增加 `BlackboardRegionUpdatedEvent`；
 - `blackboard/state.py`：只增加 `input_id / required_regions / completed_regions` 等协调字段；
 - `blackboard/prompt_composer.py`：接收有界 Region 紧凑投影；
-- `blackboard/plugin.py`：Region 生命周期、readiness、Product Conversation 投影和持久化；
+- `blackboard/plugin.py`：Region 生命周期、readiness、完整 Run History 提交和持久化；
 - `blackboard/factory.py` 与 `manifest.json`：提供 `region_registry`、两个只读 Tool 和事件声明；
 - 必要的 Manifest、SessionRuntime 集成测试。
 
@@ -68,8 +68,8 @@
 6. readiness 同时等待现有 required ContextContribution 和 required Region；成功、空、失败、超时都可完成。
 7. Prompt 只自动加入有界 compact view，不展开 `data`。
 8. `blackboard_list` 和 `blackboard_read` 只读本地 Snapshot；`refs` 只筛选公开的 `output.refs/data.items`。
-9. Product Conversation 只提交原始 User 与最终/已展示 Assistant，排除 ToolCall、ToolResult、中间 Assistant 和 Runtime Context。
-10. `context_tokens` 对 Product Conversation 做确定性保守估算，不沿用完整 Run 最后一步 usage。
+9. Blackboard 按 `agent-run-history-steering-design.md` 提交完整、协议闭合的 Run 消息。
+10. `context_tokens` 对实际提交消息做确定性保守估算，不把 Task 累计 Usage 当成当前请求大小。
 11. Session State 升级并兼容恢复旧 v1；input Region 不持久化，session Region 持久化。
 
 ### 测试门槛
@@ -79,7 +79,7 @@
 - required/optional readiness、空/失败/超时终态、只发布一次 Context；
 - input/session 生命周期和恢复；
 - compact view 与两个只读 Tool 的筛选和预算；
-- Product Conversation 在成功、取消、失败时不保存 ReAct 轨迹；
+- 完整 Run History 在成功、取消和可提交失败时遵守统一消息闭合规则；
 - 原有 ContextContribution、压缩、图片和双终态清理回归；
 - SessionRuntime E2E：注册 Region owner 测试 Plugin，输入等待 Region，Agent 看到 compact view，Tool 可读且不可写，恢复后 Conversation 正确。
 
@@ -170,7 +170,7 @@
    - 读取与重编译知识；
    - 用 `blackboard_list/read` 查看 Memory 当前状态。
 3. 审查 RuntimeUpdate、Trace、Blackboard Session State、`icarus.db` 和服务数据目录：
-   - Product Conversation 无 Tool/Runtime Context；
+   - 完整 Run History 保留已闭合 Tool Group 和已应用 Runtime Context；
    - Trace 能重建完整执行；
    - input Region 不跨 Session 恢复；
    - Secret 未写入日志、状态或 ToolResult；

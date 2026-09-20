@@ -102,6 +102,16 @@ class RuntimeClient(Protocol):
     ) -> SubmitAccepted:
         ...
 
+    async def steer_task(
+        self,
+        task_id: str,
+        prompt: str,
+        *,
+        resources: tuple[ResourceRefModel, ...] = (),
+        display_text: str | None = None,
+    ) -> TaskOperationResult:
+        ...
+
     async def cancel_task(
         self,
         task_id: str,
@@ -537,6 +547,12 @@ class IcarusTextualApp(App[int]):
             return
 
         self._has_user_submission = True
+        if (
+            self.chat_state.phase == RuntimePhase.RUNNING
+            and self.chat_state.active_task_id is not None
+        ):
+            await self._steer_active_task(message.submission)
+            return
         self.chat_state.enqueue(message.submission)
         if not await self._refresh_queue():
             return
@@ -548,6 +564,55 @@ class IcarusTextualApp(App[int]):
                 severity="error",
             )
         await self._dispatch_next()
+
+    async def _steer_active_task(self, submission) -> None:
+        service = self.service
+        task_id = self.chat_state.active_task_id
+        if service is None or task_id is None:
+            self.chat_state.enqueue(submission)
+            await self._refresh_queue()
+            self._refresh_status()
+            return
+        self._refresh_status("Adding correction to current task")
+        try:
+            result = await service.steer_task(
+                task_id,
+                submission.model_prompt(),
+                resources=self._submission_resources(submission),
+                display_text=submission.text,
+            )
+        except asyncio.CancelledError:
+            self.chat_state.enqueue(submission)
+            await self._refresh_queue()
+            raise
+        except BaseException as error:
+            self.chat_state.enqueue(submission)
+            await self._refresh_queue()
+            self._refresh_status("Correction queued for the next task")
+            self._safe_notify(
+                f"Unable to add correction to current task: {type(error).__name__}: {error}",
+                title="Correction queued",
+                severity="warning",
+            )
+            return
+        if result.status == "accepted":
+            self._delete_submission_images(submission)
+            self._refresh_status("Correction accepted for current task")
+            return
+        self.chat_state.enqueue(submission)
+        if not await self._refresh_queue():
+            return
+        self._refresh_status("Correction queued for the next task")
+        if result.status == "already_finished":
+            try:
+                await self._reconcile_task_status(service, task_id)
+            except Exception:
+                logger.debug(
+                    "Unable to reconcile task after late steer",
+                    exc_info=True,
+                )
+        if self.chat_state.phase == RuntimePhase.READY:
+            await self._dispatch_next()
 
     def _can_start_session_operation(self) -> bool:
         worker = self._session_operation_worker
@@ -865,13 +930,7 @@ class IcarusTextualApp(App[int]):
             accepted = await service.submit(
                 prompt=submission.model_prompt(),
                 submission_id=submission.submission_id,
-                resources=tuple(
-                    ResourceRefModel(
-                        resource_id=self._resource_id(image),
-                        media_type=None,
-                    )
-                    for image in submission.images
-                ),
+                resources=self._submission_resources(submission),
                 display_text=submission.text,
             )
         except asyncio.CancelledError:
@@ -949,7 +1008,7 @@ class IcarusTextualApp(App[int]):
                 update.session_id,
             )
             return
-        if update.type == "user.message":
+        if update.type in {"user.message", "user.correction"}:
             self._session_has_user_input = True
         raw_step = update.payload.get("step")
         assistant_key = (
@@ -1412,6 +1471,15 @@ class IcarusTextualApp(App[int]):
             return image.path.resolve().relative_to(root).as_posix()
         except ValueError as error:
             raise ValueError("Image is outside the controlled resource root") from error
+
+    def _submission_resources(self, submission) -> tuple[ResourceRefModel, ...]:
+        return tuple(
+            ResourceRefModel(
+                resource_id=self._resource_id(image),
+                media_type=None,
+            )
+            for image in submission.images
+        )
 
     @staticmethod
     def _delete_submission_images(submission) -> None:

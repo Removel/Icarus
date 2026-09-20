@@ -246,6 +246,31 @@ class GatewayClient:
             run_id=result.get("run_id"),
         )
 
+    async def steer_task(
+        self,
+        task_id: str,
+        prompt: str,
+        *,
+        resources: tuple[ResourceRefModel, ...] = (),
+        display_text: str | None = None,
+    ) -> TaskOperationResult:
+        result = await self.request(
+            "session.steer",
+            {
+                "workspace_path": self.workspace_path,
+                "session_id": self._require_session_id(),
+                "task_id": task_id,
+                "prompt": prompt,
+                "display_text": display_text,
+                "resources": [item.model_dump(mode="json") for item in resources],
+            },
+        )
+        return TaskOperationResult(
+            task_id=result.get("task_id"),
+            status=str(result["status"]),
+            run_id=result.get("run_id"),
+        )
+
     async def request(self, method: str, params: dict[str, Any]) -> Any:
         socket = self._socket
         if socket is None or self._closed:

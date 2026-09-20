@@ -292,11 +292,14 @@ def test_react_agent_异步调用在首个step前注入context():
     )
 
     assert llm.calls[0][0][-1].content[0].text == (
-        "<runtime_context>\n1. async extra\n</runtime_context>"
+        "<runtime_context>\n1. async extra\n</runtime_context>\n\noriginal"
     )
-    assert result.task_messages[1].content[0].text == (
-        "<runtime_context>\n1. async extra\n</runtime_context>"
+    assert result.task_messages[0].content[0].text == (
+        "<runtime_context>\n1. async extra\n</runtime_context>\n\noriginal"
     )
+    assert [message.role for message in result.task_messages] == [
+        "user", "assistant"
+    ]
 
 
 def active_channel() -> TaskChannel:
@@ -315,7 +318,6 @@ def test_react_agent首次step前按fifo合并运行中context():
     result = agent.invoke("", [], "original", run_control=channel)
 
     assert llm.calls[0][0] == [
-        Message("user", [TextPart("original")]),
         Message(
             "user",
             [
@@ -323,14 +325,53 @@ def test_react_agent首次step前按fifo合并运行中context():
                     "<runtime_context>\n"
                     "1. first\n"
                     "2. second\n"
-                    "</runtime_context>"
+                    "</runtime_context>\n\n"
+                    "original"
                 )
             ],
         ),
     ]
-    assert result.task_messages[1].content[0].text == (
-        "<runtime_context>\n1. first\n2. second\n</runtime_context>"
+    assert result.task_messages[0].content[0].text == (
+        "<runtime_context>\n1. first\n2. second\n</runtime_context>\n\noriginal"
     )
+
+
+def test_react_agent首次step把steer合并到当前用户消息末尾():
+    agent, llm = make_agent([final_response()])
+    channel = active_channel()
+    channel.add_context("remember", source_id="memory")
+    channel.add_steer("only tests")
+
+    result = agent.invoke("", [], "original", run_control=channel)
+
+    assert len(llm.calls[0][0]) == 1
+    assert llm.calls[0][0][0].content[0].text == (
+        "<runtime_context>\n1. remember\n</runtime_context>\n\n"
+        "original\n\n"
+        "<user_correction>\n1. only tests\n</user_correction>"
+    )
+    assert result.task_messages[0] == llm.calls[0][0][0]
+
+
+def test_react_agent首次step保留原始图片并追加steer图片():
+    agent, llm = make_agent([final_response()])
+    channel = active_channel()
+    original = ImagePart("assets/original.png", "asset", "image/png")
+    correction = ImagePart("assets/correction.png", "asset", "image/png")
+    channel.add_steer("compare", input_images=(correction,))
+
+    result = agent.invoke(
+        "", [], "original", input_images=[original], run_control=channel
+    )
+
+    assert llm.calls[0][0][0].content == [
+        TextPart(
+            "original\n\n<user_correction>\n1. compare\n</user_correction>"
+        ),
+        original,
+        correction,
+    ]
+    assert result.task_messages[0] == llm.calls[0][0][0]
 
 
 def test_react_agent工具完成后在下一step前注入context():
@@ -361,6 +402,56 @@ def test_react_agent工具完成后在下一step前注入context():
     )
 
 
+def test_react_agent工具完成后在下一step前注入steer并写入完整历史():
+    channel = active_channel()
+
+    class SteeringTool(EchoTool):
+        def invoke(self, arguments):
+            result = super().invoke(arguments)
+            channel.add_steer("only change tests")
+            return result
+
+    registry = ToolRegistry()
+    registry.register(SteeringTool())
+    llm = QueueLLM([tool_response(), final_response()])
+    agent = ReActAgent("thinking", llm, ToolExecutor(registry))
+
+    result = agent.invoke("", [], "original", tools=["echo"], run_control=channel)
+
+    assert [message.role for message in llm.calls[1][0]] == [
+        "user", "assistant", "tool", "user"
+    ]
+    assert llm.calls[1][0][-1].content[0].text == (
+        "<user_correction>\n1. only change tests\n</user_correction>"
+    )
+    assert result.task_messages == tuple(llm.calls[1][0]) + (
+        Message("assistant", [TextPart("done")]),
+    )
+
+
+def test_react_agent工具完成后steer图片进入下一条用户消息():
+    channel = active_channel()
+    image = ImagePart("assets/correction.png", "asset", "image/png")
+
+    class SteeringTool(EchoTool):
+        def invoke(self, arguments):
+            result = super().invoke(arguments)
+            channel.add_steer("look", input_images=(image,))
+            return result
+
+    registry = ToolRegistry()
+    registry.register(SteeringTool())
+    llm = QueueLLM([tool_response(), final_response()])
+    agent = ReActAgent("thinking", llm, ToolExecutor(registry))
+
+    agent.invoke("", [], "original", tools=["echo"], run_control=channel)
+
+    assert llm.calls[1][0][-1].content == [
+        TextPart("<user_correction>\n1. look\n</user_correction>"),
+        image,
+    ]
+
+
 def test_react_agent完成竞争时补充context触发额外step():
     channel = active_channel()
 
@@ -381,6 +472,42 @@ def test_react_agent完成竞争时补充context触发额外step():
     assert llm.calls[1][0][-1].content[0].text == (
         "<runtime_context>\n1. late but accepted\n</runtime_context>"
     )
+
+
+def test_react_agent完成竞争后的新steer合并到尚未发送的user():
+    channel = active_channel()
+
+    class SameBoundarySteerChannel(TaskChannel):
+        def close_or_drain(self, *, applied_before_step):
+            batch = super().close_or_drain(
+                applied_before_step=applied_before_step
+            )
+            if batch is not None:
+                self.add_steer("second")
+            return batch
+
+    channel = SameBoundarySteerChannel("task-1")
+    channel.mark_preparing_context()
+    channel.start_run("run-1")
+
+    class FirstSteerLLM(QueueLLM):
+        def invoke(self, messages, tools=None):
+            response = super().invoke(messages, tools)
+            if len(self.calls) == 1:
+                channel.add_steer("first")
+            return response
+
+    llm = FirstSteerLLM([final_response("draft"), final_response("done")])
+    agent = ReActAgent("thinking", llm, ToolExecutor(ToolRegistry()))
+
+    result = agent.invoke("", [], "original", run_control=channel)
+
+    assert result.steps == 2
+    assert [message.role for message in llm.calls[1][0]] == [
+        "user", "assistant", "user"
+    ]
+    assert "1. first" in llm.calls[1][0][-1].content[0].text
+    assert "1. second" in llm.calls[1][0][-1].content[0].text
 
 
 def test_react_agent在下一step前执行harness上限检查():

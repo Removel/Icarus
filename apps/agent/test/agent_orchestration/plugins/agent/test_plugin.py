@@ -27,6 +27,8 @@ from apps.agent.src.agent_orchestration.run_control import (
     TaskCancelResultEvent,
     TaskContextInputEvent,
     TaskContextInputResultEvent,
+    TaskSteerAppliedEvent,
+    TaskSteerRequestedEvent,
 )
 from apps.agent.src.model_provider.types import (
     LLMResponse,
@@ -350,6 +352,128 @@ def test_agent_plugin仅为eventbus操作发布结果事件():
     assert results[0].request_event_id == request.event_id
     assert results[0].status == "accepted"
     assert not any(isinstance(event, TaskCancelResultEvent) for event in events)
+
+
+def test_agent_plugin直接steer复用task_channel且不发布结果事件():
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        channel.start_run("run-1")
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+
+        result = agent_plugin.handle_task_operation(
+            "user",
+            TaskSteerRequestedEvent(
+                task_id="task-1", content="only change tests"
+            ),
+        )
+        batch = channel.drain_context(applied_before_step=2)
+        await manager.event_bus.drain()
+        await sink.drain()
+        await manager.stop(timeout=1)
+        return result, batch, sink.events
+
+    result, batch, events = asyncio.run(run())
+
+    assert result.status == "accepted"
+    assert batch is not None
+    assert batch.records[0].kind == "user_correction"
+    assert "only change tests" in batch.message.content[0].text
+    assert events == []
+
+
+def test_agent_plugin记录steer接受应用和被stop丢弃():
+    registry = HookRegistry()
+    recorder = RecordingHook()
+    registry.register("*", recorder)
+    channels = TaskChannelRegistry()
+    channel = channels.create("task-1")
+    channel.mark_preparing_context()
+    channel.start_run("run-1")
+    plugin = AgentPlugin(
+        "agent", StubAgentFactory(), channels,
+        hook_dispatcher=HookDispatcher(registry),
+    )
+
+    first = plugin.handle_task_operation(
+        "user", TaskSteerRequestedEvent(task_id="task-1", content="applied")
+    )
+    channel.drain_context(applied_before_step=2)
+    plugin._trace_applied_context("task-1", channel)
+    second = plugin.handle_task_operation(
+        "user", TaskSteerRequestedEvent(task_id="task-1", content="discarded")
+    )
+    stopped = plugin.handle_task_operation(
+        "external", TaskCancelRequestedEvent(task_id="task-1", reason="stop")
+    )
+
+    assert first.status == second.status == stopped.status == "accepted"
+    steer_events = [event for event in recorder.events if event.name == "task.steer"]
+    assert [event.phase for event in steer_events] == [
+        "applied", "discarded_by_stop"
+    ]
+
+
+def test_agent_plugin在steer真正应用后才发布用户纠偏事件():
+    class ApplyingAgent(StubAgent):
+        async def astream(self, *args, run_control=None, **kwargs):
+            del args, kwargs
+            assert run_control is not None
+            run_control.drain_context(applied_before_step=1)
+            yield AgentCompletedEvent(
+                step=1,
+                response=AgentResponse(
+                    message=Message("assistant", [TextPart("done")]),
+                    finish_reason="stop",
+                    steps=1,
+                ),
+            )
+
+    async def run():
+        manager = PluginManager()
+        blackboard = SinkPlugin("blackboard")
+        factory = StubAgentFactory()
+        factory.agent = ApplyingAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        channel.add_steer("change", display_text="change visible")
+        agent_plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for plugin in (blackboard, agent_plugin, sink):
+            manager.register(plugin)
+        manager.subscribe("agent", "blackboard")
+        manager.subscribe("sink", "agent")
+        await manager.start()
+        await blackboard.publish(
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            )
+        )
+        await agent_plugin.drain()
+        await manager.event_bus.drain()
+        await sink.drain()
+        await manager.stop(timeout=1)
+        return sink.events
+
+    events = asyncio.run(run())
+    applied = [event for event in events if isinstance(event, TaskSteerAppliedEvent)]
+
+    assert len(applied) == 1
+    assert applied[0].content == "change"
+    assert applied[0].display_text == "change visible"
+    assert applied[0].applied_before_step == 1
 
 
 def test_agent_plugin拒绝已过期的运行时context():

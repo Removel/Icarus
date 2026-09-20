@@ -90,7 +90,7 @@ SessionRuntime / AgentRuntime 暴露 Steer
    - 并发 Tool Result 按 Tool Call 原始顺序排列；
    - Completed Run 最后一条是普通 Assistant Message；
    - Cancelled Run 闭合后最后一条是普通 Assistant Message；
-   - 受控 Failed 安全前缀可以结束于完整 Tool Group；
+   - Failed Run 只有在检查点已经由普通 Assistant Message 闭合时才可提交；
    - 不包含 System Message、未完成 Assistant 或孤立 Tool Result。
    这里“不包含 System Message”只约束单个 Run 的增量；完整 Provider 请求仍必须且只能在首位包含
    当前 SessionRuntime 的稳定 System Prompt。
@@ -182,7 +182,8 @@ SessionRuntime / AgentRuntime 暴露 Steer
    - 含未闭合 Tool Call、孤立 Tool Result 或空 Assistant 时拒绝提交。
 3. Run 启动前取消没有 `task_messages`，不写入伪造历史。
 4. Fatal `TaskErrorEvent` 只有明确携带 `task_messages` 时才提交：
-   - `max_steps_exceeded` 等受控截停使用安全前缀；
+   - 安全前缀还必须已经由普通 Assistant Message 闭合；
+   - `max_steps_exceeded` 等受控截停如果结束于 Tool Result，本阶段不提交该 Task；
    - 普通不可恢复异常没有安全前缀时不提交；
    - 删除当前 `_last_visible_assistant()` 猜测逻辑。
 5. 保持 `agent_finished + input_finished` 双终态清理和重复事件幂等，不改变 UserInputPlugin 的取消
@@ -196,7 +197,7 @@ SessionRuntime / AgentRuntime 暴露 Steer
 - 已有普通 Assistant 尾部不产生连续 Assistant；
 - Run 启动前 Stop 不提交；
 - 未携带安全检查点的 Failed Run 不提交；
-- `max_steps_exceeded` 安全闭合并可被下一 Run 重放；
+- `max_steps_exceeded` 只有检查点已由普通 Assistant 闭合时才被下一 Run 重放；
 - Agent/Input 终态乱序不会漏提交或重复提交。
 
 ## 任务四：为 TaskChannel 增加用户 Steer
@@ -212,7 +213,7 @@ SessionRuntime / AgentRuntime 暴露 Steer
 
 ### 开发内容
 
-1. 新增 `TaskSteerRequestedEvent(content)`，复用现有 Event 身份字段。首期 Steer 只走应用层直接
+1. 新增 `TaskSteerRequestedEvent(content, input_images, display_text)`，复用现有 Event 身份字段。Steer 请求只走应用层直接
    调用，不发布到 EventBus，因此不新增 `TaskSteerResultEvent`。
 2. 将当前运行中记录扩展为带类型的记录，类型固定为：
    - `context`：Plugin Runtime Context；
@@ -266,7 +267,7 @@ SessionRuntime / AgentRuntime 暴露 Steer
    - Tool Call 与对应 Tool Result 之间不注入，只有整个 Tool Group 闭合后才注入；
    - 完成竞争中有已接受输入时增加一个 LLM Step。
 3. 首个 Step 的合并不解析或重建 Blackboard Prompt：Runtime Context 作为已有 `input_prompt` 前缀，
-   Steer 作为后缀，图片 ContentPart 保持原位置和内容。
+   Steer 作为后缀；原始图片保持原位置，Steer 图片追加到同一条 User Message。
 4. 同步、异步、流式、异步流式入口不得各自实现一套 Steer 逻辑。
 5. 扩展现有操作 Trace：
    - 请求接受记录 `operation=steer, status=accepted`；
@@ -299,16 +300,20 @@ SessionRuntime / AgentRuntime 暴露 Steer
 
 ### 开发内容
 
-1. `SessionRuntime.steer_task(task_id, content)`：
+1. `SessionRuntime.steer_task(task_id, content, input_images, display_text)`：
    - Runtime 未启动时返回 `not_running`；
    - 在现有 Task Hook Context 中直接调用 AgentPlugin 的统一操作处理；
    - source 固定为应用层用户来源，不发布 EventBus Result Event。
-2. `AgentRuntime.steer_task(workspace_path, session_id, task_id, content)`：
+2. `AgentRuntime.steer_task(workspace_path, session_id, task_id, content, resources, display_text)`：
    - 复用 `cancel_task()` 的 Session 定位、mutation lock 和生命周期检查；
    - 不自动恢复已卸载 Session；
    - 不创建新 Task；
    - `accepted` 时只更新活动时间，不写入新的 SessionStore 业务记录。
-3. 不修改 Gateway/TUI 调用协议。接口先供 Agent 层测试和后续接入使用。
+3. Gateway 增加 `session.steer`，复用 `session.submit` 的 ResourceRef 校验与 Session assets 导入链路。
+4. TUI 运行中提交走 `session.steer`，空闲提交继续走 `session.submit`；Steer 被拒绝或调用失败时，
+   完整输入保留在现有本地队列，待当前 Task 结束后作为新 Task 提交。
+5. 只有安全点真正应用的 Steer 才发布 `user.correction` RuntimeUpdate；TUI 用它展示纠偏并支持
+   Session 恢复。
 
 ### 定向测试
 
@@ -318,7 +323,8 @@ SessionRuntime / AgentRuntime 暴露 Steer
 - 已结束 Task 返回 `already_finished`；
 - 正在取消返回 `already_cancelling`；
 - 空内容返回 `invalid_content`；
-- Steer 不创建 Task、不改变本地输入队列数量。
+- Agent 层 Steer 不创建 Task，也不操作调用方的本地输入队列。
+- 文本和图片 Steer 均进入当前 Run；图片在 accepted 前不删除临时文件；已结束 Task 回退为下一条输入。
 
 ## 任务七：文档同步与最终验证
 

@@ -22,6 +22,7 @@
     "apps.agent.src.agent_orchestration.events.task_error.TaskErrorEvent",
     "apps.agent.src.agent_orchestration.capability.types.AgentCancelledEvent",
     "apps.agent.src.agent_orchestration.run_control.events.TaskContextInputResultEvent",
+    "apps.agent.src.agent_orchestration.run_control.events.TaskSteerAppliedEvent",
     "apps.agent.src.agent_orchestration.run_control.events.TaskCancelResultEvent"
   ],
   "consumed_events": [

@@ -35,7 +35,7 @@ from apps.agent.src.model_config import (
     ModelSettings,
     ThinkMode,
 )
-from apps.agent.src.model_provider.types import Message, TextPart, Usage
+from apps.agent.src.model_provider.types import ImagePart, Message, TextPart, Usage
 from apps.agent.src.runtime_update import RuntimeUpdate
 
 
@@ -85,6 +85,7 @@ class SessionStub:
         self.busy = False
         self.imported = []
         self.cancelled = []
+        self.steered = []
 
     async def start(self):
         if self.gate is not None:
@@ -112,9 +113,22 @@ class SessionStub:
         self.cancelled.append((task_id, reason))
         return TaskOperationResult(task_id=task_id, status="accepted")
 
+    async def steer_task(
+        self, task_id, content, input_images=None, *, display_text=None
+    ):
+        self.steered.append((task_id, content, input_images, display_text))
+        return TaskOperationResult(task_id=task_id, status="accepted")
+
     def import_resources(self, paths):
         self.imported.extend(paths)
-        return []
+        return [
+            ImagePart(
+                f"assets/{path.name}",
+                "asset",
+                media_type or "image/png",
+            )
+            for path, media_type in paths
+        ]
 
     def snapshot(self):
         return SessionRuntimeSnapshot(
@@ -220,6 +234,73 @@ def test_agent_runtime并发resume严格single_flight且查询不等待写锁(tm
     assert status.lifecycle == "loading"
     assert accepted.task_id
     assert len(factory.created) == 1
+
+
+def test_agent_runtime向已加载session的当前task追加steer(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        session_id = await runtime.create_session(tmp_path, "session")
+
+        missing = await runtime.steer_task(
+            tmp_path, "missing", "task-1", "ignored"
+        )
+        accepted = await runtime.steer_task(
+            tmp_path, session_id, "task-1", "only tests"
+        )
+        activity = next(iter(runtime._entries.values())).last_task_activity_at
+        await runtime.stop()
+        return missing, accepted, activity, factory.created[0].steered
+
+    missing, accepted, activity, steered = asyncio.run(run())
+
+    assert missing.status == "not_running"
+    assert accepted.status == "accepted"
+    assert activity is not None
+    assert steered == [("task-1", "only tests", None, None)]
+
+
+def test_agent_runtime将steer图片导入当前session(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        incoming = config.icarus_data_dir / "incoming"
+        incoming.mkdir(parents=True)
+        source = incoming / "image.png"
+        source.write_bytes(b"image")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        await runtime.create_session(tmp_path, "session")
+        result = await runtime.steer_task(
+            tmp_path,
+            "session",
+            "task-1",
+            "look",
+            resources=(ResourceRef("image.png"),),
+            display_text="look [#image1]",
+        )
+        session = factory.created[0]
+        await runtime.stop()
+        return result, session.imported, session.steered
+
+    result, imported, steered = asyncio.run(run())
+
+    assert result.status == "accepted"
+    assert imported[0][0].name == "image.png"
+    assert steered == [
+        (
+            "task-1",
+            "look",
+            [ImagePart("assets/image.png", "asset", "image/png")],
+            "look [#image1]",
+        )
+    ]
 
 
 def test_agent_runtime并发resume等待者共享同一次失败(tmp_path):

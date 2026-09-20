@@ -6,7 +6,7 @@ from enum import Enum
 from collections.abc import Sequence
 from typing import Literal, Protocol, TypeAlias
 
-from apps.agent.src.model_provider.types import Message, Usage
+from apps.agent.src.model_provider.types import ImagePart, Message, Usage
 
 
 class TaskChannelStatus(str, Enum):
@@ -28,6 +28,7 @@ TaskOperationStatus: TypeAlias = Literal[
     "invalid_content",
     "expired",
 ]
+RuntimeInputKind: TypeAlias = Literal["context", "user_correction"]
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,9 @@ class RuntimeContextRecord:
     source_id: str
     content: str
     received_at: datetime
+    kind: RuntimeInputKind = "context"
+    input_images: tuple[ImagePart, ...] = ()
+    display_text: str | None = None
 
 
 @dataclass(frozen=True)

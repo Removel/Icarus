@@ -312,6 +312,35 @@ class AgentRuntime:
                 entry.last_task_activity_at = self._clock()
             return result
 
+    async def steer_task(
+        self,
+        workspace_path: str | Path,
+        session_id: str,
+        task_id: str,
+        content: str,
+        *,
+        resources: tuple[ResourceRef, ...] = (),
+        display_text: str | None = None,
+    ) -> TaskOperationResult:
+        self._require_accepting()
+        identity = SessionIdentity.create(workspace_path, session_id)
+        entry = self._entries.get(_key(identity))
+        if entry is None:
+            return TaskOperationResult(task_id=task_id, status="not_running")
+        async with entry.mutation_lock:
+            self._require_accepting()
+            if entry.discarding:
+                return TaskOperationResult(task_id=task_id, status="not_running")
+            if entry.runtime is None or entry.lifecycle in {"loading", "unloading"}:
+                return TaskOperationResult(task_id=task_id, status="not_running")
+            images = await self._import_resources(entry.runtime, resources)
+            result = await entry.runtime.steer_task(
+                task_id, content, images, display_text=display_text
+            )
+            if result.status == "accepted":
+                entry.last_task_activity_at = self._clock()
+            return result
+
     async def unload_session(
         self, workspace_path: str | Path, session_id: str
     ) -> UnloadResult:

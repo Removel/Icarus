@@ -31,11 +31,14 @@ from apps.agent.src.agent_orchestration.run_control import (
     TaskChannelStatus,
     TaskContextInputEvent,
     TaskContextInputResultEvent,
+    TaskSteerAppliedEvent,
+    TaskSteerRequestedEvent,
     TaskOperationResult,
     MaxStepsExceededError,
 )
 from apps.agent.src.model_provider.types import (
     ImageAssetUnavailableError,
+    ImagePart,
     Message,
     TextPart,
 )
@@ -139,11 +142,17 @@ class AgentPlugin(BasePlugin):
     def handle_task_operation(
         self,
         source_id: str,
-        event: TaskContextInputEvent | TaskCancelRequestedEvent,
+        event: (
+            TaskContextInputEvent
+            | TaskSteerRequestedEvent
+            | TaskCancelRequestedEvent
+        ),
     ) -> TaskOperationResult:
         operation = (
             "add_context"
             if isinstance(event, TaskContextInputEvent)
+            else "steer"
+            if isinstance(event, TaskSteerRequestedEvent)
             else "cancel"
         )
         channel = self.task_channels.get(event.task_id) if event.task_id else None
@@ -168,8 +177,19 @@ class AgentPlugin(BasePlugin):
                     source_id=source_id,
                     event_id=event.event_id,
                 )
+        elif isinstance(event, TaskSteerRequestedEvent):
+            result = self._steer_task(
+                event.task_id,
+                event.content,
+                input_images=event.input_images,
+                display_text=event.display_text,
+                source_id=source_id,
+                event_id=event.event_id,
+            )
         else:
             result = self._cancel_task(event.task_id, event.reason)
+            if result.status == "accepted":
+                self._trace_discarded_steers(event.task_id)
         self._trace_operation(
             "after",
             event,
@@ -202,6 +222,8 @@ class AgentPlugin(BasePlugin):
         task_id: str | None,
         content: str,
         *,
+        input_images: tuple[ImagePart, ...] = (),
+        display_text: str | None = None,
         source_id: str,
         event_id: str | None = None,
     ) -> TaskOperationResult:
@@ -228,6 +250,27 @@ class AgentPlugin(BasePlugin):
                 active.execution_task.cancel()
         return result
 
+    def _steer_task(
+        self,
+        task_id: str | None,
+        content: str,
+        *,
+        input_images: tuple[ImagePart, ...] = (),
+        display_text: str | None = None,
+        source_id: str,
+        event_id: str | None = None,
+    ) -> TaskOperationResult:
+        if not task_id:
+            return TaskOperationResult(task_id=task_id, status="not_found")
+        return self.task_channels.add_steer(
+            task_id,
+            content,
+            input_images=input_images,
+            display_text=display_text,
+            source_id=source_id,
+            event_id=event_id,
+        )
+
     async def _run_agent(
         self,
         event: BlackboardContextReadyEvent,
@@ -237,6 +280,7 @@ class AgentPlugin(BasePlugin):
         partial_step = 0
         partial_text: list[str] = []
         completed_message_steps: set[int] = set()
+        published_steers: set[str] = set()
         try:
             execution_started.set()
             channel.raise_if_cancelled()
@@ -250,6 +294,9 @@ class AgentPlugin(BasePlugin):
                 run_control=channel,
             ):
                 channel.raise_if_cancelled()
+                await self._publish_applied_steers(
+                    event.task_id, channel, published_steers
+                )
                 if isinstance(stream_event, AgentTextDeltaEvent):
                     if partial_step != stream_event.step:
                         await self._publish_partial_message(
@@ -321,6 +368,9 @@ class AgentPlugin(BasePlugin):
         except asyncio.CancelledError:
             if channel.status == TaskChannelStatus.CANCELLING:
                 if channel.mark_cancelled():
+                    await self._publish_applied_steers(
+                        event.task_id, channel, published_steers
+                    )
                     await self._publish_partial_message(
                         event.task_id, channel, partial_step, partial_text
                     )
@@ -340,6 +390,9 @@ class AgentPlugin(BasePlugin):
         except Exception as error:
             if channel.mark_failed():
                 code, message = self._error_details(error)
+                await self._publish_applied_steers(
+                    event.task_id, channel, published_steers
+                )
                 await self._publish_partial_message(
                     event.task_id, channel, partial_step, partial_text
                 )
@@ -369,6 +422,9 @@ class AgentPlugin(BasePlugin):
                 return
             if channel.status == TaskChannelStatus.CANCELLING:
                 if channel.mark_cancelled():
+                    await self._publish_applied_steers(
+                        event.task_id, channel, published_steers
+                    )
                     await self._publish_partial_message(
                         event.task_id, channel, partial_step, partial_text
                     )
@@ -386,7 +442,34 @@ class AgentPlugin(BasePlugin):
                 return
             raise
         finally:
+            await self._publish_applied_steers(
+                event.task_id, channel, published_steers
+            )
             self._trace_applied_context(event.task_id, channel)
+
+    async def _publish_applied_steers(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        published: set[str],
+    ) -> None:
+        for batch in channel.applied_batches:
+            for record in batch.records:
+                if record.kind != "user_correction" or record.event_id in published:
+                    continue
+                await self._publish_run_event(
+                    task_id,
+                    channel,
+                    TaskSteerAppliedEvent(
+                        task_id=task_id,
+                        request_event_id=record.event_id,
+                        content=record.content,
+                        input_images=record.input_images,
+                        display_text=record.display_text,
+                        applied_before_step=batch.applied_before_step,
+                    ),
+                )
+                published.add(record.event_id)
 
     async def _publish_partial_message(
         self,
@@ -420,7 +503,11 @@ class AgentPlugin(BasePlugin):
     def _trace_operation(
         self,
         phase: str,
-        event: TaskContextInputEvent | TaskCancelRequestedEvent,
+        event: (
+            TaskContextInputEvent
+            | TaskSteerRequestedEvent
+            | TaskCancelRequestedEvent
+        ),
         *,
         operation: str,
         source_id: str,
@@ -449,8 +536,13 @@ class AgentPlugin(BasePlugin):
         with hook_context({"task_id": task_id}, run_id=channel.run_id):
             for batch in channel.applied_batches:
                 for record in batch.records:
+                    name = (
+                        "task.steer"
+                        if record.kind == "user_correction"
+                        else "task.context"
+                    )
                     self.hook_dispatcher.trigger(
-                        "task.context",
+                        name,
                         "applied",
                         {
                             "request_event_id": record.event_id,
@@ -458,6 +550,25 @@ class AgentPlugin(BasePlugin):
                             "applied_before_step": batch.applied_before_step,
                         },
                     )
+
+    def _trace_discarded_steers(self, task_id: str | None) -> None:
+        if self.hook_dispatcher is None or not task_id:
+            return
+        channel = self.task_channels.get(task_id)
+        if channel is None:
+            return
+        with hook_context({"task_id": task_id}, run_id=channel.run_id):
+            for record in channel.discarded_records:
+                if record.kind != "user_correction":
+                    continue
+                self.hook_dispatcher.trigger(
+                    "task.steer",
+                    "discarded_by_stop",
+                    {
+                        "request_event_id": record.event_id,
+                        "source_id": record.source_id,
+                    },
+                )
 
     async def _publish_run_event(
         self,

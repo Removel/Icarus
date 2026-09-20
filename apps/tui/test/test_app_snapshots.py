@@ -75,6 +75,7 @@ class SnapshotService:
         self.subscription = SnapshotSubscription()
         self.submissions: list[str] = []
         self.submission_images: list[tuple[Path, ...]] = []
+        self.steers: list[str] = []
         self.started = False
         self.session_summaries = ()
 
@@ -140,6 +141,13 @@ class SnapshotService:
 
     async def cancel_task(self, task_id: str, reason: str | None = None):
         del reason
+        return TaskOperationResult(task_id=task_id, status="accepted")
+
+    async def steer_task(
+        self, task_id: str, prompt: str, *, resources=(), display_text=None
+    ):
+        del resources, display_text
+        self.steers.append(prompt)
         return TaskOperationResult(task_id=task_id, status="accepted")
 
     async def get_task_status(self, task_id):
@@ -500,10 +508,12 @@ def test_snapshot_running_with_pending_queue(snap_compare):
         )
         await wait_until(
             pilot,
-            lambda: pilot.app.query_one(QueuePanel).items
-            == (
-                "Review the documentation",
-                "Run the complete suite\nand inspect the snapshots",
+            lambda: (
+                pilot.app.query_one(QueuePanel).items == ()
+                and pilot.app.service.steers == [
+                    "Review the documentation",
+                    "Run the complete suite\nand inspect the snapshots",
+                ]
             ),
         )
 
@@ -653,8 +663,8 @@ def test_snapshot_narrow_running_layout(snap_compare):
         await wait_until(
             pilot,
             lambda: (
-                pilot.app.query_one(QueuePanel).items
-                == ("Queue this follow-up",)
+                pilot.app.query_one(QueuePanel).items == ()
+                and pilot.app.service.steers == ["Queue this follow-up"]
                 and len(pilot.app.query(AssistantMessage)) == 1
                 and pilot.app.query_one(AssistantMessage).markdown_text
                 == expected_markdown

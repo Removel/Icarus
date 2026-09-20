@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import pytest
 
 from apps.agent.src.agent_orchestration.plugins.user_input import InputAccepted
+from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
 from apps.agent.src.application import DiscardSessionResult, SessionSummary
 from apps.gateway.src.protocol.errors import BUSINESS_ERROR, GatewayRpcError
 from apps.gateway.src.protocol.methods import GatewayMethods
@@ -78,6 +79,26 @@ class RuntimeStub:
     async def cancel_task(self, *args):
         raise AssertionError(args)
 
+    async def steer_task(
+        self,
+        workspace_path,
+        session_id,
+        task_id,
+        prompt,
+        *,
+        resources,
+        display_text=None,
+    ):
+        self.steered = (
+            workspace_path,
+            session_id,
+            task_id,
+            prompt,
+            resources,
+            display_text,
+        )
+        return TaskOperationResult(task_id=task_id, status="accepted", run_id="run")
+
     async def unload_session(self, *args):
         raise AssertionError(args)
 
@@ -144,6 +165,38 @@ def test_gateway_methods读取session历史():
     assert result["has_more"] is False
     assert result["records"][0]["type"] == "user.message"
     assert result["records"][0]["sequence"] == 1
+
+
+def test_gateway_methods将文本和图片steer路由到当前task():
+    async def run():
+        runtime = RuntimeStub()
+        result = await GatewayMethods(runtime).dispatch(
+            "session.steer",
+            {
+                "workspace_path": "/workspace",
+                "session_id": "session",
+                "task_id": "task",
+                "prompt": "look at the image",
+                "display_text": "look [#image1]",
+                "resources": [
+                    {"resource_id": "client/image.png", "media_type": "image/png"}
+                ],
+            },
+            set(),
+        )
+        return runtime, result
+
+    runtime, result = asyncio.run(run())
+
+    assert result == {"task_id": "task", "status": "accepted", "run_id": "run"}
+    assert runtime.steered[0:4] == (
+        "/workspace",
+        "session",
+        "task",
+        "look at the image",
+    )
+    assert runtime.steered[4][0].resource_id == "client/image.png"
+    assert runtime.steered[5] == "look [#image1]"
 
 
 def test_gateway_methods列出摘要并清理空session():

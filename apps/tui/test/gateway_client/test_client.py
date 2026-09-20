@@ -4,6 +4,7 @@ import json
 import pytest
 
 from apps.tui.src.gateway_client import GatewayClient, GatewayClientError
+from packages.gateway_protocol import ResourceRefModel
 
 
 class SocketStub:
@@ -108,6 +109,53 @@ def test_gateway_client接收runtime_update_notification():
         return update
 
     assert asyncio.run(run()).type == "task.started"
+
+
+def test_gateway_client发送session_steer及图片资源():
+    async def run():
+        socket = SocketStub()
+        client = GatewayClient(
+            url="ws://gateway/rpc",
+            workspace_path="/workspace",
+            session_id="session",
+            connector=lambda url: asyncio.sleep(0, result=socket),
+        )
+        client._socket = socket
+        client._reader = asyncio.create_task(client._read_loop())
+        task = asyncio.create_task(
+            client.steer_task(
+                "task",
+                "look at image",
+                resources=(ResourceRefModel(resource_id="image.png"),),
+                display_text="look [#image1]",
+            )
+        )
+        while not socket.sent:
+            await asyncio.sleep(0)
+        request = socket.sent[-1]
+        await socket.incoming.put(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "task_id": "task",
+                    "status": "accepted",
+                    "run_id": "run",
+                },
+            }
+        )
+        result = await task
+        await client.close()
+        return request, result
+
+    request, result = asyncio.run(run())
+
+    assert request["method"] == "session.steer"
+    assert request["params"]["task_id"] == "task"
+    assert request["params"]["resources"] == [
+        {"resource_id": "image.png", "media_type": None}
+    ]
+    assert result.status == "accepted"
 
 
 def test_gateway_client断线唤醒pending请求和update订阅():

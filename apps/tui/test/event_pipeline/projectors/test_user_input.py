@@ -19,6 +19,9 @@ def test_user_input_projector映射生命周期():
     assert projector.project(
         update("user.message", {"text": "hello", "resources": []})
     ) == (AppendUserMessage("task-1", "hello"),)
+    assert projector.project(
+        update("user.correction", {"text": "change it", "resources": []})
+    ) == (AppendUserMessage("task-1", "change it"),)
     assert projector.project(update("task.accepted", {"queue_position": 0})) == (
         SetRuntimeStatus("task-1", "accepted", "Accepted by runtime"),
     )
