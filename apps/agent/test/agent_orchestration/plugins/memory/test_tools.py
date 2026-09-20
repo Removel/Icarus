@@ -7,7 +7,7 @@ from apps.agent.src.agent_orchestration.plugins.memory.tools import create_memor
 from .test_plugin import BackendStub, plugin, record
 
 
-def tools_with_backend(*, top_k=3, threshold=0.65, max_context_chars=6000):
+def tools_with_backend(*, top_k=3, threshold=0.25, max_context_chars=6000):
     backend = BackendStub([MemoryItem("memory:1", "fact", 0.9, "global")])
     backend.records["memory:1"] = record()
     target = plugin(
@@ -28,6 +28,26 @@ def test_memory工具名称和并行策略固定():
     assert tools["memory_get"].can_run_parallel({}) is True
     assert tools["memory_history"].can_run_parallel({}) is True
     assert tools["memory_remember"].can_run_parallel({}) is False
+
+
+def test_memory_recall空结果说明不会误判整个记忆为空():
+    _, _, tools = tools_with_backend()
+    description = tools["memory_recall"].definition.description
+
+    assert "does not prove that no memory exists" in description
+    assert "我记不起来了" in description
+    assert "memory store is empty" in description
+
+
+def test_memory_remember工具说明允许自主保存长期信息():
+    _, _, tools = tools_with_backend()
+    description = tools["memory_remember"].definition.description.lower()
+
+    assert "proactively" in description
+    assert "without asking for confirmation" in description
+    assert "stable fact" in description
+    assert "temporary details" in description
+    assert "credentials" in description
 
 
 def test_memory_recall布尔范围和停止引用参数():

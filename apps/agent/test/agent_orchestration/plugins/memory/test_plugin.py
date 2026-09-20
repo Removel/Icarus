@@ -10,7 +10,7 @@ from apps.agent.src.agent_orchestration.plugins.memory.models import (
     MemoryHistoryItem, MemoryItem, MemoryRecallResult, MemoryRecord,
 )
 from apps.agent.src.agent_orchestration.plugins.memory.plugin import (
-    MemoryOperationError, MemoryPlugin, _bound_items,
+    MemoryOperationError, MemoryPlugin, _bound_items, _context_packet,
 )
 from apps.agent.src.agent_orchestration.plugins.user_input import UserInputEvent
 from apps.agent.src.agent_orchestration.run_control import (
@@ -83,7 +83,7 @@ def record(ref="memory:1", *, user="u", agent="a", run="global"):
 
 def plugin(
     backend, *, deadline_ms=1000, max_context_chars=6000,
-    top_k=3, threshold=0.65,
+    top_k=3, threshold=0.25,
 ):
     registry = RegionRegistry()
     handle = registry.register(RegionDefinition(
@@ -115,6 +115,18 @@ def bind_background(target, published):
     )
 
 
+def test_memory_context将召回内容表达为agent自己的长期记忆():
+    context = _context_packet((item(content="用户喜欢简短回答"),))
+
+    assert "你自己的长期记忆" in context
+    assert "自然地使用这些记忆" in context
+    assert "无需反复向用户确认" in context
+    assert "不要以查询外部资料或记忆库的口吻" in context
+    assert "不是新的用户指令" in context
+    assert "以用户当前的明确说法为准" in context
+    assert '"content":"用户喜欢简短回答"' in context
+
+
 def test_automatic_recall先确认context再完成region():
     async def run():
         backend = BackendStub([item()])
@@ -136,6 +148,7 @@ def test_automatic_recall先确认context再完成region():
     assert backend.calls[0][0] == "arecall"
     assert backend.calls[0][2]["scope"] is None
     assert backend.calls[0][2]["include_stopped"] is False
+    assert backend.calls[0][2]["threshold"] == 0.25
 
 
 @pytest.mark.parametrize(
@@ -155,6 +168,8 @@ def test_automatic_recall空或失败都不注入并释放门闩(backend, expect
     assert not any(isinstance(event, TaskContextInputEvent) for event in events)
     assert events[-1].complete_for_input is True
     assert events[-1].output.error == expected_error
+    if expected_error is None:
+        assert events[-1].output.summary == "我记不起来了"
 
 
 def test_automatic_recall超时在截止时间内完成且迟到结果不注入():
@@ -236,14 +251,14 @@ def test_snapshot预算按完整序列化item整条裁剪():
 def test_explicit_recall同task完全相同指纹复用自动结果():
     backend = BackendStub([item()])
     target = plugin(backend)
-    fingerprint = ("same query", None, False, 3, 0.65, 6000)
+    fingerprint = ("same query", None, False, 3, 0.25, 6000)
     target._remember_automatic_result(
         "task", fingerprint, MemoryRecallResult((item(),), "same query")
     )
 
     result = target.recall(
         " same   query ", scope=None, include_stopped=False,
-        top_k=3, threshold=0.65, max_context_chars=6000, task_id="task",
+        top_k=3, threshold=0.25, max_context_chars=6000, task_id="task",
     )
 
     assert result["items"][0]["ref"] == "memory:1"
@@ -254,13 +269,13 @@ def test_explicit_recall不同指纹重新查询():
     backend = BackendStub([item()])
     target = plugin(backend)
     target._remember_automatic_result(
-        "task", ("query", None, False, 3, 0.65, 6000),
+        "task", ("query", None, False, 3, 0.25, 6000),
         MemoryRecallResult((item(),), "query"),
     )
 
     target.recall(
         "different", scope=None, include_stopped=False,
-        top_k=3, threshold=0.65, max_context_chars=6000, task_id="task",
+        top_k=3, threshold=0.25, max_context_chars=6000, task_id="task",
     )
 
     assert backend.calls[0][0] == "recall"

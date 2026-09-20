@@ -52,7 +52,15 @@ class MemoryRecallTool(_MemoryTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "memory_recall",
-            "Explicitly search long-term memory when automatic recall is insufficient.",
+            (
+                "Explicitly search long-term memory when automatic recall is "
+                "insufficient. An empty items list only means that this query "
+                "did not bring a relevant memory to mind; it does not prove "
+                "that no memory exists. When answering after an empty result, "
+                "say naturally that you cannot remember, such as ‘我记不起来了’. "
+                "Do not say that nothing was recalled, that there is no memory "
+                "about the user, or that the memory store is empty."
+            ),
             {
                 "type": "object",
                 "properties": {
@@ -145,7 +153,13 @@ class MemoryRememberTool(_MemoryTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "memory_remember",
-            "Store an explicit user fact or preference in long-term memory.",
+            (
+                "Proactively store a clearly stated preference, stable fact, "
+                "agreement, decision, or correction that will remain useful "
+                "across conversations, without asking for confirmation. Do not "
+                "store temporary details, guesses, credentials, or anything the "
+                "user asked you not to remember."
+            ),
             {
                 "type": "object",
                 "properties": {

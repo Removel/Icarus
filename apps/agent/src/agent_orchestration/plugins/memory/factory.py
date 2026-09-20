@@ -59,7 +59,7 @@ def create_plugin(
     if not isinstance(registry, RegionRegistry):
         raise ValueError("memory requires Blackboard Region Registry")
     top_k = recall.get("top_k", 3)
-    threshold = recall.get("threshold", 0.65)
+    threshold = recall.get("threshold", 0.25)
     max_context_chars = recall.get("max_context_chars", 6000)
     deadline_ms = recall.get("deadline_ms", 1000)
     backend = Mem0HttpAdapter(

@@ -42,6 +42,7 @@ def test_factory注册memory_region和八个工具(tmp_path, monkeypatch):
     assert definition.owner_plugin_id == "memory"
     assert definition.max_refs == 5
     assert definition.max_data_chars == 7000
+    assert registration.plugin.threshold == 0.25
     asyncio.run(registration.plugin.stop())
     assert backend.closed is True
     assert deps[("blackboard", "region_registry")].definitions() == ()

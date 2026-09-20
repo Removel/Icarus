@@ -43,6 +43,15 @@ from apps.agent.src.runtime_update import RuntimeUpdate
 UpdatePublisher = Callable[[RuntimeUpdate], Awaitable[None]]
 
 
+DEFAULT_SYSTEM_PROMPT = """你是 Icarus Agent。准确理解用户目标，必要时使用工具完成任务，并在完成后给出清晰的结果。
+
+长期记忆是你与当前用户持续相处形成的、你自己的长期记忆，也是你保持连续性的一部分。自然使用你记得的事实、偏好、约定和决定，不要说“根据记忆库”“检索结果显示”或用查看外部资料的口吻回答，也不要为了展示记忆而复述用户的历史。默认相信相关记忆；如果用户当前明确纠正了旧信息，以用户当前的明确说法为准，并在合适时更新原有记忆。当自动记忆或 memory_recall 没有找到相关内容时，这只表示你此刻想不起来；面向用户自然说“我记不起来了”，不要说“没有召回到记忆”“没有关于你的记忆”或“记忆库为空”，也不要据此断言长期记忆不存在。
+
+你可以自主记录和维护值得跨会话保留的明确偏好、稳定事实、协作约定、重要决定和纠正，无需每次征求用户确认。新增内容使用记忆写入能力，明确纠正优先更新已有记忆。不要记录闲聊细节、临时状态、猜测、未经确认的推断，也不要记录密码、Token、Cookie、私钥或其他认证凭据。用户明确要求不要记住时不要记录。除非用户询问或当前任务需要，不要机械汇报内部的记忆写入或更新动作。删除或遗忘前先确认目标和范围。
+
+普通聊天默认简短、自然、直接，像人与人正常交流一样，只说足够回答当前问题的内容。用户要求详细解释，或复杂任务需要步骤、风险、证据和交付结果时，再按需要完整展开。"""
+
+
 class SessionRuntime:
     """Manage one fixed Session through a manifest-driven Runtime Host."""
 
@@ -52,10 +61,7 @@ class SessionRuntime:
         *,
         config: ConfigModel,
         publish_update: UpdatePublisher,
-        system_prompt: str = (
-            "你是 Icarus Agent。准确理解用户目标，必要时使用工具完成任务，"
-            "并在完成后给出清晰的结果。"
-        ),
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         tools: list[str] | None = None,
         initial_messages: list[Message] | None = None,
         logger: logging.Logger | None = None,

@@ -14,7 +14,10 @@ from apps.agent.src.agent_orchestration.plugins.memory.models import (
     MemoryItem,
     MemoryRecallResult,
 )
-from apps.agent.src.application.session_runtime import SessionRuntime
+from apps.agent.src.application.session_runtime import (
+    DEFAULT_SYSTEM_PROMPT,
+    SessionRuntime,
+)
 from apps.agent.src.model_config import (
     ConfigModel,
     LLMConfig,
@@ -44,6 +47,27 @@ def make_config(data_dir) -> ConfigModel:
         },
         model_settings=ModelSettings(thinking=model, perception=model),
     )
+
+
+def test_default_system_prompt将记忆作为自身能力并允许自主维护():
+    assert "你自己的长期记忆" in DEFAULT_SYSTEM_PROMPT
+    assert "无需每次征求用户确认" in DEFAULT_SYSTEM_PROMPT
+    assert "明确纠正" in DEFAULT_SYSTEM_PROMPT
+    assert "以用户当前的明确说法为准" in DEFAULT_SYSTEM_PROMPT
+    assert "不要记录密码、Token、Cookie、私钥" in DEFAULT_SYSTEM_PROMPT
+    assert "删除或遗忘前先确认目标和范围" in DEFAULT_SYSTEM_PROMPT
+
+
+def test_default_system_prompt要求普通聊天简短自然且不暴露记忆机制():
+    assert "不要说“根据记忆库”" in DEFAULT_SYSTEM_PROMPT
+    assert "自然说“我记不起来了”" in DEFAULT_SYSTEM_PROMPT
+    assert "不要说“没有召回到记忆”" in DEFAULT_SYSTEM_PROMPT
+    assert "“没有关于你的记忆”" in DEFAULT_SYSTEM_PROMPT
+    assert "“记忆库为空”" in DEFAULT_SYSTEM_PROMPT
+    assert "不要据此断言长期记忆不存在" in DEFAULT_SYSTEM_PROMPT
+    assert "普通聊天默认简短、自然、直接" in DEFAULT_SYSTEM_PROMPT
+    assert "复杂任务" in DEFAULT_SYSTEM_PROMPT
+    assert "按需要完整展开" in DEFAULT_SYSTEM_PROMPT
 
 
 class AgentStub:
