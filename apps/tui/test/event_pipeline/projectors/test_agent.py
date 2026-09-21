@@ -1,9 +1,11 @@
 from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
+    AppendThinkingDelta,
     AppendError,
     AppendToolStarted,
     CompleteAssistantMessage,
+    CompleteThinking,
     UpdateToolCompleted,
 )
 from apps.tui.src.event_pipeline.projectors.agent import AgentProjector
@@ -72,7 +74,57 @@ def test_agent_projector工具完成不暴露完整output():
     assert failure == (
         UpdateToolCompleted("task-1", "call-1", "bash", False, "exit code 1"),
     )
-    assert "output" not in repr(success)
+    assert success[0].output_preview is None
+
+
+def test_agent_projector映射实时和历史thinking():
+    projector = AgentProjector()
+
+    assert projector.project(
+        update("assistant.thinking_delta", {"step": 2, "text": "分析"})
+    ) == (AppendThinkingDelta("task-1", 2, "分析", False),)
+    assert projector.project(
+        update(
+            "assistant.thinking",
+            {"step": 2, "text": "分析完成", "partial": True},
+        ),
+        historical=True,
+    ) == (CompleteThinking("task-1", 2, "分析完成", True, True),)
+
+
+def test_agent_projector映射tool_preview并兼容旧记录():
+    projector = AgentProjector()
+    projected = projector.project(
+        update(
+            "tool.completed",
+            {
+                "step": 3,
+                "call_id": "call-1",
+                "tool_name": "read",
+                "success": True,
+                "error": None,
+                "output_preview": {"path": "README.md"},
+                "preview_truncated": True,
+                "full_result_available": True,
+                "preview_error": None,
+            },
+        )
+    )
+
+    assert projected == (
+        UpdateToolCompleted(
+            "task-1",
+            "call-1",
+            "read",
+            True,
+            None,
+            3,
+            {"path": "README.md"},
+            True,
+            True,
+            None,
+        ),
+    )
 
 
 def test_agent_projector映射错误并忽略usage和空delta():

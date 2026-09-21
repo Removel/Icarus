@@ -97,30 +97,83 @@ Screen {
     height: auto;
 }
 
-.tool-message {
-    border-left: thick $icarus-tool;
+.run-card {
+    border-left: solid $icarus-border;
     padding: 0 1;
     background: $icarus-surface;
+}
+
+.run-card-label {
+    height: 1;
+    color: $icarus-muted;
+    text-style: bold;
+}
+
+.thinking-block,
+.assistant-progress,
+.tool-block,
+.user-correction-block {
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+}
+
+.thinking-block {
+    color: $icarus-muted;
+}
+
+.thinking-content,
+.assistant-progress .assistant-markdown {
+    height: auto;
+    padding-left: 2;
+}
+
+.disclosure-summary {
+    height: 1;
+    color: $icarus-user;
+}
+
+.disclosure-summary:focus {
+    background: $icarus-raised;
+    color: $icarus-accent;
+    text-style: bold;
+}
+
+.tool-block {
+    border-left: thick $icarus-tool;
+    padding: 0 1;
+    background: $icarus-raised;
 }
 
 .tool-summary {
     color: $icarus-user;
 }
 
-.tool-state {
+.tool-details {
     color: $icarus-muted;
+    padding-left: 2;
 }
 
-.tool-message.is-success .tool-state {
+.tool-block.is-success .tool-summary {
     color: $icarus-green;
 }
 
-.tool-message.is-failed .tool-state {
+.tool-block.is-failed .tool-summary {
     color: $icarus-red;
 }
 
-.tool-message.is-interrupted .tool-state {
+.tool-block.is-interrupted .tool-summary {
     color: $icarus-muted;
+}
+
+.correction-label {
+    color: $icarus-accent;
+    text-style: bold;
+}
+
+.correction-content {
+    color: $icarus-user;
+    padding-left: 2;
 }
 
 .error-message {

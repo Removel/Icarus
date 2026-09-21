@@ -6,8 +6,9 @@ from apps.tui.src.event_pipeline.actions import UiAction
 
 class BlackboardProjector:
     def project(
-        self, update: RuntimeUpdateModel
+        self, update: RuntimeUpdateModel, *, historical: bool = False
     ) -> tuple[UiAction, ...] | None:
+        del historical
         if update.type in {"context.compacted", "session.lifecycle"}:
             return ()
         return None

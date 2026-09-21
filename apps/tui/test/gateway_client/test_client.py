@@ -3,7 +3,11 @@ import json
 
 import pytest
 
-from apps.tui.src.gateway_client import GatewayClient, GatewayClientError
+from apps.tui.src.gateway_client import (
+    GatewayClient,
+    GatewayClientError,
+    GatewayTransportError,
+)
 from packages.gateway_protocol import ResourceRefModel
 
 
@@ -126,6 +130,7 @@ def test_gateway_client发送session_steer及图片资源():
             client.steer_task(
                 "task",
                 "look at image",
+                submission_id="steer-1",
                 resources=(ResourceRefModel(resource_id="image.png"),),
                 display_text="look [#image1]",
             )
@@ -152,6 +157,7 @@ def test_gateway_client发送session_steer及图片资源():
 
     assert request["method"] == "session.steer"
     assert request["params"]["task_id"] == "task"
+    assert request["params"]["submission_id"] == "steer-1"
     assert request["params"]["resources"] == [
         {"resource_id": "image.png", "media_type": None}
     ]
@@ -179,7 +185,7 @@ def test_gateway_client断线唤醒pending请求和update订阅():
         return results
 
     results = asyncio.run(run())
-    assert all(isinstance(item, ConnectionError) for item in results)
+    assert all(isinstance(item, GatewayTransportError) for item in results)
 
 
 def test_gateway_client读取session历史并保留缓冲实时update():

@@ -1,4 +1,8 @@
-from apps.tui.src.gateway_client.client import GatewayClient, GatewayClientError
+from apps.tui.src.gateway_client.client import (
+    GatewayClient,
+    GatewayClientError,
+    GatewayTransportError,
+)
 from apps.tui.src.gateway_client.models import (
     SubmitAccepted,
     TaskOperationResult,
@@ -8,6 +12,7 @@ from apps.tui.src.gateway_client.models import (
 __all__ = [
     "GatewayClient",
     "GatewayClientError",
+    "GatewayTransportError",
     "SubmitAccepted",
     "TaskOperationResult",
     "UpdateSubscription",

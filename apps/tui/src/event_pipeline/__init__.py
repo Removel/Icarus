@@ -2,9 +2,12 @@
 
 from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
+    AppendThinkingDelta,
     AppendError,
     AppendToolStarted,
     AppendUserMessage,
+    AppendUserCorrection,
+    CompleteThinking,
     CompleteAssistantMessage,
     FinishTurn,
     SetRuntimeStatus,
@@ -20,9 +23,12 @@ from apps.tui.src.event_pipeline.dispatcher import (
 
 __all__ = [
     "AppendAssistantDelta",
+    "AppendThinkingDelta",
     "AppendError",
     "AppendToolStarted",
     "AppendUserMessage",
+    "AppendUserCorrection",
+    "CompleteThinking",
     "CompleteAssistantMessage",
     "FinishTurn",
     "ProjectorRegistry",

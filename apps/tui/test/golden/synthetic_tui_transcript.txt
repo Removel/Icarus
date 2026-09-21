@@ -1,5 +1,7 @@
 [task] accepted: Accepted by runtime
 [task] running: Agent is running
+[thinking step=1]
+先检查配置，再读取文件。
 [assistant]
 正在**检查配置**……
 
@@ -7,6 +9,10 @@
 - 准备读取文件
 [tool] read {"path":"配置/你好.md"}
 [tool] read completed: success
+[tool-output]
+{"lines": 2, "title": "配置"}
+[user-correction before-step=2]
+也检查默认值
 [assistant]
 读取完成。
 

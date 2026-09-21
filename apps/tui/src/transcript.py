@@ -5,8 +5,11 @@ from __future__ import annotations
 from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
     AppendError,
+    AppendThinkingDelta,
     AppendToolStarted,
+    AppendUserCorrection,
     AppendUserMessage,
+    CompleteThinking,
     CompleteAssistantMessage,
     FinishTurn,
     SetRuntimeStatus,
@@ -27,6 +30,8 @@ class TranscriptRecorder:
     def __init__(self) -> None:
         self._lines: list[str] = []
         self._assistant_parts: list[str] = []
+        self._thinking_parts: dict[tuple[str, int], list[str]] = {}
+        self._completed_thinking: set[tuple[str, int]] = set()
 
     def record(self, action: UiAction) -> None:
         if isinstance(action, AppendUserMessage):
@@ -40,9 +45,30 @@ class TranscriptRecorder:
         if isinstance(action, CompleteAssistantMessage):
             self._assistant_parts = [action.text]
             return
+        if isinstance(action, AppendThinkingDelta):
+            key = (action.task_id, action.step)
+            if key not in self._completed_thinking:
+                self._flush_assistant()
+                self._thinking_parts.setdefault(key, []).append(action.text)
+            return
+        if isinstance(action, CompleteThinking):
+            key = (action.task_id, action.step)
+            if key not in self._completed_thinking:
+                self._flush_assistant()
+                self._thinking_parts[key] = [action.text]
+                self._completed_thinking.add(key)
+                status = " partial" if action.partial else ""
+                self._lines.append(f"[thinking step={action.step}{status}]")
+                self._lines.extend(action.text.splitlines())
+            return
 
         self._flush_assistant()
-        if isinstance(action, AppendToolStarted):
+        if isinstance(action, AppendUserCorrection):
+            self._lines.append(
+                f"[user-correction before-step={action.applied_before_step}]"
+            )
+            self._lines.extend(action.text.splitlines())
+        elif isinstance(action, AppendToolStarted):
             self._lines.append(
                 f"[tool] {action.tool_name} {action.arguments_json}"
             )
@@ -53,6 +79,23 @@ class TranscriptRecorder:
             )
             if not action.success and action.error:
                 self._lines.append(f"[tool-error] {action.error}")
+            if action.output_preview is not None:
+                self._lines.append("[tool-output]")
+                self._lines.extend(
+                    _format_transcript_value(action.output_preview).splitlines()
+                )
+            if action.preview_error:
+                self._lines.append("[tool-preview] unavailable")
+            if action.preview_truncated and action.full_result_available:
+                self._lines.append(
+                    "[tool-preview] truncated; full result remains agent-side"
+                )
+            elif action.preview_truncated:
+                self._lines.append(
+                    "[tool-preview] truncated; full result unavailable"
+                )
+            elif action.full_result_available:
+                self._lines.append("[tool-preview] full result remains agent-side")
         elif isinstance(action, AppendError):
             self._lines.append(
                 f"[error] {action.error_type}: {action.message}"
@@ -96,3 +139,14 @@ def transcript_from_scenario(
             ):
                 recorder.record(action)
     return recorder.render()
+
+
+def _format_transcript_value(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    import json
+
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        return "[Preview unavailable]"

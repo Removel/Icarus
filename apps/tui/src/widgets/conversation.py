@@ -11,18 +11,25 @@ from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
     CompleteAssistantMessage,
     AppendError,
+    AppendThinkingDelta,
     AppendToolStarted,
+    AppendUserCorrection,
     AppendUserMessage,
+    CompleteThinking,
     FinishTurn,
     UiAction,
     UpdateToolCompleted,
 )
 from apps.tui.src.widgets.messages import (
     AssistantMessage,
+    AssistantProgressBlock,
     ErrorMessage,
-    ToolMessage,
+    RunCard,
+    ThinkingBlock,
+    ToolBlock,
     TurnStatusMessage,
     UserMessage,
+    UserCorrectionBlock,
     WelcomeMessage,
     StreamingMarkdown,
 )
@@ -34,8 +41,14 @@ class ConversationView(VerticalScroll):
     def __init__(self, workspace_path: str | Path, *, id: str | None = None) -> None:
         super().__init__(id=id)
         self.workspace_path = Path(workspace_path).expanduser().resolve()
-        self._active_assistant: AssistantMessage | None = None
-        self._tools: dict[str, ToolMessage] = {}
+        self._run_cards: dict[str, RunCard] = {}
+        self._assistant_candidates: dict[
+            tuple[str, int], AssistantProgressBlock
+        ] = {}
+        self._candidate_completed: set[tuple[str, int]] = set()
+        self._completed_thinking: set[tuple[str, int]] = set()
+        self._thinking: dict[tuple[str, int], ThinkingBlock] = {}
+        self._tools: dict[tuple[str, str], ToolBlock] = {}
         self._anchor_pending = True
         self._restoring_history = False
 
@@ -45,7 +58,12 @@ class ConversationView(VerticalScroll):
     async def reset(self) -> None:
         """Replace the current Session projection with an empty one."""
 
-        await self._finish_assistant_segment()
+        await self._finish_all_streams()
+        self._run_cards.clear()
+        self._assistant_candidates.clear()
+        self._candidate_completed.clear()
+        self._completed_thinking.clear()
+        self._thinking.clear()
         self._tools.clear()
         self._restoring_history = False
         self.display = True
@@ -56,7 +74,6 @@ class ConversationView(VerticalScroll):
         self.scroll_home(animate=False, immediate=True)
 
     async def append_user_message(self, text: str) -> None:
-        await self._finish_assistant_segment()
         await self.mount(UserMessage(text))
         if not self._restoring_history:
             self._activate_anchor_after_layout()
@@ -74,42 +91,93 @@ class ConversationView(VerticalScroll):
         if isinstance(action, AppendUserMessage):
             await self.append_user_message(action.text)
         elif isinstance(action, AppendAssistantDelta):
-            assistant = await self._ensure_assistant_segment()
+            await self._advance_step(action.task_id, action.step)
+            assistant = await self._ensure_assistant_candidate(
+                action.task_id, action.step
+            )
             await assistant.append_delta(action.text)
         elif isinstance(action, CompleteAssistantMessage):
-            assistant = await self._ensure_assistant_segment()
+            await self._advance_step(action.task_id, action.step)
+            assistant = await self._ensure_assistant_candidate(
+                action.task_id, action.step
+            )
             await assistant.complete_text(action.text)
+            self._candidate_completed.add((action.task_id, action.step))
+        elif isinstance(action, AppendThinkingDelta):
+            key = (action.task_id, action.step)
+            if key not in self._completed_thinking:
+                await self._advance_step(action.task_id, action.step)
+                thinking = await self._ensure_thinking(
+                    action.task_id,
+                    action.step,
+                    historical=action.historical,
+                )
+                await thinking.append_delta(action.text)
+        elif isinstance(action, CompleteThinking):
+            key = (action.task_id, action.step)
+            if key not in self._completed_thinking:
+                await self._advance_step(action.task_id, action.step)
+                thinking = await self._ensure_thinking(
+                    action.task_id,
+                    action.step,
+                    historical=action.historical,
+                )
+                await thinking.complete_text(
+                    action.text, partial=action.partial
+                )
+                self._completed_thinking.add(key)
+        elif isinstance(action, AppendUserCorrection):
+            card = await self._ensure_run_card(action.task_id)
+            await card.mount(
+                UserCorrectionBlock(
+                    action.text, action.applied_before_step
+                )
+            )
         elif isinstance(action, AppendToolStarted):
-            await self._finish_assistant_segment()
-            tool = ToolMessage(
+            await self._advance_step(action.task_id, action.step)
+            await self._finish_candidate(action.task_id, action.step)
+            card = await self._ensure_run_card(action.task_id)
+            tool = ToolBlock(
                 call_id=action.call_id,
                 tool_name=action.tool_name,
                 arguments_json=action.arguments_json,
             )
-            self._tools[action.call_id] = tool
-            await self.mount(tool)
+            self._tools[(action.task_id, action.call_id)] = tool
+            await card.mount(tool)
         elif isinstance(action, UpdateToolCompleted):
-            await self._finish_assistant_segment()
-            tool = self._tools.get(action.call_id)
+            await self._advance_step(action.task_id, action.step)
+            await self._finish_candidate(action.task_id, action.step)
+            key = (action.task_id, action.call_id)
+            tool = self._tools.get(key)
             if tool is None:
-                tool = ToolMessage(
+                card = await self._ensure_run_card(action.task_id)
+                tool = ToolBlock(
                     call_id=action.call_id,
                     tool_name=action.tool_name,
                 )
-                self._tools[action.call_id] = tool
-                await self.mount(tool)
-            tool.complete(success=action.success, error=action.error)
+                self._tools[key] = tool
+                await card.mount(tool)
+            tool.complete(
+                success=action.success,
+                error=action.error,
+                output_preview=action.output_preview,
+                preview_truncated=action.preview_truncated,
+                full_result_available=action.full_result_available,
+                preview_error=action.preview_error,
+            )
         elif isinstance(action, AppendError):
-            await self._finish_assistant_segment()
             await self.mount(ErrorMessage(action.error_type, action.message))
         elif isinstance(action, FinishTurn):
-            await self._finish_assistant_segment()
+            await self._finish_task_candidates(action.task_id)
             if action.status == "interrupted":
-                for tool in self._tools.values():
-                    tool.interrupt()
+                for (task_id, _), tool in self._tools.items():
+                    if task_id == action.task_id:
+                        tool.interrupt()
+            if action.status == "completed":
+                await self._promote_final_candidate(action.task_id)
             if action.status in {"failed", "cancelled", "interrupted"}:
                 await self.mount(TurnStatusMessage(action.status))
-            self._tools.clear()
+            await self._remove_empty_run_card(action.task_id)
         else:
             return False
 
@@ -117,21 +185,110 @@ class ConversationView(VerticalScroll):
             self._activate_anchor_after_layout()
         return True
 
-    async def _ensure_assistant_segment(self) -> AssistantMessage:
-        assistant = self._active_assistant
-        if assistant is not None:
-            return assistant
-        assistant = AssistantMessage()
-        self._active_assistant = assistant
-        await self.mount(assistant)
+    async def _ensure_run_card(self, task_id: str) -> RunCard:
+        card = self._run_cards.get(task_id)
+        if card is None:
+            card = RunCard(task_id)
+            self._run_cards[task_id] = card
+            await self.mount(card)
+        return card
+
+    async def _ensure_assistant_candidate(
+        self, task_id: str, step: int
+    ) -> AssistantProgressBlock:
+        key = (task_id, step)
+        assistant = self._assistant_candidates.get(key)
+        if assistant is None:
+            card = await self._ensure_run_card(task_id)
+            assistant = AssistantProgressBlock(step)
+            self._assistant_candidates[key] = assistant
+            await card.mount(assistant)
         return assistant
 
-    async def _finish_assistant_segment(self) -> None:
-        assistant = self._active_assistant
-        if assistant is None:
+    async def _ensure_thinking(
+        self, task_id: str, step: int, *, historical: bool
+    ) -> ThinkingBlock:
+        key = (task_id, step)
+        thinking = self._thinking.get(key)
+        if thinking is None:
+            card = await self._ensure_run_card(task_id)
+            thinking = ThinkingBlock(
+                step=step,
+                expanded=True,
+                historical=historical,
+            )
+            self._thinking[key] = thinking
+            await card.mount(thinking)
+        return thinking
+
+    async def _advance_step(self, task_id: str, step: int) -> None:
+        previous_steps = {
+            candidate_step
+            for candidate_task, candidate_step in self._assistant_candidates
+            if candidate_task == task_id and candidate_step < step
+        }
+        for previous_step in sorted(previous_steps):
+            await self._finish_candidate(task_id, previous_step)
+
+    async def _finish_candidate(self, task_id: str, step: int) -> None:
+        assistant = self._assistant_candidates.get((task_id, step))
+        if assistant is not None:
+            await assistant.finish()
+
+    async def _finish_task_candidates(self, task_id: str) -> None:
+        for (candidate_task, _), assistant in self._assistant_candidates.items():
+            if candidate_task == task_id:
+                await assistant.finish()
+
+    async def _promote_final_candidate(self, task_id: str) -> None:
+        completed = [
+            key
+            for key in self._candidate_completed
+            if key[0] == task_id
+        ]
+        if not completed:
             return
-        self._active_assistant = None
-        await assistant.finish()
+        key = max(completed, key=lambda item: item[1])
+        candidate = self._assistant_candidates.pop(key, None)
+        self._candidate_completed.discard(key)
+        if candidate is None:
+            return
+        text = candidate.markdown_text
+        await candidate.remove()
+        final = AssistantMessage()
+        card = self._run_cards.get(task_id)
+        if card is None:
+            await self.mount(final)
+        else:
+            await self.mount(final, after=card)
+        await final.complete_text(text)
+        await final.finish()
+
+    async def _remove_empty_run_card(self, task_id: str) -> None:
+        card = self._run_cards.get(task_id)
+        if card is None:
+            return
+        meaningful = any(
+            isinstance(
+                child,
+                (
+                    ThinkingBlock,
+                    ToolBlock,
+                    UserCorrectionBlock,
+                    AssistantProgressBlock,
+                ),
+            )
+            for child in card.children
+        )
+        if not meaningful:
+            self._run_cards.pop(task_id, None)
+            await card.remove()
+
+    async def _finish_all_streams(self) -> None:
+        for assistant in self._assistant_candidates.values():
+            await assistant.finish()
+        for thinking in self._thinking.values():
+            await thinking.finish()
 
     def page_up(self) -> None:
         self.scroll_page_up(animate=False)

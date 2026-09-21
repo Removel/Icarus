@@ -36,6 +36,10 @@ class GatewayClientError(RuntimeError):
         self.code = code
 
 
+class GatewayTransportError(ConnectionError):
+    """The connection ended before an RPC result became authoritative."""
+
+
 class GatewayClient:
     def __init__(
         self,
@@ -251,6 +255,7 @@ class GatewayClient:
         task_id: str,
         prompt: str,
         *,
+        submission_id: str,
         resources: tuple[ResourceRefModel, ...] = (),
         display_text: str | None = None,
     ) -> TaskOperationResult:
@@ -262,6 +267,7 @@ class GatewayClient:
                 "task_id": task_id,
                 "prompt": prompt,
                 "display_text": display_text,
+                "submission_id": submission_id,
                 "resources": [item.model_dump(mode="json") for item in resources],
             },
         )
@@ -313,6 +319,9 @@ class GatewayClient:
         )
 
     async def _disconnect(self) -> None:
+        self._fail_pending(
+            GatewayTransportError("Gateway connection was replaced")
+        )
         socket = self._socket
         self._socket = None
         if socket is not None:
@@ -353,10 +362,18 @@ class GatewayClient:
         except BaseException as error:
             if not self._closed:
                 self._socket = None
-                for future in tuple(self._pending.values()):
-                    if not future.done():
-                        future.set_exception(error)
-                self._updates.close(error)
+                transport_error = (
+                    error
+                    if isinstance(error, GatewayTransportError)
+                    else GatewayTransportError(str(error))
+                )
+                self._fail_pending(transport_error)
+                self._updates.close(transport_error)
+
+    def _fail_pending(self, error: BaseException) -> None:
+        for future in tuple(self._pending.values()):
+            if not future.done():
+                future.set_exception(error)
 
     def _require_session_id(self) -> str:
         if self.session_id is None:

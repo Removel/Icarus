@@ -1,16 +1,20 @@
 import asyncio
 
+from rich.cells import cell_len
 from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
-from textual.geometry import Offset
+from textual.geometry import Offset, Region
 from textual.widgets import Markdown
 
 from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
     AppendError,
+    AppendThinkingDelta,
     AppendToolStarted,
+    AppendUserCorrection,
     AppendUserMessage,
+    CompleteThinking,
     CompleteAssistantMessage,
     FinishTurn,
     SetRuntimeStatus,
@@ -20,11 +24,15 @@ from apps.tui.src.widgets.composer import PersistentComposer
 from apps.tui.src.widgets.conversation import ConversationView
 from apps.tui.src.widgets.messages import (
     AssistantMessage,
+    AssistantProgressBlock,
     ErrorMessage,
     ICARUS_LOGO,
-    ToolMessage,
+    RunCard,
+    ThinkingBlock,
+    ToolBlock,
     TurnStatusMessage,
     UserMessage,
+    UserCorrectionBlock,
     WelcomeMessage,
     StreamingMarkdown,
     render_icarus_logo,
@@ -144,14 +152,16 @@ def test_conversation分割文本工具文本并更新工具状态(tmp_path):
                 )
             )
             await view.apply_action(
-                AppendAssistantDelta(task_id="task-1", text="after")
+                AppendAssistantDelta(
+                    task_id="task-1", text="after", step=2
+                )
             )
             await view.apply_action(
                 FinishTurn(task_id="task-1", status="completed")
             )
             await pilot.pause()
-            assistants = list(view.query(AssistantMessage))
-            tool = view.query_one(ToolMessage)
+            assistants = list(view.query(AssistantProgressBlock))
+            tool = view.query_one(ToolBlock)
             return (
                 len(view.query(WelcomeMessage)),
                 len(view.query(UserMessage)),
@@ -190,9 +200,184 @@ def test_conversation完整消息校准流式文本且不重复(tmp_path):
                 )
             )
             await pilot.pause()
-            return view.query_one(AssistantMessage).markdown_text
+            return view.query_one(AssistantProgressBlock).markdown_text
 
     assert asyncio.run(run()) == "部分完整"
+
+
+def test_conversation完成时提升最终回答并保留中间过程(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                AppendAssistantDelta("task-1", "checking", step=1)
+            )
+            await view.apply_action(
+                CompleteAssistantMessage("task-1", "checking", step=1)
+            )
+            await view.apply_action(
+                AppendToolStarted("task-1", "call", "read", "{}", step=1)
+            )
+            await view.apply_action(
+                AppendAssistantDelta("task-1", "final", step=2)
+            )
+            await view.apply_action(
+                CompleteAssistantMessage("task-1", "final answer", step=2)
+            )
+            await view.apply_action(FinishTurn("task-1", "completed"))
+            await pilot.pause()
+            return (
+                [
+                    item.markdown_text
+                    for item in view.query(AssistantProgressBlock)
+                ],
+                [item.markdown_text for item in view.query(AssistantMessage)],
+                len(view.query(RunCard)),
+            )
+
+    progress, final, cards = asyncio.run(run())
+    assert progress == ["checking"]
+    assert final == ["final answer"]
+    assert cards == 1
+
+
+def test_conversation纯最终回答完成时移除空run_card(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                CompleteAssistantMessage("task-1", "answer", step=1)
+            )
+            await view.apply_action(FinishTurn("task-1", "completed"))
+            await pilot.pause()
+            return (
+                len(view.query(RunCard)),
+                view.query_one(AssistantMessage).markdown_text,
+            )
+
+    assert asyncio.run(run()) == (0, "answer")
+
+
+def test_conversation思考流对账后始终默认展开并忽略迟到delta(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                AppendThinkingDelta("task-1", 1, "partial")
+            )
+            first = view.query_one(ThinkingBlock)
+            expanded_while_live = first.expanded
+            await view.apply_action(
+                CompleteThinking("task-1", 1, "complete", partial=False)
+            )
+            await view.apply_action(
+                AppendThinkingDelta("task-1", 1, " late")
+            )
+            await view.apply_action(
+                AppendThinkingDelta("task-1", 2, "next")
+            )
+            await view.apply_action(
+                AppendToolStarted(
+                    "task-1", "call-1", "read", "{}", step=2
+                )
+            )
+            blocks = list(view.query(ThinkingBlock))
+            await view.apply_action(FinishTurn("task-1", "completed"))
+            await pilot.pause()
+            return (
+                expanded_while_live,
+                [(item.markdown_text, item.expanded) for item in blocks],
+            )
+
+    expanded, blocks = asyncio.run(run())
+    assert expanded is True
+    assert blocks == [("complete", True), ("next", True)]
+
+
+def test_conversation历史thinking默认展开且可键盘折叠(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            view.begin_history_restore()
+            await view.apply_action(
+                CompleteThinking(
+                    "task-1", 1, "restored", historical=True
+                )
+            )
+            view.finish_history_restore()
+            thinking = view.query_one(ThinkingBlock)
+            initially_expanded = thinking.expanded
+            thinking.query_one(".thinking-summary").focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            return (
+                thinking.markdown_text,
+                initially_expanded,
+                thinking.expanded,
+            )
+
+    assert asyncio.run(run()) == ("restored", True, False)
+
+
+def test_conversation完整thinking对账保留用户手动折叠状态(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                AppendThinkingDelta("task-1", 1, "partial")
+            )
+            thinking = view.query_one(ThinkingBlock)
+            thinking.set_expanded(False)
+            await view.apply_action(
+                CompleteThinking("task-1", 1, "complete", partial=False)
+            )
+            await pilot.pause()
+            return thinking.markdown_text, thinking.expanded
+
+    assert asyncio.run(run()) == ("complete", False)
+
+
+def test_conversation工具预览和追加内容位于同一run_card(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                AppendUserCorrection("task-1", "check errors", 2)
+            )
+            await view.apply_action(
+                UpdateToolCompleted(
+                    "task-1",
+                    "call",
+                    "bash",
+                    False,
+                    "exit code 1",
+                    output_preview={"stdout": "hello"},
+                    preview_truncated=True,
+                    full_result_available=True,
+                )
+            )
+            tool = view.query_one(ToolBlock)
+            tool.set_expanded(True)
+            await pilot.pause()
+            return (
+                len(view.query(RunCard)),
+                view.query_one(UserCorrectionBlock).correction_text,
+                str(tool.query_one(".tool-details").render()),
+                tool.state_text,
+            )
+
+    cards, correction, details, state = asyncio.run(run())
+    assert cards == 1
+    assert correction == "check errors"
+    assert '"stdout": "hello"' in details
+    assert "Full result remains on the Agent side" in details
+    assert state == "failed"
 
 
 def test_conversation_reset清空session投影并恢复欢迎内容(tmp_path):
@@ -218,15 +403,15 @@ def test_conversation_reset清空session投影并恢复欢迎内容(tmp_path):
             return (
                 len(view.query(WelcomeMessage)),
                 len(view.query(UserMessage)),
-                len(view.query(AssistantMessage)),
-                len(view.query(ToolMessage)),
-                view._active_assistant,
+                len(view.query(AssistantProgressBlock)),
+                len(view.query(ToolBlock)),
+                view._assistant_candidates,
                 view._tools,
                 view._restoring_history,
             )
 
     result = asyncio.run(run())
-    assert result == (1, 0, 0, 0, None, {}, False)
+    assert result == (1, 0, 0, 0, {}, {}, False)
 
 
 def test_streaming_markdown替换后旧节点不会触发鼠标选择崩溃(
@@ -306,7 +491,7 @@ def test_streaming_markdown后续delta不再全量update(monkeypatch, tmp_path):
                 FinishTurn(task_id="task-1", status="completed")
             )
             await pilot.pause()
-            assistant = view.query_one(AssistantMessage)
+            assistant = view.query_one(AssistantProgressBlock)
             return assistant.markdown_text, markdown.source
 
     markdown_text, rendered_source = asyncio.run(run())
@@ -344,7 +529,7 @@ def test_streaming_markdown只写入新fragment并在finish停止stream(
             await view.apply_action(
                 AppendAssistantDelta(task_id="task-1", text=" second")
             )
-            assistant = view.query_one(AssistantMessage)
+            assistant = view.query_one(AssistantProgressBlock)
             await view.apply_action(
                 FinishTurn(task_id="task-1", status="completed")
             )
@@ -363,6 +548,90 @@ def test_streaming_markdown只写入新fragment并在finish停止stream(
     assert stop_count == 1
     assert markdown_text == "first second"
     assert active_stream is None
+
+
+def test_streaming_markdown中英文混排按终端cell折行(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 20)) as pilot:
+            view = app.query_one(ConversationView)
+            text = (
+                "博客正文：我用 RSS 抓了 18 篇全文存成文件，但真正进我眼里的是"
+                "我摘出来读的那些片段，加上归档页、分类页的列表输出。"
+                "这次一共处理了 9 万 4 千字。"
+            )
+            await view.apply_action(
+                AppendAssistantDelta(task_id="task-1", text=text)
+            )
+            await pilot.pause()
+            markdown = app.query_one(StreamingMarkdown)
+            paragraph = app.query_one("MarkdownParagraph")
+            lines = [
+                line.text.rstrip()
+                for line in paragraph.render_lines(
+                    Region(0, 0, paragraph.region.width, paragraph.region.height)
+                )
+            ]
+            return (
+                markdown.source,
+                paragraph.render().plain,
+                paragraph.region.width,
+                paragraph.styles.text_wrap,
+                lines,
+            )
+
+    source, rendered_text, width, text_wrap, lines = asyncio.run(run())
+
+    assert source == rendered_text
+    assert text_wrap == "wrap"
+    assert all(cell_len(line) <= width for line in lines)
+    assert "".join(lines).replace(" ", "") == rendered_text.replace(
+        " ", ""
+    )
+    assert all(not line.endswith("18") for line in lines)
+    assert any("18 篇" in line for line in lines)
+    assert all(not line.endswith(("9", "4")) for line in lines)
+    assert any("9 万" in line and "4 千" in line for line in lines)
+
+
+def test_streaming_markdown纯英文仍按单词换行(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(40, 20)) as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                AppendAssistantDelta(
+                    task_id="task-1",
+                    text="The conversation remains readable on a narrow terminal.",
+                )
+            )
+            await pilot.pause()
+            paragraph = app.query_one("MarkdownParagraph")
+            lines = [
+                line.text.rstrip()
+                for line in paragraph.render_lines(
+                    Region(
+                        0,
+                        0,
+                        paragraph.region.width,
+                        paragraph.region.height,
+                    )
+                )
+            ]
+            return (
+                paragraph.styles.text_wrap,
+                paragraph.region.width,
+                lines,
+            )
+
+    text_wrap, width, lines = asyncio.run(run())
+
+    assert text_wrap == "wrap"
+    assert lines == [
+        "The conversation remains readable",
+        "on a narrow terminal.",
+    ]
+    assert all(cell_len(line) <= width for line in lines)
 
 
 def test_streaming_markdown保留已稳定的前部block(tmp_path):
@@ -411,7 +680,7 @@ def test_conversation_reset会停止仍在输出的markdown_stream(tmp_path):
             await view.apply_action(
                 AppendAssistantDelta(task_id="task-1", text="partial")
             )
-            assistant = view.query_one(AssistantMessage)
+            assistant = view.query_one(AssistantProgressBlock)
             stream = assistant._markdown_stream
 
             await view.reset()
@@ -456,7 +725,7 @@ def test_conversation对缺失start的失败工具降级并显示错误终态(tm
                 )
             )
             await pilot.pause()
-            tool = view.query_one(ToolMessage)
+            tool = view.query_one(ToolBlock)
             return (
                 tool.success,
                 tool.error,
@@ -492,11 +761,11 @@ def test_conversation恢复用户部分回复和未完成工具为interrupted(tm
             )
             await view.apply_action(FinishTurn("task-1", "interrupted"))
             await pilot.pause()
-            tool = view.query_one(ToolMessage)
+            tool = view.query_one(ToolBlock)
             return (
                 len(view.query(UserMessage)),
-                view.query_one(AssistantMessage).markdown_text,
-                str(tool.query_one(".tool-state").render()),
+                view.query_one(AssistantProgressBlock).markdown_text,
+                tool.state_text,
                 str(view.query_one(TurnStatusMessage).render()),
             )
 

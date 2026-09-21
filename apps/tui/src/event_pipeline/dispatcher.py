@@ -11,7 +11,7 @@ from apps.tui.src.event_pipeline.actions import UiAction
 
 class UpdateProjector(Protocol):
     def project(
-        self, update: RuntimeUpdateModel
+        self, update: RuntimeUpdateModel, *, historical: bool = False
     ) -> tuple[UiAction, ...] | None: ...
 
 
@@ -39,6 +39,7 @@ class ProjectorRegistry:
         *,
         active_task_id: str | None,
         include_unrelated: bool = False,
+        historical: bool = False,
     ) -> tuple[UiAction, ...]:
         projector = self._projectors.get(update.type)
         if projector is None:
@@ -58,7 +59,7 @@ class ProjectorRegistry:
                 active_task_id,
             )
             return ()
-        actions = projector.project(update)
+        actions = projector.project(update, historical=historical)
         if actions is None:
             self.unknown_update_count += 1
             return ()
@@ -80,6 +81,8 @@ def create_default_projector_registry(
     agent = AgentProjector()
     for update_type in (
         "assistant.text_delta",
+        "assistant.thinking_delta",
+        "assistant.thinking",
         "assistant.message",
         "tool.started",
         "tool.completed",

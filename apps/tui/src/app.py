@@ -25,9 +25,14 @@ from apps.tui.src.clipboard import (
     ClipboardImageReadError,
     read_clipboard_image,
 )
-from apps.tui.src.commands import parse_local_command
+from apps.tui.src.commands import (
+    CommandDefinition,
+    CommandRegistry,
+    create_default_command_registry,
+)
 from apps.tui.src.chat_state import (
     ChatState,
+    DispatchReservation,
     InterruptAction,
     RuntimePhase,
 )
@@ -39,6 +44,10 @@ from apps.tui.src.event_pipeline import (
     create_default_projector_registry,
 )
 from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
+from apps.tui.src.gateway_client import (
+    GatewayClientError,
+    GatewayTransportError,
+)
 from packages.gateway_protocol import (
     DiscardEmptySessionResultModel,
     ResourceRefModel,
@@ -107,6 +116,7 @@ class RuntimeClient(Protocol):
         task_id: str,
         prompt: str,
         *,
+        submission_id: str,
         resources: tuple[ResourceRefModel, ...] = (),
         display_text: str | None = None,
     ) -> TaskOperationResult:
@@ -218,6 +228,7 @@ class IcarusTextualApp(App[int]):
         workspace_path: str | Path,
         resource_root: str | Path | None = None,
         projector_registry: ProjectorRegistry | None = None,
+        command_registry: CommandRegistry | None = None,
     ) -> None:
         super().__init__()
         self.runtime_factory = runtime_factory
@@ -231,11 +242,17 @@ class IcarusTextualApp(App[int]):
         )
         self.chat_state = ChatState()
         self.projector_registry = projector_registry
+        self.command_registry = (
+            command_registry or create_default_command_registry()
+        )
         self._last_sequence = 0
         self._completed_assistant_steps: set[tuple[str, int]] = set()
         self.subscription: UpdateSubscription | None = None
         self._runtime_start_worker: Worker[Any] | None = None
         self._event_worker: Worker[Any] | None = None
+        self._reconnect_worker: Worker[Any] | None = None
+        self._dispatch_worker: Worker[Any] | None = None
+        self._retry_reconnect_requested = False
         self._clipboard_worker: Worker[Any] | None = None
         self._session_operation_worker: Worker[Any] | None = None
         self._clipboard_temp_directory: tempfile.TemporaryDirectory[
@@ -243,6 +260,7 @@ class IcarusTextualApp(App[int]):
         ] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._dispatch_scheduled = False
+        self._connection_epoch = 0
         self._accepting_input = True
         self._has_user_submission = False
         self._session_has_user_input = False
@@ -374,6 +392,7 @@ class IcarusTextualApp(App[int]):
             return
         self.service = message.service
         self.subscription = message.subscription
+        self._connection_epoch += 1
         conversation = self.query_one(ConversationView)
         if message.history:
             conversation.begin_history_restore()
@@ -453,9 +472,31 @@ class IcarusTextualApp(App[int]):
         ):
             logger.debug("Ignoring failure from an inactive subscription")
             return
+        self._schedule_reconnect(message.error)
+
+    def _schedule_reconnect(
+        self, cause: BaseException, *, retry_after_current: bool = False
+    ) -> None:
+        if not self._accepting_input:
+            return
+        worker = self._reconnect_worker
+        if worker is not None and not worker.is_finished:
+            if retry_after_current:
+                self._retry_reconnect_requested = True
+            return
+        self._reconnect_worker = self.run_worker(
+            partial(self._reconnect_runtime, cause),
+            name="runtime-reconnect",
+            group="runtime-reconnect",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    async def _reconnect_runtime(self, cause: BaseException) -> None:
         service = self.service
         if service is not None:
             try:
+                self._retry_reconnect_requested = False
                 subscription = await service.reconnect()
                 history = await service.get_session_history(
                     after_sequence=self._last_sequence
@@ -469,6 +510,7 @@ class IcarusTextualApp(App[int]):
                 )
                 active_task_id = self.chat_state.active_task_id
                 self.subscription = subscription
+                self._connection_epoch += 1
                 self._fatal_failure = False
                 self._fatal_message = ""
                 self.chat_state.mark_ready()
@@ -483,16 +525,26 @@ class IcarusTextualApp(App[int]):
                     exit_on_error=False,
                 )
                 self._refresh_status("Reconnected")
-                self._schedule_dispatch()
+                reservation = self.chat_state.dispatch_reservation
+                if reservation is not None and reservation.outcome_unknown:
+                    retry = self.chat_state.begin_dispatch_retry(
+                        reservation, self._connection_epoch
+                    )
+                    await self._send_reservation(retry)
+                    if self._retry_reconnect_requested:
+                        self._retry_reconnect_requested = False
+                        await self._reconnect_runtime(cause)
+                else:
+                    self._schedule_dispatch()
                 return
             except asyncio.CancelledError:
                 raise
             except Exception:
-                pass
+                logger.debug("Runtime reconnect failed", exc_info=True)
         self._fatal_failure = True
         self.chat_state.mark_failed()
         self._fatal_message = (
-            f"Output stream closed: {type(message.error).__name__}: {message.error}"
+            f"Output stream closed: {type(cause).__name__}: {cause}"
         )
         self._refresh_status(self._fatal_message)
         self._safe_notify(
@@ -506,40 +558,12 @@ class IcarusTextualApp(App[int]):
     ) -> None:
         if not self._accepting_input:
             return
-        command = message.text.strip()
-        if command.lower() in {"exit", "quit"}:
-            self.request_shutdown(return_code=0)
-            return
         local_text = message.text
         for image in message.images:
             local_text = local_text.replace(image.marker, "")
-        local_command = parse_local_command(local_text)
-        if local_command is not None:
-            if message.images:
-                self.query_one(PersistentComposer).restore_draft(
-                    message.submission
-                )
-                self._safe_notify(
-                    "Remove image attachments before running a Session command.",
-                    title="Session command not run",
-                    severity="warning",
-                )
-                return
-            if not self._can_start_session_operation():
-                self._notify_session_command_unavailable()
-                return
-            operation = (
-                self._resume_session
-                if local_command == "resume"
-                else self._clear_session
-            )
-            self._session_operation_worker = self.run_worker(
-                operation,
-                name=f"session-{local_command}",
-                group="session-operation",
-                exclusive=True,
-                exit_on_error=False,
-            )
+        invocation = self.command_registry.parse(local_text)
+        if invocation is not None:
+            self._handle_command_submission(message, invocation.name, invocation.arguments)
             return
         if self.chat_state.phase == RuntimePhase.SWITCHING:
             self.query_one(PersistentComposer).restore_draft(message.submission)
@@ -547,12 +571,6 @@ class IcarusTextualApp(App[int]):
             return
 
         self._has_user_submission = True
-        if (
-            self.chat_state.phase == RuntimePhase.RUNNING
-            and self.chat_state.active_task_id is not None
-        ):
-            await self._steer_active_task(message.submission)
-            return
         self.chat_state.enqueue(message.submission)
         if not await self._refresh_queue():
             return
@@ -563,56 +581,72 @@ class IcarusTextualApp(App[int]):
                 title="Icarus startup failed",
                 severity="error",
             )
-        await self._dispatch_next()
+        self._schedule_dispatch()
 
-    async def _steer_active_task(self, submission) -> None:
-        service = self.service
-        task_id = self.chat_state.active_task_id
-        if service is None or task_id is None:
-            self.chat_state.enqueue(submission)
-            await self._refresh_queue()
-            self._refresh_status()
-            return
-        self._refresh_status("Adding correction to current task")
-        try:
-            result = await service.steer_task(
-                task_id,
-                submission.model_prompt(),
-                resources=self._submission_resources(submission),
-                display_text=submission.text,
-            )
-        except asyncio.CancelledError:
-            self.chat_state.enqueue(submission)
-            await self._refresh_queue()
-            raise
-        except BaseException as error:
-            self.chat_state.enqueue(submission)
-            await self._refresh_queue()
-            self._refresh_status("Correction queued for the next task")
-            self._safe_notify(
-                f"Unable to add correction to current task: {type(error).__name__}: {error}",
-                title="Correction queued",
-                severity="warning",
+    def _handle_command_submission(
+        self, message: PersistentComposer.Submitted, name: str, arguments: str
+    ) -> None:
+        definition = self.command_registry.resolve(name)
+        if definition is None:
+            self._reject_command(
+                message, f"Unknown command: {name}", title="Unknown command"
             )
             return
-        if result.status == "accepted":
-            self._delete_submission_images(submission)
-            self._refresh_status("Correction accepted for current task")
+        if arguments and not definition.accepts_arguments:
+            self._reject_command(
+                message,
+                f"{definition.name} does not accept arguments.",
+                title="Command not run",
+            )
             return
-        self.chat_state.enqueue(submission)
-        if not await self._refresh_queue():
+        if message.images and not definition.allow_attachments:
+            self._reject_command(
+                message,
+                "Remove image attachments before running this command.",
+                title="Command not run",
+            )
             return
-        self._refresh_status("Correction queued for the next task")
-        if result.status == "already_finished":
-            try:
-                await self._reconcile_task_status(service, task_id)
-            except Exception:
-                logger.debug(
-                    "Unable to reconcile task after late steer",
-                    exc_info=True,
-                )
-        if self.chat_state.phase == RuntimePhase.READY:
-            await self._dispatch_next()
+        if definition.requires_idle and not self._can_start_session_operation():
+            self.query_one(PersistentComposer).restore_draft(message.submission)
+            self._notify_session_command_unavailable()
+            return
+        self._run_command(definition)
+
+    def _reject_command(
+        self,
+        message: PersistentComposer.Submitted,
+        reason: str,
+        *,
+        title: str,
+    ) -> None:
+        self.query_one(PersistentComposer).restore_draft(message.submission)
+        self._refresh_status(reason)
+        self._safe_notify(reason, title=title, severity="warning")
+
+    def _run_command(self, definition: CommandDefinition) -> None:
+        if definition.handler_name == "exit_app":
+            self.request_shutdown(return_code=0)
+            return
+        operations = {
+            "clear_session": self._clear_session,
+            "resume_session": self._resume_session,
+        }
+        operation = operations.get(definition.handler_name)
+        if operation is None:
+            self._enter_fatal(
+                "command dispatch",
+                RuntimeError(
+                    f"Unknown command handler: {definition.handler_name}"
+                ),
+            )
+            return
+        self._session_operation_worker = self.run_worker(
+            operation,
+            name=f"command-{definition.name.removeprefix('/')}",
+            group="session-operation",
+            exclusive=True,
+            exit_on_error=False,
+        )
 
     def _can_start_session_operation(self) -> bool:
         worker = self._session_operation_worker
@@ -753,6 +787,7 @@ class IcarusTextualApp(App[int]):
 
         self.service = prepared.service
         self.subscription = prepared.subscription
+        self._connection_epoch += 1
         self.chat_state = ChatState()
         self._last_sequence = 0
         self._completed_assistant_steps.clear()
@@ -913,43 +948,73 @@ class IcarusTextualApp(App[int]):
 
     async def _dispatch_next(self) -> None:
         self._dispatch_scheduled = False
-        submission = self.chat_state.begin_dispatch()
-        if submission is None:
+        reservation = self.chat_state.begin_dispatch(self._connection_epoch)
+        if reservation is None:
             return
+        await self._send_reservation(reservation)
 
-        self._refresh_status("Submitting queued message")
+    async def _send_reservation(
+        self, reservation: DispatchReservation
+    ) -> None:
+        action = "Submitting queued message"
+        if reservation.mode == "steer":
+            action = "Adding queued message to current task"
+        self._refresh_status(action)
         if self._fatal_failure:
             return
         service = self.service
         if service is None:
-            self.chat_state.fail_dispatch()
-            self._fatal_message = "Runtime is unavailable"
-            self._refresh_status(self._fatal_message)
+            self.chat_state.release_dispatch(reservation, fatal=True)
+            self._enter_fatal(
+                "message dispatch", RuntimeError("Runtime is unavailable")
+            )
             return
         try:
-            accepted = await service.submit(
-                prompt=submission.model_prompt(),
-                submission_id=submission.submission_id,
-                resources=self._submission_resources(submission),
-                display_text=submission.text,
-            )
+            if reservation.mode == "submit":
+                result = await service.submit(
+                    prompt=reservation.message.model_prompt(),
+                    submission_id=reservation.message.submission_id,
+                    resources=self._submission_resources(
+                        reservation.message
+                    ),
+                    display_text=reservation.message.text,
+                )
+            else:
+                task_id = reservation.task_id
+                if task_id is None:
+                    raise RuntimeError(
+                        "Steer reservation is missing its task ID"
+                    )
+                result = await service.steer_task(
+                    task_id,
+                    reservation.message.model_prompt(),
+                    submission_id=reservation.message.submission_id,
+                    resources=self._submission_resources(
+                        reservation.message
+                    ),
+                    display_text=reservation.message.text,
+                )
         except asyncio.CancelledError:
-            self.chat_state.fail_dispatch()
             raise
-        except BaseException as error:
-            self.chat_state.fail_dispatch()
-            self._fatal_message = f"Submit failed: {type(error).__name__}: {error}"
-            self._refresh_status(self._fatal_message)
-            self._safe_notify(
-                self._fatal_message,
-                title="Message was not submitted",
-                severity="error",
+        except GatewayTransportError as error:
+            await self._handle_unknown_dispatch(reservation, error)
+            return
+        except GatewayClientError as error:
+            await self._handle_dispatch_gateway_error(
+                reservation, error
             )
+            return
+        except BaseException as error:
+            self.chat_state.release_dispatch(reservation, fatal=True)
+            self._enter_fatal("message dispatch", error)
             return
 
+        if reservation.mode == "steer":
+            await self._handle_steer_result(reservation, result)
+            return
         try:
-            accepted_message = self.chat_state.accept_dispatch(
-                accepted.task_id
+            accepted_message = self.chat_state.accept_submit(
+                reservation, result.task_id
             )
             self._delete_submission_images(accepted_message)
         except asyncio.CancelledError:
@@ -960,15 +1025,101 @@ class IcarusTextualApp(App[int]):
         if not await self._refresh_queue():
             return
         self._refresh_status("Accepted by runtime")
-        await self._flush_early_updates(accepted.task_id)
-        if self.chat_state.active_task_id == accepted.task_id:
+        await self._flush_early_updates(result.task_id)
+        if self.chat_state.active_task_id == result.task_id:
             try:
-                await self._reconcile_task_status(service, accepted.task_id)
+                await self._reconcile_task_status(service, result.task_id)
             except Exception:
                 logger.debug(
                     "Unable to reconcile accepted task status",
                     exc_info=True,
                 )
+        self._schedule_dispatch()
+
+    async def _handle_steer_result(
+        self, reservation: DispatchReservation, result: TaskOperationResult
+    ) -> None:
+        status = result.status
+        if status == "accepted":
+            accepted_message = self.chat_state.accept_steer(reservation)
+            self._delete_submission_images(accepted_message)
+            if not await self._refresh_queue():
+                return
+            self._refresh_status("Correction accepted for current task")
+            self._schedule_dispatch()
+            return
+        if status in {"already_finished", "not_found", "not_running"}:
+            self.chat_state.release_dispatch(reservation)
+            self._refresh_status("Queued message will start the next task")
+            task_id = reservation.task_id
+            service = self.service
+            if task_id is not None and service is not None:
+                try:
+                    await self._reconcile_task_status(service, task_id)
+                except Exception:
+                    logger.debug(
+                        "Unable to reconcile task after late steer",
+                        exc_info=True,
+                    )
+            if self.chat_state.phase == RuntimePhase.READY:
+                self._schedule_dispatch()
+            return
+        if status == "already_cancelling":
+            self.chat_state.release_dispatch(reservation)
+            self._refresh_status("Queued message is waiting for cancellation")
+            return
+        if status in {"invalid_content", "expired"}:
+            await self._block_dispatch(
+                reservation, f"Runtime rejected queued message: {status}"
+            )
+            return
+        self.chat_state.release_dispatch(reservation, fatal=True)
+        self._enter_fatal(
+            "steer response", RuntimeError(f"Unknown status: {status}")
+        )
+
+    async def _handle_dispatch_gateway_error(
+        self, reservation: DispatchReservation, error: GatewayClientError
+    ) -> None:
+        if error.code in {
+            "invalid_resource",
+            "resource_unavailable",
+            "invalid_content",
+            "expired",
+        }:
+            await self._block_dispatch(
+                reservation,
+                f"Runtime rejected queued message: {error.code}",
+            )
+            return
+        self.chat_state.release_dispatch(reservation, fatal=True)
+        self._enter_fatal("message dispatch protocol", error)
+
+    async def _block_dispatch(
+        self, reservation: DispatchReservation, reason: str
+    ) -> None:
+        self.chat_state.block_dispatch(reservation, reason)
+        if not await self._refresh_queue():
+            return
+        self._refresh_status(reason)
+        self._safe_notify(
+            reason + " Press Ctrl+C to edit it.",
+            title="Message needs editing",
+            severity="warning",
+        )
+
+    async def _handle_unknown_dispatch(
+        self, reservation: DispatchReservation, error: GatewayTransportError
+    ) -> None:
+        unknown = self.chat_state.mark_dispatch_outcome_unknown(reservation)
+        self._refresh_status("Connection lost; confirming queued message")
+        if self._connection_epoch > unknown.attempt_epoch:
+            retry = self.chat_state.begin_dispatch_retry(
+                unknown, self._connection_epoch
+            )
+            await self._send_reservation(retry)
+            return
+        self._schedule_reconnect(error, retry_after_current=True)
 
     async def on_runtime_output_received(
         self, message: RuntimeOutputReceived
@@ -1062,6 +1213,7 @@ class IcarusTextualApp(App[int]):
                 include_unrelated=(
                     historical or update.sequence is not None
                 ),
+                historical=historical,
             )
         except Exception as error:
             self._enter_fatal("event projection", error)
@@ -1160,6 +1312,7 @@ class IcarusTextualApp(App[int]):
                     "completed": "",
                     "failed": "Task failed",
                     "cancelled": "Task cancelled",
+                    "interrupted": "Task interrupted",
                 }[action.status]
             )
             self._schedule_dispatch()
@@ -1168,7 +1321,18 @@ class IcarusTextualApp(App[int]):
         if self._dispatch_scheduled or not self.chat_state.can_dispatch:
             return
         self._dispatch_scheduled = True
-        self.call_later(self._dispatch_next)
+        self.call_later(self._start_dispatch_worker)
+
+    def _start_dispatch_worker(self) -> None:
+        if not self._accepting_input:
+            self._dispatch_scheduled = False
+            return
+        self._dispatch_worker = self.run_worker(
+            self._dispatch_next,
+            name="message-dispatch",
+            group="message-dispatch",
+            exit_on_error=False,
+        )
 
     async def _refresh_queue(self) -> bool:
         try:
@@ -1398,6 +1562,28 @@ class IcarusTextualApp(App[int]):
                 errors.append(
                     self._cleanup_error("clipboard worker", error)
                 )
+
+        reconnect_worker = self._reconnect_worker
+        self._reconnect_worker = None
+        if reconnect_worker is not None:
+            reconnect_worker.cancel()
+            try:
+                await reconnect_worker.wait()
+            except (asyncio.CancelledError, WorkerCancelled):
+                pass
+            except Exception as error:
+                errors.append(self._cleanup_error("reconnect worker", error))
+
+        dispatch_worker = self._dispatch_worker
+        self._dispatch_worker = None
+        if dispatch_worker is not None:
+            dispatch_worker.cancel()
+            try:
+                await dispatch_worker.wait()
+            except (asyncio.CancelledError, WorkerCancelled):
+                pass
+            except Exception as error:
+                errors.append(self._cleanup_error("dispatch worker", error))
 
         start_worker = self._runtime_start_worker
         self._runtime_start_worker = None

@@ -14,12 +14,38 @@ class AppendUserMessage:
 class AppendAssistantDelta:
     task_id: str
     text: str
+    step: int = 1
 
 
 @dataclass(frozen=True)
 class CompleteAssistantMessage:
     task_id: str
     text: str
+    step: int = 1
+
+
+@dataclass(frozen=True)
+class AppendThinkingDelta:
+    task_id: str
+    step: int
+    text: str
+    historical: bool = False
+
+
+@dataclass(frozen=True)
+class CompleteThinking:
+    task_id: str
+    step: int
+    text: str
+    partial: bool = False
+    historical: bool = False
+
+
+@dataclass(frozen=True)
+class AppendUserCorrection:
+    task_id: str
+    text: str
+    applied_before_step: int
 
 
 @dataclass(frozen=True)
@@ -28,6 +54,7 @@ class AppendToolStarted:
     call_id: str
     tool_name: str
     arguments_json: str
+    step: int = 1
 
 
 @dataclass(frozen=True)
@@ -37,6 +64,11 @@ class UpdateToolCompleted:
     tool_name: str
     success: bool
     error: str | None = None
+    step: int = 1
+    output_preview: object = None
+    preview_truncated: bool = False
+    full_result_available: bool = False
+    preview_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +100,9 @@ class FinishTurn:
 UiAction: TypeAlias = (
     AppendUserMessage
     | AppendAssistantDelta
+    | AppendThinkingDelta
+    | CompleteThinking
+    | AppendUserCorrection
     | CompleteAssistantMessage
     | AppendToolStarted
     | UpdateToolCompleted

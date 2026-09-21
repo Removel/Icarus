@@ -17,8 +17,8 @@ def update(update_type="assistant.text_delta", task_id="task-1"):
 
 
 class SameProjector:
-    def project(self, value):
-        del value
+    def project(self, value, *, historical=False):
+        del value, historical
         return ()
 
 
@@ -27,6 +27,8 @@ def test_default_registry只显式注册公共update类型():
     assert {
         "user.message",
         "assistant.text_delta",
+        "assistant.thinking_delta",
+        "assistant.thinking",
         "task.finished",
         "session.lifecycle",
     } <= registry.update_types

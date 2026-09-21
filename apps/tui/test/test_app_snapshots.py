@@ -27,11 +27,13 @@ from apps.tui.src.event_pipeline import (
 from apps.tui.src.screens import SessionPicker
 from apps.tui.src.widgets import (
     AssistantMessage,
+    AssistantProgressBlock,
     ConversationView,
     ErrorMessage,
     PersistentComposer,
     QueuePanel,
-    ToolMessage,
+    ThinkingBlock,
+    ToolBlock,
     TurnStatusMessage,
     UserMessage,
     WelcomeMessage,
@@ -144,9 +146,15 @@ class SnapshotService:
         return TaskOperationResult(task_id=task_id, status="accepted")
 
     async def steer_task(
-        self, task_id: str, prompt: str, *, resources=(), display_text=None
+        self,
+        task_id: str,
+        prompt: str,
+        *,
+        submission_id: str,
+        resources=(),
+        display_text=None,
     ):
-        del resources, display_text
+        del submission_id, resources, display_text
         self.steers.append(prompt)
         return TaskOperationResult(task_id=task_id, status="accepted")
 
@@ -399,8 +407,8 @@ def test_snapshot_image_markers_in_queue_and_draft(snap_compare, tmp_path):
 def test_snapshot_streaming_markdown_with_draft(snap_compare):
     markdown = (
         "# Implementation update\n\n"
-        "The runtime now streams **Markdown** while tools run.\n\n"
-        "- Composer stays editable\n"
+        "我用 RSS 抓了 **18 篇全文**，现在按终端宽度自然折行。\n\n"
+        "- 这次没有把 9 万 4 千字全压进上下文\n"
         "- Queue remains local\n\n"
         "```python\nawait service.submit(prompt)\n```"
     )
@@ -421,8 +429,9 @@ def test_snapshot_streaming_markdown_with_draft(snap_compare):
         await pilot.press(*"Add a focused regression test next")
         await wait_until(
             pilot,
-            lambda: len(pilot.app.query(AssistantMessage)) == 1
-            and pilot.app.query_one(AssistantMessage).markdown_text == markdown
+            lambda: len(pilot.app.query(AssistantProgressBlock)) == 1
+            and pilot.app.query_one(AssistantProgressBlock).markdown_text
+            == markdown
             and pilot.app.query_one(StreamingMarkdown).source == markdown
             and len(pilot.app.query_one(StreamingMarkdown).children) >= 4
             and pilot.app.query_one(StreamingMarkdown).children[-1].region.height
@@ -547,12 +556,108 @@ def test_snapshot_tool_success_uses_positive_state_color(snap_compare):
         )
         await wait_until(
             pilot,
-            lambda: pilot.app.query_one(ToolMessage).success is True,
+            lambda: pilot.app.query_one(ToolBlock).success is True,
         )
 
     assert snap_compare(
         make_app(),
         terminal_size=(100, 32),
+        run_before=prepare,
+    )
+
+
+def test_snapshot_run_card_thinking_correction_and_tool_preview(snap_compare):
+    async def prepare(pilot) -> None:
+        await wait_ready(pilot)
+        await submit_text(pilot, "Inspect the current implementation")
+        publish(pilot, "user-input", input_started())
+        publish(
+            pilot,
+            "agent",
+            runtime_update(
+                "assistant.thinking_delta",
+                payload={"step": 1, "text": "Checking the event path..."},
+            ),
+        )
+        publish(
+            pilot,
+            "agent",
+            runtime_update(
+                "assistant.thinking",
+                payload={
+                    "step": 1,
+                    "text": "Checking the event path and persistence boundary.",
+                    "partial": False,
+                },
+            ),
+        )
+        publish(
+            pilot,
+            "agent",
+            runtime_update(
+                "tool.started",
+                payload={
+                    "step": 1,
+                    "call_id": "call-read",
+                    "tool_name": "read_file",
+                    "arguments": {"path": "apps/tui/src/app.py"},
+                },
+            ),
+        )
+        publish(
+            pilot,
+            "agent",
+            runtime_update(
+                "tool.completed",
+                payload={
+                    "step": 1,
+                    "call_id": "call-read",
+                    "tool_name": "read_file",
+                    "success": True,
+                    "error": None,
+                    "output_preview": {
+                        "matches": 3,
+                        "summary": "Command and queue flow located",
+                    },
+                    "preview_truncated": True,
+                    "full_result_available": True,
+                    "preview_error": None,
+                },
+            ),
+        )
+        publish(
+            pilot,
+            "user-input",
+            runtime_update(
+                "user.correction",
+                payload={
+                    "text": "Also verify reconnect behavior.",
+                    "applied_before_step": 2,
+                },
+            ),
+        )
+        publish(
+            pilot,
+            "agent",
+            runtime_update(
+                "assistant.thinking_delta",
+                payload={
+                    "step": 2,
+                    "text": "Now checking idempotent retry after reconnect.",
+                },
+            ),
+        )
+        await wait_until(
+            pilot,
+            lambda: len(pilot.app.query(ThinkingBlock)) == 2
+            and pilot.app.query_one(ToolBlock).success is True,
+        )
+        pilot.app.query_one(ToolBlock).set_expanded(True)
+        await pilot.pause()
+
+    assert snap_compare(
+        make_app(),
+        terminal_size=(100, 38),
         run_before=prepare,
     )
 
@@ -632,7 +737,7 @@ def test_snapshot_tool_failure_and_agent_error(snap_compare):
             pilot,
             lambda: len(pilot.app.query(ErrorMessage)) == 1
             and len(pilot.app.query(TurnStatusMessage)) == 1
-            and pilot.app.query_one(ToolMessage).success is False,
+            and pilot.app.query_one(ToolBlock).success is False,
         )
 
     assert snap_compare(
@@ -665,8 +770,8 @@ def test_snapshot_narrow_running_layout(snap_compare):
             lambda: (
                 pilot.app.query_one(QueuePanel).items == ()
                 and pilot.app.service.steers == ["Queue this follow-up"]
-                and len(pilot.app.query(AssistantMessage)) == 1
-                and pilot.app.query_one(AssistantMessage).markdown_text
+                and len(pilot.app.query(AssistantProgressBlock)) == 1
+                and pilot.app.query_one(AssistantProgressBlock).markdown_text
                 == expected_markdown
                 and pilot.app.query_one(StreamingMarkdown).source
                 == expected_markdown

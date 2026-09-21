@@ -26,18 +26,26 @@ from apps.tui.src.clipboard import (
 from apps.tui.src.event_pipeline import FinishTurn, ShowNotification
 from apps.tui.src.screens import SessionPicker
 from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
+from apps.tui.src.gateway_client import (
+    GatewayClientError,
+    GatewayTransportError,
+)
 from apps.tui.src.widgets import (
     AssistantMessage,
+    AssistantProgressBlock,
     ConversationView,
     PersistentComposer,
     QueuePanel,
     RuntimeStatusBar,
+    RunCard,
+    ThinkingBlock,
 )
 from apps.tui.src.widgets.messages import (
     ErrorMessage,
-    ToolMessage,
+    ToolBlock,
     TurnStatusMessage,
     UserMessage,
+    UserCorrectionBlock,
 )
 
 
@@ -209,9 +217,17 @@ class ControlledService:
         return TaskOperationResult(task_id=task_id, status="accepted")
 
     async def steer_task(
-        self, task_id, prompt, *, resources=(), display_text=None
+        self,
+        task_id,
+        prompt,
+        *,
+        submission_id,
+        resources=(),
+        display_text=None,
     ):
-        self.steers.append((task_id, prompt, tuple(resources), display_text))
+        self.steers.append(
+            (task_id, prompt, tuple(resources), display_text, submission_id)
+        )
         if self.steer_error is not None:
             raise self.steer_error
         return TaskOperationResult(task_id=task_id, status=self.steer_status)
@@ -227,6 +243,90 @@ class ReconnectingService(ControlledService):
         self.actions.append("reconnect")
         self.subscription = ControlledSubscription(self.actions)
         return self.subscription
+
+
+class BlockingSteerService(ReconnectingService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.steer_entered = asyncio.Event()
+        self.steer_release = asyncio.Event()
+        self.steer_attempt_ids: list[str] = []
+
+    async def steer_task(
+        self,
+        task_id,
+        prompt,
+        *,
+        submission_id,
+        resources=(),
+        display_text=None,
+    ):
+        self.steer_attempt_ids.append(submission_id)
+        self.steer_entered.set()
+        await self.steer_release.wait()
+        return await super().steer_task(
+            task_id,
+            prompt,
+            submission_id=submission_id,
+            resources=resources,
+            display_text=display_text,
+        )
+
+
+class RetryingSteerService(ReconnectingService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.steer_attempts: list[tuple[str, str, str]] = []
+
+    async def steer_task(
+        self,
+        task_id,
+        prompt,
+        *,
+        submission_id,
+        resources=(),
+        display_text=None,
+    ):
+        self.steer_attempts.append((task_id, prompt, submission_id))
+        if len(self.steer_attempts) == 1:
+            raise GatewayTransportError("connection lost")
+        return await super().steer_task(
+            task_id,
+            prompt,
+            submission_id=submission_id,
+            resources=resources,
+            display_text=display_text,
+        )
+
+
+class LateTransportSteerService(ReconnectingService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_steer_entered = asyncio.Event()
+        self.first_steer_release = asyncio.Event()
+        self.steer_attempts: list[tuple[str, str, str]] = []
+
+    async def steer_task(
+        self,
+        task_id,
+        prompt,
+        *,
+        submission_id,
+        resources=(),
+        display_text=None,
+    ):
+        self.steer_attempts.append((task_id, prompt, submission_id))
+        if len(self.steer_attempts) == 1:
+            self.first_steer_entered.set()
+            await self.first_steer_release.wait()
+            raise GatewayTransportError("old connection lost")
+        return await super().steer_task(
+            task_id,
+            prompt,
+            submission_id=submission_id,
+            resources=resources,
+            display_text=display_text,
+        )
 
 def make_app(
     service: ControlledService,
@@ -317,13 +417,15 @@ def _history_update(sequence, update_type, payload=None):
 
 
 class FailingProjector:
-    def project(self, event):
+    def project(self, event, *, historical=False):
+        del historical
         del event
         raise RuntimeError("projector exploded")
 
 
 class NotificationThenFinishProjector:
-    def project(self, event):
+    def project(self, event, *, historical=False):
+        del historical
         return (
             ShowNotification(level="information", text="finished"),
             FinishTurn(task_id=event.task_id, status="completed"),
@@ -331,7 +433,8 @@ class NotificationThenFinishProjector:
 
 
 class UnknownActionProjector:
-    def project(self, event):
+    def project(self, event, *, historical=False):
+        del historical
         del event
         return (object(),)
 
@@ -788,8 +891,8 @@ def test_app恢复session退出时的消息工具错误和中断状态(tmp_path)
             await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
             result = (
                 len(app.query(UserMessage)),
-                app.query_one(AssistantMessage).markdown_text,
-                str(app.query_one(ToolMessage).query_one(".tool-state").render()),
+                app.query_one(AssistantProgressBlock).markdown_text,
+                app.query_one(ToolBlock).state_text,
                 len(app.query(ErrorMessage)),
                 str(app.query_one(TurnStatusMessage).render()),
                 app._last_sequence,
@@ -805,6 +908,93 @@ def test_app恢复session退出时的消息工具错误和中断状态(tmp_path)
         1,
         "Task interrupted",
         6,
+    )
+
+
+def test_app历史恢复thinking默认展开并恢复工具追加和最终回答(tmp_path):
+    async def run():
+        service = ControlledService()
+        service.history = SessionHistoryModel(
+            history_cursor=8,
+            records=(
+                _history_update(
+                    1, "user.message", {"text": "hello", "resources": []}
+                ),
+                _history_update(2, "task.started"),
+                _history_update(
+                    3,
+                    "assistant.thinking",
+                    {"step": 1, "text": "reasoning", "partial": False},
+                ),
+                _history_update(
+                    4,
+                    "user.correction",
+                    {"text": "also check errors", "applied_before_step": 2},
+                ),
+                _history_update(
+                    5,
+                    "tool.started",
+                    {
+                        "step": 2,
+                        "call_id": "call",
+                        "tool_name": "bash",
+                        "arguments": {"command": "test"},
+                    },
+                ),
+                _history_update(
+                    6,
+                    "tool.completed",
+                    {
+                        "step": 2,
+                        "call_id": "call",
+                        "tool_name": "bash",
+                        "success": True,
+                        "output_preview": {"stdout": "ok"},
+                        "preview_truncated": False,
+                        "full_result_available": False,
+                        "preview_error": None,
+                    },
+                ),
+                _history_update(
+                    7,
+                    "assistant.message",
+                    {"step": 3, "text": "final answer"},
+                ),
+                _history_update(
+                    8,
+                    "task.finished",
+                    {"status": "completed", "run_id": "run"},
+                ),
+            ),
+        )
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            thinking = app.query_one(ThinkingBlock)
+            tool = app.query_one(ToolBlock)
+            result = (
+                len(app.query(RunCard)),
+                thinking.markdown_text,
+                thinking.expanded,
+                app.query_one(UserCorrectionBlock).correction_text,
+                tool.output_preview,
+                app.query_one(AssistantMessage).markdown_text,
+                app._last_sequence,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    assert asyncio.run(run()) == (
+        1,
+        "reasoning",
+        True,
+        "also check errors",
+        {"stdout": "ok"},
+        "final answer",
+        8,
     )
 
 
@@ -874,7 +1064,7 @@ def test_app历史在隐藏conversation和batch中完整构建后一次显示(
             result = (
                 tuple(observed),
                 conversation.display,
-                app.query_one(AssistantMessage).markdown_text,
+                app.query_one(AssistantProgressBlock).markdown_text,
             )
             app.request_shutdown(return_code=0)
             await wait_until(pilot, lambda: service.stopped)
@@ -1315,6 +1505,181 @@ def test运行中输入默认追加到当前task而不创建新task(tmp_path):
     assert active is None
 
 
+def test运行中输入全部经过fifo队列且steer使用稳定submission_id(tmp_path):
+    async def run():
+        service = BlockingSteerService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "first")
+            await enter_text(pilot, "second")
+            await service.steer_entered.wait()
+            await enter_text(pilot, "third")
+            queued_while_sending = app.query_one(QueuePanel).items
+            locked_id = app.chat_state.dispatch_reservation.message.submission_id
+            service.steer_release.set()
+            await wait_until(pilot, lambda: len(service.steers) == 2)
+            result = (
+                queued_while_sending,
+                tuple(item[1] for item in service.steers),
+                service.steer_attempt_ids[0],
+                locked_id,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    queued, steers, sent_id, locked_id = asyncio.run(run())
+    assert queued == ("second", "third")
+    assert steers == ("second", "third")
+    assert sent_id == locked_id
+
+
+def test_steer传输失败重连后以相同目标和submission_id重试(tmp_path):
+    async def run():
+        service = RetryingSteerService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "first")
+            await enter_text(pilot, "correction")
+            await wait_until(pilot, lambda: len(service.steer_attempts) == 2)
+            result = (
+                tuple(service.steer_attempts),
+                tuple(item[1] for item in service.steers),
+                app.chat_state.pending_items,
+                service.actions.count("reconnect"),
+                app._connection_epoch,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    attempts, accepted, pending, reconnects, epoch = asyncio.run(run())
+    assert attempts[0] == attempts[1]
+    assert accepted == ("correction",)
+    assert pending == ()
+    assert reconnects == 1
+    assert epoch == 2
+
+
+def test_订阅先重连后旧steer才失败仍立即精确重试(tmp_path):
+    async def run():
+        service = LateTransportSteerService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "first")
+            await enter_text(pilot, "correction")
+            await service.first_steer_entered.wait()
+            app.post_message(
+                RuntimeSubscriptionFailed(ConnectionError("stream lost"))
+            )
+            await wait_until(pilot, lambda: app._connection_epoch == 2)
+            service.first_steer_release.set()
+            await wait_until(pilot, lambda: len(service.steer_attempts) == 2)
+            result = (
+                tuple(service.steer_attempts),
+                app.chat_state.pending_items,
+                service.actions.count("reconnect"),
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    attempts, pending, reconnects = asyncio.run(run())
+    assert attempts[0] == attempts[1]
+    assert pending == ()
+    assert reconnects == 1
+
+
+def test_确定性资源拒绝阻塞队首并允许ctrl_c恢复编辑(tmp_path):
+    async def run():
+        service = ControlledService(
+            steer_error=GatewayClientError(
+                "invalid_resource", "Resource is invalid"
+            )
+        )
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "first")
+            await enter_text(pilot, "fix attachment")
+            await wait_until(
+                pilot,
+                lambda: app.chat_state.blocked_submission_id is not None,
+            )
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            composer = app.query_one(PersistentComposer)
+            result = (
+                composer.text,
+                app.chat_state.pending_items,
+                app.chat_state.blocked_submission_id,
+                app.chat_state.phase,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    assert asyncio.run(run()) == (
+        "fix attachment",
+        (),
+        None,
+        RuntimePhase.RUNNING,
+    )
+
+
+def test裸exit和quit作为普通消息而slash_exit退出(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "exit")
+            await enter_text(pilot, "quit")
+            await wait_until(pilot, lambda: len(service.steers) == 1)
+            await enter_text(pilot, "/exit")
+            await wait_until(pilot, lambda: service.stopped)
+            return tuple(service.submissions), tuple(
+                item[1] for item in service.steers
+            )
+
+    assert asyncio.run(run()) == (("exit",), ("quit",))
+
+
+def test未知命令和命令参数恢复原草稿且不发送(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "/compact now")
+            composer = app.query_one(PersistentComposer)
+            unknown = composer.text
+            composer.clear_draft()
+            await enter_text(pilot, "/clear now")
+            argument_error = composer.text
+            result = unknown, argument_error, tuple(service.submissions)
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    assert asyncio.run(run()) == ("/compact now", "/clear now", ())
+
+
 def test运行中图片steer接受后删除临时文件(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "apps.tui.src.app.read_clipboard_image",
@@ -1480,10 +1845,10 @@ def test_agent输出期间草稿光标和焦点保持不变(tmp_path):
                 ),
             )
             await wait_until(
-                pilot, lambda: len(app.query(AssistantMessage)) == 1
+                pilot, lambda: len(app.query(AssistantProgressBlock)) == 1
             )
             after = (composer.text, composer.cursor_location, app.focused)
-            markdown = app.query_one(AssistantMessage).markdown_text
+            markdown = app.query_one(AssistantProgressBlock).markdown_text
             app.request_shutdown(return_code=0)
             await wait_until(pilot, lambda: service.stopped)
             return before, after, markdown

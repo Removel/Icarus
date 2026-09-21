@@ -197,6 +197,18 @@ class ReplayRuntimeService:
         del reason
         return TaskOperationResult(task_id, "accepted")
 
+    async def steer_task(
+        self,
+        task_id,
+        prompt,
+        *,
+        submission_id,
+        resources=(),
+        display_text=None,
+    ):
+        del prompt, submission_id, resources, display_text
+        return TaskOperationResult(task_id, "accepted")
+
     async def get_task_status(self, task_id):
         return self._task_statuses.get(
             task_id, {"task_id": task_id, "lifecycle": "running"}
