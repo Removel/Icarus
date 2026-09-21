@@ -7,6 +7,10 @@
 和五类完整 shell snapshot 均已建立；视觉审查覆盖欢迎页、流式 Markdown + 草稿、运行中
 多条队列、工具失败 + AgentError 和窄终端布局。
 
+后续实现已把普通输入统一为出队时动态选择 submit/steer 的 FIFO，并用 CommandRegistry 的 `/exit`
+替代裸 `exit` / `quit`。当前实现计划见
+[Agent Thinking Experience](../2026-09-21-agent-thinking-experience/plan.md)。
+
 视觉审查期间发现并修复了两个实现问题：Composer 单行内容被 `height: auto` 撑到上限，
 以及窄屏 class 错加到 App 而不是 Screen。当前 Composer 从一行开始，按逻辑行增长到八行
 后内部滚动；窄屏规则由 Screen class 生效。任务级真实取消仍不属于本计划，继续由

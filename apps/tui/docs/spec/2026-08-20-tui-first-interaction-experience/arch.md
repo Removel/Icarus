@@ -4,6 +4,8 @@
 > 动作为连接本机 Agent Gateway，不再在 TUI 进程内构造 Agent Runtime。
 > 鼠标滚轮和流式 Markdown 的后续实现由 `apps/tui/docs/spec/2026-09-02-tui-streaming-markdown-scroll/arch.md` 替代本文的
 > 焦点门禁规则：滚轮按指针所在区域路由，不再要求 Conversation 持有键盘焦点。
+> 旧 `exit` / `quit` 退出语义已由 CommandRegistry 的 `/exit` 替代；当前命令和统一输入队列见
+> [Agent Thinking Experience](../2026-09-21-agent-thinking-experience/arch.md)。
 
 ## 文档定位
 

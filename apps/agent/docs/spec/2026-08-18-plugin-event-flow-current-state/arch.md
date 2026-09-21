@@ -43,7 +43,10 @@ required Region。完整设计见 `apps/agent/docs/spec/2026-08-15-plugin-eventb
 
 Agent 文本具有两种明确语义：`assistant.text_delta` 是低延迟实时投影，不进入 Session Conversation；
 `assistant.message` 是一个模型 Step 完成后的完整文本，作为恢复历史持久化。取消或失败前已经显示的
-部分文本同样会收束为完整消息。旧版本持久化的 delta 在读取时兼容聚合，不修改原始数据库记录。
+部分文本同样会收束为完整消息。thinking 使用平行但隔离的输出链：`assistant.thinking_delta` 只实时
+投影，`assistant.thinking` 按模型 Step 完整持久化，二者都不进入 Message、Blackboard 或后续模型请求。
+旧版本持久化的 text delta 在读取时兼容聚合，不修改原始数据库记录。完整契约见
+[Agent Thinking Experience](../2026-09-21-agent-thinking-experience/arch.md)。
 
 `ReActAgent`、Skill Catalog、Producer、Evolver、JobManager、Repository 和 WriteCoordinator
 都是所属 Plugin 内的普通组件，不注册为子 Plugin。

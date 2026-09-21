@@ -1,5 +1,7 @@
 # TUI First Interaction Experience Implementation Plan｜TUI 首次交互体验实施计划
 
+> 历史计划：其中 `exit` / `quit` 退出语义已经废止；当前使用 CommandRegistry 注册的 `/exit`。
+
 ## 目标与依据
 
 依据 `apps/tui/docs/spec/2026-08-20-tui-first-interaction-experience/arch.md`，完成三项当前已复现问题：

@@ -6,6 +6,10 @@ AgentRuntime，并向 TUI 和未来 Backend 推送公共 RuntimeUpdate。
 Gateway 只负责连接、协议校验、调用路由和消息分发，不承担用户、权限、文件上传、Memory、知识库
 或其他产品业务。当前 Gateway 与 AgentRuntime 在同一进程运行。
 
+公共更新通过开放的 `type: str` 与 `payload: dict` Envelope 传输。thinking delta 只进入实时订阅，
+完整 thinking 与 Tool 安全预览同时进入实时订阅和 Session 历史；Gateway 不聚合 thinking，也不读取
+Agent 侧完整 Tool Result。`session.steer` 可透传稳定 `submission_id`，供客户端在响应未知时幂等重试。
+
 ## 安装依赖
 
 运行环境：

@@ -346,8 +346,11 @@ AgentRuntime 不感知 WebSocket 订阅关系。
 
 公共 RuntimeUpdate 包含 `workspace_key`、`session_id`、可选 `task_id`、稳定 `type`、JSON 兼容
 `payload` 和 `occurred_at`。第一阶段覆盖 Session 生命周期、Task 接受/开始/结束/错误/累计 Usage、
-助手文本增量、Tool 开始/完成和 Context Compact，不暴露 `source_plugin_id`、Python Event 类名、
-System Prompt、完整 History 或完整 AgentResponse。
+助手文本增量、thinking 增量与完整块、Tool 开始/完成和 Context Compact，不暴露
+`source_plugin_id`、Python Event 类名、System Prompt、完整 History 或完整 AgentResponse。
+`tool.completed` 只携带 Agent 已生成的脱敏、限长预览，不携带本地结果路径。thinking delta 与文本
+delta 都不持久化；完整 thinking 和完整 Assistant Message 进入 Session Conversation。详细契约见
+[Gateway Thinking and Tool Output Protocol](../2026-09-21-agent-thinking-experience/arch.md)。
 
 AgentRuntime 和 Gateway 的每个订阅/连接使用独立有界队列。慢消费者溢出时关闭对应订阅或连接并
 返回明确错误，不阻塞 Runtime，也不静默丢弃单条 Update。当前实现通过 Session 内 sequence 和
@@ -453,8 +456,8 @@ icarus
 
 ```text
 TUI 为消息保留 submission_id
-→ session.submit(workspace_path, session_id, prompt, resources)
-→ Gateway 校验 JSON-RPC/Pydantic 参数并调用 AgentRuntime.submit
+→ 出队时按实时状态选择 session.submit(...) 或 session.steer(..., submission_id)
+→ Gateway 校验 JSON-RPC/Pydantic 参数并调用对应 AgentRuntime submit/steer 方法
 → AgentRuntime 按 SessionIdentity 串行修改；未加载时 single-flight resume
 → ResourceRef 在返回 task_id 前导入 Session assets
 → SessionRuntime 将任务加入 UserInput Runtime Queue
@@ -465,7 +468,7 @@ TUI 为消息保留 submission_id
 → RuntimeUpdatePlugin 投影内部 Event
 → AgentRuntime 聚合 RuntimeUpdate 并更新 Session/Task 状态
 → Gateway 按连接订阅过滤并发送 runtime.update Notification
-→ TUI 按 RuntimeUpdate.type 投影文本、Tool、Usage、错误和终态
+→ TUI 按 RuntimeUpdate.type 投影文本、thinking、Tool、追加内容、Usage、错误和终态
 ```
 
 正常成功任务的主要公共 Update 顺序是：
@@ -473,7 +476,8 @@ TUI 为消息保留 submission_id
 ```text
 task.accepted
 → task.started
-→ assistant.text_delta / tool.started / tool.completed ...
+→ assistant.thinking_delta / assistant.text_delta ...
+→ assistant.thinking / assistant.message / tool.started / tool.completed ...
 → task.usage（存在累计 Usage 时）
 → task.finished
 ```

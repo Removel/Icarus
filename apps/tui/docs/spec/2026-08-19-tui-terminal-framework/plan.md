@@ -2,6 +2,7 @@
 
 > 历史计划：本文记录已经完成的第一阶段 `prompt_toolkit + Rich` 终端框架。当前 Textual
 > 全屏 TUI 的实施依据是 `apps/tui/docs/spec/2026-08-19-tui-persistent-input-queue/plan.md`。
+> 其中 `exit` / `quit` 退出语义已经废止；当前使用 CommandRegistry 注册的 `/exit`。
 
 ## 目标
 

@@ -56,24 +56,28 @@ Gateway 的 RPC 契约见：
 
 ## 本地命令路由
 
-新增独立、纯函数式命令解析模块，例如 `src/commands.py`：
+命令入口已经收敛到独立 `src/commands.py` 注册表：
 
 ```python
-LocalCommand = Literal["resume", "clear"]
-
-def parse_local_command(text: str) -> LocalCommand | None:
-    ...
+CommandRegistry
+├── /clear
+├── /resume
+└── /exit
 ```
 
 解析规则：
 
-- 对输入执行 `strip()` 后精确匹配 `/resume` 或 `/clear`；
+- 对输入执行 `strip()` 后解析第一个斜杠 token，并通过注册表解析；
 - 本地命令不区分大小写；
-- `/resume anything`、`please /resume` 等不匹配，仍是普通 Agent 输入；
+- 已注册命令的参数、附件和 idle 条件由 `CommandDefinition` 统一校验；
+- `please /resume` 不是斜杠命令，仍是普通 Agent 输入；
+- 未知 `/xxx` 显示错误并恢复草稿，不发送给 Agent；
 - 命令附带图片时拒绝执行，并通过 `restore_draft()` 恢复完整草稿和附件；
 - 命令在 `ChatState.enqueue()` 之前拦截，因此不进入队列或历史。
 
-本期不注册 `/compact`，也不为未知斜杠命令增加统一错误；未知命令保持普通文本语义。
+当前只注册 `/clear`、`/resume` 和 `/exit`。不注册 `/compact`、`/btw`，也不预设未来命令语义。
+裸 `exit`、`quit` 不再是退出命令，而是普通 Agent 输入。完整扩展结构见
+[Agent Thinking Experience](../2026-09-21-agent-thinking-experience/arch.md)。
 
 ## 空闲态门禁
 
@@ -258,7 +262,10 @@ Client Factory
 `history_cursor` 后，实时 Event Worker 忽略或对账不大于该 cursor 的记录，再继续处理新记录。
 
 实时 `assistant.text_delta` 用于增量 Markdown；随后的 `assistant.message` 用最终完整文本校准同一
-Task Step，不重复追加。Session 恢复只需要完整消息，旧 Session 的 delta 由 Agent 读取端聚合。
+Task Step，不重复追加。`assistant.thinking_delta` 同样只用于实时展示，`assistant.thinking` 提供按 Step
+持久化的完整内容。Session 恢复使用完整 Message 与完整 thinking，旧 Session 的 text delta 由 Agent
+读取端聚合。RunCard、thinking 对账与最终回答提升见
+[Agent Thinking Experience](../2026-09-21-agent-thinking-experience/arch.md)。
 
 ## ConversationView 重置
 
@@ -359,8 +366,8 @@ Conversation。
 
 ### 纯状态与命令
 
-- 精确解析 `/resume`、`/clear` 和大小写；
-- 未知斜杠文本保持普通消息；
+- 通过 CommandRegistry 精确解析 `/resume`、`/clear`、`/exit` 和大小写；
+- 未知斜杠命令显示错误且不进入普通消息队列；
 - 有图片的命令恢复完整草稿；
 - Ready/Running/Cancelling/Failed/Switching、Pending 和 submitting 的门禁；
 - Session ID 缩写和第一条输入裁剪。

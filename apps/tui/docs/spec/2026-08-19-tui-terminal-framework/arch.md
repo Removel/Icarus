@@ -1,7 +1,9 @@
 # TUI Terminal Framework Design｜TUI 终端框架设计
 
 > 本文记录早期终端框架决策；AgentRuntimeService 和 OutputBridge 直连关系已经由 GatewayClient 与
-> RuntimeUpdate 替代。组件、焦点、滚动和按键设计仍可作为当前 TUI 参考。
+> RuntimeUpdate 替代。组件、焦点、滚动和按键设计仍可作为当前 TUI 参考。旧 `exit` / `quit` 退出
+> 语义已由 CommandRegistry 的 `/exit` 替代，完整当前行为见
+> [Agent Thinking Experience](../2026-09-21-agent-thinking-experience/arch.md)。
 
 ## 文档定位
 

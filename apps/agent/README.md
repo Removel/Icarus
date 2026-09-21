@@ -6,12 +6,13 @@
 ## 当前能力
 
 - OpenAI 与 Anthropic 协议模型接入；
-- 无状态 ReAct Agent、流式输出和 Tool 调用；
+- 无状态 ReAct Agent、文本与 thinking 流式输出和 Tool 调用；
 - Manifest 驱动的 Plugin 发现、依赖解析、生命周期和状态恢复；
 - Blackboard 上下文、历史提交和自动 Compact；
 - 设备级 AgentRuntime 与多个相互隔离的 SessionRuntime；
 - Session 创建、恢复、提交、取消、状态查询和卸载；
-- 使用 `SessionStore` 持久化 Session 元数据和公共 Conversation；
+- 使用 `SessionStore` 持久化 Session 元数据和公共 Conversation，包括 step 级完整 thinking 与
+  脱敏、限长的 Tool 输出预览；
 - 使用文件保存 Plugin State、Trace、日志和图片 Asset；
 - Skill 发现、搜索、生产和演化；
 - 通过 FastMCP 连接外部 MCP Server，并以固定的 list/search/execute 工具发现和调用其 Tools。

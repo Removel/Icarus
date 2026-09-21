@@ -65,7 +65,7 @@ Makefile         根目录统一命令入口
 ### 可恢复的完整会话体验
 
 模型上下文和界面历史分别使用适合各自职责的数据保存：Blackboard 保存下一轮 Agent 使用的上下文，
-公共会话记录保存用户在界面中看到的消息、助手文本、Tool、错误和任务终态。使用相同 Session ID
+公共会话记录保存用户在界面中看到的消息、助手文本、完整 thinking、Tool 安全预览、错误和任务终态。使用相同 Session ID
 重启后，TUI 会一次性恢复退出时的 Conversation，再继续接收新的实时输出。
 
 Session 元数据和公共 Conversation 由 Agent Application 的 `SessionStore` 统一保存到
@@ -228,16 +228,18 @@ OpenKB 读取同一个根 `.env`，把 config、知识库与备份放在
 `OPENAI_API_KEY`；默认使用 `deepseek/deepseek-v4-flash`。
 
 使用同一 Workspace 和 Session ID 再次启动时，TUI 会在进入 Ready 前从 SessionStore 一次性恢复
-已持久化的 Conversation，包括用户消息、助手文本、Tool、错误和中断终态，然后继续接收实时流。
-旧 JSONL Session 不读取、不迁移，也不从内部 Trace 推断展示历史。
+已持久化的 Conversation，包括用户消息、助手文本、完整 thinking、Tool 安全预览、错误和中断终态，
+然后继续接收实时流。thinking 的流式 delta 不入库，恢复时使用每个模型 step 的完整记录。旧 JSONL
+Session 不读取、不迁移，也不从内部 Trace 推断展示历史。
 
 Runtime 完全空闲时可以输入 `/resume`，从当前 Workspace 的非空 Session 列表中选择并恢复；输入
-`/clear` 会保留当前非空 Session 并开始新对话。两者都是 TUI 本地命令，不发送给 Agent；当前有任务、
-提交握手或待发送消息时会直接拒绝，不会排队。
+`/clear` 会保留当前非空 Session 并开始新对话。`/exit` 通过同一命令注册表执行正常退出。三个命令
+都是 TUI 本地命令，不发送给 Agent；`/clear` 和 `/resume` 在当前有任务、提交握手或待发送消息时会
+直接拒绝，不会排队。裸 `exit` 和 `quit` 是普通用户消息。
 
-`Enter` 把消息提交到 TUI 本地队列；Agent 运行期间输入框仍可编辑，待发送消息会显示在输入框上方，
-并在当前轮次结束后按 FIFO 自动发送。受支持终端可用 `Shift+Enter` 换行，所有支持的终端都可用
-`Ctrl+J` 换行。
+`Enter` 把消息提交到 TUI 本地队列；Agent 运行期间输入框仍可编辑，待发送消息会显示在输入框上方。
+队首在发送时根据实时状态动态路由：Agent 正在运行时追加到当前 Task，空闲时作为新 Task 提交；
+所有消息继续按 FIFO 发送。受支持终端可用 `Shift+Enter` 换行，所有支持的终端都可用 `Ctrl+J` 换行。
 
 在 macOS 上复制截图或浏览器图片后，可在 Composer 中按 `Ctrl+V` 插入 `[#imageN]` 并随消息提交。
 图片先写入 `$ICARUS_DATA_DIR/incoming/`，RPC 只传 ResourceRef；Runtime 接受任务前将其导入 Session
@@ -245,7 +247,7 @@ Asset。Windows/Linux 的系统剪贴板图片读取暂未实现。
 
 `Ctrl+C` 会依次处理当前草稿、撤回最新排队消息、取消正在运行的 Task，或在完全空闲时
 退出。取消过程中会显示 `Cancelling`，并保留已经输出的内容；收到取消终态后才继续调度队列。
-输入 `exit`、`quit`，或在空输入时按 `Ctrl+D` 也会退出。Textual 退出后恢复启动前的终端画面。
+输入 `/exit`，或在空输入时按 `Ctrl+D` 也会退出。Textual 退出后恢复启动前的终端画面。
 
 各 App 的底层脚本仍保留用于开发和调试，但不是推荐的用户入口：
 
@@ -264,13 +266,13 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 ## 当前能力
 
 - 创建和恢复多个相互隔离的 Session；
-- 流式显示 Agent 回复、Tool 调用、错误和任务状态；
-- Agent 工作期间继续编辑并按 FIFO 排队后续消息；
+- 使用 RunCard 流式显示 thinking、Assistant 中间进展、Tool 安全预览、追加内容和任务状态；
+- Agent 工作期间继续编辑并按 FIFO 排队，发送时自动选择追加当前 Task 或创建新 Task；
 - 取消当前任务，并保留已经产生的输出；
 - 提交文本以及 macOS 剪贴板图片；
 - 持久化会话内容和模型上下文；
 - 使用相同 Session ID 恢复退出时的 Conversation，并继续之前的对话；
-- 使用 `/resume` 列出并切换当前 Workspace 的非空 Session，使用 `/clear` 开始新对话；
+- 使用 `/resume` 列出并切换当前 Workspace 的非空 Session，使用 `/clear` 开始新对话，使用 `/exit` 退出；
 - 恢复异常退出前已经产生的部分回复和 Tool 状态，并标记中断任务；
 - Gateway 断线后重新连接并对账当前任务状态；
 - 自动卸载长时间空闲的 Session，同时保留本地数据供下次恢复。

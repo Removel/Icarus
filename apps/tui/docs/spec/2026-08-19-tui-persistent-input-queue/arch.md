@@ -2,7 +2,9 @@
 
 > 本文的本地草稿、FIFO/LIFO 队列和 `Ctrl+C` 交互仍有效；AgentRuntimeService、OutputBridge 和
 > 内部 Event 投影部分属于迁移前历史。当前 TUI 通过 GatewayClient 使用 JSON-RPC，并消费公共
-> RuntimeUpdate。
+> RuntimeUpdate。所有普通输入已统一进入同一 FIFO，并在出队时按实时状态选择 `session.steer` 或
+> `session.submit`；thinking、RunCard、Tool 安全预览和命令注册表见
+> [Agent Thinking Experience](../2026-09-21-agent-thinking-experience/arch.md)。
 
 ## 文档定位
 
