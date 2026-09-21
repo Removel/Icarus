@@ -42,6 +42,15 @@ from apps.agent.src.model_config import ConfigModel, get_config
 from apps.agent.src.runtime_update import RuntimeUpdate
 
 
+TRANSIENT_UPDATE_TYPES = frozenset(
+    {
+        "session.lifecycle",
+        "assistant.text_delta",
+        "assistant.thinking_delta",
+    }
+)
+
+
 class SubmissionConflictError(ValueError):
     pass
 
@@ -54,6 +63,12 @@ class AgentRuntimeStoppingError(RuntimeError):
 class _SubmissionRecord:
     fingerprint: str
     accepted: InputAccepted
+
+
+@dataclass(frozen=True)
+class _SteerSubmissionRecord:
+    fingerprint: str
+    result: TaskOperationResult
 
 
 @dataclass
@@ -70,6 +85,9 @@ class _SessionEntry:
     error: str | None = None
     persistence_failed: bool = False
     submissions: OrderedDict[str, _SubmissionRecord] = field(
+        default_factory=OrderedDict
+    )
+    steer_submissions: OrderedDict[str, _SteerSubmissionRecord] = field(
         default_factory=OrderedDict
     )
     tasks: OrderedDict[str, TaskStatus] = field(default_factory=OrderedDict)
@@ -321,24 +339,48 @@ class AgentRuntime:
         *,
         resources: tuple[ResourceRef, ...] = (),
         display_text: str | None = None,
+        submission_id: str | None = None,
     ) -> TaskOperationResult:
         self._require_accepting()
+        if submission_id is not None and not submission_id.strip():
+            raise ValueError("submission_id cannot be empty")
         identity = SessionIdentity.create(workspace_path, session_id)
         entry = self._entries.get(_key(identity))
         if entry is None:
             return TaskOperationResult(task_id=task_id, status="not_running")
+        fingerprint = _steer_fingerprint(
+            task_id, content, resources, display_text
+        )
         async with entry.mutation_lock:
             self._require_accepting()
             if entry.discarding:
                 return TaskOperationResult(task_id=task_id, status="not_running")
             if entry.runtime is None or entry.lifecycle in {"loading", "unloading"}:
                 return TaskOperationResult(task_id=task_id, status="not_running")
+            if submission_id is not None:
+                record = entry.steer_submissions.get(submission_id)
+                if record is not None:
+                    if record.fingerprint != fingerprint:
+                        raise SubmissionConflictError(
+                            "submission_id was already used with different content"
+                        )
+                    entry.steer_submissions.move_to_end(submission_id)
+                    return record.result
             images = await self._import_resources(entry.runtime, resources)
+            steer_kwargs: dict[str, object] = {
+                "display_text": display_text
+            }
+            if submission_id is not None:
+                steer_kwargs["submission_id"] = submission_id
             result = await entry.runtime.steer_task(
-                task_id, content, images, display_text=display_text
+                task_id, content, images, **steer_kwargs
             )
             if result.status == "accepted":
                 entry.last_task_activity_at = self._clock()
+                if submission_id is not None:
+                    self._remember_steer_submission(
+                        entry, submission_id, fingerprint, result
+                    )
             return result
 
     async def unload_session(
@@ -831,10 +873,7 @@ class AgentRuntime:
                             entry.lifecycle = projected
                             if projected != previous:
                                 lifecycle_update = projected
-                        if update.type not in {
-                            "session.lifecycle",
-                            "assistant.text_delta",
-                        }:
+                        if update.type not in TRANSIENT_UPDATE_TYPES:
                             if update.type == "task.accepted":
                                 accepted = entry.tasks.get(update.task_id or "")
                                 if accepted is None:
@@ -849,10 +888,7 @@ class AgentRuntime:
                             recorded_update = await self._store().append_update(
                                 entry.identity, update
                             )
-                elif update.type not in {
-                    "session.lifecycle",
-                    "assistant.text_delta",
-                }:
+                elif update.type not in TRANSIENT_UPDATE_TYPES:
                     raise RuntimeError(
                         "RuntimeUpdate belongs to an unknown Session"
                     )
@@ -1017,6 +1053,20 @@ class AgentRuntime:
         while len(entry.submissions) > self.submission_history_limit:
             entry.submissions.popitem(last=False)
 
+    def _remember_steer_submission(
+        self,
+        entry: _SessionEntry,
+        submission_id: str,
+        fingerprint: str,
+        result: TaskOperationResult,
+    ) -> None:
+        entry.steer_submissions[submission_id] = _SteerSubmissionRecord(
+            fingerprint, result
+        )
+        entry.steer_submissions.move_to_end(submission_id)
+        while len(entry.steer_submissions) > self.submission_history_limit:
+            entry.steer_submissions.popitem(last=False)
+
     def _remember_task(self, entry: _SessionEntry, status: TaskStatus) -> None:
         entry.tasks[status.task_id] = status
         entry.tasks.move_to_end(status.task_id)
@@ -1113,6 +1163,30 @@ def _submission_fingerprint(
 ) -> str:
     payload = {
         "prompt": prompt,
+        "display_text": display_text,
+        "resources": [
+            {
+                "resource_id": item.resource_id,
+                "media_type": item.media_type,
+            }
+            for item in resources
+        ],
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _steer_fingerprint(
+    task_id: str,
+    content: str,
+    resources: tuple[ResourceRef, ...],
+    display_text: str | None,
+) -> str:
+    payload = {
+        "task_id": task_id,
+        "content": content,
         "display_text": display_text,
         "resources": [
             {

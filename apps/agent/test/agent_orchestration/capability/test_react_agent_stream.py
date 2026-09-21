@@ -7,6 +7,7 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
     AgentMessageCompletedEvent,
     AgentTextDeltaEvent,
+    AgentThinkingDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
     ReActAgent,
@@ -109,7 +110,7 @@ def final_stream():
     ]
 
 
-def test_stream_完成多轮工具调用且不流出reasoning():
+def test_stream_完成多轮工具调用且将reasoning作为专用事件流出():
     agent, llm = make_agent([tool_stream(), final_stream()])
 
     events = list(agent.stream("你是助手", [], "执行任务", tools=["echo"]))
@@ -117,10 +118,12 @@ def test_stream_完成多轮工具调用且不流出reasoning():
     assert [type(event) for event in events] == [
         AgentTextDeltaEvent,
         AgentTextDeltaEvent,
+        AgentThinkingDeltaEvent,
         AgentMessageCompletedEvent,
         AgentToolStartedEvent,
         AgentToolCompletedEvent,
         AgentTextDeltaEvent,
+        AgentThinkingDeltaEvent,
         AgentTextDeltaEvent,
         AgentMessageCompletedEvent,
         AgentCompletedEvent,
@@ -130,6 +133,14 @@ def test_stream_完成多轮工具调用且不流出reasoning():
         "调用工具",
         "最终",
         "回答",
+    ]
+    assert [
+        (event.step, event.text)
+        for event in events
+        if isinstance(event, AgentThinkingDeltaEvent)
+    ] == [
+        (1, "内部推理"),
+        (2, "完成推理"),
     ]
     assert [
         event.message.content
@@ -167,6 +178,12 @@ def test_stream_完成多轮工具调用且不流出reasoning():
     ]
     tool_message = llm.calls[1][0][-1]
     assert json.loads(tool_message.content[0].text)["success"] is True
+    assert all(
+        "内部推理" not in part.text
+        for message in llm.calls[1][0]
+        for part in message.content
+        if isinstance(part, TextPart)
+    )
 
 
 @pytest.mark.parametrize("async_mode", [False, True])
@@ -245,10 +262,12 @@ def test_astream_与同步流保持相同事件语义():
     assert [type(event) for event in events] == [
         AgentTextDeltaEvent,
         AgentTextDeltaEvent,
+        AgentThinkingDeltaEvent,
         AgentMessageCompletedEvent,
         AgentToolStartedEvent,
         AgentToolCompletedEvent,
         AgentTextDeltaEvent,
+        AgentThinkingDeltaEvent,
         AgentTextDeltaEvent,
         AgentMessageCompletedEvent,
         AgentCompletedEvent,

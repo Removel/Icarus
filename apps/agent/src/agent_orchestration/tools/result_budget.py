@@ -15,6 +15,7 @@ from apps.agent.src.agent_orchestration.tools.types import ToolExecutionResult
 
 
 TokenCounter = Callable[[str], int]
+DEFAULT_OMISSION_MARKER = "complete Tool Result was not saved"
 
 
 def conservative_token_count(text: str) -> int:
@@ -49,6 +50,36 @@ def serialize_tool_result(
         default=str,
         indent=2 if pretty else None,
     )
+
+
+def preview_json_value(
+    value: Any,
+    *,
+    max_tokens: int,
+    counter: TokenCounter = conservative_token_count,
+    head_ratio: float = 0.5,
+    omission_marker: str = DEFAULT_OMISSION_MARKER,
+) -> tuple[Any, bool]:
+    """Return a deterministic Head/Tail preview of one JSON-compatible value."""
+
+    if max_tokens < 1:
+        raise ValueError("max_tokens must be positive")
+    if not 0 <= head_ratio <= 1:
+        raise ValueError("head_ratio must be between 0 and 1")
+    counter = token_counter_with_fallback(counter)
+    if counter(_json(value)) <= max_tokens:
+        return value, False
+    preview = _preview_value(
+        value,
+        max_tokens,
+        counter,
+        None,
+        head_ratio,
+        omission_marker=omission_marker,
+    )
+    if counter(_json(preview)) > max_tokens:
+        raise ValueError("omission marker exceeds preview budget")
+    return preview, True
 
 
 def render_tool_result(
@@ -142,35 +173,58 @@ def _preview_result(result, budget, counter, stored, head_ratio):
     )
 
 
-def _preview_value(value, budget, counter, stored, head_ratio, depth=0):
+def _preview_value(
+    value,
+    budget,
+    counter,
+    stored,
+    head_ratio,
+    depth=0,
+    omission_marker=None,
+):
     if counter(_json(value)) <= budget:
         return value
     if depth >= 8:
-        return _minimal_value(value, stored)
+        return _minimal_value(value, stored, omission_marker)
     if isinstance(value, str):
-        return _preview_string(value, budget, counter, stored, head_ratio)
+        return _preview_string(
+            value, budget, counter, stored, head_ratio, omission_marker
+        )
     if isinstance(value, (list, tuple)):
         return _preview_sequence(
-            list(value), budget, counter, stored, head_ratio, depth
+            list(value), budget, counter, stored, head_ratio, depth,
+            omission_marker,
         )
     if isinstance(value, dict):
         return _preview_mapping(
-            value, budget, counter, stored, head_ratio, depth
+            value, budget, counter, stored, head_ratio, depth, omission_marker
         )
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    return _preview_string(str(value), budget, counter, stored, head_ratio)
+    return _preview_string(
+        str(value), budget, counter, stored, head_ratio, omission_marker
+    )
 
 
-def _preview_string(value, budget, counter, stored, head_ratio):
-    marker = _marker_text(stored, omitted_tokens=counter(value))
+def _preview_string(
+    value, budget, counter, stored, head_ratio, omission_marker=None
+):
+    marker = _marker_text(
+        stored,
+        omitted_tokens=counter(value),
+        omission_marker=omission_marker,
+    )
     if budget <= counter(marker):
         return marker
     allowance = max(0, budget - counter(marker))
     head = int(allowance * head_ratio)
     tail = allowance - head
     omitted = value[head : len(value) - tail if tail else len(value)]
-    marker = _marker_text(stored, omitted_tokens=counter(omitted))
+    marker = _marker_text(
+        stored,
+        omitted_tokens=counter(omitted),
+        omission_marker=omission_marker,
+    )
     candidate = value[:head] + marker + (value[-tail:] if tail else "")
     while candidate and counter(_json(candidate)) > budget and (head or tail):
         if head and (not tail or head / max(1, head + tail) >= head_ratio):
@@ -178,12 +232,18 @@ def _preview_string(value, budget, counter, stored, head_ratio):
         elif tail:
             tail -= 1
         omitted = value[head : len(value) - tail if tail else len(value)]
-        marker = _marker_text(stored, omitted_tokens=counter(omitted))
+        marker = _marker_text(
+            stored,
+            omitted_tokens=counter(omitted),
+            omission_marker=omission_marker,
+        )
         candidate = value[:head] + marker + (value[-tail:] if tail else "")
     return candidate
 
 
-def _preview_sequence(values, budget, counter, stored, head_ratio, depth):
+def _preview_sequence(
+    values, budget, counter, stored, head_ratio, depth, omission_marker=None
+):
     key = _omitted_key(values)
     original_tokens = counter(_json(values))
     kept_head, kept_tail = [], []
@@ -204,6 +264,7 @@ def _preview_sequence(values, budget, counter, stored, head_ratio, depth):
                 stored,
                 items=max(0, next_right - next_left + 1),
                 tokens=original_tokens,
+                omission_marker=omission_marker,
             )
         }
         candidate = _sequence_candidate(
@@ -211,7 +272,8 @@ def _preview_sequence(values, budget, counter, stored, head_ratio, depth):
         )
         if counter(_json(candidate)) > budget:
             reduced = _preview_value(
-                item, max(1, budget // 3), counter, stored, head_ratio, depth + 1
+                item, max(1, budget // 3), counter, stored, head_ratio,
+                depth + 1, omission_marker
             )
             candidate = _sequence_candidate(
                 kept_head, kept_tail, reduced, marker, target is kept_head
@@ -233,22 +295,26 @@ def _preview_sequence(values, budget, counter, stored, head_ratio, depth):
             stored,
             items=max(0, right - left + 1),
             tokens=_slice_tokens(values, left, right, counter),
+            omission_marker=omission_marker,
         )
     }
     return [*kept_head, marker, *reversed(kept_tail)]
 
 
-def _preview_mapping(value, budget, counter, stored, head_ratio, depth):
+def _preview_mapping(
+    value, budget, counter, stored, head_ratio, depth, omission_marker=None
+):
     items = list(value.items())
     if len(items) == 1:
         field, child = items[0]
         low, high = 0, budget
-        best = {field: _minimal_value(child, stored)}
+        best = {field: _minimal_value(child, stored, omission_marker)}
         while low <= high:
             child_budget = (low + high) // 2
             candidate = {
                 field: _preview_value(
-                    child, child_budget, counter, stored, head_ratio, depth + 1
+                    child, child_budget, counter, stored, head_ratio,
+                    depth + 1, omission_marker
                 )
             }
             if counter(_json(candidate)) <= budget:
@@ -278,6 +344,7 @@ def _preview_mapping(value, budget, counter, stored, head_ratio, depth):
                 stored,
                 fields=max(0, next_right - next_left + 1),
                 tokens=original_tokens,
+                omission_marker=omission_marker,
             ),
         )
         sequence = (
@@ -289,7 +356,8 @@ def _preview_mapping(value, budget, counter, stored, head_ratio, depth):
         if counter(_json(candidate)) > budget:
             child_budget = max(1, budget // 3)
             reduced = (item[0], _preview_value(
-                item[1], child_budget, counter, stored, head_ratio, depth + 1
+                item[1], child_budget, counter, stored, head_ratio,
+                depth + 1, omission_marker
             ))
             sequence = (
                 [*head, reduced, marker, *reversed(tail)]
@@ -314,6 +382,7 @@ def _preview_mapping(value, budget, counter, stored, head_ratio, depth):
             stored,
             fields=max(0, right - left + 1),
             tokens=_mapping_slice_tokens(items, left, right, counter),
+            omission_marker=omission_marker,
         ),
     )
     return dict([*head, marker, *reversed(tail)])
@@ -329,7 +398,9 @@ def _omitted_key(values) -> str:
         index += 1
 
 
-def _marker_payload(stored, **counts):
+def _marker_payload(stored, *, omission_marker=None, **counts):
+    if omission_marker is not None:
+        return {**counts, "note": omission_marker}
     if stored is None:
         reference = {"note": "complete Tool Result was not saved"}
     elif stored.complete:
@@ -343,12 +414,14 @@ def _marker_payload(stored, **counts):
     return {**counts, **reference}
 
 
-def _marker_text(stored, *, omitted_tokens=None):
+def _marker_text(stored, *, omitted_tokens=None, omission_marker=None):
     count = (
         f"; approximately {omitted_tokens} tokens omitted"
         if omitted_tokens is not None
         else ""
     )
+    if omission_marker is not None:
+        return f"\n... content omitted{count}; {omission_marker} ...\n"
     if stored and stored.complete:
         return f"\n... content omitted{count}; full Tool Result: {stored.path} ...\n"
     if stored is not None:
@@ -362,17 +435,17 @@ def _marker_text(stored, *, omitted_tokens=None):
     )
 
 
-def _minimal_value(value, stored):
-    marker = _marker_payload(stored)
+def _minimal_value(value, stored, omission_marker=None):
+    marker = _marker_payload(stored, omission_marker=omission_marker)
     if isinstance(value, str):
-        return _marker_text(stored)
+        return _marker_text(stored, omission_marker=omission_marker)
     if isinstance(value, (list, tuple)):
         return [{_omitted_key(list(value)): marker}]
     if isinstance(value, dict):
         return {_omitted_key([value]): marker}
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    return _marker_text(stored)
+    return _marker_text(stored, omission_marker=omission_marker)
 
 
 def _minimal_text(value, stored):

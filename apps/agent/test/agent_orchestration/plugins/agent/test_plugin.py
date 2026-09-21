@@ -7,7 +7,10 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentMessageCompletedEvent,
     AgentResponse,
     AgentTextDeltaEvent,
+    AgentThinkingCompletedEvent,
+    AgentThinkingDeltaEvent,
     AgentToolCompletedEvent,
+    AgentToolStartedEvent,
 )
 from apps.agent.src.agent_orchestration.capability.base_agent import BaseAgent
 from apps.agent.src.agent_orchestration.events import Event, TaskErrorEvent
@@ -176,6 +179,126 @@ def test_agent_plugin_只消费context并原样发布stream_event():
     assert events[0].text == "hello"
     assert events[1].message.content == [TextPart("hello")]
     assert events[2].response.message.content == [TextPart("hello")]
+
+
+def test_agent_plugin按step收束thinking并在message前发布():
+    class ThinkingAgent(StubAgent):
+        async def astream(self, *args, **kwargs):
+            del args, kwargs
+            call = ToolCall("call-1", "read", {})
+            yield AgentThinkingDeltaEvent(step=1, text="先")
+            yield AgentThinkingDeltaEvent(step=1, text="查资料")
+            yield AgentMessageCompletedEvent(
+                step=1,
+                message=Message("assistant", [], tool_calls=[call]),
+            )
+            yield AgentToolStartedEvent(step=1, tool_call=call)
+            yield AgentThinkingDeltaEvent(step=2, text="再总结")
+            final = Message("assistant", [TextPart("done")])
+            yield AgentMessageCompletedEvent(step=2, message=final)
+            yield AgentCompletedEvent(
+                step=2,
+                response=AgentResponse(message=final, steps=2),
+            )
+
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        factory.agent = ThinkingAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for item in (plugin, sink):
+            manager.register(item)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+        await plugin.consume(
+            "blackboard",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            ),
+        )
+        await plugin.drain()
+        await manager.event_bus.drain()
+        await sink.drain()
+        events = list(sink.events)
+        await manager.stop(timeout=1)
+        return events
+
+    events = asyncio.run(run())
+
+    completed = [
+        event
+        for event in events
+        if isinstance(event, AgentThinkingCompletedEvent)
+    ]
+    assert [(event.step, event.text, event.partial) for event in completed] == [
+        (1, "先查资料", False),
+        (2, "再总结", False),
+    ]
+    assert [type(event) for event in events] == [
+        AgentThinkingDeltaEvent,
+        AgentThinkingDeltaEvent,
+        AgentThinkingCompletedEvent,
+        AgentMessageCompletedEvent,
+        AgentToolStartedEvent,
+        AgentThinkingDeltaEvent,
+        AgentThinkingCompletedEvent,
+        AgentMessageCompletedEvent,
+        AgentCompletedEvent,
+    ]
+
+
+def test_agent_plugin取消竞争保留刚产出的partial_thinking():
+    class CancelAfterYieldAgent(StubAgent):
+        async def astream(self, *args, run_control=None, **kwargs):
+            del args, kwargs
+            assert run_control is not None
+            run_control.request_cancel("stop after thinking")
+            yield AgentThinkingDeltaEvent(step=1, text="unfinished")
+
+    async def run():
+        manager = PluginManager()
+        factory = StubAgentFactory()
+        factory.agent = CancelAfterYieldAgent()
+        channels = TaskChannelRegistry()
+        channel = channels.create("task-1")
+        channel.mark_preparing_context()
+        plugin = AgentPlugin("agent", factory, channels)
+        sink = SinkPlugin("sink")
+        for item in (plugin, sink):
+            manager.register(item)
+        manager.subscribe("sink", "agent")
+        await manager.start()
+        await plugin.consume(
+            "blackboard",
+            BlackboardContextReadyEvent(
+                task_id="task-1",
+                model_role="thinking",
+                system_prompt="",
+                input_prompt="work",
+            ),
+        )
+        await plugin.drain()
+        await manager.event_bus.drain()
+        await sink.drain()
+        events = list(sink.events)
+        await manager.stop(timeout=1)
+        return events
+
+    events = asyncio.run(run())
+
+    assert [type(event) for event in events] == [
+        AgentThinkingCompletedEvent,
+        AgentCancelledEvent,
+    ]
+    assert events[0].text == "unfinished"
+    assert events[0].partial is True
 
 
 def test_blackboard_context_event_保持扁平agent参数():

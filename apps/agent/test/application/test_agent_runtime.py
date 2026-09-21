@@ -86,6 +86,7 @@ class SessionStub:
         self.imported = []
         self.cancelled = []
         self.steered = []
+        self.steer_submission_ids = []
 
     async def start(self):
         if self.gate is not None:
@@ -114,9 +115,11 @@ class SessionStub:
         return TaskOperationResult(task_id=task_id, status="accepted")
 
     async def steer_task(
-        self, task_id, content, input_images=None, *, display_text=None
+        self, task_id, content, input_images=None, *, display_text=None,
+        submission_id=None,
     ):
         self.steered.append((task_id, content, input_images, display_text))
+        self.steer_submission_ids.append(submission_id)
         return TaskOperationResult(task_id=task_id, status="accepted")
 
     def import_resources(self, paths):
@@ -262,6 +265,108 @@ def test_agent_runtime向已加载session的当前task追加steer(tmp_path):
     assert accepted.status == "accepted"
     assert activity is not None
     assert steered == [("task-1", "only tests", None, None)]
+
+
+def test_agent_runtime以submission_id保证steer进程内幂等(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        session_id = await runtime.create_session(tmp_path, "session")
+        first = await runtime.steer_task(
+            tmp_path,
+            session_id,
+            "task-1",
+            "only tests",
+            submission_id="steer-1",
+        )
+        second = await runtime.steer_task(
+            tmp_path,
+            session_id,
+            "task-1",
+            "only tests",
+            submission_id="steer-1",
+        )
+        with pytest.raises(SubmissionConflictError):
+            await runtime.steer_task(
+                tmp_path,
+                session_id,
+                "task-1",
+                "different",
+                submission_id="steer-1",
+            )
+        session = factory.created[0]
+        await runtime.stop()
+        return first, second, session
+
+    first, second, session = asyncio.run(run())
+
+    assert second == first
+    assert session.steered == [("task-1", "only tests", None, None)]
+    assert session.steer_submission_ids == ["steer-1"]
+
+
+def test_agent_runtime不缓存未接受的steer结果(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        session_id = await runtime.create_session(tmp_path, "session")
+        session = factory.created[0]
+        calls = 0
+
+        async def reject_then_accept(
+            task_id, content, input_images=None, *, display_text=None,
+            submission_id=None,
+        ):
+            nonlocal calls
+            del content, input_images, display_text, submission_id
+            calls += 1
+            return TaskOperationResult(
+                task_id=task_id,
+                status="already_finished" if calls == 1 else "accepted",
+            )
+
+        session.steer_task = reject_then_accept
+        first = await runtime.steer_task(
+            tmp_path, session_id, "task-1", "retry",
+            submission_id="steer-1",
+        )
+        second = await runtime.steer_task(
+            tmp_path, session_id, "task-1", "retry",
+            submission_id="steer-1",
+        )
+        await runtime.stop()
+        return first, second, calls
+
+    first, second, calls = asyncio.run(run())
+
+    assert first.status == "already_finished"
+    assert second.status == "accepted"
+    assert calls == 2
+
+
+def test_agent_runtime拒绝空steer_submission_id(tmp_path):
+    async def run():
+        runtime = AgentRuntime(
+            config_loader=lambda: make_config(tmp_path / "data"),
+            session_factory=RuntimeFactory(),
+        )
+        await runtime.start()
+        with pytest.raises(ValueError, match="submission_id cannot be empty"):
+            await runtime.steer_task(
+                tmp_path, "session", "task-1", "content",
+                submission_id="  ",
+            )
+        await runtime.stop()
+
+    asyncio.run(run())
 
 
 def test_agent_runtime将steer图片导入当前session(tmp_path):
@@ -758,6 +863,87 @@ def test_agent_runtime读取旧历史时按step聚合完整assistant消息(tmp_p
     assert records[0].payload == {"step": 1, "text": "完整回答"}
     assert records[0].sequence == 2
     assert cursor == 3
+
+
+def test_agent_runtime只实时发布thinking_delta并持久化完整thinking(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        runtime = AgentRuntime(config_loader=lambda: config)
+        await runtime.start()
+        session_id = await runtime.create_session(tmp_path, "thinking")
+        identity = SessionIdentity.create(tmp_path, session_id)
+        subscription = runtime.subscribe_updates()
+        now = datetime.now(UTC)
+        delta = RuntimeUpdate(
+            workspace_key=identity.workspace_key,
+            session_id=session_id,
+            task_id="task",
+            type="assistant.thinking_delta",
+            payload={"step": 1, "text": "正在分析"},
+            occurred_at=now,
+        )
+        completed = RuntimeUpdate(
+            workspace_key=identity.workspace_key,
+            session_id=session_id,
+            task_id="task",
+            type="assistant.thinking",
+            payload={
+                "step": 1,
+                "text": "正在分析",
+                "partial": False,
+            },
+            occurred_at=now + timedelta(microseconds=1),
+        )
+        await runtime._handle_update(delta)
+        await runtime._handle_update(completed)
+        await runtime._update_queue.join()
+        live = (
+            await subscription.next_update(),
+            await subscription.next_update(),
+        )
+        records, cursor = await runtime.get_session_history(tmp_path, session_id)
+        subscription.close()
+        await runtime.stop()
+        return live, records, cursor
+
+    live, records, cursor = asyncio.run(run())
+
+    assert [item.type for item in live] == [
+        "assistant.thinking_delta",
+        "assistant.thinking",
+    ]
+    assert live[0].sequence is None
+    assert live[1].sequence == 1
+    assert [item.type for item in records] == ["assistant.thinking"]
+    assert records[0].payload["text"] == "正在分析"
+    assert cursor == 1
+
+
+def test_agent_runtime未知session的thinking_delta仍作为临时更新发布(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        runtime = AgentRuntime(config_loader=lambda: config)
+        await runtime.start()
+        subscription = runtime.subscribe_updates()
+        update = RuntimeUpdate(
+            workspace_key="unknown-workspace",
+            session_id="unknown-session",
+            task_id="task",
+            type="assistant.thinking_delta",
+            payload={"step": 1, "text": "transient"},
+            occurred_at=datetime.now(UTC),
+        )
+        await runtime._handle_update(update)
+        await runtime._update_queue.join()
+        published = await subscription.next_update()
+        subscription.close()
+        await runtime.stop()
+        return published
+
+    published = asyncio.run(run())
+
+    assert published.type == "assistant.thinking_delta"
+    assert published.sequence is None
 
 
 def test_agent_runtime已加载session不把排队task误判为interrupted(tmp_path):

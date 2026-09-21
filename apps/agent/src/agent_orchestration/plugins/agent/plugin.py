@@ -2,7 +2,7 @@
 
 import asyncio
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 import logging
 from datetime import UTC, datetime
@@ -14,6 +14,8 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
     AgentMessageCompletedEvent,
     AgentTextDeltaEvent,
+    AgentThinkingCompletedEvent,
+    AgentThinkingDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
@@ -55,6 +57,15 @@ class ActiveAgentRun:
     channel: TaskChannel
     execution_task: asyncio.Task[None]
     execution_started: asyncio.Event
+
+
+@dataclass
+class _ThinkingBuffer:
+    step: int | None = None
+    parts: list[str] = field(default_factory=list)
+    completed_steps: set[int] = field(default_factory=set)
+    closed_steps: set[int] = field(default_factory=set)
+    highest_step: int = 0
 
 
 class AgentPlugin(BasePlugin):
@@ -284,6 +295,7 @@ class AgentPlugin(BasePlugin):
         partial_text: list[str] = []
         completed_message_steps: set[int] = set()
         published_steers: set[str] = set()
+        thinking = _ThinkingBuffer()
         try:
             execution_started.set()
             channel.raise_if_cancelled()
@@ -296,10 +308,47 @@ class AgentPlugin(BasePlugin):
                 tools=None if event.tools is None else list(event.tools),
                 run_control=channel,
             ):
+                if isinstance(stream_event, AgentThinkingDeltaEvent):
+                    await self._advance_thinking_step(
+                        event.task_id, channel, thinking, stream_event.step
+                    )
+                    if stream_event.step in thinking.closed_steps:
+                        raise RuntimeError(
+                            "Agent thinking delta arrived after its step boundary: "
+                            f"step={stream_event.step}"
+                        )
+                    if stream_event.text:
+                        thinking.parts.append(stream_event.text)
                 channel.raise_if_cancelled()
                 await self._publish_applied_steers(
                     event.task_id, channel, published_steers
                 )
+                if not isinstance(stream_event, AgentThinkingDeltaEvent):
+                    await self._advance_thinking_step(
+                        event.task_id, channel, thinking, stream_event.step
+                    )
+                if isinstance(stream_event, AgentMessageCompletedEvent):
+                    await self._publish_completed_thinking(
+                        event.task_id,
+                        channel,
+                        thinking,
+                        stream_event.step,
+                        partial=False,
+                    )
+                    thinking.closed_steps.add(stream_event.step)
+                elif isinstance(
+                    stream_event, (AgentToolStartedEvent, AgentCompletedEvent)
+                ):
+                    await self._publish_completed_thinking(
+                        event.task_id,
+                        channel,
+                        thinking,
+                        stream_event.step,
+                        partial=(
+                            stream_event.step not in completed_message_steps
+                        ),
+                    )
+                    thinking.closed_steps.add(stream_event.step)
                 if isinstance(stream_event, AgentTextDeltaEvent):
                     if partial_step != stream_event.step:
                         await self._publish_partial_message(
@@ -374,6 +423,12 @@ class AgentPlugin(BasePlugin):
                     await self._publish_applied_steers(
                         event.task_id, channel, published_steers
                     )
+                    await self._publish_completed_thinking(
+                        event.task_id,
+                        channel,
+                        thinking,
+                        partial=True,
+                    )
                     await self._publish_partial_message(
                         event.task_id, channel, partial_step, partial_text
                     )
@@ -395,6 +450,12 @@ class AgentPlugin(BasePlugin):
                 code, message = self._error_details(error)
                 await self._publish_applied_steers(
                     event.task_id, channel, published_steers
+                )
+                await self._publish_completed_thinking(
+                    event.task_id,
+                    channel,
+                    thinking,
+                    partial=True,
                 )
                 await self._publish_partial_message(
                     event.task_id, channel, partial_step, partial_text
@@ -433,6 +494,12 @@ class AgentPlugin(BasePlugin):
                 if channel.mark_cancelled():
                     await self._publish_applied_steers(
                         event.task_id, channel, published_steers
+                    )
+                    await self._publish_completed_thinking(
+                        event.task_id,
+                        channel,
+                        thinking,
+                        partial=True,
                     )
                     await self._publish_partial_message(
                         event.task_id, channel, partial_step, partial_text
@@ -498,6 +565,59 @@ class AgentPlugin(BasePlugin):
                 task_id=task_id,
                 step=step,
                 message=Message("assistant", [TextPart(text)]),
+            ),
+        )
+
+    async def _advance_thinking_step(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        thinking: _ThinkingBuffer,
+        step: int,
+    ) -> None:
+        if step < thinking.highest_step:
+            raise RuntimeError(
+                "Agent stream step moved backwards: "
+                f"previous={thinking.highest_step}, current={step}"
+            )
+        if thinking.step is not None and step > thinking.step:
+            await self._publish_completed_thinking(
+                task_id, channel, thinking, partial=True
+            )
+            thinking.closed_steps.add(thinking.step)
+        if thinking.step != step:
+            thinking.step = step
+        thinking.highest_step = max(thinking.highest_step, step)
+
+    async def _publish_completed_thinking(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        thinking: _ThinkingBuffer,
+        step: int | None = None,
+        *,
+        partial: bool,
+    ) -> None:
+        target_step = thinking.step if step is None else step
+        if (
+            target_step is None
+            or target_step in thinking.completed_steps
+            or thinking.step != target_step
+        ):
+            return
+        text = "".join(thinking.parts)
+        if not text:
+            return
+        thinking.parts.clear()
+        thinking.completed_steps.add(target_step)
+        await self._publish_run_event(
+            task_id,
+            channel,
+            AgentThinkingCompletedEvent(
+                task_id=task_id,
+                step=target_step,
+                text=text,
+                partial=partial,
             ),
         )
 

@@ -288,7 +288,8 @@ def test_session_runtime向当前task追加用户steer(tmp_path):
 
         image = ImagePart("assets/image.png", "asset", "image/png")
         accepted = await runtime.steer_task(
-            "task-1", "only tests", [image], display_text="only [#image1]"
+            "task-1", "only tests", [image],
+            display_text="only [#image1]", submission_id="steer-1"
         )
         batch = channel.drain_context(applied_before_step=2)
         await runtime.stop("test", timeout=1)
@@ -306,6 +307,33 @@ def test_session_runtime向当前task追加用户steer(tmp_path):
         ImagePart("assets/image.png", "asset", "image/png"),
     )
     assert batch.records[0].display_text == "only [#image1]"
+    assert batch.records[0].event_id == "steer-1"
+
+
+def test_session_runtime旧steer调用生成非空唯一event_id(tmp_path):
+    async def run():
+        runtime = SessionRuntime(
+            SessionIdentity.create(tmp_path, "session-steer-legacy"),
+            config=make_config(tmp_path / "data"),
+            publish_update=lambda update: asyncio.sleep(0),
+        )
+        await runtime.start()
+        agent = runtime.runtime_host.get_plugin("agent")
+        channel = agent.task_channels.create("task-1")
+        channel.mark_preparing_context()
+        channel.start_run("run-1")
+        await runtime.steer_task("task-1", "first")
+        await runtime.steer_task("task-1", "second")
+        batch = channel.drain_context(applied_before_step=2)
+        await runtime.stop("test", timeout=1)
+        return batch
+
+    batch = asyncio.run(run())
+
+    assert batch is not None
+    event_ids = [record.event_id for record in batch.records]
+    assert all(event_ids)
+    assert len(set(event_ids)) == 2
 
 
 def test_session_runtime_e2e持久化完整agent_run历史(tmp_path):

@@ -2,6 +2,7 @@ import json
 
 from apps.agent.src.agent_orchestration.tools.result_budget import (
     conservative_token_count,
+    preview_json_value,
     render_tool_result,
     serialize_tool_result,
 )
@@ -95,3 +96,19 @@ def test_result_budget非json对象按实际字符串序列化后降级():
     assert isinstance(rendered.output, str)
     assert "content omitted" in rendered.output
     assert conservative_token_count(serialize_tool_result(rendered)) <= 300
+
+
+def test_preview_json_value使用无路径省略标记并返回截断状态():
+    preview, truncated = preview_json_value(
+        {"items": [f"item-{index}" for index in range(500)]},
+        max_tokens=300,
+        omission_marker="more output omitted",
+    )
+    encoded = json.dumps(
+        preview, ensure_ascii=False, separators=(",", ":")
+    )
+
+    assert truncated is True
+    assert "more output omitted" in encoded
+    assert "path" not in encoded
+    assert conservative_token_count(encoded) <= 300

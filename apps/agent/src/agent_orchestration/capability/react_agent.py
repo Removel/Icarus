@@ -10,6 +10,7 @@ from apps.agent.src.agent_orchestration.capability.types import (
     AgentMessageCompletedEvent,
     AgentResponse,
     AgentTextDeltaEvent,
+    AgentThinkingDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
@@ -168,6 +169,11 @@ class ReActAgent(BaseAgent):
                 state.messages,
                 state.tool_definitions or None,
             ):
+                if chunk.reasoning_delta:
+                    yield AgentThinkingDeltaEvent(
+                        step=state.steps,
+                        text=chunk.reasoning_delta,
+                    )
                 if chunk.text_delta:
                     yield AgentTextDeltaEvent(
                         step=state.steps,
@@ -267,6 +273,11 @@ class ReActAgent(BaseAgent):
                 state.messages,
                 state.tool_definitions or None,
             ):
+                if chunk.reasoning_delta:
+                    yield AgentThinkingDeltaEvent(
+                        step=state.steps,
+                        text=chunk.reasoning_delta,
+                    )
                 if chunk.text_delta:
                     yield AgentTextDeltaEvent(
                         step=state.steps,

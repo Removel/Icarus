@@ -8,6 +8,8 @@ from apps.agent.src.agent_orchestration.capability.types import (
     AgentMessageCompletedEvent,
     AgentResponse,
     AgentTextDeltaEvent,
+    AgentThinkingCompletedEvent,
+    AgentThinkingDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
@@ -18,6 +20,8 @@ __all__ = [
     "AgentMessageCompletedEvent",
     "AgentResponse",
     "AgentTextDeltaEvent",
+    "AgentThinkingCompletedEvent",
+    "AgentThinkingDeltaEvent",
     "AgentToolCompletedEvent",
     "AgentToolStartedEvent",
     "BaseAgent",

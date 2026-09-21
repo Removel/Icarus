@@ -251,18 +251,30 @@ class SessionRuntime:
         input_images: list[ImagePart] | None = None,
         *,
         display_text: str | None = None,
+        submission_id: str | None = None,
     ) -> TaskOperationResult:
         if not self._started or self._agent_plugin is None:
             return TaskOperationResult(task_id=task_id, status="not_running")
         with self._task_context_scope(task_id):
-            return self._agent_plugin.handle_task_operation(
-                "user",
+            request = (
                 TaskSteerRequestedEvent(
+                    task_id=task_id,
+                    event_id=submission_id,
+                    content=content,
+                    input_images=tuple(input_images or ()),
+                    display_text=display_text,
+                )
+                if submission_id is not None
+                else TaskSteerRequestedEvent(
                     task_id=task_id,
                     content=content,
                     input_images=tuple(input_images or ()),
                     display_text=display_text,
-                ),
+                )
+            )
+            return self._agent_plugin.handle_task_operation(
+                "user",
+                request,
             )
 
     def snapshot(self) -> SessionRuntimeSnapshot:

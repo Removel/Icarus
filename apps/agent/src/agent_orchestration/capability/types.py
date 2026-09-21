@@ -42,6 +42,23 @@ class AgentTextDeltaEvent(Event):
 
 
 @dataclass(frozen=True, kw_only=True)
+class AgentThinkingDeltaEvent(Event):
+    trace_event_flow: ClassVar[bool] = False
+
+    step: int
+    text: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentThinkingCompletedEvent(Event):
+    trace_event_flow: ClassVar[bool] = False
+
+    step: int
+    text: str
+    partial: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
 class AgentMessageCompletedEvent(Event):
     """One complete model response, emitted after its stream is assembled."""
 

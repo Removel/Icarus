@@ -8,6 +8,8 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
     AgentMessageCompletedEvent,
     AgentTextDeltaEvent,
+    AgentThinkingCompletedEvent,
+    AgentThinkingDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
@@ -23,6 +25,7 @@ from apps.agent.src.agent_orchestration.plugins.user_input import (
 )
 from apps.agent.src.agent_orchestration.run_control import TaskSteerAppliedEvent
 from apps.agent.src.agent_orchestration.plugins.persistence.redactor import Redactor
+from apps.agent.src.agent_orchestration.plugins.runtime_update import tool_preview
 from apps.agent.src.model_provider.types import TextPart
 from apps.agent.src.runtime_update import RuntimeUpdate
 
@@ -70,6 +73,20 @@ class RuntimeUpdatePlugin(BasePlugin):
                 return None
             update_type = "assistant.text_delta"
             payload = {"step": event.step, "text": event.text}
+        elif isinstance(event, AgentThinkingDeltaEvent):
+            if not event.text:
+                return None
+            update_type = "assistant.thinking_delta"
+            payload = {"step": event.step, "text": event.text}
+        elif isinstance(event, AgentThinkingCompletedEvent):
+            if not event.text:
+                return None
+            update_type = "assistant.thinking"
+            payload = {
+                "step": event.step,
+                "text": event.text,
+                "partial": event.partial,
+            }
         elif isinstance(event, TaskSteerAppliedEvent):
             update_type = "user.correction"
             payload = {
@@ -108,6 +125,31 @@ class RuntimeUpdatePlugin(BasePlugin):
                 ),
             }
         elif isinstance(event, AgentToolCompletedEvent):
+            full_result_available = tool_preview.full_result_available(
+                event.result
+            )
+            try:
+                projection = tool_preview.build_public_tool_projection(
+                    event.result, self._redactor
+                )
+            except Exception:
+                try:
+                    safe_error = tool_preview.safe_tool_error(
+                        event.result, self._redactor
+                    )
+                except Exception:
+                    safe_error = (
+                        "Tool execution error unavailable"
+                        if event.result.error is not None
+                        else None
+                    )
+                projection = tool_preview.PublicToolProjection(
+                    output_preview=None,
+                    preview_truncated=True,
+                    full_result_available=full_result_available,
+                    preview_error=tool_preview.PREVIEW_UNAVAILABLE,
+                    safe_error=safe_error,
+                )
             update_type = "tool.completed"
             payload = {
                 "step": event.step,
@@ -115,11 +157,16 @@ class RuntimeUpdatePlugin(BasePlugin):
                 "tool_name": event.tool_call.name,
                 "success": event.result.success,
                 "error": (
-                    self._redactor.redact_text(event.result.error)
+                    projection.safe_error
                     if not event.result.success
-                    and event.result.error is not None
                     else None
                 ),
+                "output_preview": projection.output_preview,
+                "preview_truncated": projection.preview_truncated,
+                "full_result_available": (
+                    projection.full_result_available
+                ),
+                "preview_error": projection.preview_error,
             }
         elif isinstance(event, AgentCompletedEvent):
             usage = event.response.usage

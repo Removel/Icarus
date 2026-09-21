@@ -5,6 +5,8 @@ from apps.agent.src.agent_orchestration.capability import (
     AgentCompletedEvent,
     AgentMessageCompletedEvent,
     AgentTextDeltaEvent,
+    AgentThinkingCompletedEvent,
+    AgentThinkingDeltaEvent,
     AgentToolCompletedEvent,
     AgentToolStartedEvent,
 )
@@ -145,6 +147,58 @@ def test_runtime_update_plugin只投影已应用steer并保留图片引用():
     }
 
 
+def test_runtime_update_plugin投影thinking_delta和完整块():
+    updates = project(
+        [
+            (
+                "agent",
+                AgentThinkingDeltaEvent(
+                    task_id="task", step=2, text="正在分析"
+                ),
+            ),
+            (
+                "agent",
+                AgentThinkingCompletedEvent(
+                    task_id="task",
+                    step=2,
+                    text="正在分析",
+                    partial=True,
+                ),
+            ),
+        ]
+    )
+
+    assert [update.type for update in updates] == [
+        "assistant.thinking_delta",
+        "assistant.thinking",
+    ]
+    assert updates[0].payload == {"step": 2, "text": "正在分析"}
+    assert updates[1].payload == {
+        "step": 2,
+        "text": "正在分析",
+        "partial": True,
+    }
+
+
+def test_runtime_update_plugin过滤空thinking():
+    updates = project(
+        [
+            (
+                "agent",
+                AgentThinkingDeltaEvent(task_id="task", step=1, text=""),
+            ),
+            (
+                "agent",
+                AgentThinkingCompletedEvent(
+                    task_id="task", step=1, text="", partial=False
+                ),
+            ),
+        ]
+    )
+
+    assert updates == []
+
+
 def test_runtime_update_plugin对工具参数递归脱敏():
     updates = project(
         [
@@ -191,6 +245,62 @@ def test_runtime_update_plugin对工具错误文本脱敏():
     )
 
     assert updates[0].payload["error"] == "Authorization: [REDACTED]"
+    assert updates[0].payload["output_preview"] is None
+    assert updates[0].payload["preview_truncated"] is False
+    assert updates[0].payload["full_result_available"] is False
+    assert updates[0].payload["preview_error"] is None
+
+
+def test_runtime_update_plugin预览失败不改变tool结果并保留完整结果事实(
+    monkeypatch,
+):
+    from apps.agent.src.agent_orchestration.plugins.runtime_update import (
+        plugin as plugin_module,
+    )
+
+    def fail_preview(result, redactor):
+        del result, redactor
+        raise RuntimeError("private preview error")
+
+    monkeypatch.setattr(
+        plugin_module.tool_preview,
+        "build_public_tool_projection",
+        fail_preview,
+    )
+    result_file = "/private/session/tool-results/result.json"
+    updates = project(
+        [
+            (
+                "agent",
+                AgentToolCompletedEvent(
+                    task_id="task",
+                    step=1,
+                    tool_call=ToolCall("call-1", "read", {}),
+                    result=ToolExecutionResult(
+                        success=True,
+                        output={"private": object()},
+                        metadata={
+                            "result_file": result_file,
+                            "result_file_complete": True,
+                        },
+                    ),
+                ),
+            )
+        ]
+    )
+
+    assert updates[0].payload == {
+        "step": 1,
+        "call_id": "call-1",
+        "tool_name": "read",
+        "success": True,
+        "error": None,
+        "output_preview": None,
+        "preview_truncated": True,
+        "full_result_available": True,
+        "preview_error": "Tool output preview unavailable",
+    }
+    assert result_file not in repr(updates[0])
 
 
 def test_runtime_update_plugin对task错误文本脱敏():
