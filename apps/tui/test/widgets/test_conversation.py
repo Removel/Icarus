@@ -200,12 +200,12 @@ def test_conversation完整消息校准流式文本且不重复(tmp_path):
                 )
             )
             await pilot.pause()
-            return view.query_one(AssistantProgressBlock).markdown_text
+            return view.query_one(AssistantMessage).markdown_text
 
     assert asyncio.run(run()) == "部分完整"
 
 
-def test_conversation完成时提升最终回答并保留中间过程(tmp_path):
+def test_conversation完成时保留每个完整assistant消息(tmp_path):
     async def run():
         app = ConversationTestApp(tmp_path)
         async with app.run_test() as pilot:
@@ -237,9 +237,163 @@ def test_conversation完成时提升最终回答并保留中间过程(tmp_path):
             )
 
     progress, final, cards = asyncio.run(run())
-    assert progress == ["checking"]
-    assert final == ["final answer"]
+    assert progress == []
+    assert final == ["checking", "final answer"]
     assert cards == 1
+
+
+def test_conversation未完成文本在tool开始后降级为中间过程(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                AppendAssistantDelta("task-1", "checking", step=1)
+            )
+            live_candidate = view.query_one(AssistantMessage)
+            await view.apply_action(
+                AppendToolStarted(
+                    "task-1", "call", "read", "{}", step=1
+                )
+            )
+            await pilot.pause()
+            progress = view.query_one(AssistantProgressBlock)
+            return (
+                live_candidate.markdown_text,
+                live_candidate.parent,
+                progress.markdown_text,
+                progress.parent is view.query_one(RunCard),
+                len(view.query(AssistantMessage)),
+            )
+
+    original_text, original_parent, progress_text, in_card, final_count = (
+        asyncio.run(run())
+    )
+
+    assert original_text == "checking"
+    assert original_parent is None
+    assert progress_text == "checking"
+    assert in_card is True
+    assert final_count == 0
+
+
+def test_conversation完整中间消息在后续tool开始后保持对话样式(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                CompleteThinking("task-1", 1, "inspect", partial=False)
+            )
+            await view.apply_action(
+                AppendAssistantDelta(
+                    "task-1",
+                    "This is useful context before I inspect the repo.",
+                    step=1,
+                )
+            )
+            live_message = view.query_one(AssistantMessage)
+            await view.apply_action(
+                CompleteAssistantMessage(
+                    "task-1",
+                    "This is useful context before I inspect the repo.",
+                    step=1,
+                )
+            )
+            await view.apply_action(
+                AppendToolStarted(
+                    "task-1", "call", "bash", "{}", step=1
+                )
+            )
+            await pilot.pause()
+            cards = list(view.query(RunCard))
+            direct_children = [
+                type(child).__name__ for child in view.children
+            ]
+            return (
+                view.query_one(AssistantMessage) is live_message,
+                live_message.markdown_text,
+                live_message.parent is view,
+                len(view.query(AssistantProgressBlock)),
+                len(cards),
+                direct_children,
+                view.query_one(ToolBlock).parent is cards[1],
+            )
+
+    (
+        same_message,
+        text,
+        at_top_level,
+        progress_count,
+        card_count,
+        order,
+        tool_in_second_card,
+    ) = asyncio.run(run())
+
+    assert same_message is True
+    assert text == "This is useful context before I inspect the repo."
+    assert at_top_level is True
+    assert progress_count == 0
+    assert card_count == 2
+    assert order == [
+        "WelcomeMessage",
+        "RunCard",
+        "AssistantMessage",
+        "RunCard",
+    ]
+    assert tool_in_second_card is True
+
+
+def test_conversation工具循环后最终回答从首个delta起保持对话样式(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(
+                CompleteThinking("task-1", 1, "inspect", partial=False)
+            )
+            await view.apply_action(
+                AppendToolStarted("task-1", "call", "read", "{}", step=1)
+            )
+            await view.apply_action(
+                UpdateToolCompleted(
+                    "task-1", "call", "read", True, step=1
+                )
+            )
+            await view.apply_action(
+                AppendAssistantDelta("task-1", "final", step=2)
+            )
+            await pilot.pause()
+            live_final = view.query_one(AssistantMessage)
+            during_stream = (
+                live_final.markdown_text,
+                len(view.query(AssistantProgressBlock)),
+                live_final.parent is view,
+            )
+
+            await view.apply_action(
+                CompleteAssistantMessage(
+                    "task-1", "final answer", step=2
+                )
+            )
+            same_after_message = view.query_one(AssistantMessage) is live_final
+            await view.apply_action(FinishTurn("task-1", "completed"))
+            await pilot.pause()
+            return (
+                during_stream,
+                same_after_message,
+                view.query_one(AssistantMessage) is live_final,
+                live_final.markdown_text,
+            )
+
+    during_stream, same_after_message, same_after_finish, text = asyncio.run(
+        run()
+    )
+
+    assert during_stream == ("final", 0, True)
+    assert same_after_message is True
+    assert same_after_finish is True
+    assert text == "final answer"
 
 
 def test_conversation纯最终回答完成时移除空run_card(tmp_path):
@@ -488,16 +642,19 @@ def test_streaming_markdown后续delta不再全量update(monkeypatch, tmp_path):
                 AppendAssistantDelta(task_id="task-1", text=third)
             )
             await view.apply_action(
+                CompleteAssistantMessage(
+                    task_id="task-1", text=first + second + third
+                )
+            )
+            await view.apply_action(
                 FinishTurn(task_id="task-1", status="completed")
             )
             await pilot.pause()
-            assistant = view.query_one(AssistantProgressBlock)
-            return assistant.markdown_text, markdown.source
+            return markdown.source
 
-    markdown_text, rendered_source = asyncio.run(run())
+    rendered_source = asyncio.run(run())
 
     expected = "# Heading\n\nFirst paragraph.\n\n- first item\n- second item\n"
-    assert markdown_text == expected
     assert rendered_source == expected
 
 
@@ -529,7 +686,12 @@ def test_streaming_markdown只写入新fragment并在finish停止stream(
             await view.apply_action(
                 AppendAssistantDelta(task_id="task-1", text=" second")
             )
-            assistant = view.query_one(AssistantProgressBlock)
+            assistant = view.query_one(AssistantMessage)
+            await view.apply_action(
+                CompleteAssistantMessage(
+                    task_id="task-1", text="first second"
+                )
+            )
             await view.apply_action(
                 FinishTurn(task_id="task-1", status="completed")
             )
@@ -652,6 +814,11 @@ def test_streaming_markdown保留已稳定的前部block(tmp_path):
                 AppendAssistantDelta(task_id="task-1", text=tail)
             )
             await view.apply_action(
+                CompleteAssistantMessage(
+                    task_id="task-1", text=first + tail
+                )
+            )
+            await view.apply_action(
                 FinishTurn(task_id="task-1", status="completed")
             )
             await pilot.pause()
@@ -680,7 +847,7 @@ def test_conversation_reset会停止仍在输出的markdown_stream(tmp_path):
             await view.apply_action(
                 AppendAssistantDelta(task_id="task-1", text="partial")
             )
-            assistant = view.query_one(AssistantProgressBlock)
+            assistant = view.query_one(AssistantMessage)
             stream = assistant._markdown_stream
 
             await view.reset()

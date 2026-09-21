@@ -429,8 +429,8 @@ def test_snapshot_streaming_markdown_with_draft(snap_compare):
         await pilot.press(*"Add a focused regression test next")
         await wait_until(
             pilot,
-            lambda: len(pilot.app.query(AssistantProgressBlock)) == 1
-            and pilot.app.query_one(AssistantProgressBlock).markdown_text
+            lambda: len(pilot.app.query(AssistantMessage)) == 1
+            and pilot.app.query_one(AssistantMessage).markdown_text
             == markdown
             and pilot.app.query_one(StreamingMarkdown).source == markdown
             and len(pilot.app.query_one(StreamingMarkdown).children) >= 4
@@ -591,6 +591,26 @@ def test_snapshot_run_card_thinking_correction_and_tool_preview(snap_compare):
                 },
             ),
         )
+        intermediate = (
+            "This event boundary is useful. I will inspect the current "
+            "implementation before deciding."
+        )
+        publish(
+            pilot,
+            "agent",
+            runtime_update(
+                "assistant.text_delta",
+                payload={"step": 1, "text": intermediate},
+            ),
+        )
+        publish(
+            pilot,
+            "agent",
+            runtime_update(
+                "assistant.message",
+                payload={"step": 1, "text": intermediate},
+            ),
+        )
         publish(
             pilot,
             "agent",
@@ -647,17 +667,32 @@ def test_snapshot_run_card_thinking_correction_and_tool_preview(snap_compare):
                 },
             ),
         )
+        publish(
+            pilot,
+            "agent",
+            runtime_update(
+                "assistant.text_delta",
+                payload={
+                    "step": 2,
+                    "text": "The implementation is ready for review.",
+                },
+            ),
+        )
         await wait_until(
             pilot,
-            lambda: len(pilot.app.query(ThinkingBlock)) == 2
-            and pilot.app.query_one(ToolBlock).success is True,
+            lambda: (
+                len(pilot.app.query(ThinkingBlock)) == 2
+                and pilot.app.query_one(ToolBlock).success is True
+                and len(pilot.app.query(AssistantMessage)) == 2
+                and len(pilot.app.query(AssistantProgressBlock)) == 0
+            ),
         )
         pilot.app.query_one(ToolBlock).set_expanded(True)
         await pilot.pause()
 
     assert snap_compare(
         make_app(),
-        terminal_size=(100, 38),
+        terminal_size=(100, 50),
         run_before=prepare,
     )
 
@@ -770,8 +805,8 @@ def test_snapshot_narrow_running_layout(snap_compare):
             lambda: (
                 pilot.app.query_one(QueuePanel).items == ()
                 and pilot.app.service.steers == ["Queue this follow-up"]
-                and len(pilot.app.query(AssistantProgressBlock)) == 1
-                and pilot.app.query_one(AssistantProgressBlock).markdown_text
+                and len(pilot.app.query(AssistantMessage)) == 1
+                and pilot.app.query_one(AssistantMessage).markdown_text
                 == expected_markdown
                 and pilot.app.query_one(StreamingMarkdown).source
                 == expected_markdown

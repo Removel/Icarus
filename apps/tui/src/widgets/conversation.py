@@ -43,7 +43,7 @@ class ConversationView(VerticalScroll):
         self.workspace_path = Path(workspace_path).expanduser().resolve()
         self._run_cards: dict[str, RunCard] = {}
         self._assistant_candidates: dict[
-            tuple[str, int], AssistantProgressBlock
+            tuple[str, int], AssistantMessage | AssistantProgressBlock
         ] = {}
         self._candidate_completed: set[tuple[str, int]] = set()
         self._completed_thinking: set[tuple[str, int]] = set()
@@ -91,18 +91,25 @@ class ConversationView(VerticalScroll):
         if isinstance(action, AppendUserMessage):
             await self.append_user_message(action.text)
         elif isinstance(action, AppendAssistantDelta):
+            if (action.task_id, action.step) in self._candidate_completed:
+                return True
             await self._advance_step(action.task_id, action.step)
             assistant = await self._ensure_assistant_candidate(
                 action.task_id, action.step
             )
             await assistant.append_delta(action.text)
         elif isinstance(action, CompleteAssistantMessage):
+            key = (action.task_id, action.step)
+            if key in self._candidate_completed:
+                return True
             await self._advance_step(action.task_id, action.step)
             assistant = await self._ensure_assistant_candidate(
                 action.task_id, action.step
             )
             await assistant.complete_text(action.text)
-            self._candidate_completed.add((action.task_id, action.step))
+            await assistant.finish()
+            self._candidate_completed.add(key)
+            await self._close_run_card_segment(action.task_id)
         elif isinstance(action, AppendThinkingDelta):
             key = (action.task_id, action.step)
             if key not in self._completed_thinking:
@@ -135,7 +142,7 @@ class ConversationView(VerticalScroll):
             )
         elif isinstance(action, AppendToolStarted):
             await self._advance_step(action.task_id, action.step)
-            await self._finish_candidate(action.task_id, action.step)
+            await self._downgrade_candidate(action.task_id, action.step)
             card = await self._ensure_run_card(action.task_id)
             tool = ToolBlock(
                 call_id=action.call_id,
@@ -146,7 +153,7 @@ class ConversationView(VerticalScroll):
             await card.mount(tool)
         elif isinstance(action, UpdateToolCompleted):
             await self._advance_step(action.task_id, action.step)
-            await self._finish_candidate(action.task_id, action.step)
+            await self._downgrade_candidate(action.task_id, action.step)
             key = (action.task_id, action.call_id)
             tool = self._tools.get(key)
             if tool is None:
@@ -168,13 +175,11 @@ class ConversationView(VerticalScroll):
         elif isinstance(action, AppendError):
             await self.mount(ErrorMessage(action.error_type, action.message))
         elif isinstance(action, FinishTurn):
-            await self._finish_task_candidates(action.task_id)
             if action.status == "interrupted":
                 for (task_id, _), tool in self._tools.items():
                     if task_id == action.task_id:
                         tool.interrupt()
-            if action.status == "completed":
-                await self._promote_final_candidate(action.task_id)
+            await self._finish_task_candidates(action.task_id)
             if action.status in {"failed", "cancelled", "interrupted"}:
                 await self.mount(TurnStatusMessage(action.status))
             await self._remove_empty_run_card(action.task_id)
@@ -190,19 +195,39 @@ class ConversationView(VerticalScroll):
         if card is None:
             card = RunCard(task_id)
             self._run_cards[task_id] = card
-            await self.mount(card)
+            live_candidate = next(
+                (
+                    candidate
+                    for (candidate_task, candidate_step), candidate in (
+                        self._assistant_candidates.items()
+                    )
+                    if candidate_task == task_id
+                    and isinstance(candidate, AssistantMessage)
+                    and (candidate_task, candidate_step)
+                    not in self._candidate_completed
+                    and candidate.parent is self
+                ),
+                None,
+            )
+            if live_candidate is None:
+                await self.mount(card)
+            else:
+                await self.mount(card, before=live_candidate)
         return card
 
     async def _ensure_assistant_candidate(
         self, task_id: str, step: int
-    ) -> AssistantProgressBlock:
+    ) -> AssistantMessage | AssistantProgressBlock:
         key = (task_id, step)
         assistant = self._assistant_candidates.get(key)
         if assistant is None:
-            card = await self._ensure_run_card(task_id)
-            assistant = AssistantProgressBlock(step)
+            assistant = AssistantMessage()
             self._assistant_candidates[key] = assistant
-            await card.mount(assistant)
+            card = self._run_cards.get(task_id)
+            if card is None:
+                await self.mount(assistant)
+            else:
+                await self.mount(assistant, after=card)
         return assistant
 
     async def _ensure_thinking(
@@ -228,47 +253,61 @@ class ConversationView(VerticalScroll):
             if candidate_task == task_id and candidate_step < step
         }
         for previous_step in sorted(previous_steps):
-            await self._finish_candidate(task_id, previous_step)
+            await self._downgrade_candidate(task_id, previous_step)
 
-    async def _finish_candidate(self, task_id: str, step: int) -> None:
-        assistant = self._assistant_candidates.get((task_id, step))
-        if assistant is not None:
+    async def _downgrade_candidate(self, task_id: str, step: int) -> None:
+        key = (task_id, step)
+        assistant = self._assistant_candidates.get(key)
+        if assistant is None:
+            return
+        if key in self._candidate_completed:
+            return
+        if isinstance(assistant, AssistantProgressBlock):
             await assistant.finish()
+            return
+
+        text = assistant.markdown_text
+        await assistant.finish()
+        card = await self._ensure_run_card(task_id)
+        await assistant.remove()
+        progress = AssistantProgressBlock(step)
+        self._assistant_candidates[key] = progress
+        self._candidate_completed.discard(key)
+        await card.mount(progress)
+        await progress.complete_text(text)
+        await progress.finish()
 
     async def _finish_task_candidates(self, task_id: str) -> None:
-        for (candidate_task, _), assistant in self._assistant_candidates.items():
-            if candidate_task == task_id:
-                await assistant.finish()
-
-    async def _promote_final_candidate(self, task_id: str) -> None:
-        completed = [
-            key
-            for key in self._candidate_completed
-            if key[0] == task_id
+        keys = [
+            key for key in self._assistant_candidates if key[0] == task_id
         ]
-        if not completed:
-            return
-        key = max(completed, key=lambda item: item[1])
-        candidate = self._assistant_candidates.pop(key, None)
-        self._candidate_completed.discard(key)
-        if candidate is None:
-            return
-        text = candidate.markdown_text
-        await candidate.remove()
-        final = AssistantMessage()
-        card = self._run_cards.get(task_id)
-        if card is None:
-            await self.mount(final)
-        else:
-            await self.mount(final, after=card)
-        await final.complete_text(text)
-        await final.finish()
+        for key in sorted(keys):
+            if key in self._candidate_completed:
+                candidate = self._assistant_candidates.get(key)
+                if candidate is not None:
+                    await candidate.finish()
+            else:
+                await self._downgrade_candidate(*key)
+        for key in keys:
+            self._assistant_candidates.pop(key, None)
+            self._candidate_completed.discard(key)
+
+    async def _close_run_card_segment(self, task_id: str) -> None:
+        card = self._run_cards.pop(task_id, None)
+        if card is not None and not self._run_card_is_meaningful(card):
+            await card.remove()
 
     async def _remove_empty_run_card(self, task_id: str) -> None:
         card = self._run_cards.get(task_id)
         if card is None:
             return
-        meaningful = any(
+        if not self._run_card_is_meaningful(card):
+            self._run_cards.pop(task_id, None)
+            await card.remove()
+
+    @staticmethod
+    def _run_card_is_meaningful(card: RunCard) -> bool:
+        return any(
             isinstance(
                 child,
                 (
@@ -280,9 +319,6 @@ class ConversationView(VerticalScroll):
             )
             for child in card.children
         )
-        if not meaningful:
-            self._run_cards.pop(task_id, None)
-            await card.remove()
 
     async def _finish_all_streams(self) -> None:
         for assistant in self._assistant_candidates.values():

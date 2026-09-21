@@ -105,14 +105,16 @@ Projector 时显式传入历史上下文，由 Projector 填充 Action，供 Wid
 ```text
 ConversationView
 ├── UserMessage(task A)
-├── RunCard(task A)
+├── RunCard(task A, segment 1)
 │   ├── ThinkingBlock(step 1)
-│   ├── AssistantProgressBlock(step 1, when a Tool step emits text)
+│   └── AssistantProgressBlock(step 1, only when text is interrupted before complete)
+├── AssistantMessage(task A, complete step 1)
+├── RunCard(task A, segment 2)
 │   ├── ToolBlock(call A)
 │   ├── UserCorrectionBlock
 │   ├── ThinkingBlock(step 2)
 │   └── ToolBlock(call B)
-├── AssistantMessage(task A final)
+├── AssistantMessage(task A, complete final step)
 └── TurnStatusMessage(task A, only non-success terminal states)
 ```
 
@@ -120,7 +122,8 @@ ConversationView
 
 ```text
 run_cards: dict[task_id, RunCard]
-assistant_candidates: dict[(task_id, step), AssistantProgressBlock]
+active_run_cards: dict[task_id, RunCard]
+assistant_candidates: dict[(task_id, step), AssistantMessage | AssistantProgressBlock]
 completed_thinking: set[(task_id, step)]
 tools: dict[(task_id, call_id), ToolBlock]
 restoring_history: bool
@@ -128,23 +131,27 @@ restoring_history: bool
 
 RunCard 是 TUI 展示组件，不是新的 Runtime 实体，不持久化自身状态，也不改变 Task/Run/Step 定义。
 
-## Assistant 候选与最终提升
+## Assistant 候选与按需降级
 
-`assistant.text_delta` 和 `assistant.message` 都已有 step。Projector 保留该 step，ConversationView 将
-当前 step 的可见文本先流式投影为 RunCard 内的 Assistant 候选，而不是立即创建卡片后的顶层消息：
+`assistant.text_delta` 和 `assistant.message` 都已有 step。Projector 保留该 step。ConversationView 无法从
+首个 delta 确认当前 step 是否完整，因此先把候选投影为顶层 `AssistantMessage`，再以是否收到权威的
+`assistant.message` 作为唯一分类边界：
 
-- 同 step 后续出现 `tool.started`，该候选成为 `AssistantProgressBlock` 并留在 RunCard；
-- 更大 step 的 thinking/text 开始时，上一候选也确定为中间过程；
-- `task.finished(status=completed)` 到达时，把最后一个未被后续 step/Tool 消费、且已经收到
-  `assistant.message` 的候选原子提升为 RunCard 后的独立 `AssistantMessage`；
-- failed/cancelled/interrupted 不提升未完成候选，已产生内容作为 partial progress 留在 RunCard；
-- 历史恢复按相同规则重建，不能依赖“Tool step 通常没有文本”的模型习惯。
+- 收到 `assistant.message` 后，该 step 的候选完成流式渲染并锁定为顶层 `AssistantMessage`；它是已经进入
+  Conversation history 的完整可读消息，即使同 step 随后出现 Tool，也不再降级或更换样式；
+- 完整消息会结束当前 active RunCard 段。后续 Tool、thinking 或 correction 懒创建新的 RunCard，挂在该
+  Assistant 消息之后，从而保持“说明文字 → Tool → 后续过程”的真实时间顺序；
+- 同 step Tool、更大 step 或 Task 终态只能将尚未收到 `assistant.message` 的候选降级为
+  `AssistantProgressBlock`，用于保留被截断的 partial 文本；
+- completed/failed/cancelled/interrupted 都保留已经锁定的完整 Assistant，只收束或降级仍未完成的候选；
+- 历史恢复按相同规则重建；持久化历史没有 delta，但每个完整 step 都有 `assistant.message`，因此同样能
+  稳定恢复完整 Assistant 与分段 RunCard 的顺序。
 
-提升后如果 RunCard 没有 thinking、Tool、correction 或中间 Assistant，移除空卡片，使不产生中间过程的
-普通问答保持现有简洁布局。
+候选降级或任务完成后，如果 RunCard 没有 thinking、Tool、correction 或中间 Assistant，移除空卡片，使
+不产生中间过程的普通问答保持现有简洁布局。
 
-提升只改变 Widget 所属层级，不复制文本、不增加 RuntimeUpdate。这样既保持实时可见，也保证 Tool 不会
-因为插入到已挂载 RunCard 内而在视觉上跑到早先的顶层 Assistant 文本之前。
+候选降级只改变 TUI Widget，不增加 RuntimeUpdate，也不修改持久化内容。所有完整 Assistant 消息从首个
+delta 起保持正常对话样式；只有在缺少 `assistant.message` 的情况下被后续事件截断，才降级到 RunCard。
 
 ## ThinkingBlock 行为
 
@@ -435,10 +442,11 @@ class CommandRegistry:
 Session 激活时 `ConversationView.begin_history_restore()`：
 
 - 按 sequence 依次投影 `user.message`、thinking、Tool、correction、Assistant 和终态。
-- 每个 task_id 懒创建 RunCard。
+- 每个 task_id 按事件顺序懒创建 active RunCard；完整 Assistant 会结束当前段，后续过程事件创建新段。
 - 所有 historical ThinkingBlock 默认展开。
 - ToolBlock 默认折叠。
-- 中间 Assistant candidate 留在 RunCard；成功 Task 的最后 candidate 在终态时提升为独立最终消息。
+- Assistant candidate 从首个 delta 起按顶层消息投影；`assistant.message` 将其锁定并结束当前 active
+  RunCard 段，后续 Tool/过程事件创建新段。只有缺少完整消息边界的 candidate 才降级到 RunCard。
 - 恢复结束后清除当前流式句柄并滚动到历史末尾。
 
 重连增量历史与实时流可能重叠：

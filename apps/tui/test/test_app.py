@@ -1845,10 +1845,10 @@ def test_agent输出期间草稿光标和焦点保持不变(tmp_path):
                 ),
             )
             await wait_until(
-                pilot, lambda: len(app.query(AssistantProgressBlock)) == 1
+                pilot, lambda: len(app.query(AssistantMessage)) == 1
             )
             after = (composer.text, composer.cursor_location, app.focused)
-            markdown = app.query_one(AssistantProgressBlock).markdown_text
+            markdown = app.query_one(AssistantMessage).markdown_text
             app.request_shutdown(return_code=0)
             await wait_until(pilot, lambda: service.stopped)
             return before, after, markdown

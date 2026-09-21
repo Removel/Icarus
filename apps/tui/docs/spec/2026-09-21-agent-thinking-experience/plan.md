@@ -278,10 +278,12 @@ apps/tui/.venv/bin/python -m pytest apps/tui/test/event_pipeline -q
    - Tool start/complete；
    - correction；
    - FinishTurn 保留 thinking 当前展开状态、收束未完成 Tool。
-7. Assistant 文本先按 `(task_id, step)` 在 RunCard 内作为候选流式渲染：同 step Tool 或更大 step 到达时
-   固化为中间 `AssistantProgressBlock`；成功 FinishTurn 把最后一个已 complete、未被后续 step/Tool 消费
-   的候选原子提升为 RunCard 后的独立 `AssistantMessage`。失败、取消或中断不提升 partial 候选；不能
-   通过假设 Tool step 没有文本来规避顺序问题。提升后 RunCard 若没有其他子项则移除空卡片。
+7. Assistant 文本按 `(task_id, step)` 从首个 delta 起作为顶层 `AssistantMessage` 候选流式渲染；收到
+   `assistant.message` 后立即结束流并锁定该 Widget，不因同 step Tool、后续 step 或 Task 终态改变样式。
+   锁定完整消息时结束当前 active RunCard 段；后续 Tool、thinking 或 correction 创建位于该消息之后的新
+   RunCard，保持事件顺序。只有未收到 `assistant.message` 就遇到 Tool、更大 step 或 Task 终态的 partial
+   候选才原子降级为 RunCard 内的 `AssistantProgressBlock`。候选降级或任务完成后，RunCard 若没有其他
+   子项则移除空卡片。
 8. reset/session switch 清空 RunCard、thinking completed keys、Tool map 和 streaming handle。
 9. 更新 TCSS：
    - 单一 RunCard 边界；
@@ -299,8 +301,10 @@ apps/tui/.venv/bin/python -m pytest apps/tui/test/event_pipeline -q
 - historical thinking 默认展开，手动可折叠和重新展开。
 - 完整记录对账保留用户手动选择的展开状态。
 - correction 在正确 RunCard，不产生 UserMessage。
-- Tool step 带可见 assistant text 时，中间文本和 Tool 在同一卡片内保持先后顺序。
-- 成功 Task 的 final AssistantMessage 从最后候选提升，位于 RunCard 之后、文本不重复且保持独立。
+- Tool step 带完整 assistant text 时，文本从首个 delta 起保持 AssistantMessage 样式，Tool 位于其后的
+  新 RunCard；`assistant.message`、Tool 和 Task 终态都不替换已锁定 Widget。
+- Tool 循环后的最终文本从首个 delta 起使用 AssistantMessage 样式，流式结束时不发生样式跳变。
+- 未完成候选后续出现同 step Tool、更大 step 或 Task 终态时降级进入 RunCard，文本不重复且顺序不变。
 - 只有最终文本、没有中间过程的 Task 不留下空 RunCard。
 - failed/cancelled/interrupted 的未完成候选留在 RunCard，不误标为最终回答。
 - Tool JSON/text/scalar/path-summary/failure/truncation/full-result 提示显示正确。
@@ -439,16 +443,17 @@ apps/tui/.venv/bin/python -m pytest \
 5. History restore：所有 thinking 默认展开；实时和历史 complete 都保留当前 block 展开状态。
 6. Session activation/reset 清空对账集合和 RunCard map。
 7. 保留 Assistant `_completed_assistant_steps` 的现有去重行为，不把 thinking 与 Assistant key 混用。
-8. 历史恢复使用与实时相同的 Assistant candidate 固化/提升状态机；不能在 historical 分支另写一套
-   “所有 assistant.message 都是最终回答”的规则。
+8. 历史恢复使用与实时相同的 Assistant candidate 完整消息锁定/partial 降级状态机；
+   `assistant.message` 表示一个模型 step 的完整可读输出，不等于整个 Task 的最终回答，historical 分支不能
+   为它另写不同的展示规则。
 
 ### 定向测试
 
 - 断线前收到 delta，重连后完整 thinking 替换临时 block。
 - 历史 complete 先到、迟到实时 delta 后到时不重复。
 - 多 task 相同 step 不冲突。
-- Tool step 含文本、无 Tool 的中间 continuation step、最终成功 step 三种 Assistant candidate 均正确归类。
-- 历史恢复与实时路径对同一事件序列产生相同的 RunCard/最终消息结构。
+- Tool step 的完整消息、被截断的 partial 文本、最终成功 step 三种 Assistant candidate 均正确归类。
+- 历史恢复与实时路径对同一事件序列产生相同的 RunCard/完整 Assistant 消息结构。
 - Session switch 后相同 task/step 可在新 Session 正确创建。
 - sequence gap 规则对持久化 thinking 生效，对 delta 不生效。
 - history cursor 只随有 sequence update 推进。
