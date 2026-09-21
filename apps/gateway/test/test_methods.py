@@ -70,10 +70,42 @@ class RuntimeStub:
                     occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
                     sequence=1,
                 ),
+                RuntimeUpdate(
+                    workspace_key="workspace",
+                    session_id=session_id,
+                    task_id="task",
+                    type="assistant.thinking",
+                    payload={
+                        "step": 1,
+                        "text": "considered the request",
+                        "partial": False,
+                    },
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=2,
+                ),
+                RuntimeUpdate(
+                    workspace_key="workspace",
+                    session_id=session_id,
+                    task_id="task",
+                    type="tool.completed",
+                    payload={
+                        "step": 1,
+                        "call_id": "call-1",
+                        "tool_name": "read",
+                        "success": True,
+                        "error": None,
+                        "output_preview": {"count": 1},
+                        "preview_truncated": False,
+                        "full_result_available": False,
+                        "preview_error": None,
+                    },
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=3,
+                ),
             )
-            if after_sequence < 1
+            if after_sequence < 3
             else (),
-            1,
+            3,
         )
 
     async def cancel_task(self, *args):
@@ -88,6 +120,7 @@ class RuntimeStub:
         *,
         resources,
         display_text=None,
+        submission_id=None,
     ):
         self.steered = (
             workspace_path,
@@ -96,6 +129,7 @@ class RuntimeStub:
             prompt,
             resources,
             display_text,
+            submission_id,
         )
         return TaskOperationResult(task_id=task_id, status="accepted", run_id="run")
 
@@ -160,11 +194,20 @@ def test_gateway_methods读取session历史():
         )
 
     result = asyncio.run(run())
-    assert result["history_cursor"] == 1
-    assert result["next_after_sequence"] == 1
+    assert result["history_cursor"] == 3
+    assert result["next_after_sequence"] == 3
     assert result["has_more"] is False
     assert result["records"][0]["type"] == "user.message"
     assert result["records"][0]["sequence"] == 1
+    assert result["records"][1]["type"] == "assistant.thinking"
+    assert result["records"][1]["payload"] == {
+        "step": 1,
+        "text": "considered the request",
+        "partial": False,
+    }
+    assert result["records"][2]["payload"]["output_preview"] == {
+        "count": 1
+    }
 
 
 def test_gateway_methods将文本和图片steer路由到当前task():
@@ -178,6 +221,7 @@ def test_gateway_methods将文本和图片steer路由到当前task():
                 "task_id": "task",
                 "prompt": "look at the image",
                 "display_text": "look [#image1]",
+                "submission_id": "steer-1",
                 "resources": [
                     {"resource_id": "client/image.png", "media_type": "image/png"}
                 ],
@@ -197,6 +241,42 @@ def test_gateway_methods将文本和图片steer路由到当前task():
     )
     assert runtime.steered[4][0].resource_id == "client/image.png"
     assert runtime.steered[5] == "look [#image1]"
+    assert runtime.steered[6] == "steer-1"
+
+
+def test_gateway_methods兼容省略steer_submission_id并拒绝空值():
+    async def run():
+        runtime = RuntimeStub()
+        methods = GatewayMethods(runtime)
+        result = await methods.dispatch(
+            "session.steer",
+            {
+                "workspace_path": "/workspace",
+                "session_id": "session",
+                "task_id": "task",
+                "prompt": "continue",
+            },
+            set(),
+        )
+        with pytest.raises(GatewayRpcError) as invalid:
+            await methods.dispatch(
+                "session.steer",
+                {
+                    "workspace_path": "/workspace",
+                    "session_id": "session",
+                    "task_id": "task",
+                    "prompt": "continue",
+                    "submission_id": "  ",
+                },
+                set(),
+            )
+        return runtime, result, invalid.value
+
+    runtime, result, invalid = asyncio.run(run())
+
+    assert result["status"] == "accepted"
+    assert runtime.steered[6] is None
+    assert invalid.code == -32602
 
 
 def test_gateway_methods列出摘要并清理空session():

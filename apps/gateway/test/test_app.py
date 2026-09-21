@@ -91,15 +91,21 @@ def test_gateway按连接关注session过滤runtime_update():
                     workspace_key="workspace",
                     session_id="a",
                     task_id="task",
-                    type="assistant.text_delta",
-                    payload={"step": 1, "text": "hello"},
+                    type="assistant.thinking_delta",
+                    payload={"step": 1, "text": "considering"},
                     occurred_at=datetime.now(UTC),
                 ),
             )
             notification = websocket.receive_json()
             assert notification["method"] == "runtime.update"
             assert notification["params"]["session_id"] == "a"
-            assert notification["params"]["payload"]["text"] == "hello"
+            assert notification["params"]["type"] == (
+                "assistant.thinking_delta"
+            )
+            assert notification["params"]["payload"]["text"] == (
+                "considering"
+            )
+            assert notification["params"]["sequence"] is None
 
 
 def test_jsonrpc_notification失败不返回error_response():

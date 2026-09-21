@@ -65,6 +65,9 @@ class SteerParams(SessionParams):
     task_id: str = Field(min_length=1, pattern=r".*\S.*")
     prompt: str
     display_text: str | None = None
+    submission_id: str | None = Field(
+        default=None, min_length=1, pattern=r".*\S.*"
+    )
     resources: tuple[ResourceRefModel, ...] = ()
 
 
@@ -239,6 +242,7 @@ class GatewayMethods:
                 value.prompt,
                 resources=resources,
                 display_text=value.display_text,
+                submission_id=value.submission_id,
             )
         except ResourceUnavailableError as error:
             raise _business(
