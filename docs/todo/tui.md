@@ -79,8 +79,8 @@
   Gateway ResourceRef 提交；Windows/Linux 后续只扩展统一平台函数，不修改 TUI 主流程。图片读取
   失败作为非致命 TUI 通知，任务确认后清理暂存文件，失败和断线时保留以便幂等重试；
   已覆盖 TUI 功能测试和视觉快照。详细设计见
-  `apps/tui/docs/arch/tui-clipboard-image-paste-design.md`，实施步骤见
-  `apps/tui/docs/plan/tui-clipboard-image-paste-development-plan.md`。
+  `apps/tui/docs/spec/2026-08-27-tui-clipboard-image-paste/arch.md`，实施步骤见
+  `apps/tui/docs/spec/2026-08-27-tui-clipboard-image-paste/plan.md`。
 - [x] `TUI-16` 支持 Session 历史浏览、恢复和切换；TUI 只展示并发起应用服务操作，不自行
   重建 Blackboard 业务历史。当前 `/resume` 在空闲态列出当前 Workspace 的非空 Session，并通过
   Gateway 恢复公共会话历史；`/clear` 保留非空当前 Session 并创建新对话。空 Session 不展示，
@@ -93,10 +93,10 @@
   窄屏、多行 Composer 和连续 resize 下使用布局结构保证区域不相交，不依赖魔法间距。
 
 以上编号只用于需求追踪，不代表开发优先级。第一阶段终端框架的状态、交互和验收
-设计见 `apps/tui/docs/arch/tui-terminal-framework-design.md`；开发步骤见
-`apps/tui/docs/plan/tui-terminal-framework-development-plan.md`。持久输入、队列与过渡期
-`Ctrl+C` 设计见 `apps/tui/docs/arch/tui-persistent-input-queue-design.md`，当前 Textual 实施
-步骤见 `apps/tui/docs/plan/textual-tui-development-plan.md`。
+设计见 `apps/tui/docs/spec/2026-08-19-tui-terminal-framework/arch.md`；开发步骤见
+`apps/tui/docs/spec/2026-08-19-tui-terminal-framework/plan.md`。持久输入、队列与过渡期
+`Ctrl+C` 设计见 `apps/tui/docs/spec/2026-08-19-tui-persistent-input-queue/arch.md`，当前 Textual 实施
+步骤见 `apps/tui/docs/spec/2026-08-19-tui-persistent-input-queue/plan.md`。
 
 ## 推进方式
 

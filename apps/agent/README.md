@@ -97,4 +97,5 @@ Trace、日志和 Asset 继续按 Workspace/Session 保存为文件。旧 `conve
 ./apps/agent/scripts/test.sh
 ```
 
-架构设计位于 `apps/agent/docs/arch/`，实施计划位于 `apps/agent/docs/plan/`。
+架构设计和实施计划按功能聚合在 `apps/agent/docs/spec/YYYY-MM-DD-<feature>/`。架构文档以当前
+源代码和测试为事实依据，用于描述架构与系统设计，不反向限制源代码演进。

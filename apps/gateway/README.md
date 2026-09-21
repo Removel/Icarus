@@ -66,4 +66,5 @@ WS  ws://127.0.0.1:8765/rpc
 ./apps/gateway/scripts/test.sh
 ```
 
-架构设计位于 `apps/gateway/docs/arch/`，实施计划位于 `apps/gateway/docs/plan/`。
+架构设计和实施计划按功能聚合在 `apps/gateway/docs/spec/YYYY-MM-DD-<feature>/`。架构文档以当前
+源代码和测试为事实依据，用于描述架构与系统设计，不反向限制源代码演进。

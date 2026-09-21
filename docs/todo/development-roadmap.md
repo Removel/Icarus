@@ -4,7 +4,8 @@
 
 本文记录 Icarus 未来一段时间已经对齐的开发主线、阶段顺序和关键依赖。它是路线图与
 TODO 索引，不替代具体功能的架构设计和实施计划。进入每个阶段前，仍需在对应应用的
-`docs/arch/` 与 `docs/plan/` 中完成设计、评审和任务拆分。
+`docs/spec/YYYY-MM-DD-<feature>/` 中完成设计、评审和任务拆分。架构文档应根据当前源代码与测试
+描述系统，不作为限制源代码演进的反向约束。
 
 详细 TODO：
 
@@ -141,8 +142,8 @@ Knowledge 等位于 Kernel 外部并提供协作能力；Hook 保持底层观测
 
 上述基础能力已经完成。后续异常、日志、配置、安全和资源限制继续由真实调用方驱动加固，不再
 阻塞设备级 Runtime、Gateway 和 Session 产品化。详细设计见
-`apps/agent/docs/arch/agent-core-capability-completion-design.md`，实施结果见
-`apps/agent/docs/plan/agent-core-capability-completion-development-plan.md`。
+`apps/agent/docs/spec/2026-08-27-agent-core-capability-completion/arch.md`，实施结果见
+`apps/agent/docs/spec/2026-08-27-agent-core-capability-completion/plan.md`。
 
 完成标志：新增 Plugin 和 Tool 不需要修改 Kernel 主循环；核心模块边界可以独立理解和测试；
 关键同步、异步与终态行为一致；重构后的文档与实现保持一致。

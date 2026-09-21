@@ -40,8 +40,8 @@ Tool Result 和任务中断之间的协议缺口。当前应先完成下文“�
 已完成的基础能力顺序为：ReAct 去重 → 256 Step Harness → 统一错误 Event → Blackboard Compact →
 本地图片引用；设备级 AgentRuntime、SessionRuntime、Gateway 边界和 Session 恢复能力也已落地。
 当前优先基于真实长对话暴露的问题继续加固 Kernel，再扩展 UI 产品化。基础能力设计见
-`apps/agent/docs/arch/agent-core-capability-completion-design.md`，实施结果见
-`apps/agent/docs/plan/agent-core-capability-completion-development-plan.md`。
+`apps/agent/docs/spec/2026-08-27-agent-core-capability-completion/arch.md`，实施结果见
+`apps/agent/docs/spec/2026-08-27-agent-core-capability-completion/plan.md`。
 
 ## 长对话、Tool 与中断二次收敛
 
@@ -84,7 +84,7 @@ Session、Blackboard State 和 Trace 元数据后，已确认更直接的问题�
 
 ### P0：先恢复完整历史与运行中纠偏
 
-- [x] 按 `apps/agent/docs/arch/agent-run-history-steering-design.md` 恢复 Blackboard 完整 Agent Run
+- [x] 按 `apps/agent/docs/spec/2026-09-20-agent-run-history-steering/arch.md` 恢复 Blackboard 完整 Agent Run
   历史，正常完成时整体提交 `AgentResponse.task_messages`，不再只保留 User 与最终 Assistant。
 - [x] 为新 Run 增量增加严格结构校验；为旧 Session 增加只作用于请求副本的兼容修复，处理孤立
   User、孤立 Tool Result、缺失 Tool Result、空 Assistant 和重复 Tool Call ID，不原地改写旧数据。
@@ -286,7 +286,7 @@ Request Assembler 与 Wire Budget → Redirect → HITL 与 Effect Journal → �
 - [x] 实现 Plugin `quiesce`、状态快照/恢复、退出收束和启动失败回滚。
 - [x] 将当前内置 Plugin 迁移到 Manifest 装配，并保持现有行为与测试兼容。
 
-详细设计见 `apps/agent/docs/arch/plugin-runtime-manifest-lifecycle-design.md`。
+详细设计见 `apps/agent/docs/spec/2026-08-23-plugin-runtime-manifest-lifecycle/arch.md`。
 
 ## SkillPlugin 重构
 
@@ -344,7 +344,7 @@ Request Assembler 与 Wire Budget → Redirect → HITL 与 Effect Journal → �
 
 - [x] 新增设备级唯一的 `AgentRuntime` 和 Session Registry；将当前 `AgentRuntimeService` 的单
   Session 组装与控制能力复用为内部 `SessionRuntime`，迁移期保留兼容入口。详细设计见
-  `apps/agent/docs/arch/device-agent-runtime-session-design.md`。
+  `apps/agent/docs/spec/2026-08-29-device-agent-runtime-session/arch.md`。
 - [x] 将有状态 Plugin 的运行状态统一按 SessionIdentity 快照；Skill Job/通知不再由多个 Session
   覆盖同一 Workspace Plugin State。以 `state_version` 作为状态格式兼容契约；核心 Plugin 恢复失败
   阻止 Session Ready，非核心 Plugin 由 Host 禁用并级联依赖。每个 SessionRuntime 独立持有现有

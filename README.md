@@ -40,7 +40,10 @@ scripts/         整个仓库的安装、启动和测试编排
 Makefile         根目录统一命令入口
 ```
 
-各应用的说明、设计和实施计划分别放在自己的 `README.md`、`docs/arch/` 和 `docs/plan/` 中。
+各应用的说明放在自己的 `README.md`；架构设计和实施计划按功能聚合在
+`docs/spec/YYYY-MM-DD-<feature>/` 中，分别使用 `arch.md`、`plan.md` 或带用途后缀的计划文件。
+架构文档以当前源代码和测试为事实依据，用于描述架构与系统设计，不反向限制源代码演进。
+不可拆分的跨应用需求使用根目录 `spec/YYYY-MM-DD-<feature>.md`。
 完整产品定位见 [`docs/product-positioning.md`](docs/product-positioning.md)。
 每个 App 使用自己的 `.venv` 和 requirements；根目录不集中安装某一种语言的依赖，只调用各 App
 提供的脚本。

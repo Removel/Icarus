@@ -145,3 +145,8 @@ apps/tui/.venv/bin/python apps/tui/scripts/replay_events.py \
 apps/tui/.venv/bin/python -m pytest \
   apps/tui/test/test_app_snapshots.py -q
 ```
+
+## 文档
+
+架构设计和实施计划按功能聚合在 `apps/tui/docs/spec/YYYY-MM-DD-<feature>/`。架构文档以当前
+源代码和测试为事实依据，用于描述架构与系统设计，不反向限制源代码演进。

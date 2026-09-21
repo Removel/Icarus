@@ -8,25 +8,30 @@ Keep application-specific code in `apps/<app-name>/`. Introduce shared packages 
 
 ## Architecture
 
-Agent architecture designs are maintained in:
+Application-specific designs and implementation plans are grouped by feature:
 
-- `apps/agent/docs/arch/`
+```text
+apps/<app-name>/docs/spec/YYYY-MM-DD-<feature>/
+├── arch.md
+├── plan.md
+└── plan-<phase-or-purpose>.md
+```
 
-Implementation plans are maintained in:
+Use the date when the feature design first entered Git. For a plan-only spec, use the plan's first
+Git date. Keep the directory name stable after creation. A feature may be arch-only or plan-only
+when no natural counterpart exists; do not create placeholder documents.
 
-- `apps/agent/docs/plan/`
+Use the repository-root `spec/YYYY-MM-DD-<feature>.md` only for an indivisible requirement that
+requires changes in at least two applications. Use the date when the repository-level spec first
+enters Git and keep the filename stable afterward. If a cross-application requirement can be split
+into app-owned parts, keep each part in the corresponding application's docs instead. Do not put a
+single-application spec in the root `spec/`.
 
-Application-specific designs and implementation plans belong to that application:
-
-- `apps/<app-name>/docs/arch/`
-- `apps/<app-name>/docs/plan/`
-
-Use the repository-root `spec/` only for an indivisible requirement that requires changes in at
-least two applications. If a cross-application requirement can be split into app-owned parts, keep
-each part in the corresponding application's docs instead. Do not put a single-application spec in
-the root `spec/`.
-
-Read the relevant design before changing architecture or data flow. When implementation and documentation differ, verify the current code and tests first, then update the corresponding document.
+Architecture documents describe the current source-code architecture and system design. They are
+derived from the implementation and do not constrain how source code may evolve. Before changing or
+writing architecture documentation, inspect the relevant code and tests. When implementation and
+documentation differ, treat the current code and tests as the source of truth, then update the
+corresponding document. Explicit repository rules in this file still apply.
 
 ## Development Red Lines
 
