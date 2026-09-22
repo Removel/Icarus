@@ -34,6 +34,7 @@ AgentRuntime                     # 一台设备一个逻辑实例
 │       ├── PluginRuntime(agent)
 │       ├── PluginRuntime(blackboard)
 │       ├── PluginRuntime(user-input)
+│       ├── PluginRuntime(process)
 │       └── ...
 ├── SessionRuntime B
 │   └── PluginRuntimeHost B
@@ -93,6 +94,7 @@ SessionRuntime 是单 Session 的组装、生命周期和应用操作单元，�
 - AgentPlugin 直接持有当前 Session 的 TaskChannelRegistry 和 active runs；
 - PersistencePlugin 直接持有当前 SessionIdentity；
 - SkillPlugin 依赖当前 Session 的 Blackboard conversation 和 Session State；
+- ProcessPlugin 持有当前 Session 启动的进程组、Supervisor 和有界日志；
 - 迁移前的 OutputBridgePlugin 只输出一套 Session Event；当前已按职责重构为 RuntimeUpdatePlugin。
 
 因此第一阶段继续为每个 SessionRuntime 创建一套 Plugin 实例、EventBus 和 PluginRuntimeHost。
@@ -225,8 +227,10 @@ SessionRuntime 只在以下情况关闭：
 - SessionRuntime 启动或恢复失败，需要清理半初始化实例。
 
 网络连接断开、TUI 或 Backend 退出、客户端切换到其他 Session，以及 Session 暂时空闲，都不会
-立即关闭 SessionRuntime。普通 unload 遇到运行中或排队中的 Task 时返回“Session 正忙”，不隐式
-取消任务；调用方应先等待任务结束或显式取消，再重新 unload。
+立即关闭 SessionRuntime。普通 unload 遇到运行中或排队中的 Agent Task 时返回“Session 正忙”，
+不隐式取消 Agent Task；调用方应先等待任务结束或显式取消，再重新 unload。只有 Plugin 后台工作时
+允许进入 unload，随后由统一的 `quiesce → drain → stop` 生命周期先收束这些工作（包括 ProcessPlugin
+的进程组），再完成 Session 卸载。
 
 正常卸载复用现有 Host 生命周期：停止接受新 Task，quiesce，drain，snapshot，停止 Plugin 和后台
 任务，关闭当前 SessionRuntime 独立的 PersistenceRuntime，最后从活动 Registry 移除。

@@ -19,6 +19,8 @@
 - Blackboard 多 Region 当前状态、只读 Region Tool 与 Product Conversation 投影；
 - 通过 MemoryPlugin 接入自建 Mem0：每轮 1 秒内自动召回，并提供 8 个显式记忆 Tool。
 - 通过 KnowledgePlugin 接入自建 OpenKB：提供 5 个按需知识 Tool，不开放删除能力。
+- 通过 ProcessPlugin 在 Session 内启动和管理开发服务器等长期命令，提供一个参数化
+  `background_process` Tool，并在 Session 卸载前收束完整进程组。
 
 ## 安装依赖
 
