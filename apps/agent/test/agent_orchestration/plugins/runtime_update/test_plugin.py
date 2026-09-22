@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 import json
 
 from apps.agent.src.agent_orchestration.capability import (
@@ -17,6 +18,7 @@ from apps.agent.src.agent_orchestration.plugins.blackboard import (
 from apps.agent.src.agent_orchestration.plugins.runtime_update import (
     RuntimeUpdatePlugin,
 )
+from apps.agent.src.agent_orchestration.plugins.process import ProcessUpdatedEvent
 from apps.agent.src.agent_orchestration.plugins.user_input import (
     InputFinishedEvent,
     InputQueuedEvent,
@@ -381,3 +383,46 @@ def test_runtime_update拒绝非json_payload():
     updates = project([("user-input", event)])
     assert updates[0].workspace_key == "workspace"
     assert updates[0].session_id == "session"
+
+
+def test_runtime_update_plugin投影process状态并脱敏且不暴露日志路径():
+    now = datetime.now(UTC)
+    updates = project(
+        [
+            (
+                "process",
+                ProcessUpdatedEvent(
+                    process_id="proc_1",
+                    pid=123,
+                    command="serve --token=top-secret",
+                    workdir="/workspace/password=hidden",
+                    status="failed",
+                    started_at=now,
+                    ended_at=now,
+                    exit_code=7,
+                    stop_reason="Authorization: Bearer abc",
+                    log_truncated=True,
+                    origin_task_id="task-origin",
+                ),
+            )
+        ]
+    )
+
+    assert len(updates) == 1
+    update = updates[0]
+    assert update.type == "process.updated"
+    assert update.task_id is None
+    assert update.payload == {
+        "process_id": "proc_1",
+        "pid": 123,
+        "command": "serve --token=[REDACTED]",
+        "workdir": "/workspace/password=[REDACTED]",
+        "status": "failed",
+        "started_at": now.isoformat().replace("+00:00", "Z"),
+        "ended_at": now.isoformat().replace("+00:00", "Z"),
+        "exit_code": 7,
+        "stop_reason": "Authorization: [REDACTED]",
+        "log_truncated": True,
+        "origin_task_id": "task-origin",
+    }
+    assert "log_path" not in update.payload

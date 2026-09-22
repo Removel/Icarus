@@ -5,7 +5,11 @@ import pytest
 
 from apps.agent.src.agent_orchestration.plugins.user_input import InputAccepted
 from apps.agent.src.agent_orchestration.run_control import TaskOperationResult
-from apps.agent.src.application import DiscardSessionResult, SessionSummary
+from apps.agent.src.application import (
+    DiscardSessionResult,
+    SessionSummary,
+    UnloadResult,
+)
 from apps.gateway.src.protocol.errors import BUSINESS_ERROR, GatewayRpcError
 from apps.gateway.src.protocol.methods import GatewayMethods
 from apps.agent.src.runtime_update import RuntimeUpdate
@@ -134,7 +138,8 @@ class RuntimeStub:
         return TaskOperationResult(task_id=task_id, status="accepted", run_id="run")
 
     async def unload_session(self, *args):
-        raise AssertionError(args)
+        self.unloaded = args
+        return UnloadResult("workspace", args[1], "unloaded")
 
     def get_task_status(self, *args):
         raise KeyError(args)
@@ -208,6 +213,25 @@ def test_gateway_methods读取session历史():
     assert result["records"][2]["payload"]["output_preview"] == {
         "count": 1
     }
+
+
+def test_gateway_methods沿用session_unload协议关闭后台工作():
+    async def run():
+        runtime = RuntimeStub()
+        result = await GatewayMethods(runtime).dispatch(
+            "session.unload",
+            {"workspace_path": "/workspace", "session_id": "session"},
+            set(),
+        )
+        return runtime, result
+
+    runtime, result = asyncio.run(run())
+    assert result == {
+        "workspace_key": "workspace",
+        "session_id": "session",
+        "status": "unloaded",
+    }
+    assert runtime.unloaded == ("/workspace", "session")
 
 
 def test_gateway_methods将文本和图片steer路由到当前task():

@@ -89,6 +89,7 @@ class SessionRuntime:
         required.add("mcp")
         required.add("memory")
         required.add("knowledge")
+        required.add("process")
         self.runtime_host = PluginRuntimeHost(
             identity.workspace_path,
             identity.session_id,
@@ -154,6 +155,15 @@ class SessionRuntime:
                 },
                 "knowledge": {
                     **config.runtime.plugin_config.get("knowledge", {}),
+                    "default_page_size": (
+                        config.agent.tool_execution.default_page_size
+                    ),
+                    "max_page_size": (
+                        config.agent.tool_execution.max_page_size
+                    ),
+                },
+                "process": {
+                    **config.runtime.plugin_config.get("process", {}),
                     "default_page_size": (
                         config.agent.tool_execution.default_page_size
                     ),
