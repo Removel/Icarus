@@ -16,6 +16,7 @@ from apps.tui.src.widgets.messages import (
 )
 from apps.tui.src.widgets.queue_panel import QueuePanel
 from apps.tui.src.widgets.status_bar import RuntimeStatusBar
+from apps.tui.src.widgets.turn_rail import TurnRail
 
 __all__ = [
     "AssistantMessage",
@@ -29,6 +30,7 @@ __all__ = [
     "ThinkingBlock",
     "ToolBlock",
     "TurnStatusMessage",
+    "TurnRail",
     "UserMessage",
     "UserCorrectionBlock",
     "WelcomeMessage",

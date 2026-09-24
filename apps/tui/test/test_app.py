@@ -17,13 +17,23 @@ from apps.tui.src.gateway_client.models import (
     SubmitAccepted,
     TaskOperationResult,
 )
-from apps.tui.src.app import IcarusTextualApp, RuntimeSubscriptionFailed
+from apps.tui.src.app import (
+    IcarusTextualApp,
+    PreparedSession,
+    RuntimeSubscriptionFailed,
+)
 from apps.tui.src.chat_state import RuntimePhase
 from apps.tui.src.clipboard import (
     ClipboardImage,
     ClipboardImageReadError,
 )
-from apps.tui.src.event_pipeline import FinishTurn, ShowNotification
+from apps.tui.src.event_pipeline import (
+    AppendAssistantDelta,
+    AppendUserMessage,
+    CompleteAssistantMessage,
+    FinishTurn,
+    ShowNotification,
+)
 from apps.tui.src.screens import SessionPicker
 from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
 from apps.tui.src.gateway_client import (
@@ -38,6 +48,7 @@ from apps.tui.src.widgets import (
     QueuePanel,
     RuntimeStatusBar,
     RunCard,
+    TurnRail,
     ThinkingBlock,
 )
 from apps.tui.src.widgets.messages import (
@@ -911,7 +922,7 @@ def test_app恢复session退出时的消息工具错误和中断状态(tmp_path)
     )
 
 
-def test_app历史恢复thinking默认展开并恢复工具追加和最终回答(tmp_path):
+def test_app历史恢复thinking默认折叠并恢复工具追加和最终回答(tmp_path):
     async def run():
         service = ControlledService()
         service.history = SessionHistoryModel(
@@ -990,12 +1001,136 @@ def test_app历史恢复thinking默认展开并恢复工具追加和最终回答
     assert asyncio.run(run()) == (
         1,
         "reasoning",
-        True,
+        False,
         "also check errors",
         {"stdout": "ok"},
         "final answer",
         8,
     )
+
+
+def test_app_切换会话时清空旧用户轮次轨道(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            await app._apply_action(AppendUserMessage("task-1", "old"))
+            rail = app.query_one(TurnRail)
+            assert "●" in rail.renderable.plain
+            replacement = ControlledService()
+            replacement.history = SessionHistoryModel(records=(), history_cursor=0)
+            await app._activate_session(
+                PreparedSession(replacement, replacement.subscription, replacement.history)
+            )
+            await pilot.pause()
+            return rail.renderable.plain
+
+    assert asyncio.run(run()) == ""
+
+
+def test_app_浏览历史时新回复显示回到最新入口(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            for index in range(30):
+                await app._apply_action(AppendUserMessage(f"task-{index}", f"q {index}"))
+            view = app.query_one(ConversationView)
+            await view.jump_to_turn(0)
+            await app._apply_action(AppendUserMessage("task-30", "new input"))
+            await pilot.pause()
+            indicator = app.query_one("#new-output")
+            visible = indicator.display
+            assert "New messages" in str(indicator.label)
+            assert indicator.region.x >= view.region.right - indicator.region.width - 4
+            indicator.press()
+            await pilot.pause()
+            return visible, view.mounted_turn_range, indicator.display
+
+    visible, mounted, remaining = asyncio.run(run())
+    assert visible is True
+    assert mounted[1] == 31
+    assert remaining is False
+
+
+def test_app_当前窗口内上翻后新回复仍提示回到最新(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test(size=(100, 20)) as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            for index in range(6):
+                await app._apply_action(AppendUserMessage(f"task-{index}", f"q {index}"))
+                await app._apply_action(CompleteAssistantMessage(f"task-{index}", "response " * 40))
+            view = app.query_one(ConversationView)
+            view.page_up()
+            await pilot.pause()
+            assert view._detached_window is False
+            await app._apply_action(AppendAssistantDelta("task-5", " new", step=2))
+            await pilot.pause()
+            return app.query_one("#new-output").display
+
+    assert asyncio.run(run()) is True
+
+
+def test_app恢复历史后轨道选择最后一轮且未展示中途挂载(tmp_path, monkeypatch):
+    async def run():
+        service = ControlledService()
+        records = []
+        for index in range(30):
+            records.extend((
+                RuntimeUpdateModel(
+                    workspace_key="workspace", session_id="test-session",
+                    task_id=f"history-{index}", type="user.message",
+                    payload={"text": f"question {index}", "resources": []},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=2 * index + 1,
+                ),
+                RuntimeUpdateModel(
+                    workspace_key="workspace", session_id="test-session",
+                    task_id=f"history-{index}", type="assistant.message",
+                    payload={"step": 1, "text": f"answer {index}"},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=2 * index + 2,
+                ),
+            ))
+        service.history = SessionHistoryModel(
+            records=tuple(records), history_cursor=len(records)
+        )
+        visible_during_mount = []
+        original_mount = ConversationView._mount_unit
+
+        async def observe_mount(self, unit):
+            visible_during_mount.append(
+                self.display and self.styles.visibility == "visible"
+            )
+            return await original_mount(self, unit)
+
+        monkeypatch.setattr(ConversationView, "_mount_unit", observe_mount)
+        app = make_app(service, tmp_path)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            await pilot.pause()
+            rail = app.query_one(TurnRail)
+            conversation = app.query_one(ConversationView)
+            result = (
+                rail.current, rail.window_start,
+                conversation.mounted_turn_range,
+                conversation.scroll_y == conversation.max_scroll_y,
+                visible_during_mount,
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+            return result
+
+    current, start, mounted, at_bottom, visible = asyncio.run(run())
+    assert current == 29
+    assert start == 20
+    assert mounted == (6, 30)
+    assert at_bottom is True
+    assert visible and not any(visible)
 
 
 def test_app聚合历史允许sequence跳号(tmp_path):
@@ -2099,8 +2234,8 @@ def test_conversation更新失败后忽略后续event且不调度队首(
 def test_runtime接受后用户消息渲染失败不把消息重新入队(
     monkeypatch, tmp_path
 ):
-    async def fail_user_message(self, text):
-        del self, text
+    async def fail_user_message(self, text, *, task_id=""):
+        del self, text, task_id
         raise RuntimeError("user message exploded")
 
     monkeypatch.setattr(

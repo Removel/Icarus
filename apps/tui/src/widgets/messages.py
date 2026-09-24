@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 import re
@@ -429,7 +430,7 @@ class DisclosureSummary(Static):
 
 class ThinkingBlock(Vertical):
     def __init__(
-        self, *, step: int, expanded: bool = True, historical: bool = False
+        self, *, step: int, expanded: bool = False, historical: bool = False
     ) -> None:
         super().__init__(classes="thinking-block")
         self.step = step
@@ -439,6 +440,9 @@ class ThinkingBlock(Vertical):
         self.completed = False
         self._markdown_parts: list[str] = []
         self._markdown_stream = None
+        self._render_generation = 0
+        self._rendered_text = ""
+        self._render_lock = asyncio.Lock()
 
     @property
     def markdown_text(self) -> str:
@@ -458,11 +462,20 @@ class ThinkingBlock(Vertical):
         if self.completed or not text:
             return
         self._markdown_parts.append(text)
+        if not self.expanded:
+            return
         if self._markdown_stream is None:
+            if self._rendered_text != self.markdown_text[:-len(text)]:
+                await self.query_one(StreamingMarkdown).update(
+                    self.markdown_text
+                )
+                self._rendered_text = self.markdown_text
+                return
             self._markdown_stream = Markdown.get_stream(
                 self.query_one(StreamingMarkdown)
             )
         await self._markdown_stream.write(text)
+        self._rendered_text = self.markdown_text
 
     async def complete_text(self, text: str, *, partial: bool) -> None:
         if self.completed:
@@ -474,14 +487,36 @@ class ThinkingBlock(Vertical):
         self._markdown_parts = [text]
         self.partial = partial
         self.completed = True
-        await self.query_one(StreamingMarkdown).update(text)
+        async with self._render_lock:
+            if self.expanded and self._rendered_text != text:
+                await self.query_one(StreamingMarkdown).update(text)
+                self._rendered_text = text
         self._refresh_summary()
 
     def set_expanded(self, expanded: bool) -> None:
+        if self.expanded == expanded:
+            return
         self.expanded = expanded
+        self._render_generation += 1
         if self.is_mounted:
             self.query_one(StreamingMarkdown).display = expanded
+            if expanded and self._rendered_text != self.markdown_text:
+                self.run_worker(self._render_body(self._render_generation))
             self._refresh_summary()
+
+    async def _render_body(self, generation: int) -> None:
+        stream = self._markdown_stream
+        self._markdown_stream = None
+        if stream is not None:
+            await stream.stop()
+        async with self._render_lock:
+            if generation != self._render_generation or not self.is_mounted or not self.expanded:
+                return
+            text = self.markdown_text
+            if text != self._rendered_text:
+                await self.query_one(StreamingMarkdown).update(text)
+                self._rendered_text = text
+
 
     def toggle(self) -> None:
         self.set_expanded(not self.expanded)

@@ -15,9 +15,9 @@ from typing import Any, Protocol
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Static
+from textual.widgets import Button, Static
 from textual.worker import Worker, WorkerCancelled
 
 from apps.tui.src.clipboard import (
@@ -61,6 +61,7 @@ from apps.tui.src.widgets import (
     PersistentComposer,
     QueuePanel,
     RuntimeStatusBar,
+    TurnRail,
 )
 
 
@@ -271,7 +272,10 @@ class IcarusTextualApp(App[int]):
     def compose(self) -> ComposeResult:
         yield Static("ICARUS", id="app-title", markup=False)
         yield Static(str(self.workspace_path), id="workspace-label", markup=False)
-        yield ConversationView(self.workspace_path, id="conversation")
+        with Horizontal(id="conversation-shell"):
+            yield ConversationView(self.workspace_path, id="conversation")
+            yield TurnRail(id="turn-rail")
+            yield Button("↓ New messages", id="new-output")
         yield QueuePanel(id="queue-panel")
         with Vertical(id="composer-shell"):
             yield Static("❯", id="composer-prompt", markup=False)
@@ -291,6 +295,7 @@ class IcarusTextualApp(App[int]):
 
     def on_resize(self, event: events.Resize) -> None:
         self._update_responsive_classes(event.size.width, event.size.height)
+        self.call_after_refresh(self._position_new_output)
 
     def _update_responsive_classes(self, width: int, height: int) -> None:
         self.screen.set_class(width <= 70, "-narrow")
@@ -403,9 +408,14 @@ class IcarusTextualApp(App[int]):
                     )
                     if self._fatal_failure:
                         message.subscription.close()
-                        conversation.finish_history_restore()
+                        await conversation.finish_history_restore_async()
                         return
-            conversation.finish_history_restore()
+            await conversation.finish_history_restore_async()
+            rail = self.query_one(TurnRail)
+            rail.set_turns(
+                [turn.text for turn in conversation.projection.turns],
+                conversation.current_turn_index or 0,
+            )
         self._last_sequence = max(
             self._last_sequence, message.history_cursor
         )
@@ -802,6 +812,8 @@ class IcarusTextualApp(App[int]):
         activated = False
         try:
             await conversation.reset()
+            self.query_one("#new-output", Button).display = False
+            self.query_one(TurnRail).set_turns((), 0)
             if prepared.history.records:
                 conversation.begin_history_restore()
                 with self.batch_update():
@@ -811,7 +823,12 @@ class IcarusTextualApp(App[int]):
                         )
                         if self._fatal_failure:
                             raise RuntimeError(self._fatal_message)
-                conversation.finish_history_restore()
+                await conversation.finish_history_restore_async()
+                rail = self.query_one(TurnRail)
+                rail.set_turns(
+                    [turn.text for turn in conversation.projection.turns],
+                    conversation.current_turn_index or 0,
+                )
             self._last_sequence = max(
                 self._last_sequence, prepared.history.history_cursor
             )
@@ -1304,6 +1321,18 @@ class IcarusTextualApp(App[int]):
         if not handled:
             raise TypeError(f"Unhandled UiAction: {type(action).__name__}")
 
+        conversation = self.query_one(ConversationView)
+        rail = self.query_one(TurnRail)
+        indicator = self.query_one("#new-output", Button)
+        if (conversation._detached_window or conversation._reading_history) and conversation.turn_count:
+            indicator.display = True
+            self.call_after_refresh(self._position_new_output)
+        else:
+            indicator.display = False
+        rail.set_turns(
+            [turn.text for turn in conversation.projection.turns],
+            conversation.current_turn_index or 0,
+        )
         if isinstance(action, FinishTurn):
             if not self.chat_state.finish_active(action.task_id):
                 return
@@ -1316,6 +1345,39 @@ class IcarusTextualApp(App[int]):
                 }[action.status]
             )
             self._schedule_dispatch()
+
+    async def on_turn_rail_turn_selected(
+        self, message: TurnRail.TurnSelected
+    ) -> None:
+        conversation = self.query_one(ConversationView)
+        await conversation.jump_to_turn(message.index)
+        self.query_one(TurnRail).set_turns(
+            [turn.text for turn in conversation.projection.turns],
+            message.index,
+        )
+
+    def _position_new_output(self) -> None:
+        indicator = self.query_one("#new-output", Button)
+        if not indicator.display:
+            return
+        conversation = self.query_one(ConversationView)
+        shell = self.query_one("#conversation-shell", Horizontal)
+        indicator.styles.offset = (
+            max(
+                0,
+                conversation.region.right
+                - shell.region.x
+                - indicator.size.width
+                - 2,
+            ),
+            2,
+        )
+
+    def on_button_pressed(self, message: Button.Pressed) -> None:
+        if message.button.id != "new-output":
+            return
+        self.query_one(ConversationView).resume_follow()
+        message.button.display = False
 
     def _schedule_dispatch(self) -> None:
         if self._dispatch_scheduled or not self.chat_state.can_dispatch:
