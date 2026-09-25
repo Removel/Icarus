@@ -1,8 +1,12 @@
 import asyncio
 
+from pathlib import Path
+
 from textual.app import App, ComposeResult
 
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
+
+from textual.widgets import Static
 
 from apps.tui.src.widgets.turn_rail import TurnRail
 
@@ -12,6 +16,17 @@ class RailTestApp(App):
 
     def compose(self) -> ComposeResult:
         with Vertical():
+            yield TurnRail(id="turn-rail")
+
+
+class RailShellApp(App):
+    """The rail inside the real conversation shell, so styles.tcss applies."""
+
+    CSS_PATH = Path(__file__).resolve().parents[2] / "src" / "styles.tcss"
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="conversation-shell"):
+            yield Static("", id="conversation")
             yield TurnRail(id="turn-rail")
 
 
@@ -93,7 +108,35 @@ def test_turn_rail_focused_summary_panel_click_selects_row():
             await pilot.pause()
             return rail.selected_turn
 
-    assert asyncio.run(run()) == 21
+    # Row 2 is the spacer row under the first excerpt, so it selects window_start.
+    assert asyncio.run(run()) == 20
+
+
+def test_turn_rail_excerpt_click_selects_the_summary_under_the_pointer():
+    async def run():
+        app = RailShellApp()
+        async with app.run_test(size=(100, 32)) as pilot:
+            rail = app.query_one(TurnRail)
+            rail.set_turns([f"question {i}" for i in range(30)], current=29)
+            rail.show_excerpts()
+            await pilot.pause()
+            panel = rail.query_one("#turn-rail-excerpts")
+            selected = []
+            for item in (0, 2, 5, 9):
+                rail.selected_turn = None
+                if not panel.display:
+                    rail.show_excerpts()
+                    await pilot.pause()
+                # Each excerpt paints its dot row plus a blank spacer row.
+                row = panel.region.y + 1 + item * 2
+                await pilot.click(offset=(panel.region.x + 4, row))
+                await pilot.pause()
+                selected.append(rail.selected_turn)
+            return rail.window_start, selected
+
+    window_start, selected = asyncio.run(run())
+    assert window_start == 20
+    assert selected == [20, 22, 25, 29]
 
 
 def test_turn_rail_excerpt_list_aligns_with_centered_dots():

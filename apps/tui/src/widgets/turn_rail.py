@@ -23,7 +23,8 @@ class TurnExcerpts(Static):
         event.stop()
         rail = self.parent
         if isinstance(rail, TurnRail):
-            row = event.y - 1
+            # Each excerpt paints a dot row plus a blank spacer row.
+            row = (event.y - 1) // 2
             index = rail.window_start + row
             if 0 <= row < min(rail.capacity, len(rail._turns) - rail.window_start):
                 rail._cursor = index
