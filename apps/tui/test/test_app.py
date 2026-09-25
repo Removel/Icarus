@@ -1075,6 +1075,77 @@ def test_app_当前窗口内上翻后新回复仍提示回到最新(tmp_path):
     assert asyncio.run(run()) is True
 
 
+def test_app_仅上翻历史不会显示回到最新提示(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test(size=(100, 20)) as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            for index in range(6):
+                await app._apply_action(AppendUserMessage(f"task-{index}", f"q {index}"))
+                await app._apply_action(CompleteAssistantMessage(f"task-{index}", "response " * 40))
+            view = app.query_one(ConversationView)
+            view.page_up()
+            await pilot.pause()
+            return view.following_live_tail, app.query_one("#new-output").display
+
+    assert asyncio.run(run()) == (False, False)
+
+
+def test_app_手动滚回最新内容后回到最新提示自动消失(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test(size=(100, 20)) as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            for index in range(6):
+                await app._apply_action(AppendUserMessage(f"task-{index}", f"q {index}"))
+                await app._apply_action(CompleteAssistantMessage(f"task-{index}", "response " * 40))
+            view = app.query_one(ConversationView)
+            view.page_up()
+            await pilot.pause()
+            await app._apply_action(AppendAssistantDelta("task-5", " new", step=2))
+            await pilot.pause()
+            assert app.query_one("#new-output").display is True
+            for _ in range(30):
+                if view.is_vertical_scroll_end:
+                    break
+                view.page_down()
+                await pilot.pause()
+            await pilot.pause()
+            return view.is_vertical_scroll_end, app.query_one("#new-output").display
+
+    at_end, visible = asyncio.run(run())
+    assert at_end is True
+    assert visible is False
+
+
+def test_app_滚回最新内容后新输出继续自动跟随(tmp_path):
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test(size=(100, 20)) as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            for index in range(6):
+                await app._apply_action(AppendUserMessage(f"task-{index}", f"q {index}"))
+                await app._apply_action(CompleteAssistantMessage(f"task-{index}", "response " * 40))
+            view = app.query_one(ConversationView)
+            view.page_up()
+            await pilot.pause()
+            await app._apply_action(AppendAssistantDelta("task-5", " new", step=2))
+            await pilot.pause()
+            for _ in range(30):
+                if view.is_vertical_scroll_end:
+                    break
+                view.page_down()
+                await pilot.pause()
+            await app._apply_action(AppendAssistantDelta("task-5", " more", step=2))
+            await pilot.pause()
+            return view.is_vertical_scroll_end, app.query_one("#new-output").display
+
+    assert asyncio.run(run()) == (True, False)
+
+
 def test_app恢复历史后轨道选择最后一轮且未展示中途挂载(tmp_path, monkeypatch):
     async def run():
         service = ControlledService()

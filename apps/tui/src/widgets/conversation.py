@@ -6,6 +6,7 @@ from pathlib import Path
 
 from textual import events
 from textual.containers import VerticalScroll
+from textual.message import Message
 
 from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
@@ -42,6 +43,13 @@ from apps.tui.src.widgets.messages import (
 class ConversationView(VerticalScroll):
     """Render only conversation-target UiActions."""
 
+    class FollowChanged(Message):
+        """The view started or stopped following the live tail."""
+
+        def __init__(self, following: bool) -> None:
+            self.following = following
+            super().__init__()
+
     def __init__(self, workspace_path: str | Path, *, id: str | None = None) -> None:
         super().__init__(id=id)
         self.workspace_path = Path(workspace_path).expanduser().resolve()
@@ -67,6 +75,29 @@ class ConversationView(VerticalScroll):
         self._visible_turns: list[tuple[int, list[object]]] = []
         self._anchor_pending = True
         self._restoring_history = False
+        self._following = True
+
+    @property
+    def following_live_tail(self) -> bool:
+        """Whether new output keeps the newest content in view on its own."""
+
+        return not self._detached_window and not self._reading_history
+
+    def _set_reading_history(self, reading: bool) -> None:
+        if self._reading_history != reading:
+            self._reading_history = reading
+            self._announce_follow_state()
+
+    def _set_detached_window(self, detached: bool) -> None:
+        if self._detached_window != detached:
+            self._detached_window = detached
+            self._announce_follow_state()
+
+    def _announce_follow_state(self) -> None:
+        following = self.following_live_tail
+        if following != self._following:
+            self._following = following
+            self.post_message(self.FollowChanged(following))
 
     async def on_mount(self) -> None:
         await self.mount(WelcomeMessage(self.workspace_path))
@@ -80,9 +111,9 @@ class ConversationView(VerticalScroll):
         self._window_widgets.clear()
         self._rendered_turn = None
         self._history_deferred = False
-        self._detached_window = False
+        self._set_detached_window(False)
         self._window_loading = False
-        self._reading_history = False
+        self._set_reading_history(False)
         self._live_tail_task = None
         self._live_tail_widgets.clear()
         self._run_cards.clear()
@@ -112,7 +143,7 @@ class ConversationView(VerticalScroll):
             return
         if self.turn_count > 24 and len(self._visible_turns) >= 24:
             if self._reading_history:
-                self._detached_window = True
+                self._set_detached_window(True)
                 return
             old_index, old_widgets = self._visible_turns.pop(0)
             detached = not self.is_vertical_scroll_end
@@ -125,7 +156,7 @@ class ConversationView(VerticalScroll):
             self._window_start = old_index + 1
             if detached:
                 self.anchor(False)
-                self._detached_window = True
+                self._set_detached_window(True)
                 self.scroll_to(y=old_scroll, animate=False, immediate=True)
         widget = UserMessage(text)
         await self.mount(widget)
@@ -284,7 +315,7 @@ class ConversationView(VerticalScroll):
                 turn_widgets.append(widget)
             self._visible_turns.append((index, turn_widgets))
         self._window_start, self._window_end = start, end
-        self._detached_window = end < self.turn_count
+        self._set_detached_window(end < self.turn_count)
 
     async def _mount_unit(self, unit: DisplayUnit):
         if unit.kind == "user":
@@ -621,7 +652,7 @@ class ConversationView(VerticalScroll):
         self.resume_follow()
 
     def page_up(self) -> None:
-        self._reading_history = True
+        self._set_reading_history(True)
         if self._window_start > 0 and self.scroll_y <= self.size.height:
             self.run_worker(self._page_window(-8), exclusive=True,
                             group="conversation-window")
@@ -672,7 +703,7 @@ class ConversationView(VerticalScroll):
 
 
     def resume_follow(self) -> None:
-        self._reading_history = False
+        self._set_reading_history(False)
         if self._detached_window and self.turn_count:
             self.run_worker(self._resume_latest_window(), exclusive=True,
                             group="conversation-window")
@@ -710,6 +741,9 @@ class ConversationView(VerticalScroll):
             self._anchor_pending = True
         elif self.is_vertical_scroll_end:
             self._anchor_pending = False
+            # Scrolling back to the tail is the reader returning to the newest
+            # output, so the history-reading state ends with it.
+            self._set_reading_history(False)
             self.anchor()
 
     def _activate_anchor_after_layout(self) -> None:
@@ -730,12 +764,12 @@ class ConversationView(VerticalScroll):
 
     def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         if self._window_start > 0 and self.scroll_y <= self.size.height:
-            self._reading_history = True
+            self._set_reading_history(True)
             self.run_worker(self._page_window(-8), exclusive=True,
                             group="conversation-window")
             event.stop()
             return
-        self._reading_history = True
+        self._set_reading_history(True)
         super()._on_mouse_scroll_up(event)
 
     def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:

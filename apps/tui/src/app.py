@@ -1323,12 +1323,7 @@ class IcarusTextualApp(App[int]):
 
         conversation = self.query_one(ConversationView)
         rail = self.query_one(TurnRail)
-        indicator = self.query_one("#new-output", Button)
-        if (conversation._detached_window or conversation._reading_history) and conversation.turn_count:
-            indicator.display = True
-            self.call_after_refresh(self._position_new_output)
-        else:
-            indicator.display = False
+        self._sync_new_output(conversation.following_live_tail)
         rail.set_turns(
             [turn.text for turn in conversation.projection.turns],
             conversation.current_turn_index or 0,
@@ -1355,6 +1350,25 @@ class IcarusTextualApp(App[int]):
             [turn.text for turn in conversation.projection.turns],
             message.index,
         )
+
+    def on_conversation_view_follow_changed(
+        self, message: ConversationView.FollowChanged
+    ) -> None:
+        """Returning to the tail dismisses the prompt."""
+
+        # Showing it stays with _apply_action, which runs when output actually
+        # arrives, so the label keeps meaning "new messages".
+        if message.following:
+            self._sync_new_output(True)
+
+    def _sync_new_output(self, following: bool) -> None:
+        conversation = self.query_one(ConversationView)
+        indicator = self.query_one("#new-output", Button)
+        if not following and conversation.turn_count:
+            indicator.display = True
+            self.call_after_refresh(self._position_new_output)
+        else:
+            indicator.display = False
 
     def _position_new_output(self) -> None:
         indicator = self.query_one("#new-output", Button)
