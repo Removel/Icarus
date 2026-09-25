@@ -25,6 +25,9 @@ from apps.agent.src.agent_orchestration.plugins.user_input import (
 )
 from apps.agent.src.agent_orchestration.run_control import TaskSteerAppliedEvent
 from apps.agent.src.agent_orchestration.plugins.persistence.redactor import Redactor
+from apps.agent.src.agent_orchestration.plugins.process.events import (
+    ProcessUpdatedEvent,
+)
 from apps.agent.src.agent_orchestration.plugins.runtime_update import tool_preview
 from apps.agent.src.model_provider.types import TextPart
 from apps.agent.src.runtime_update import RuntimeUpdate
@@ -197,6 +200,29 @@ class RuntimeUpdatePlugin(BasePlugin):
             payload = {
                 "before_tokens": event.before_tokens,
                 "after_tokens": event.after_tokens,
+            }
+        elif isinstance(event, ProcessUpdatedEvent):
+            update_type = "process.updated"
+            payload = {
+                "process_id": event.process_id,
+                "pid": event.pid,
+                "command": self._redactor.redact_text(event.command),
+                "workdir": self._redactor.redact_text(event.workdir),
+                "status": event.status,
+                "started_at": event.started_at.isoformat().replace("+00:00", "Z"),
+                "ended_at": (
+                    event.ended_at.isoformat().replace("+00:00", "Z")
+                    if event.ended_at is not None
+                    else None
+                ),
+                "exit_code": event.exit_code,
+                "stop_reason": (
+                    self._redactor.redact_text(event.stop_reason)
+                    if event.stop_reason is not None
+                    else None
+                ),
+                "log_truncated": event.log_truncated,
+                "origin_task_id": event.origin_task_id,
             }
         if update_type is None:
             return None

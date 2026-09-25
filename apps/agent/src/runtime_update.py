@@ -26,6 +26,7 @@ RuntimeUpdateType: TypeAlias = Literal[
     "tool.completed",
     "task.error",
     "context.compacted",
+    "process.updated",
 ]
 
 

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "plugin_id": "process",
+  "plugin_version": "1.0.0",
+  "entrypoint": "apps.agent.src.agent_orchestration.plugins.process.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [
+    {"plugin_id": "persistence", "capability_id": "runtime", "version_spec": ">=1,<2"},
+    {"plugin_id": "persistence", "capability_id": "session", "version_spec": ">=1,<2"}
+  ],
+  "provided_capabilities": [],
+  "provided_tools": ["background_process"],
+  "published_events": [
+    "apps.agent.src.agent_orchestration.plugins.process.events.ProcessUpdatedEvent"
+  ],
+  "consumed_events": [],
+  "state_scopes": []
+}

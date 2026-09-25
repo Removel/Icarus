@@ -114,6 +114,7 @@ class RuntimeSettings(pydantic.BaseModel):
             "mcp",
             "memory",
             "knowledge",
+            "process",
         ]
     )
 

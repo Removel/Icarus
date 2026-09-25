@@ -415,7 +415,9 @@ Gateway 停止接受新调用
 释放已加载 SessionRuntime 的操作统一称为 `unload_session(SessionIdentity)`。它保留 Session 快照、
 Asset 和其他持久化数据，以后仍可 resume；删除 Session 数据不属于第一阶段。显式 unload、
 AgentRuntime 整体停止或启动/恢复失败清理会关闭 SessionRuntime，客户端切换 Session 或 Session
-短时空闲不会立即关闭。普通 unload 遇到运行中或排队中的 Task 时返回忙，不隐式取消。
+短时空闲不会立即关闭。普通 unload 遇到运行中或排队中的 Agent Task 时返回忙，不隐式取消。仅有
+Plugin 后台工作时允许进入 unload，并由 SessionRuntime 的统一 Plugin 生命周期先收束后台工作再完成
+卸载。
 
 AgentRuntime 会自动卸载连续 6 小时没有状态变化，并且没有运行中或排队 Task、没有未结束 Plugin
 后台工作的 SessionRuntime。连接和 RuntimeUpdate 订阅不阻止自动卸载，只读查询、订阅、心跳和
@@ -470,6 +472,10 @@ TUI 为消息保留 submission_id
 → Gateway 按连接订阅过滤并发送 runtime.update Notification
 → TUI 按 RuntimeUpdate.type 投影文本、thinking、Tool、追加内容、Usage、错误和终态
 ```
+
+ProcessPlugin 启动的长期命令不新增 Gateway RPC。其 `running/completed/failed/stopped` 状态由
+`ProcessUpdatedEvent` 投影成 `process.updated`，再沿同一个 `runtime.update` Notification 发送；日志正文
+仍由 Agent 通过受 Tool Guard 控制的 `background_process(action=logs)` 按页读取，不在网络状态流广播。
 
 正常成功任务的主要公共 Update 顺序是：
 

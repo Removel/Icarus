@@ -53,6 +53,13 @@ class DataPathResolver:
     def assets_dir(self, identity: SessionIdentity) -> Path:
         return self.session_dir(identity) / "assets"
 
+    def processes_dir(self, identity: SessionIdentity) -> Path:
+        return self.session_dir(identity) / "processes"
+
+    def process_log(self, identity: SessionIdentity, process_id: str) -> Path:
+        self._validate_id(process_id, "process_id")
+        return self.processes_dir(identity) / f"{process_id}.log"
+
     def tool_results_dir(
         self, identity: SessionIdentity, task_id: str | None = None
     ) -> Path:
@@ -72,6 +79,7 @@ class DataPathResolver:
         session_directory = self.session_dir(identity)
         self._mkdir(session_directory)
         self._mkdir(self.assets_dir(identity))
+        self._mkdir(self.processes_dir(identity))
         return session_directory
 
     @staticmethod

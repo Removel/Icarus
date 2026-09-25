@@ -83,6 +83,7 @@ class SessionStub:
         self.stop_reasons = []
         self.submit_count = 0
         self.busy = False
+        self.background_busy = False
         self.imported = []
         self.cancelled = []
         self.steered = []
@@ -139,7 +140,7 @@ class SessionStub:
             queued_task_count=0,
             pending_event_count=0,
             pending_plugin_event_count=0,
-            background_work_count=0,
+            background_work_count=(1 if self.background_busy else 0),
             last_event_at=None,
             last_background_work_at=None,
         )
@@ -201,6 +202,46 @@ def test_agent_runtime_create_submit幂等与unload_resume(tmp_path):
     assert resumed.task_id
     assert unloaded.status == "unloaded"
     assert len(factory.created) == 2
+
+
+def test_agent_runtime显式unload允许仅剩plugin后台工作(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        session_id = await runtime.create_session(tmp_path, "session")
+        session = factory.created[0]
+        session.background_busy = True
+        result = await runtime.unload_session(tmp_path, session_id)
+        await runtime.stop()
+        return result, session.stop_reasons
+
+    result, reasons = asyncio.run(run())
+    assert result.status == "unloaded"
+    assert reasons == ["manual_unload"]
+
+
+def test_agent_runtime显式unload仍拒绝活动agent_task(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config, session_factory=factory
+        )
+        await runtime.start()
+        session_id = await runtime.create_session(tmp_path, "session")
+        session = factory.created[0]
+        session.busy = True
+        result = await runtime.unload_session(tmp_path, session_id)
+        await runtime.stop()
+        return result, session.stop_reasons
+
+    result, reasons = asyncio.run(run())
+    assert result.status == "busy"
+    assert reasons == ["runtime_shutdown"]
 
 
 def test_agent_runtime并发resume严格single_flight且查询不等待写锁(tmp_path):
@@ -491,6 +532,37 @@ def test_agent_runtime空闲扫描与busy复检(tmp_path):
 
     busy, unloaded, reasons = asyncio.run(run())
     assert busy.lifecycle == "running"
+    assert unloaded.lifecycle == "unloaded"
+    assert reasons == ["idle_timeout"]
+
+
+def test_agent_runtime空闲扫描不会卸载有plugin后台工作的session(tmp_path):
+    async def run():
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(
+            config_loader=lambda: config,
+            session_factory=factory,
+            clock=lambda: now,
+            idle_timeout=timedelta(hours=6),
+            cleanup_interval=timedelta(hours=2),
+        )
+        await runtime.start()
+        await runtime.create_session(tmp_path, "session")
+        now = now + timedelta(hours=7)
+        factory.created[0].background_busy = True
+        await runtime.cleanup_idle_sessions()
+        busy = await runtime.get_session_status(tmp_path, "session")
+        factory.created[0].background_busy = False
+        await runtime.cleanup_idle_sessions()
+        unloaded = await runtime.get_session_status(tmp_path, "session")
+        await runtime.stop()
+        return busy, unloaded, factory.created[0].stop_reasons
+
+    busy, unloaded, reasons = asyncio.run(run())
+    assert busy.lifecycle == "running"
+    assert busy.background_work_count == 1
     assert unloaded.lifecycle == "unloaded"
     assert reasons == ["idle_timeout"]
 

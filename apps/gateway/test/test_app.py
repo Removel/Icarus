@@ -108,6 +108,39 @@ def test_gateway按连接关注session过滤runtime_update():
             assert notification["params"]["sequence"] is None
 
 
+def test_gateway通过既有runtime_update转发process状态():
+    runtime = RuntimeStub()
+    with TestClient(create_app(runtime)) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            websocket.send_json(
+                request(
+                    "session.subscribe",
+                    {"workspace_key": "workspace", "session_id": "a"},
+                )
+            )
+            assert websocket.receive_json()["result"] == {"subscribed": True}
+            client.portal.call(
+                runtime.stream.publish,
+                RuntimeUpdate(
+                    workspace_key="workspace",
+                    session_id="a",
+                    task_id=None,
+                    type="process.updated",
+                    payload={
+                        "process_id": "proc_1",
+                        "pid": 123,
+                        "status": "running",
+                    },
+                    occurred_at=datetime.now(UTC),
+                ),
+            )
+            notification = websocket.receive_json()
+            assert notification["method"] == "runtime.update"
+            assert notification["params"]["type"] == "process.updated"
+            assert notification["params"]["task_id"] is None
+            assert notification["params"]["payload"]["status"] == "running"
+
+
 def test_jsonrpc_notification失败不返回error_response():
     runtime = RuntimeStub()
     with TestClient(create_app(runtime)) as client:

@@ -404,7 +404,7 @@ class AgentRuntime:
                     return UnloadResult(
                         identity.workspace_key, session_id, "already_unloaded"
                     )
-                elif entry.runtime.snapshot().has_work:
+                elif self._has_active_agent_work(entry):
                     return UnloadResult(identity.workspace_key, session_id, "busy")
                 else:
                     wait_for = self._begin_unload_locked(
@@ -1078,6 +1078,16 @@ class AgentRuntime:
         return any(
             status.lifecycle in {"accepted", "running"}
             for status in entry.tasks.values()
+        )
+
+    @classmethod
+    def _has_active_agent_work(cls, entry: _SessionEntry) -> bool:
+        if entry.runtime is None:
+            return False
+        snapshot = entry.runtime.snapshot()
+        return bool(
+            snapshot.active_task_ids
+            or snapshot.queued_task_count
         )
 
     def _require_accepting(self) -> None:

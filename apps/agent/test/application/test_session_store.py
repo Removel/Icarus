@@ -76,6 +76,33 @@ def test_session_store管理session和conversation(tmp_path):
     assert finish.occurred_at.tzinfo is UTC
 
 
+def test_session_store持久化process_update且task_id为空(tmp_path):
+    async def run():
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        identity = SessionIdentity.create(tmp_path / "workspace", "session")
+        await store.create_session(identity)
+        recorded = await store.append_update(
+            identity,
+            update(
+                identity,
+                "process.updated",
+                at=datetime.now(UTC),
+                task_id=None,
+                payload={"process_id": "proc_1", "status": "running"},
+            ),
+        )
+        restored, cursor = await store.read_updates(identity)
+        await store.close()
+        return recorded, restored, cursor
+
+    recorded, restored, cursor = asyncio.run(run())
+    assert recorded.sequence == 1
+    assert restored == (recorded,)
+    assert restored[0].task_id is None
+    assert cursor == 1
+
+
 def test_session_store软删除空session并保留记录(tmp_path):
     async def run():
         store = SessionStore(tmp_path / "data")

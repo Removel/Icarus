@@ -55,7 +55,7 @@ def test_get_config_default_resource_is_packaged():
     assert settings["model_settings"]["thinking"]["model_name"]
     assert settings["agent"]["tool_execution"] == {
         "default_timeout_seconds": 120.0,
-        "default_output_tokens": 4000,
+        "default_output_tokens": 3000,
     }
     config = get_config()
     assert config.agent.tool_execution.max_timeout_seconds == 600
@@ -76,6 +76,7 @@ def test_config_model_skill_permissions_default_disabled():
     assert "mcp" in config.runtime.required_plugin_ids
     assert "memory" in config.runtime.required_plugin_ids
     assert "knowledge" in config.runtime.required_plugin_ids
+    assert "process" in config.runtime.required_plugin_ids
 
 
 def test_config_model读取通用mcp_servers并保留server字段():

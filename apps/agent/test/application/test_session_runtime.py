@@ -185,6 +185,8 @@ def test_session_runtime使用runtime_update并保留单session行为(tmp_path):
     assert "mcp" in {item.plugin_id for item in graph.plugins}
     assert "memory" in {item.plugin_id for item in graph.plugins}
     assert "knowledge" in {item.plugin_id for item in graph.plugins}
+    assert "process" in {item.plugin_id for item in graph.plugins}
+    assert "background_process" in runtime.tool_registry.names()
     assert runtime.is_running is False
 
 
