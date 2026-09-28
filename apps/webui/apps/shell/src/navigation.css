@@ -1,0 +1,44 @@
+/* Desktop uses independent content scrolling and two levels of navigation. */
+html, body, #root { height: 100%; overflow: hidden; }
+.app-layout { display: grid; grid-template-columns: 224px minmax(0, 1fr); height: 100dvh; overflow: hidden; }
+.sidebar { position: relative; top: auto; width: auto; height: 100dvh; padding: 0 12px 20px; display: flex; flex-direction: column; align-items: stretch; gap: 0; border-right: 1px solid var(--line); border-bottom: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--semi-color-border) transparent; }
+.sidebar .brand { height: 64px; flex-shrink: 0; padding: 0 12px; }
+.sidebar nav { display: block; height: auto; margin-top: 24px; }
+.sidebar nav > .nav-group { display: block; height: auto; }
+.sidebar nav > .nav-label { display: block; height: auto; }
+.sidebar .nav-label { display: block; }
+.sidebar .nav-link { display: flex; justify-content: flex-start; padding: 11px 12px; margin: 0 0 3px; min-height: 42px; }
+.sidebar .nav-link span, .sidebar .brand-word { display: inline; }
+.sidebar .sidebar-bottom { display: block; }
+.subnav { display: grid; gap: 2px; margin: 2px 0 14px 42px; }
+.subnav-link { display: block; padding: 8px 12px; border-radius: 5px; font-size: 13px; color: var(--muted); }
+.subnav-link:hover { color: var(--ink); background: var(--subtle); }
+.subnav-link.active { color: var(--accent); font-weight: 600; background: var(--semi-color-primary-light-default); }
+.shell-main { height: 100dvh; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--semi-color-border-2) transparent; }
+.shell-main::-webkit-scrollbar, .sidebar::-webkit-scrollbar { width: 8px; }
+.shell-main::-webkit-scrollbar-thumb, .sidebar::-webkit-scrollbar-thumb { background: var(--semi-color-border-2); border-radius: 8px; }
+.shell-main::-webkit-scrollbar-track, .sidebar::-webkit-scrollbar-track { background: transparent; }
+.topbar { position: sticky; top: 0; right: auto; width: 100%; height: 64px; z-index: 20; border-bottom: 1px solid var(--line); background: #fff; }
+.topbar .breadcrumb { display: flex; }
+.page { padding-top: 32px; }
+.memory-page .content-tabs, .knowledge-page .content-tabs { display: none; }
+.memory-page .toolbar, .knowledge-page .toolbar { padding-top: 4px; }
+@media(max-width: 1050px) and (min-width: 701px) {
+  .app-layout { grid-template-columns: 200px minmax(0,1fr); }
+  .page { padding: 28px; }
+  .list-panel .data-table tbody { grid-template-columns: 1fr; }
+}
+@media(max-width: 700px) {
+  html, body, #root { height: auto; min-height: 100%; overflow: auto; }
+  .app-layout { display: block; height: auto; min-height: 100dvh; padding-bottom: 70px; overflow: visible; }
+  .sidebar { position: fixed; z-index: 30; top: auto; bottom: 0; left: 0; width: 100%; height: auto; padding: 5px 10px max(5px, env(safe-area-inset-bottom)); display: block; border-right: 0; border-top: 1px solid var(--line); overflow: visible; }
+  .sidebar .brand, .sidebar .nav-label, .sidebar .subnav, .sidebar .sidebar-bottom { display: none; }
+  .sidebar nav { margin: 0; display: flex; justify-content: space-around; }
+  .sidebar nav > .nav-group { display: block; }
+  .sidebar .nav-link { flex-direction: column; gap: 3px; justify-content: center; padding: 5px 14px; margin: 0; }
+  .sidebar .nav-link span { display: block; }
+  .shell-main { height: auto; min-height: calc(100dvh - 70px); overflow: visible; }
+  .topbar { display: none; }
+  .memory-page .content-tabs, .knowledge-page .content-tabs { display: block; }
+  .memory-page .toolbar, .knowledge-page .toolbar { padding-top: 16px; }
+}

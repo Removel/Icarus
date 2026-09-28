@@ -1,0 +1,17 @@
+{
+  "name": "icarus-webui",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "dev": "pnpm --filter @icarus/shell dev",
+    "build": "pnpm --filter @icarus/shell build",
+    "typecheck": "tsc --noEmit",
+    "test": "uv run --no-project --with-requirements test/requirements.txt python -m pytest -c pytest.ini",
+    "preview": "pnpm --filter @icarus/shell preview"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}

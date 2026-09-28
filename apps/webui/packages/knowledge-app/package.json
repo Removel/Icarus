@@ -1,0 +1,7 @@
+{
+  "name": "@icarus/knowledge-app",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/KnowledgeApp.tsx" },
+  "dependencies": { "@icarus/ui": "workspace:*", "react": "19.2.4", "lucide-react": "0.577.0" }
+}
