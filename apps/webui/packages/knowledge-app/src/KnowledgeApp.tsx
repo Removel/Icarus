@@ -1,34 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, Upload, FileText, BookOpen, ArrowUpRight, RefreshCw, Trash2, Check, CheckCheck, ArrowRight, FolderOpen, X, Network, Pencil, ShieldCheck, CircleAlert, Loader2 } from 'lucide-react';
-import { Button, Select, Modal, Input, TextArea, Toast, PageHeading, Status, Tabs, SearchField, DetailHeading, Field, EmptyState, TableFooter } from '@icarus/ui';
+import { Plus, Upload, FileText, BookOpen, ArrowUpRight, RefreshCw, X, Link2, ShieldCheck, CircleAlert, Check, Loader2 } from 'lucide-react';
+import { Button, Select, Modal, Input, Toast, PageHeading, Status, Tabs, SearchField, Field, EmptyState, navigate } from '@icarus/ui';
 import { initialBases, kindLabel, type KnowledgeBase, type Source, type WikiPage } from './demo';
 import Graph from './Graph';
+import KnowledgeReader from './KnowledgeReader';
+import { excerpt } from './Reading';
 import './knowledge.css';
 
-function Reading({ content }: { content: string }) {
-  return <div className="reading">{content.split('\n').map((line, i) => line.startsWith('## ') ? <h3 key={i}>{line.slice(3)}</h3> : <p key={i}>{line}</p>)}</div>;
-}
+type Destination = { baseName?: string; pagePath?: string; sourceId?: string; from?: string };
+const sourceState = (source: Source) => source.phase === 'failed' ? '需重试' : source.phase === 'compiling' ? '编译中' : source.content ? '已就绪' : '未解析';
 
-export default function KnowledgeApp() {
+export default function KnowledgeApp({ active, hash }: { active: boolean; hash: string }) {
   const [bases, setBases] = useState<KnowledgeBase[]>(initialBases);
-  const [baseName, setBaseName] = useState(initialBases[0].name);
-  const [tab, setTab] = useState('sources');
-  useEffect(() => {
-    function syncSection() { if (location.hash.startsWith('#/knowledge')) { const next = location.hash.split('/')[2]; setTab(['sources', 'pages', 'graph', 'quality'].includes(next) ? next : 'sources'); } }
-    syncSection();
-    window.addEventListener('hashchange', syncSection);
-    return () => window.removeEventListener('hashchange', syncSection);
-  }, []);
+  const params = new URLSearchParams(hash.split('?')[1]);
+  const section = hash.split('?')[0].split('/')[2];
+  const view = ['pages', 'sources', 'graph'].includes(section) ? section : 'pages';
+  const requestedBase = params.get('base');
+  const base = bases.find(item => item.name === requestedBase) ?? bases[0];
+  const sourceId = params.get('source');
+  const pagePath = params.get('page');
+  const fromPage = params.get('from');
+  const source = view === 'sources' ? base.documents.find(item => item.hash === sourceId) : undefined;
+  const page = view !== 'sources' ? base.pages.find(item => item.path === pagePath) : undefined;
   const [search, setSearch] = useState('');
   const [type, setType] = useState('all');
-  const [sourceId, setSourceId] = useState<string | null>(null);
-  const [pagePath, setPagePath] = useState('');
-  useEffect(() => {
-    if (!sourceId && !pagePath) return;
-    function closeOnEscape(event: KeyboardEvent) { if (event.key === 'Escape') { setSourceId(null); setPagePath(''); } }
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [sourceId, pagePath]);
   const [upload, setUpload] = useState(false);
   const [files, setFiles] = useState<{ name: string; size: number }[]>([]);
   const [uploadError, setUploadError] = useState('');
@@ -36,73 +31,168 @@ export default function KnowledgeApp() {
   const [create, setCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newError, setNewError] = useState('');
-  const [reader, setReader] = useState<{ title: string; content: string } | null>(null);
-  const [editingPage, setEditingPage] = useState(false);
-  const [pageDraft, setPageDraft] = useState('');
-  const [pageError, setPageError] = useState('');
-  const [deleteSource, setDeleteSource] = useState(false);
-  const [linted, setLinted] = useState(false);
-  const [lintBusy, setLintBusy] = useState(false);
-  const [fixed, setFixed] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ baseName: string; source: Source } | null>(null);
+  const [quality, setQuality] = useState(false);
+  const [report, setReport] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
-  const base = bases.find(b => b.name === baseName)!;
-  const selected = base.documents.find(d => d.hash === sourceId);
-  const selectedPage = base.pages.find(p => p.path === pagePath);
-  const documents = base.documents.filter(d => (type === 'all' || d.display_type === type) && d.name.toLowerCase().includes(search.toLowerCase()));
-  const pages = base.pages.filter(p => (type === 'all' || p.kind === type) && p.title.toLowerCase().includes(search.toLowerCase()));
-  const ready = base.documents.filter(d => d.phase === 'ready').length;
-  const related = selected ? base.pages.filter(p => p.sources.includes(selected.name)) : [];
+  const readerRef = useRef<HTMLDivElement>(null);
+  const importing = useRef(false);
 
-  function updateBase(name: string, update: (b: KnowledgeBase) => KnowledgeBase) { setBases(items => items.map(b => b.name === name ? update(b) : b)); }
-  function switchBase(name: string) { setBaseName(name); setSourceId(null); setPagePath(''); setSearch(''); setType('all'); setLinted(false); setFixed(false); }
-  function switchTab(id: string) { setTab(id); setSearch(''); setType('all'); location.hash = `/knowledge/${id}`; }
-  function schedule(fn: () => void, ms = 1200) { timers.current.push(setTimeout(fn, ms)); }
-  function recompile(source: Source) {
-    const name = baseName;
-    updateBase(name, b => ({ ...b, documents: b.documents.map(d => d.hash === source.hash ? { ...d, phase: 'compiling' } : d) }));
-    schedule(() => { updateBase(name, b => ({ ...b, documents: b.documents.map(d => d.hash === source.hash ? { ...d, phase: 'ready' } : d) })); Toast.success('演示编译完成'); });
+  function go(nextView = view, destination: Destination = {}, replace = false) {
+    const query = new URLSearchParams({ base: destination.baseName ?? base.name });
+    if (destination.pagePath) query.set('page', destination.pagePath);
+    if (destination.sourceId) query.set('source', destination.sourceId);
+    if (destination.from) query.set('from', destination.from);
+    navigate(`#/knowledge/${nextView}?${query}`, replace);
   }
+
+  useEffect(() => {
+    if (!active) return;
+    if (section === 'quality') { setQuality(true); setReport(false); go('pages', {}, true); return; }
+    if ((requestedBase && !bases.some(item => item.name === requestedBase)) || (sourceId && !source) || (pagePath && !page)) go(view, {}, true);
+  }, [active, hash, bases]);
+
+  useEffect(() => {
+    if (!active) { setUpload(false); setCreate(false); setDeleteTarget(null); setQuality(false); }
+  }, [active]);
+  useEffect(() => { setSearch(''); setType('all'); setQuality(false); setReport(false); }, [base.name, view]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  useEffect(() => {
+    if (active && (sourceId || pagePath)) {
+      readerRef.current?.scrollIntoView({ block: 'start' });
+      readerRef.current?.focus({ preventScroll: true });
+    }
+  }, [active, sourceId, pagePath, base.name]);
+
+  const documents = base.documents.filter(item => (type === 'all' || item.display_type === type) && item.name.toLowerCase().includes(search.trim().toLowerCase()));
+  const pages = base.pages.filter(item => (type === 'all' || item.kind === type) && `${item.title} ${item.content}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const deleteBase = deleteTarget && bases.find(item => item.name === deleteTarget.baseName);
+  const deleteRelated = deleteBase?.pages.filter(item => item.sources.includes(deleteTarget!.source.name)) ?? [];
+
+  function updateBase(name: string, update: (item: KnowledgeBase) => KnowledgeBase) {
+    setBases(items => items.map(item => item.name === name ? update(item) : item));
+  }
+
+  function schedule(callback: () => void, ms: number) { timers.current.push(setTimeout(callback, ms)); }
+
+  function recompile(document: Source) {
+    if (document.phase === 'compiling') return;
+    const name = base.name;
+    updateBase(name, item => ({ ...item, documents: item.documents.map(entry => entry.hash === document.hash ? { ...entry, phase: 'compiling' } : entry) }));
+    schedule(() => {
+      updateBase(name, item => ({ ...item, documents: item.documents.map(entry => entry.hash === document.hash ? { ...entry, phase: 'ready' } : entry) }));
+      Toast.info('演示编译完成，未调用解析服务');
+    }, 900);
+  }
+
   function chooseFiles(incoming: FileList | File[]) {
     const list = Array.from(incoming);
-    if (list.some(f => !/\.(pdf|md|txt|docx)$/i.test(f.name))) { setUploadError('此 Demo 支持选择 PDF、Markdown、TXT 和 DOCX 文件。'); return; }
-    if (list.some(f => f.size > 100 * 1024 * 1024) || [...files, ...list].reduce((n, f) => n + f.size, 0) > 500 * 1024 * 1024) { setUploadError('单个文件上限 100 MB，单次导入合计上限 500 MB。'); return; }
-    setFiles(previous => [...previous, ...list.map(f => ({ name: f.name, size: f.size }))].filter((f, i, all) => all.findIndex(x => x.name === f.name) === i)); setUploadError('');
+    if (list.some(file => !/\.(pdf|md|txt|docx)$/i.test(file.name))) { setUploadError('支持 PDF、Markdown、TXT 和 DOCX 文件。'); return; }
+    const unique = [...files, ...list.map(file => ({ name: file.name, size: file.size }))].filter((file, index, all) => all.findIndex(item => item.name === file.name) === index);
+    if (unique.some(file => file.size > 100 * 1024 * 1024) || unique.reduce((size, file) => size + file.size, 0) > 500 * 1024 * 1024) {
+      setUploadError('单个文件不超过 100 MB，单次合计不超过 500 MB。'); return;
+    }
+    setFiles(unique); setUploadError('');
   }
+
   function startImport() {
-    if (!files.length) { setUploadError('先选择文件，或使用示例文件体验流程。'); return; }
-    const name = baseName;
-    const incoming = files.filter(f => !base.documents.some(d => d.name === f.name));
-    if (!incoming.length) { setUploadError('所选文件都已存在。可关闭窗口，在资料详情中重新编译。'); return; }
-    setBusy(true);
+    if (importing.current) return;
+    if (!files.length) { setUploadError('请先选择文件。'); return; }
+    const incoming = files.filter(file => !base.documents.some(item => item.name === file.name));
+    if (!incoming.length) { setUploadError('所选文件已存在，可在资料中重新编译。'); return; }
+    const name = base.name;
+    const origin = window.location.hash;
+    const skipped = files.length - incoming.length;
+    importing.current = true; setBusy(true);
     schedule(() => {
-      const added: Source[] = incoming.map(f => ({ hash: `doc_${crypto.randomUUID().slice(0, 8)}`, name: f.name, display_type: f.name.split('.').pop()!.toUpperCase(), pages: null, phase: 'ready', content: '## 导入流程演示\n此处演示了文件选择与编译完成后的状态。文件内容没有上传或解析；真实资料正文将在服务接入后提供。' }));
-      updateBase(name, b => ({ ...b, documents: [...added, ...b.documents] })); setSourceId(added[0].hash); setTab('sources'); setSearch(''); setType('all'); setBusy(false); setUpload(false); setFiles([]); Toast.success(`演示导入完成：新增 ${added.length} 份，跳过 ${files.length - added.length} 份`);
-    }, 1600);
+      const added: Source[] = incoming.map(file => ({ hash: `doc_${crypto.randomUUID().slice(0, 8)}`, name: file.name, display_type: file.name.split('.').pop()!.toUpperCase(), pages: null, phase: 'ready', content: '' }));
+      updateBase(name, item => ({ ...item, documents: [...added, ...item.documents] }));
+      setBusy(false); importing.current = false; setUpload(false); setFiles([]);
+      if (window.location.hash === origin) go('sources', { baseName: name, sourceId: added[0].hash });
+      Toast.success(`已登记 ${added.length} 份演示资料${skipped ? `，跳过 ${skipped} 份重复文件` : ''}`);
+    }, 1000);
   }
-  function runLint() { setLintBusy(true); schedule(() => { setLintBusy(false); setLinted(true); setFixed(false); }, 1100); }
+
+  function createBase() {
+    const name = newName.trim();
+    if (!name || /[\\/]/.test(name) || name.startsWith('.')) { setNewError('名称不能为空，不能以点开头或包含路径分隔符。'); return; }
+    if (bases.some(item => item.name === name)) { setNewError('这个知识库名称已存在。'); return; }
+    setBases(items => [...items, { name, description: '', documents: [], pages: [] }]);
+    setCreate(false); go('pages', { baseName: name }); Toast.success('已创建知识库');
+  }
+
+  function openPage(item: WikiPage) { go(view === 'graph' ? 'graph' : 'pages', { pagePath: item.path }); }
+  function openSource(item: Source) { go('sources', { sourceId: item.hash, from: page?.path ?? fromPage ?? '' }); }
+  function closeReader() {
+    if (fromPage && base.pages.some(item => item.path === fromPage)) go('pages', { pagePath: fromPage });
+    else go(view);
+  }
 
   return <div className="page knowledge-page">
-    <PageHeading title="我的知识库" description="集中保存资料，整理成方便阅读和查找的知识。"><Button className="secondary-action" type="tertiary" icon={<Plus size={15} />} onClick={() => { setNewName(''); setNewError(''); setCreate(true); }}>新建知识库</Button><Button theme="solid" icon={<Upload size={15} />} onClick={() => { setUploadError(''); setUpload(true); }}>导入资料</Button></PageHeading>
-    <div className="kb-banner"><div className="kb-banner-icon"><FolderOpen size={23} strokeWidth={1.4} /></div><div className="kb-banner-main"><Select aria-label="选择知识库" value={baseName} onChange={v => switchBase(String(v))} optionList={bases.map(b => ({ label: b.name, value: b.name }))} /><p>{base.description}</p></div><div className="kb-banner-stat"><strong>{String(base.documents.length).padStart(2, '0')}</strong><span>份资料</span></div><div className="kb-banner-stat"><strong>{String(base.pages.length).padStart(2, '0')}</strong><span>知识页面</span></div><div className="kb-banner-decoration" aria-hidden="true"><span /><span /><span /></div></div>
-    <Tabs value={tab} onChange={switchTab} items={[{ id: 'sources', label: '原始资料', count: base.documents.length }, { id: 'pages', label: '知识页面', count: base.pages.length }, { id: 'graph', label: '关联图谱' }, { id: 'quality', label: '质量检查' }]} />
-    {(tab === 'sources' || tab === 'pages') && <div className="toolbar"><SearchField value={search} onChange={setSearch} placeholder={tab === 'sources' ? '搜索资料名称…' : '搜索知识页面标题…'} /><Select aria-label="筛选内容类型" value={type} onChange={v => setType(String(v))} optionList={tab === 'sources' ? [{ value: 'all', label: '所有文件类型' }, { value: 'MD', label: 'Markdown' }, { value: 'PDF', label: 'PDF' }, { value: 'TXT', label: 'TXT' }, { value: 'DOCX', label: 'DOCX' }] : [{ value: 'all', label: '所有页面类型' }, ...Object.entries(kindLabel).map(([value, label]) => ({ value, label }))]} /><span className="toolbar-spacer" /><span className="text-muted" style={{ fontSize: 10 }}>{tab === 'sources' ? `${ready} 份资料已就绪` : '从资料中沉淀的知识'}</span></div>}
-    {tab === 'sources' && <div className={`workspace-split ${selected ? '' : 'no-detail'}`}><section className="list-panel" aria-label="资料列表"><table className="data-table"><colgroup><col /><col style={{ width: 85 }} /><col className="mobile-hidden" style={{ width: 68 }} /><col className="optional-column" style={{ width: 75 }} /></colgroup><thead><tr><th>资料名称</th><th>处理状态</th><th className="mobile-hidden">格式</th><th className="optional-column">页数</th></tr></thead><tbody>{documents.map(d => <tr key={d.hash} className={d.hash === sourceId ? 'selected' : ''}><td><div className="file-cell"><div className={`file-icon ${d.display_type.toLowerCase()}`}><FileText size={17} strokeWidth={1.5} /></div><div><button className="table-item" aria-label={`查看资料：${d.name}`} onClick={() => setSourceId(d.hash)}>{d.name}</button><div className="item-sub"><span className="mono">{d.hash}</span></div></div></div></td><td><Status tone={d.phase === 'ready' ? 'green' : d.phase === 'failed' ? 'amber' : 'pink'}>{d.phase === 'ready' ? '已就绪' : d.phase === 'failed' ? '需重试' : '编译中'}</Status></td><td className="mobile-hidden text-muted" style={{ fontSize: 10 }}>{d.display_type}</td><td className="optional-column text-muted" style={{ fontSize: 11 }}>{d.pages ?? '—'}</td></tr>)}</tbody></table>{documents.length === 0 && <EmptyState title={base.documents.length ? '没有匹配的资料' : '从第一份资料开始'} description="导入文档，再把它们整理成相互连接的知识。"><Button icon={<Upload size={14} />} onClick={() => setUpload(true)}>导入资料</Button></EmptyState>}<TableFooter count={documents.length} noun="份资料" /><div className="pipeline-strip"><span><Upload size={13} />导入资料</span><ArrowRight size={12} /><span><Network size={13} />编译与关联</span><ArrowRight size={12} /><span><BookOpen size={13} />沉淀为知识</span></div></section>
-      {selected && <button className="detail-backdrop" aria-label="返回资料列表" onClick={() => setSourceId(null)} />}{selected && <aside className="detail-panel" aria-label="资料详情"><DetailHeading label="资料详情" onClose={() => setSourceId(null)} /><div className="source-cover"><div className={`document-paper ${selected.display_type.toLowerCase()}`}><span>{selected.display_type}</span><div /><div /><div /><div /><FileText size={18} /></div><span className="cover-label">SOURCE DOCUMENT</span></div><div className="detail-body"><h2 className="source-title">{selected.name}</h2><dl className="detail-properties"><div><dt>处理状态</dt><dd><Status tone={selected.phase === 'failed' ? 'amber' : selected.phase === 'compiling' ? 'pink' : 'green'}>{selected.phase === 'ready' ? '已就绪' : selected.phase === 'failed' ? '编译失败' : '编译中'}</Status></dd></div><div><dt>文件格式</dt><dd>{selected.display_type}</dd></div><div><dt>文档页数</dt><dd>{selected.pages ?? '不适用 / 暂无'}</dd></div></dl>{selected.phase === 'failed' && <div className="callout">示例失败原因：未提取到可读文本。检查文件后可以重新编译。</div>}<div className="detail-actions"><Button icon={<BookOpen size={13} />} onClick={() => setReader({ title: selected.name, content: selected.content })}>阅读原文</Button><Button type="tertiary" disabled={selected.phase === 'compiling'} icon={<RefreshCw size={13} className={selected.phase === 'compiling' ? 'spinning' : ''} />} onClick={() => recompile(selected)}>重新编译</Button></div><div className="detail-section"><h3>生成的知识页面 <span className="text-muted">{related.length.toString().padStart(2, '0')}</span></h3>{related.length ? related.map(p => <button className="related-page" key={p.path} onClick={() => { setPagePath(p.path); switchTab('pages'); }}><BookOpen size={13} /><span>{p.title}</span><ArrowUpRight size={13} /></button>) : <p className="field-hint">此示例资料暂无关联知识页面。</p>}</div><div className="detail-section"><Button type="danger" theme="borderless" icon={<Trash2 size={12} />} style={{ fontSize: 11, padding: 0 }} onClick={() => setDeleteSource(true)}>移除资料</Button></div></div></aside>}
-    </div>}
-    {(tab === 'pages' || tab === 'graph') && <div className={`workspace-split ${selectedPage ? '' : 'no-detail'}`} style={tab === 'graph' ? { marginTop: 22 } : undefined}><section className="list-panel">{tab === 'graph' && base.pages.length > 0 ? <Graph pages={base.pages} selected={pagePath} onSelect={p => setPagePath(p.path)} /> : tab === 'pages' ? <><table className="data-table"><colgroup><col /><col style={{ width: 76 }} /><col className="mobile-hidden" style={{ width: 90 }} /></colgroup><thead><tr><th>知识页面</th><th>类型</th><th className="mobile-hidden">来源资料</th></tr></thead><tbody>{pages.map(p => <tr key={p.path} className={p.path === pagePath ? 'selected' : ''}><td><button className="table-item" onClick={() => setPagePath(p.path)}>{p.title}</button><div className="item-sub mono">{p.path}</div></td><td><Status tone={p.kind === 'concepts' ? 'green' : p.kind === 'entities' ? 'pink' : 'gray'}>{kindLabel[p.kind]}</Status></td><td className="mobile-hidden text-muted">{p.sources.length} 份</td></tr>)}</tbody></table><TableFooter count={pages.length} noun="个页面" /></> : null}{(tab === 'pages' ? pages : base.pages).length === 0 && <EmptyState title="这里还没有知识页面" description="资料编译后，摘要、概念与实体会汇集在这里。" />}</section>{selectedPage && <button className="detail-backdrop" aria-label="返回知识页面列表" onClick={() => setPagePath('')} />}{selectedPage && <aside className="detail-panel" aria-label="知识页面详情"><DetailHeading label="知识页面" onClose={() => setPagePath('')} /><div className="wiki-preview"><Status>{kindLabel[selectedPage.kind]}</Status><h2>{selectedPage.title}</h2><Reading content={selectedPage.content} /><div className="detail-actions"><Button icon={<Pencil size={13} />} onClick={() => { setPageDraft(selectedPage.content); setPageError(''); setEditingPage(true); }}>编辑页面</Button><Button type="tertiary" icon={<ArrowUpRight size={13} />} onClick={() => setReader({ title: selectedPage.title, content: selectedPage.content })}>展开阅读</Button></div><div className="detail-section"><h3>来源资料</h3>{selectedPage.sources.map(name => <button className="related-page" key={name} onClick={() => { const source = base.documents.find(d => d.name === name); if (source) { setSourceId(source.hash); switchTab('sources'); } }}><FileText size={12} /><span>{name}</span><ArrowUpRight size={12} /></button>)}</div></div></aside>}</div>}
-    {tab === 'quality' && <section className="quality-panel"><div className="quality-header"><div className="quality-icon"><ShieldCheck size={29} strokeWidth={1.3} /></div><div><h2>让知识保持可靠</h2><p>检查失效引用、孤立页面与知识内容，查看报告后再决定是否修复。</p></div><Button theme="solid" disabled={lintBusy || base.documents.length === 0} icon={lintBusy ? <Loader2 size={14} className="spinning" /> : <CheckCheck size={14} />} onClick={runLint}>{lintBusy ? '正在检查…' : '运行示例检查'}</Button></div>{!linted ? <EmptyState title={lintBusy ? '正在检查关联与内容' : '还没有检查报告'} description="检查完成后，这里会展示结构检查与知识检查的结果。" /> : <div className="quality-results"><div className="quality-result"><Check size={18} /><div><h3>知识检查</h3><p>本次示例未发现相互矛盾的描述。</p></div><Status>通过</Status></div><div className="quality-result"><CircleAlert size={18} /><div><h3>结构检查</h3><p>{fixed ? '已将示例中的 1 处失效引用降级为普通文本。' : '示例发现 1 处指向旧页面的引用，建议转为普通文本。'}</p></div>{fixed ? <Status>已修复</Status> : <Button onClick={() => { setFixed(true); Toast.success('示例修复完成'); }}>修复失效引用</Button>}</div><p className="field-hint">以上为预设示例报告，不代表对真实资料的检查结果。接入后显示服务返回的结构报告和知识报告。</p></div>}</section>}
-    <footer className="bottom-caption"><span>知识由 OpenKB 管理 · 演示未连接服务</span><span>FROM INFORMATION TO UNDERSTANDING ↗</span></footer>
-    <Modal title="导入资料" visible={upload} onCancel={() => { if (!busy) setUpload(false); }} onOk={startImport} okText={busy ? '正在演示编译…' : '开始导入'} cancelText="取消" confirmLoading={busy} cancelButtonProps={{ disabled: busy }} closable={!busy} maskClosable={!busy} width={570}>
-      <p className="field-hint" style={{ marginBottom: 18 }}>导入到「{baseName}」。本次仅演示导入流程，文件不会上传。</p><input ref={fileInput} type="file" multiple accept=".pdf,.md,.txt,.docx" aria-label="选择资料文件" className="file-input" onChange={e => { if (e.target.files) chooseFiles(e.target.files); e.target.value = ''; }} />
-      <button className="upload-zone" disabled={busy} onClick={() => fileInput.current?.click()} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!busy) chooseFiles(e.dataTransfer.files); }}><Upload size={27} strokeWidth={1.3} /><strong>拖拽文件到这里，或点击选择</strong><span>PDF、Markdown、TXT、DOCX · 单个文件不超过 100 MB</span></button>
-      {files.map(f => <div className="upload-file" key={f.name}><FileText size={15} /><span>{f.name}</span>{busy ? <Loader2 size={14} className="spinning" /> : <button aria-label={`移除待导入文件 ${f.name}`} onClick={() => setFiles(items => items.filter(x => x.name !== f.name))}><X size={14} /></button>}</div>)}
-      {!files.length && <Button theme="borderless" type="tertiary" style={{ marginTop: 10, fontSize: 12 }} onClick={() => { setFiles([{ name: '协作与设计原则.md', size: 2048 }]); setUploadError(''); }}>没有文件？使用示例文件体验 <ArrowRight size={13} /></Button>}{uploadError && <p role="alert" className="form-error" style={{ marginTop: 13 }}>{uploadError}</p>}{busy && <div className="callout" style={{ marginTop: 14 }}>已接收文件信息 → 正在演示编译 → 更新资料列表</div>}
+    <PageHeading title="知识库" context={<div className="knowledge-context"><span className="context-divider" /><Select className="base-switch" aria-label="选择知识库" value={base.name} onChange={value => go(view, { baseName: String(value) })} optionList={bases.map(item => ({ label: item.name, value: item.name }))} /></div>}>
+      <Button className="icon-button" type="tertiary" theme="borderless" icon={<Plus size={18} />} aria-label="新建知识库" title="新建知识库" onClick={() => { setNewName(''); setNewError(''); setCreate(true); }} />
+      <Button theme="solid" icon={<Upload size={16} />} disabled={busy} onClick={() => { setUploadError(''); setUpload(true); }}>{busy ? '导入中…' : '导入资料'}</Button>
+    </PageHeading>
+    <div className="knowledge-nav"><Tabs value={view} onChange={id => go(id)} items={[{ id: 'pages', label: '知识页面', count: base.pages.length }, { id: 'sources', label: '原始资料', count: base.documents.length }, { id: 'graph', label: '来源关联' }]} /><Button className="quality-trigger" type="tertiary" theme="borderless" icon={<ShieldCheck size={16} />} onClick={() => { setQuality(true); setReport(false); }}>质量检查</Button></div>
+    {source || page ? <div ref={readerRef} tabIndex={-1} className="reader-anchor"><KnowledgeReader key={`${base.name}-${source?.hash ?? page?.path}`}
+      base={base} source={source} page={page} onBack={closeReader}
+      backLabel={fromPage ? '返回知识页面' : view === 'graph' ? '返回来源关联' : source ? '返回资料列表' : '返回知识页面列表'}
+      onPage={openPage} onSource={openSource} onRetry={recompile} onDelete={document => setDeleteTarget({ baseName: base.name, source: document })}
+      onSave={(path, content) => { const name = base.name; updateBase(name, item => ({ ...item, pages: item.pages.map(entry => entry.path === path ? { ...entry, content } : entry) })); Toast.success('已保存页面'); }}
+    /></div> : <>
+      {view !== 'graph' && <div className="toolbar">
+        <SearchField value={search} onChange={setSearch} placeholder={view === 'sources' ? '搜索资料名称…' : '搜索知识内容…'} />
+        <Select aria-label="筛选内容类型" value={type} onChange={value => setType(String(value))} optionList={view === 'sources' ? [{ value: 'all', label: '全部格式' }, ...['MD', 'PDF', 'TXT', 'DOCX'].map(value => ({ value, label: value === 'MD' ? 'Markdown' : value }))] : [{ value: 'all', label: '全部类型' }, ...Object.entries(kindLabel).map(([value, label]) => ({ value, label }))]} />
+        {(search || type !== 'all') && <button className="link-button" onClick={() => { setSearch(''); setType('all'); }}>清除筛选<X size={12} /></button>}
+      </div>}
+      {view === 'pages' && <section aria-label="知识页面列表">
+        {pages.length ? <div className="knowledge-grid">{pages.map(item => <article className="knowledge-card" key={item.path}>
+          <button className="knowledge-card-main" aria-label={`阅读知识：${item.title}`} onClick={() => openPage(item)}>
+            <div className="knowledge-card-top"><span className="knowledge-kind"><BookOpen size={14} />{kindLabel[item.kind]}</span><ArrowUpRight size={17} /></div>
+            <h2>{item.title}</h2><p>{excerpt(item.content)}</p>
+          </button>
+          <footer className="knowledge-card-footer"><Link2 size={13} /><span title={item.sources.join('、')}>{item.sources[0] ?? '暂无来源'}{item.sources.length > 1 ? ` 等 ${item.sources.length} 份资料` : ''}</span></footer>
+        </article>)}</div> : <EmptyState title={base.pages.length ? '没有匹配的知识页面' : base.documents.length ? '还没有知识页面' : '从第一份资料开始'} description={!base.pages.length && base.documents.length ? '资料尚未生成知识页面。当前演示不调用解析服务。' : undefined}>
+          {base.pages.length ? <Button onClick={() => { setSearch(''); setType('all'); }}>清除筛选</Button> : <Button icon={<Upload size={15} />} onClick={() => { setUploadError(''); setUpload(true); }}>导入资料</Button>}
+        </EmptyState>}
+      </section>}
+      {view === 'sources' && <section className="source-list" aria-label="资料列表">
+        {documents.length ? <table className="source-table"><thead><tr><th>资料名称</th><th>关联知识</th><th>处理状态</th><th><span className="visually-hidden">操作</span></th></tr></thead><tbody>{documents.map(document => {
+          const count = base.pages.filter(item => item.sources.includes(document.name)).length;
+          return <tr key={document.hash}>
+            <td><button className="source-open" aria-label={`查看资料：${document.name}`} onClick={() => openSource(document)}><span className={`file-badge file-${document.display_type.toLowerCase()}`}><FileText size={19} strokeWidth={1.5} /></span><span><strong>{document.name}</strong><small>{document.display_type}{document.pages != null ? ` · ${document.pages} 页` : ''}</small></span></button></td>
+            <td className="source-relations-count"><span>{count ? `${count} 个页面` : '—'}</span></td>
+            <td><Status tone={document.phase === 'failed' ? 'amber' : document.phase === 'compiling' ? 'blue' : 'gray'}>{sourceState(document)}</Status></td>
+            <td>{document.phase === 'failed' ? <Button className="icon-button" type="tertiary" theme="borderless" icon={<RefreshCw size={15} />} aria-label={`重新编译：${document.name}`} title="重新编译" onClick={() => recompile(document)} /> : <Button className="icon-button" type="tertiary" theme="borderless" icon={<ArrowUpRight size={16} />} aria-label={`打开原文：${document.name}`} title="打开原文" onClick={() => openSource(document)} />}</td>
+          </tr>;
+        })}</tbody></table> : <EmptyState title={base.documents.length ? '没有匹配的资料' : '从第一份资料开始'}>{base.documents.length ? <Button onClick={() => { setSearch(''); setType('all'); }}>清除筛选</Button> : <Button icon={<Upload size={15} />} onClick={() => { setUploadError(''); setUpload(true); }}>导入资料</Button>}</EmptyState>}
+      </section>}
+      {view === 'graph' && <Graph pages={base.pages} sourceNames={base.documents.map(document => document.name)} onSelect={openPage} />}
+    </>}
+    <Modal title="导入资料" visible={upload} onCancel={() => { if (!busy) setUpload(false); }} onOk={startImport} okText={busy ? '正在导入…' : '开始导入'} confirmLoading={busy} cancelButtonProps={{ disabled: busy }} closable={!busy} maskClosable={!busy} width={540}>
+      <p className="import-destination">导入到 <strong>{base.name}</strong></p>
+      <input ref={fileInput} type="file" multiple accept=".pdf,.md,.txt,.docx" aria-label="选择资料文件" className="visually-hidden" onChange={event => { if (event.target.files) chooseFiles(event.target.files); event.target.value = ''; }} />
+      <button className="upload-zone" disabled={busy} onClick={() => fileInput.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (!busy) chooseFiles(event.dataTransfer.files); }}><span className="upload-icon"><Upload size={24} strokeWidth={1.5} /></span><strong>拖入文件，或点击选择</strong><span>PDF · Markdown · TXT · DOCX</span><small>单个不超过 100 MB · 合计不超过 500 MB</small></button>
+      {files.map(file => <div className="upload-file" key={file.name}><FileText size={16} /><span>{file.name}<small>{Math.max(1, Math.round(file.size / 1024))} KB</small></span>{busy ? <Loader2 size={15} className="spinning" /> : <Button className="icon-button" theme="borderless" type="tertiary" aria-label={`移除待导入文件 ${file.name}`} icon={<X size={15} />} onClick={() => setFiles(items => items.filter(item => item.name !== file.name))} />}</div>)}
+      {!files.length && <button className="link-button sample-file" onClick={() => { setFiles([{ name: '协作与设计原则.md', size: 2048 }]); setUploadError(''); }}>使用示例文件<ArrowUpRight size={13} /></button>}
+      {uploadError && <p className="form-error" role="alert">{uploadError}</p>}
+      <p className="field-hint">仅演示导入流程，文件不会上传或解析。</p>
     </Modal>
-    <Modal title="新建知识库" visible={create} onCancel={() => setCreate(false)} okText="创建知识库" cancelText="取消" onOk={() => { const name = newName.trim(); if (!name || /[\\/]/.test(name) || name.startsWith('.')) { setNewError('填写一个名称，不能以点开头或包含路径分隔符。'); return; } if (bases.some(b => b.name === name)) { setNewError('这个知识库名称已存在。'); return; } setBases(items => [...items, { name, description: '从第一份资料开始，慢慢建立你的知识。', documents: [], pages: [] }]); setBaseName(name); setSourceId(null); setPagePath(''); setSearch(''); setType('all'); setTab('sources'); setLinted(false); setFixed(false); setCreate(false); Toast.success('示例知识库已创建'); }}><Field label="知识库名称"><Input aria-label="知识库名称" value={newName} onChange={setNewName} placeholder="例如：产品研究" /></Field>{newError && <p className="form-error" role="alert">{newError}</p>}<p className="field-hint">每个知识库独立管理自己的资料和知识页面。</p></Modal>
-    <Modal title={reader?.title} visible={reader !== null} onCancel={() => setReader(null)} footer={<Button onClick={() => setReader(null)}>关闭阅读</Button>} width={780}><Reading content={reader?.content ?? ''} /></Modal>
-    <Modal title={`编辑 · ${selectedPage?.title ?? ''}`} visible={editingPage} onCancel={() => setEditingPage(false)} okText="保存页面" cancelText="取消" width={720} onOk={() => { if (!pageDraft.trim()) { setPageError('页面内容不能为空。'); return; } updateBase(baseName, b => ({ ...b, pages: b.pages.map(p => p.path === pagePath ? { ...p, content: pageDraft } : p) })); setEditingPage(false); Toast.success('页面已保存到本次演示'); }}><div className="callout" style={{ marginBottom: 16 }}>可修正正文；后续重新编译原始资料时，生成内容可能被更新。</div><TextArea aria-label="知识页面正文" value={pageDraft} onChange={setPageDraft} autosize={{ minRows: 12, maxRows: 20 }} />{pageError && <p role="alert" className="form-error">{pageError}</p>}</Modal>
-    <Modal title="移除这份资料？" visible={deleteSource} onCancel={() => setDeleteSource(false)} okText="确认移除" cancelText="保留资料" okButtonProps={{ type: 'danger' }} onOk={() => { if (!selected) return; updateBase(baseName, b => ({ ...b, documents: b.documents.filter(d => d.hash !== selected.hash), pages: b.pages.map(p => ({ ...p, sources: p.sources.filter(name => name !== selected.name) })).filter(p => p.sources.length > 0) })); setSourceId(null); setDeleteSource(false); Toast.success('已移除示例资料并更新关联页面'); }}><p className="danger-copy">「{selected?.name}」有 {related.length} 个关联知识页面。此演示会移除仅由该资料支持的页面，并更新共同来源。</p><div className="callout" style={{ marginTop: 15 }}>正式接入后，先显示服务返回的删除影响预览，再确认执行。其他资料支持的内容会按服务规则保留。</div></Modal>
+    <Modal title="新建知识库" visible={create} onCancel={() => setCreate(false)} onOk={createBase} okText="创建知识库" width={440}>
+      <Field label="知识库名称"><Input aria-label="知识库名称" value={newName} onChange={setNewName} placeholder="例如：产品研究" /></Field>
+      {newError && <p className="form-error" role="alert">{newError}</p>}
+    </Modal>
+    <Modal title="移除这份资料？" visible={deleteTarget !== null} onCancel={() => setDeleteTarget(null)} okText="确认移除" cancelText="保留资料" okButtonProps={{ type: 'danger' }} onOk={() => {
+      if (!deleteTarget) return;
+      const { baseName, source: target } = deleteTarget;
+      updateBase(baseName, item => ({ ...item, documents: item.documents.filter(document => document.hash !== target.hash), pages: item.pages.map(entry => ({ ...entry, sources: entry.sources.filter(name => name !== target.name) })).filter(entry => entry.sources.length > 0) }));
+      if (base.name === baseName && sourceId === target.hash) go('sources', {}, true);
+      setDeleteTarget(null); Toast.success('已移除资料并更新关联页面');
+    }}><p className="danger-copy">{deleteTarget?.source.name}</p><div className="delete-impact"><div><span>受影响的知识页面</span><strong>{deleteRelated.length}</strong></div><div><span>仅由此资料支持，将一并移除</span><strong>{deleteRelated.filter(item => item.sources.length === 1).length}</strong></div></div><p className="field-hint">以上为本次演示数据的删除影响；其他资料支持的页面会保留。</p></Modal>
+    <Modal title="质量检查" visible={quality} onCancel={() => setQuality(false)} footer={<Button onClick={() => setQuality(false)}>关闭</Button>} width={540}>
+      <div className="quality-notice"><ShieldCheck size={22} /><div><h3>检查服务尚未连接</h3><p>示例报告不会检查或修改当前资料。</p></div></div>
+      {!report ? <Button onClick={() => setReport(true)}>查看示例报告</Button> : <div className="quality-results" aria-label="示例检查报告"><span className="report-label">预设示例</span><div className="quality-result"><Check size={18} /><div><h3>内容一致性</h3><p>示例：未发现矛盾描述</p></div></div><div className="quality-result"><CircleAlert size={18} /><div><h3>引用完整性</h3><p>示例：1 处引用指向已移除页面</p></div><Status tone="amber">待处理</Status></div></div>}
+    </Modal>
   </div>;
 }

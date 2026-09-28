@@ -8,7 +8,7 @@
 
 | 页面操作 | 现有接口 | 接入要求 |
 | --- | --- | --- |
-| 列表、筛选 | `GET /memories` | `user_id`、`agent_id`、`run_id`、`top_k`、`show_expired`；查看失效记录要显式包含过期数据。无身份筛选的全量列表有管理员限制。 |
+| 列表、筛选、排序 | `GET /memories` | `user_id`、`agent_id`、`run_id`、`top_k`、`show_expired`；查看失效记录要显式包含过期数据。无身份筛选的全量列表有管理员限制。Demo 在本地按时间戳排序，正式接入应使用服务排序。 |
 | 详情 | `GET /memories/{id}` | 使用服务的 ID 和元数据，不依赖 Demo 字段齐全。 |
 | 手动添加 | `POST /memories` | `messages: [{role: "user", content: "…"}]`，附带所属身份、范围、metadata；手动原文录入使用 `infer: false`。 |
 | 修正、有效期 | `PUT /memories/{id}` | 正文字段叫 `text`，支持 `metadata`、`expiration_date`；显式 `null` 清除有效期。此接口不能修改所属用户或范围。 |
@@ -16,7 +16,7 @@
 | 删除 | `DELETE /memories/{id}` | 确认后执行，服务成功才更新列表。 |
 | 语义搜索（待接入） | `POST /search` | `query`、`filters`、`top_k`、`threshold`、`show_expired`；当前搜索框只有本地文本筛选。 |
 
-工作区约定来自现有 Agent 适配器：`run_id = global` 或 `workspace:<workspace_key>`，检索同时限定用户与 Agent。Mem0 本身没有单独的 enabled 字段；Demo 用 `1970-01-01` 表示停用，恢复清空有效期。正式接入应明确恢复是否保留原期限，避免把这一展示约定误当成服务协议。Demo 只使用一个 Agent，并未提供 Agent 切换器。
+工作区约定来自现有 Agent 适配器：`run_id = global` 或 `workspace:<workspace_key>`，检索同时限定用户与 Agent。Mem0 本身没有单独的 enabled 字段；Demo 用 `1970-01-01` 表示停用，恢复清空有效期，批量暂停与恢复沿用同一约定并跳过无需变更的条目。正式接入应明确恢复是否保留原期限，避免把这一展示约定误当成服务协议。Demo 只使用一个 Agent，并未提供 Agent 切换器。
 
 ## OpenKB
 
@@ -34,11 +34,11 @@
 | 阅读知识页面 | `POST /api/v1/page` | `kb`、`path`。 |
 | 修正正文 | `PUT /api/v1/page` | `kb`、`path`、`content`；服务维护 frontmatter，返回保存内容和失效链接处理结果。 |
 | 页面关联 | `POST /api/v1/page/links` | `kb`、`path`；前向与反向引用应使用服务结果。 |
-| 图谱 | `POST /api/v1/graph` | 使用返回的 nodes、edges、types；当前六节点示意图不是实际知识关系。 |
-| 检查与修复 | `POST /api/v1/lint` | `kb`、`fix`；分别展示结构报告、知识报告和修改结果。 |
-| 移除资料 | `POST /api/v1/remove` | 先以 `dry_run: true` 获取影响，再确认执行；支持 `keep_raw`、`keep_empty`。Demo 仅模拟来源移除。 |
+| 图谱 | `POST /api/v1/graph` | 使用返回的 nodes、edges、types；Demo 的「来源关联」只按共同来源在本地推导连线，不是服务返回的知识关系。 |
+| 检查与修复 | `POST /api/v1/lint` | `kb`、`fix`；分别展示结构报告、知识报告和修改结果。Demo 只展示明确标注的示例报告，不提供修复。 |
+| 移除资料 | `POST /api/v1/remove` | 先以 `dry_run: true` 获取影响，再确认执行；支持 `keep_raw`、`keep_empty`。Demo 在本地计算受影响页面，并按「仅由该资料支持则移除」处理。 |
 
-`DocumentItem` 没有持久的统一 phase 字段，Demo 的 ready / compiling / failed 是展示模型；正式实现需结合操作响应或流式事件，并确定刷新后的状态来源。资料到页面的来源关系也需读取真实页面元数据，不能按文件名自行推测。
+`DocumentItem` 没有持久的统一 phase 字段，Demo 的 ready / compiling / failed 是展示模型；正式实现需结合操作响应或流式事件，并确定刷新后的状态来源。资料到页面的来源关系也需读取真实页面元数据，不能按文件名自行推测。Demo 的来源跳转只能定位到资料级别，没有段落或引用锚点，接入前不应显示精确到原文位置的假象。
 
 ## 本轮取舍与后续顺序
 

@@ -1,107 +1,30 @@
-/* Neutral workspace layout. Semi's Universe Design theme owns component colors. */
-body {
-  --canvas: var(--semi-color-fill-0);
-  --surface: var(--semi-color-bg-1);
-  --subtle: var(--semi-color-fill-0);
-  --ink: var(--semi-color-text-0);
-  --muted: var(--semi-color-text-2);
-  --line: var(--semi-color-border);
-  --accent: var(--semi-color-primary);
-  --radius: 8px;
-  background: #f7f8fa;
-  color: var(--ink);
-  font-size: 14px;
-}
-.app-layout { grid-template-columns: 208px minmax(0, 1fr); }
-.sidebar { background: #fff; color: var(--semi-color-text-1); border-right: 1px solid var(--line); padding: 0 12px 20px; }
-.brand { height: 64px; padding: 0 12px; color: var(--ink); }
-.brand svg { color: var(--accent); }
-.brand-word { font-size: 21px; letter-spacing: -.5px; }
-.brand-caption, .sidebar-note, .nav-link small { display: none; }
-.workspace-card { margin: 16px 0 24px; padding: 12px; background: var(--subtle); border: 0; }
-.workspace-card strong { color: var(--ink); font-size: 13px; font-weight: 600; }
-.workspace-card small { color: var(--muted); font-size: 11px; }
-.workspace-avatar { color: var(--muted); background: #fff; border: 1px solid var(--line); }
-.nav-label { color: var(--muted); font-size: 11px; letter-spacing: 0; margin-bottom: 8px; }
-.nav-link { color: var(--semi-color-text-1); padding: 11px 12px; margin-bottom: 4px; min-height: 42px; }
-.nav-link:hover { background: var(--subtle); color: var(--ink); }
-.nav-link.active { color: var(--accent); background: var(--semi-color-primary-light-default); font-weight: 600; }
-.nav-divider { background: var(--line); margin: 18px 12px; }
-.sidebar-bottom { padding: 16px 12px 0; border-top: 1px solid var(--line); }
-.profile { padding: 0; color: var(--ink); }
-.profile-icon { background: var(--subtle); color: var(--muted); }
-.profile small { color: var(--muted); font-size: 11px; }
-.topbar { height: 64px; background: #fff; padding: 0 28px; }
-.breadcrumb { font-size: 13px; gap: 10px; }
-.demo-label { background: var(--subtle); border: 0; color: var(--muted); font-size: 12px; }
-.demo-label i { display: none; }
-.command-trigger { padding: 6px; border-radius: 4px; }
-.command-trigger:hover { background: var(--subtle); }
-.page { padding: 28px; }
-.page-heading { margin-bottom: 24px; }
-h1 { font-size: 24px; letter-spacing: 0; }
-.page-heading p { margin-top: 6px; font-size: 13px; }
-.heading-actions { padding-top: 0; }
-.metric-strip { border: 0; padding: 0; gap: 24px; margin-bottom: 20px; }
-.metric { gap: 8px; padding-right: 24px; }
-.metric strong { font-size: 20px; font-weight: 600; letter-spacing: 0; font-variant-numeric: tabular-nums; }
-.metric span { font-size: 12px; }
-.metric-note { display: none; }
-.toolbar { padding: 16px 0; }
-.search-field { height: auto; padding: 0; max-width: 340px; border: 0; }
-.search-field:focus-within { border: 0; }
-.search-field.semi-input-wrapper { border: 1px solid var(--line); }
-.workspace-split { grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; }
-.list-panel { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.data-table th { background: var(--subtle); color: var(--semi-color-text-1); font-size: 12px; padding: 12px 16px; }
-.data-table td { font-size: 13px; padding: 15px 16px; }
-.data-table tr.selected td { background: var(--semi-color-primary-light-default); }
-.data-table tr.selected:hover td { background: var(--semi-color-primary-light-hover); }
-.data-table tr.selected td:first-child { box-shadow: inset 2px 0 var(--accent); }
-.data-table tbody tr:hover td { background: var(--subtle); }
-.table-item { font-size: 13px; }
-.table-item:hover, .related-page:hover { color: var(--accent); }
-.item-sub { font-size: 11px; }
-.scope-label, .scope-label.global { background: transparent; color: var(--muted); font-size: 11px; }
-.tab-count, .tab.active .tab-count { background: var(--semi-color-fill-1); color: var(--muted); }
-.table-footer { padding: 14px 16px; font-size: 11px; }
-.detail-panel { border-radius: var(--radius); }
-.detail-heading { font-size: 13px; color: var(--ink); font-weight: 600; }
-.detail-note, .detail-note.green { background: var(--subtle); }
-.detail-note .note-icon { display: none; }
-.detail-note small { color: var(--muted); }
-.detail-section h3, .form-label { font-size: 12px; }
-.bottom-caption { margin-top: 4px; padding-top: 16px; border: 0; font-size: 11px; }
-.bottom-caption span:last-child { display: none; }
-.callout { background: var(--subtle); border: 0; color: var(--semi-color-text-1); border-radius: 6px; }
-.command-list button { background: #fff; }
+html, body, #root { height: 100%; }
+.app-layout { height: 100dvh; overflow: hidden; }
+.shell-main { height: 100%; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--semi-color-border-2) transparent; }
+.page { width: min(1220px, 100%); min-height: 100dvh; margin: 0 auto; padding: 46px 44px 128px; }
+.app-dock { position: fixed; z-index: 40; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; max-width: calc(100vw - 24px); padding: 6px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.95); box-shadow: 0 6px 28px rgba(24,39,65,.09), 0 1px 3px rgba(24,39,65,.04); backdrop-filter: blur(16px); }
+.brand { display: flex; align-items: center; justify-content: center; padding: 0 10px; height: 40px; color: var(--accent); }
+.app-dock nav { display: flex; align-items: center; gap: 4px; }
+.nav-link { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 18px; border-radius: 10px; color: var(--semi-color-text-1); font-size: 13px; white-space: nowrap; }
+.nav-link:hover, .dock-tool:hover { background: var(--subtle); }
+.nav-link.active { background: var(--semi-color-primary-light-default); color: var(--accent); font-weight: 600; }
+.dock-tools { display: flex; align-items: center; gap: 3px; padding-left: 6px; border-left: 1px solid var(--line); }
+.dock-tool { display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 9px; color: var(--muted); background: none; }
+.dock-tool.active { color: var(--accent); background: var(--semi-color-primary-light-default); }
+.demo-indicator { display: flex; align-items: center; gap: 5px; position: fixed; z-index: 41; left: 22px; bottom: 34px; font-size: 11px; color: var(--muted); }
+.demo-indicator i { height: 5px; width: 5px; border-radius: 50%; background: var(--semi-color-text-3); }
+.command-list { display: grid; gap: 6px; margin-top: 16px; }
+.command-list button { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface); text-align: left; }
 .command-list button:hover { background: var(--subtle); }
-.kb-banner { background: #fff; border-color: var(--line); padding: 16px 20px; margin-bottom: 20px; }
-.kb-banner-icon { display: none; }
-.kb-banner-main .semi-select { font-size: 15px; }
-.kb-banner-main p, .kb-banner-stat span { color: var(--muted); }
-.kb-banner-stat strong { color: var(--ink); font-size: 20px; }
-.kb-banner-decoration { display: none; }
-.file-icon, .file-icon.pdf { background: var(--subtle); color: var(--semi-color-text-1); }
-.pipeline-strip { border: 0; border-top: 1px solid var(--line); border-radius: 0; margin: 0; color: var(--muted); }
-.source-cover { display: none; }
-.source-title { margin-top: 20px; }
-.reading p { color: var(--semi-color-text-1); }
-.graph-board { background: #fff; }
-.graph-label { color: var(--ink); }
-.graph-nodes button.active, .graph-nodes button:hover { background: var(--semi-color-primary-light-default); border-color: var(--accent); color: var(--accent); }
-.quality-icon { color: var(--semi-color-text-1); background: var(--subtle); }
-.quality-result > svg { color: var(--semi-color-text-1); }
-.upload-zone { color: var(--semi-color-text-1); background: var(--subtle); border-color: var(--line); }
-.upload-zone:hover { background: var(--semi-color-fill-1); }
-.design-intro { background: #fff; border-color: var(--line); }
-.design-intro > svg { color: var(--accent); }
-.design-intro p { color: var(--muted); }
-.design-intro > span { display: none; }
-.layout-mini-nav { background: var(--subtle); color: var(--ink); border-right: 1px solid var(--line); }
-.layout-mini-main { background: #fff; }
-.layout-mini-main > div > span:last-child { background: var(--subtle); color: var(--muted); }
-.motion-dot, .motion-dot.pink { background: var(--accent); }
-@media(max-width: 1200px) { .app-layout { grid-template-columns: 188px minmax(0, 1fr); } .page { padding-inline: 24px; } .workspace-split { grid-template-columns: minmax(0, 1fr) 280px; } }
-@media(max-width: 960px) { .app-layout { grid-template-columns: 68px minmax(0, 1fr); } .sidebar { padding-inline: 8px; } .workspace-split { grid-template-columns: minmax(0, 1fr); } }
-@media(max-width: 600px) { .app-layout { display: block; padding-bottom: 70px; } .sidebar { background: #fff; border-top: 1px solid var(--line); border-right: 0; padding: 6px 12px max(6px, env(safe-area-inset-bottom)); height: auto; } .nav-link { flex-direction: column; gap: 3px; padding: 6px 20px; } .nav-link span { display: block; font-size: 11px; } .topbar { height: 54px; padding: 0 16px; } .page { padding: 20px 16px; } .page-heading { flex-direction: column; align-items: flex-start; gap: 14px; } .heading-actions { padding: 0; } .metric-strip { gap: 12px; } .metric { padding-right: 12px; } .metric strong { font-size: 18px; } .search-field { max-width: none; } .kb-banner { padding: 14px; } .data-table td { padding: 14px 10px; } .data-table th { padding: 11px 10px; } }
+.command-list button > span { display: flex; align-items: center; gap: 10px; }
+.command-list small { color: var(--muted); }
+.command-search .search-field { max-width: none; width: 100%; }
+@media (min-width: 1600px) { .page { padding-top: 56px; } }
+@media (max-width: 1000px) { .page { padding: 32px 28px 120px; } .demo-indicator { display: none; } }
+@media (max-width: 700px) {
+  .page { padding: 26px 18px 112px; }
+  .app-dock { bottom: max(12px, env(safe-area-inset-bottom)); border-radius: 15px; gap: 4px; }
+  .brand { display: none; }
+  .nav-link { padding: 12px 18px; }
+  .dock-tool { width: 36px; }
+}

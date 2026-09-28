@@ -17,13 +17,13 @@ def browser():
 
 @pytest.fixture
 def page(browser, request):
-    context = browser.new_context(viewport={"width": 1440, "height": 1080})
+    context = browser.new_context(viewport={"width": 1440, "height": 1080}, reduced_motion="reduce")
     page = context.new_page()
     page.set_default_timeout(10000)
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(os.environ.get("WEBUI_BASE_URL", "http://127.0.0.1:5173"))
-    page.get_by_role("heading", name="我的记忆", exact=True).wait_for()
+    page.get_by_role("heading", name="记忆", exact=True).wait_for()
     yield page
     if getattr(request.node, "rep_call", None) and request.node.rep_call.failed:
         output = Path("test-results")
