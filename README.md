@@ -10,7 +10,8 @@ Icarus 希望通过长期共处逐渐理解用户、用户正在经历的事情�
 项目当前提供本地 TUI 与单用户 WebUI。TUI 支持文本和图片输入；WebUI 提供记忆管理、知识库和
 Agent 文本对话，可创建和恢复 Session、查看工具执行，并在刷新后恢复历史。长期 Memory 的
 Agent 侧能力已经接入，人物档案与关系由独立 rela-mem 服务提供；根控制面统一管理本地组件或连接已有
-远程服务。持续环境感知、多端产品和更完整的自主成长仍属于后续方向。
+远程服务。Argus 提供可选的 QQ 上报、观察持久化与 Jev 唤醒流程，默认禁用 QQ connector。
+持续环境感知、多端产品和更完整的自主成长仍属于后续方向。
 
 ## 产品方向
 
@@ -30,6 +31,9 @@ apps/
 │   ├── src/agent_app/    Icarus 插件、模型适配与应用服务
 │   └── scripts/
 ├── gateway/     本机 Agent 服务入口
+│   ├── requirements.txt
+│   └── scripts/
+├── argus/       可选 QQ 上报、观察持久化、Jev 判断和按需触发 Gateway
 │   ├── requirements.txt
 │   └── scripts/
 ├── tui/         Textual 终端客户端
@@ -354,6 +358,7 @@ make test
 # 或分别执行
 make test-agent
 make test-gateway
+make test-argus
 make test-tui
 ```
 
