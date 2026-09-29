@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+SQLAlchemy[asyncio]>=2,<3
+aiosqlite>=0.20,<1
+typesafe-sdk==0.7.2
+websockets>=13,<17

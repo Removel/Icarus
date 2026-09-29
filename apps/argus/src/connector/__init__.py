@@ -1,0 +1,1 @@
+"""Connectors for external applications."""

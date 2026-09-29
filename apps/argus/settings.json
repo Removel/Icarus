@@ -1,0 +1,19 @@
+{
+  "host": "127.0.0.1",
+  "port": 8766,
+  "log_level": "INFO",
+  "queue_capacity": 1000,
+  "worker_count": 1,
+  "recovery_interval_seconds": 1.0,
+  "judge_timeout_seconds": 2.0,
+  "jev_base_url": "https://openrouter.ai/api",
+  "jev_model": "typesafe/jev-1.13",
+  "qq": {
+    "enabled": false,
+    "bot_id": null,
+    "max_body_bytes": 1048576,
+    "workspace_path": null,
+    "gateway_url": null,
+    "bot_names": ["icarus", "伊卡洛斯"]
+  }
+}
