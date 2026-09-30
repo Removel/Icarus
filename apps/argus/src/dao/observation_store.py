@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import event, select, update
+from sqlalchemy import event, select, update, text, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -42,17 +42,33 @@ class ObservationStore:
         if self._engine is not None:
             return
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        from .schema import check_schema, VERSION
+        check_schema(self.database_path)
         engine = create_async_engine(URL.create("sqlite+aiosqlite", database=str(self.database_path)))
         event.listen(engine.sync_engine, "connect", _configure_connection)
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(_Base.metadata.create_all)
+                await conn.execute(text(f'PRAGMA user_version={VERSION}'))
             self.database_path.chmod(0o600)
         except BaseException:
             await engine.dispose()
             raise
         self._engine = engine
         self._sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def is_available(self) -> bool:
+        import asyncio
+        from sqlalchemy.exc import SQLAlchemyError
+        if self._sessions is None:
+            return False
+        try:
+            async with asyncio.timeout(0.25):
+                async with self._sessions() as db:
+                    await db.execute(text('SELECT 1 FROM decision_batches LIMIT 1'))
+            return True
+        except (SQLAlchemyError, TimeoutError):
+            return False
 
     async def close(self) -> None:
         if self._engine is not None:
@@ -71,6 +87,8 @@ class ObservationStore:
         sessions = self._require_sessions()
         fields = self._codec.to_row_fields(obs)
         async with sessions.begin() as db:
+            await db.execute(text('BEGIN IMMEDIATE'))
+            fields['ingest_seq'] = (await db.scalar(select(func.max(_ObservationRow.ingest_seq))) or 0) + 1
             statement = sqlite_insert(_ObservationRow).values(**fields).on_conflict_do_nothing(
                 index_elements=("platform", "account_id", "source_message_id")
             )
@@ -88,86 +106,29 @@ class ObservationStore:
                 raise ObservationConflictError("Conflicting observation for the same source message")
             return False
 
-    async def mark_failed_before_submit(self, id: str, error_type: str) -> None:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            await db.execute(update(_ObservationRow).where(
-                _ObservationRow.id == id,
-                _ObservationRow.processing_status == "processing",
-                _ObservationRow.submission_id.is_(None),
-            ).values(processing_status="failed", error_type=error_type,
-                     updated_at=datetime.now(UTC)))
-
-    async def release_before_submit(self, id: str) -> None:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            await db.execute(update(_ObservationRow).where(
-                _ObservationRow.id == id,
-                _ObservationRow.processing_status == "processing",
-                _ObservationRow.submission_id.is_(None),
-            ).values(processing_status="pending", updated_at=datetime.now(UTC)))
-
-    async def claim(self, id: str) -> bool:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            result = await db.execute(
-                update(_ObservationRow).where(
-                    _ObservationRow.id == id,
-                    _ObservationRow.processing_status == "pending",
-                ).values(processing_status="processing", updated_at=datetime.now(UTC))
-            )
-            return bool(result.rowcount)
-
-    async def mark_silence(self, id: str, reason: str, strategy_version: str) -> None:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            await db.execute(update(_ObservationRow).where(_ObservationRow.id == id).values(
-                processing_status="finished", judgment="silence", reason=reason,
-                strategy_version=strategy_version, updated_at=datetime.now(UTC),
-            ))
-
-    async def recover(self, *, limit: int = 100) -> tuple[Observation, ...]:
-        sessions = self._require_sessions()
-        async with sessions() as db:
+    async def preceding(self, batch, limit=10):
+        async with self._require_sessions()() as db:
+            first = await db.scalar(select(func.min(_ObservationRow.ingest_seq)).where(_ObservationRow.batch_id == batch.id))
+            if first is None:
+                return ()
             rows = (await db.scalars(select(_ObservationRow).where(
-                _ObservationRow.processing_status == "pending"
-            ).order_by(_ObservationRow.received_at, _ObservationRow.id).limit(limit))).all()
+                _ObservationRow.platform == batch.platform, _ObservationRow.account_id == batch.account_id,
+                _ObservationRow.subject == batch.subject, _ObservationRow.ingest_seq < first,
+            ).order_by(_ObservationRow.ingest_seq.desc()).limit(limit))).all()
+            return tuple(self._codec.from_row(row) for row in reversed(rows))
+
+    async def unassigned(self, scope: tuple[str, str, str], limit: int = 20):
+        async with self._require_sessions()() as db:
+            rows = (await db.scalars(select(_ObservationRow).where(
+                _ObservationRow.platform == scope[0], _ObservationRow.account_id == scope[1],
+                _ObservationRow.subject == scope[2], _ObservationRow.batch_id.is_(None),
+            ).order_by(_ObservationRow.ingest_seq).limit(limit))).all()
             return tuple(self._codec.from_row(row) for row in rows)
 
-    async def reset_interrupted(self) -> None:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            await db.execute(update(_ObservationRow).where(
-                _ObservationRow.processing_status == "processing",
-                _ObservationRow.submission_id.is_(None),
-            ).values(processing_status="pending", updated_at=datetime.now(UTC)))
-            await db.execute(update(_ObservationRow).where(
-                _ObservationRow.processing_status.in_(("processing", "submitting")),
-                _ObservationRow.submission_id.is_not(None),
-                _ObservationRow.task_id.is_(None),
-            ).values(processing_status="submission_unknown", updated_at=datetime.now(UTC)))
-
-    async def reserve_session_creation(self, id: str, workspace_path: str,
-                                       session_id: str) -> None:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            result = await db.execute(update(_ObservationRow).where(
-                _ObservationRow.id == id,
-                _ObservationRow.processing_status == "processing",
-            ).values(workspace_path=workspace_path, session_id=session_id,
-                     updated_at=datetime.now(UTC)))
-            if not result.rowcount:
-                raise ValueError("Observation cannot reserve a session")
-
-    async def pending_session(self, id: str) -> tuple[str, str] | None:
-        sessions = self._require_sessions()
-        async with sessions() as db:
-            row = await db.get(_ObservationRow, id)
-            if row is None:
-                raise KeyError(id)
-            if row.workspace_path is None or row.session_id is None:
-                return None
-            return row.workspace_path, row.session_id
+    async def unassigned_scopes(self):
+        async with self._require_sessions()() as db:
+            return tuple((await db.execute(select(_ObservationRow.platform, _ObservationRow.account_id,
+                _ObservationRow.subject).where(_ObservationRow.batch_id.is_(None)).distinct())).all())
 
     async def current_link(self, platform: str, account_id: str, subject: str) -> SessionLink | None:
         sessions = self._require_sessions()
@@ -199,70 +160,21 @@ class ObservationStore:
                 created_at=datetime.now(UTC),
             ))
 
-    async def reserve_submission(self, id: str, link: SessionLink, submission_id: str,
-                                 strategy_version: str) -> bool:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            result = await db.execute(update(_ObservationRow).where(
-                _ObservationRow.id == id,
-                _ObservationRow.processing_status == "processing",
-                _ObservationRow.submission_id.is_(None),
-            ).values(
-                processing_status="submitting", judgment="wake",
-                strategy_version=strategy_version,
-                workspace_path=link.workspace_path, workspace_key=link.workspace_key,
-                session_id=link.session_id, submission_id=submission_id,
-                updated_at=datetime.now(UTC),
-            ))
-            return bool(result.rowcount)
-
-    async def mark_submitted(self, id: str, task_id: str) -> None:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            await db.execute(update(_ObservationRow).where(
-                _ObservationRow.id == id, _ObservationRow.processing_status == "submitting"
-            ).values(processing_status="submitted", task_id=task_id, updated_at=datetime.now(UTC)))
-
-    async def mark_submission_unknown(self, id: str, error_type: str) -> None:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            await db.execute(update(_ObservationRow).where(
-                _ObservationRow.id == id, _ObservationRow.processing_status == "submitting"
-            ).values(processing_status="submission_unknown", error_type=error_type,
-                     updated_at=datetime.now(UTC)))
-
-    async def mark_submission_failed(self, id: str, error_type: str) -> None:
-        sessions = self._require_sessions()
-        async with sessions.begin() as db:
-            await db.execute(update(_ObservationRow).where(
-                _ObservationRow.id == id, _ObservationRow.processing_status == "submitting"
-            ).values(processing_status="failed", error_type=error_type,
-                     updated_at=datetime.now(UTC)))
-
     async def status_details(self, id: str) -> dict[str, str | None]:
         sessions = self._require_sessions()
         async with sessions() as db:
             row = await db.get(_ObservationRow, id)
             if row is None:
                 raise KeyError(id)
-            return {
-                "observation_id": row.id,
-                "status": row.processing_status,
-                "session_id": row.session_id,
-                "submission_id": row.submission_id,
-                "task_id": row.task_id,
-                "error_type": row.error_type,
-                "judgment": row.judgment,
-                "reason": row.reason,
-            }
+            if row.batch_id is not None:
+                from .entities import _DecisionBatchRow
+                batch = await db.get(_DecisionBatchRow, row.batch_id)
+                return dict(observation_id=id, batch_id=row.batch_id, status=batch.status,
+                    session_id=batch.session_id, submission_id=batch.operation_id,
+                    task_id=(batch.receipt or {}).get('task_id'), error_type=batch.error_type,
+                    route=batch.route)
+            return dict(observation_id=id, batch_id=None, status="pending")
 
-    async def status(self, id: str) -> str:
-        sessions = self._require_sessions()
-        async with sessions() as db:
-            row = await db.get(_ObservationRow, id)
-            if row is None:
-                raise KeyError(id)
-            return row.processing_status
 
     async def get(self, id: str) -> Observation:
         sessions = self._require_sessions()

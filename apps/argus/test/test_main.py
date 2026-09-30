@@ -35,11 +35,11 @@ def test_disabled_qq_does_not_consume_existing_pending_records(tmp_path):
     observation_id = asyncio.run(seed())
     paused_store = ObservationStore(tmp_path)
     recover_calls = []
-    original_recover = paused_store.recover
+    original_recover = paused_store.unassigned_scopes
     async def count_recover(*args, **kwargs):
         recover_calls.append(True)
         return await original_recover(*args, **kwargs)
-    paused_store.recover = count_recover
+    paused_store.unassigned_scopes = count_recover
     config = ArgusConfig(host="127.0.0.1", port=8766, log_level="INFO", queue_capacity=1, worker_count=1)
     with TestClient(create_app(config, store=paused_store)) as client:
         assert client.get("/health").status_code == 200

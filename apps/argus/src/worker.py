@@ -3,25 +3,8 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from .dao.observation_store import ObservationStore
 from .entity.observation import Observation
 from .queue import InboundQueue
-
-
-async def recover_pending(
-    store: ObservationStore, queue: InboundQueue, scheduled: set[str], *, limit: int = 100
-) -> int:
-    added = 0
-    for observation in await store.recover(limit=limit):
-        if observation.id in scheduled:
-            continue
-        try:
-            queue.put_nowait(observation)
-        except asyncio.QueueFull:
-            break
-        scheduled.add(observation.id)
-        added += 1
-    return added
 
 
 async def _no_processor(_observation: Observation) -> None:

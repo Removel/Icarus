@@ -51,4 +51,9 @@ class ArgusConfig(BaseModel):
     judge_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     jev_base_url: str = "https://openrouter.ai/api"
     jev_model: str = "typesafe/jev-1.13"
+    batch_quiet_seconds: float = Field(default=5.0, gt=0, allow_inf_nan=False)
+    batch_max_messages: int = Field(default=20, gt=0, le=100)
+    batch_max_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
+    graph_timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
+    graph_max_steps: int = Field(default=32, gt=0)
     qq: QQConfig = Field(default_factory=QQConfig)

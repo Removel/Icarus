@@ -22,7 +22,9 @@ from .queue import InboundQueue
 from .clients.icarus_client import IcarusClient
 from .clients.jev_client import JevClient
 from .service.qq_service import QQService
-from .worker import QueueWorker, recover_pending
+from .worker import QueueWorker
+from .dao.batch_store import BatchStore
+from .service.batch_scheduler import BatchScheduler
 
 logger = logging.getLogger("argus.main")
 
@@ -59,53 +61,60 @@ def create_app(
         app.state.store = store
         app.state.ready = False
         app.state.accepting = False
-        app.state.recovery_task = None
-        scheduled: set[str] = set()
+        tasks = []
+        worker = None
         await store.start()
         try:
-            await store.reset_interrupted()
+            batches = BatchStore(store)
+            scheduler = BatchScheduler(store, batches, quiet_seconds=config.batch_quiet_seconds,
+                max_messages=config.batch_max_messages, max_seconds=config.batch_max_seconds,
+                bot_names=config.qq.bot_names, capacity=config.queue_capacity)
+            app.state.scheduler = scheduler
+            app.state.batches = batches
             if config.qq.enabled:
+                await batches.reset_interrupted()
                 await gateway.connect()
-                service = QQService(
-                    store, judge, gateway, workspace_path=config.qq.workspace_path,
-                    reply_hint=QQHandler.reply_hint, bot_names=config.qq.bot_names,
-                )
-                async def process(observation):
-                    try:
-                        await service.process(observation)
-                    finally:
-                        scheduled.discard(observation.id)
+                service = QQService(store, judge, gateway, workspace_path=config.qq.workspace_path,
+                    bot_names=config.qq.bot_names, max_steps=config.graph_max_steps,
+                    graph_timeout_seconds=config.graph_timeout_seconds)
+                process = scheduler.offer
             else:
                 async def process(observation):
-                    scheduled.discard(observation.id)
+                    raise RuntimeError("QQ processing is disabled")
             worker = QueueWorker(queue, process=process)
             app.state.worker = worker
             worker.start()
-            if config.qq.enabled:
-                await recover_pending(store, queue, scheduled, limit=config.queue_capacity)
+
+            async def execute_batches():
+                while True:
+                    batch_id = await scheduler.ready.get()
+                    try:
+                        await service.process_batch(batch_id)
+                    finally:
+                        scheduler.done(batch_id)
 
             async def replenish():
                 while True:
-                    await asyncio.sleep(config.recovery_interval_seconds)
                     if config.qq.enabled:
-                        await recover_pending(store, queue, scheduled, limit=config.queue_capacity)
+                        await scheduler.check_due()
+                    await asyncio.sleep(config.recovery_interval_seconds)
 
-            app.state.recovery_task = asyncio.create_task(replenish(), name="argus:recovery")
+            tasks.append(asyncio.create_task(replenish(), name="argus:recovery"))
+            if config.qq.enabled:
+                tasks.append(asyncio.create_task(execute_batches(), name="argus:batches"))
+            app.state.recovery_task = tasks[0]
+            app.state.execution_tasks = tasks
             app.state.ready = True
             app.state.accepting = True
-            try:
-                yield
-            finally:
-                app.state.accepting = False
-                app.state.ready = False
-                app.state.recovery_task.cancel()
-                await asyncio.gather(app.state.recovery_task, return_exceptions=True)
-                await worker.stop()
+            yield
         finally:
-            if config.qq.enabled:
-                await gateway.close()
-            if owned_jev_client is not None:
-                await owned_jev_client.aclose()
+            app.state.accepting = False
+            app.state.ready = False
+            for task in tasks: task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if worker is not None: await worker.stop()
+            if config.qq.enabled: await gateway.close()
+            if owned_jev_client is not None: await owned_jev_client.aclose()
             await store.close()
 
     app = FastAPI(lifespan=lifespan)
@@ -120,8 +129,11 @@ def create_app(
         if (not getattr(app.state, "ready", False) or worker is None
                 or not worker.is_running or recovery is None or recovery.done()
                 or store._sessions is None
+                or any(t.done() for t in getattr(app.state, "execution_tasks", ()))
                 or (config.qq.enabled and not gateway.connected)):
             raise HTTPException(status_code=503, detail="Argus is not ready")
+        if not await store.is_available():
+            raise HTTPException(status_code=503, detail="Argus database is unavailable")
         return {"status": "ready"}
 
     @app.get("/observations/{observation_id}/status")

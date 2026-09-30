@@ -15,7 +15,6 @@ class _ObservationRow(_Base):
     __table_args__ = (
         UniqueConstraint("platform", "account_id", "source_message_id", name="uq_observation_source"),
         Index("ix_observation_context", "platform", "account_id", "subject", "occurred_at"),
-        Index("ix_observation_status", "processing_status", "received_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -31,17 +30,8 @@ class _ObservationRow(_Base):
     subtype: Mapped[str] = mapped_column(String(64), nullable=False)
     detail_version: Mapped[int] = mapped_column(Integer, nullable=False)
     detail: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
-    processing_status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
-    strategy_version: Mapped[str | None] = mapped_column(String(64))
-    judgment: Mapped[str | None] = mapped_column(String(32))
-    reason: Mapped[str | None] = mapped_column(String(128))
-    workspace_path: Mapped[str | None] = mapped_column(String)
-    workspace_key: Mapped[str | None] = mapped_column(String(64))
-    session_id: Mapped[str | None] = mapped_column(String(255))
-    submission_id: Mapped[str | None] = mapped_column(String(128))
-    task_id: Mapped[str | None] = mapped_column(String(255))
-    error_type: Mapped[str | None] = mapped_column(String(128))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ingest_seq: Mapped[int | None] = mapped_column(Integer, unique=True)
+    batch_id: Mapped[str | None] = mapped_column(String(64), index=True)
 
 
 class _SessionLinkRow(_Base):
@@ -61,3 +51,27 @@ class _SessionLinkRow(_Base):
     session_id: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class _DecisionBatchRow(_Base):
+    __tablename__ = "decision_batches"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    close_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="ready", index=True)
+    graph_version: Mapped[str | None] = mapped_column(String(64))
+    route: Mapped[dict | None] = mapped_column(JSON)
+    trace: Mapped[list] = mapped_column(JSON, default=list)
+    workspace_path: Mapped[str | None] = mapped_column(String)
+    workspace_key: Mapped[str | None] = mapped_column(String(64))
+    session_id: Mapped[str | None] = mapped_column(String(255))
+    operation_id: Mapped[str | None] = mapped_column(String(255))
+    method: Mapped[str | None] = mapped_column(String(64))
+    params: Mapped[dict | None] = mapped_column(JSON)
+    receipt: Mapped[dict | None] = mapped_column(JSON)
+    error_type: Mapped[str | None] = mapped_column(String(128))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

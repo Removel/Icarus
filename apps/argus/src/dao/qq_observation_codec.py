@@ -35,7 +35,6 @@ class QQObservationCodec:
                 "is_self": obs.is_self,
                 "mentions_bot": obs.mentions_bot,
             },
-            "updated_at": obs.received_at,
         }
 
     def from_row(self, row: _ObservationRow) -> QQObservation:

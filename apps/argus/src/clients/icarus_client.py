@@ -115,3 +115,22 @@ class IcarusClient:
             "workspace_path": workspace_path, "session_id": session_id,
             "prompt": prompt, "submission_id": submission_id,
         })
+
+    async def task_get_status(self, workspace_path, session_id, task_id):
+        return await self.call("task.get_status", dict(workspace_path=workspace_path, session_id=session_id, task_id=task_id))
+
+    async def session_steer(self, workspace_path, session_id, task_id, prompt, submission_id):
+        return await self.call("session.steer", dict(workspace_path=workspace_path, session_id=session_id,
+            task_id=task_id, prompt=prompt, submission_id=submission_id))
+
+    async def session_get_history(self, workspace_path, session_id, *, after_sequence=0, max_pages=5):
+        records=[]
+        for _ in range(max_pages):
+            page=await self.call("session.get_history", dict(workspace_path=workspace_path, session_id=session_id,
+                after_sequence=after_sequence, limit=200))
+            records.extend(page["records"])
+            if not page["has_more"]: return dict(records=records, has_more=False)
+            next_sequence=page["next_after_sequence"]
+            if next_sequence<=after_sequence: raise GatewayTransportError("History pagination did not advance")
+            after_sequence=next_sequence
+        return dict(records=records, has_more=True)

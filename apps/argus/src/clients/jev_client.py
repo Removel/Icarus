@@ -1,79 +1,49 @@
-"""Jev client: ask named questions about a state, with bounded retries.
-
-The client is policy-free beyond retry/fallback: callers pass the questions,
-the question name to read, the accepted outcomes, and the fallback outcome,
-so several judgements over one state stay possible.
-"""
-
+"""Typed Jev queries with one bounded retry layer."""
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
-
-from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
-
-Answers = Mapping[str, str]
-QuestionCall = Callable[[dict, Mapping[str, object]], Awaitable[Answers]]
+from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy, SystemOneResponse, ChoiceAnswer
 
 
-@dataclass(frozen=True)
-class Judgement:
-    outcome: str
-    reason: str | None = None
+class JevCallError(RuntimeError):
+    pass
 
 
 class JevClient:
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        base_url: str | None = None,
-        model: str | None = None,
-        timeout_seconds: float = 2.0,
-        attempts: int = 3,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-        answer: QuestionCall | None = None,
-    ) -> None:
-        if attempts < 1:
-            raise ValueError("attempts must be at least 1")
-        self.timeout_seconds = timeout_seconds
-        self.attempts = attempts
-        self._sleep = sleep
-        self._answer = answer
-        self._sdk = None
+    def __init__(self, *, api_key=None, base_url=None, model=None, timeout_seconds=2.0,
+                 attempts=3, sleep=asyncio.sleep, answer=None):
+        if attempts<1 or timeout_seconds<=0: raise ValueError('Invalid Jev call budget')
+        self.timeout_seconds=timeout_seconds; self.attempts=attempts
+        self._sleep=sleep; self._answer=answer; self._sdk=None; self._model=model
         if answer is None:
-            if not api_key:
-                raise ValueError("api_key is required without an injected answer callable")
-            self._sdk = AsyncTypeSafeClient(
-                api_key=api_key, base_url=base_url, model=model,
-                timeout=timeout_seconds, retry=RetryPolicy(max_retries=0),
-            )
-            self._model = model
+            if not api_key: raise ValueError('api_key is required without an injected answer callable')
+            self._sdk=AsyncTypeSafeClient(api_key=api_key,base_url=base_url,model=model,
+                                         timeout=timeout_seconds,retry=RetryPolicy(max_retries=0))
 
-    async def decide(
-        self, *, state: dict, questions: Mapping[str, object], question: str,
-        outcomes: Sequence[str], fallback: str,
-    ) -> Judgement:
-        if fallback not in outcomes:
-            raise ValueError("fallback must be one of the accepted outcomes")
+    async def _request(self,state,questions,validate):
+        last=None
         for attempt in range(self.attempts):
             try:
-                answers = await asyncio.wait_for(self._ask(state, questions),
-                                                 timeout=self.timeout_seconds)
-                choice = answers[question]
-                if choice not in outcomes:
-                    raise ValueError("Jev returned an outcome outside the accepted set")
-                return Judgement(choice)
-            except Exception:
-                if attempt < self.attempts - 1:
-                    await self._sleep(0.1 * (2 ** attempt))
-        return Judgement(fallback, "judge_fallback")
+                operation=self._answer(state,questions) if self._answer else self._sdk.system_one(state,questions,model=self._model)
+                response=await asyncio.wait_for(operation,self.timeout_seconds)
+                return validate(response)
+            except Exception as error:
+                last=type(error).__name__
+                if attempt<self.attempts-1: await self._sleep(0.1*2**attempt)
+        raise JevCallError(f'Jev failed after {self.attempts} attempts ({last})')
 
-    async def _ask(self, state: dict, questions: Mapping[str, object]) -> Answers:
-        if self._answer is not None:
-            return await self._answer(state, questions)
-        response = await self._sdk.system_one(state, questions, model=self._model)
-        return {name: answer.choice for name, answer in response.answers.items()}
+    async def ask(self, *, state, questions) -> SystemOneResponse:
+        if not questions: raise ValueError('Questions cannot be empty')
+        def validate(response):
+            if not isinstance(response,SystemOneResponse): raise ValueError('Expected typed Jev response')
+            for name,question in questions.items():
+                answer=response.answers[name]
+                kind=question['type'] if isinstance(question,dict) else question.type
+                if answer.type!=kind: raise ValueError('Jev answer type mismatch')
+                if isinstance(answer,ChoiceAnswer):
+                    criteria=question['criteria'] if isinstance(question,dict) else question.criteria
+                    if answer.choice not in criteria: raise ValueError('Unknown Jev choice')
+            return response
+        return await self._request(state,questions,validate)
 
-    async def aclose(self) -> None:
-        if self._sdk is not None:
-            await self._sdk.aclose()
+    async def aclose(self):
+        if self._sdk is not None: await self._sdk.aclose()
