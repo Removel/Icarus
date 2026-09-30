@@ -15,13 +15,13 @@ import uvicorn
 from packages.runtime_environment import get_icarus_data_dir
 from .config.config_loader import load_config
 from .config.config_model import ArgusConfig
-from .connector.QQConnector import QQConnector
+from .connector.qq_connector import QQConnector
 from .dao.observation_store import ObservationStore
-from .handler.QQHandler import QQHandler
+from .handler.qq_handler import QQHandler
 from .queue import InboundQueue
-from .clients.IcarusClient import IcarusClient
-from .clients.JevClient import JevClient
-from .service.QQService import QQService
+from .clients.icarus_client import IcarusClient
+from .clients.jev_client import JevClient
+from .service.qq_service import QQService
 from .worker import QueueWorker, recover_pending
 
 logger = logging.getLogger("argus.main")

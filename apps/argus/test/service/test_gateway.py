@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from apps.argus.src.clients.IcarusClient import IcarusClient, GatewayTransportError
+from apps.argus.src.clients.icarus_client import IcarusClient, GatewayTransportError
 from websockets.exceptions import ConnectionClosed
 
 

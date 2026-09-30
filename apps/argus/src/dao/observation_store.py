@@ -10,10 +10,10 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from apps.argus.src.entity.QQObservation import QQObservation
+from apps.argus.src.entity.qq_observation import QQObservation
 from apps.argus.src.entity.observation import Observation
 from .entities import _Base, _ObservationRow, _SessionLinkRow
-from .QQObservationCodec import QQObservationCodec
+from .qq_observation_codec import QQObservationCodec
 
 
 class ObservationConflictError(ValueError):

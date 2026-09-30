@@ -6,11 +6,11 @@ from datetime import UTC, datetime, timedelta
 import unicodedata
 from uuid import uuid4
 
-from apps.argus.src.clients.IcarusClient import GatewayBusinessError, GatewayTransportError
+from apps.argus.src.clients.icarus_client import GatewayBusinessError, GatewayTransportError
 from apps.argus.src.dao.observation_store import ObservationStore, SessionLink
 from apps.argus.src.entity.observation import Observation
-from apps.argus.src.handler.QQHandler import QQHandler
-from apps.argus.src.strategy.QQStrategy import QQStrategy
+from apps.argus.src.handler.qq_handler import QQHandler
+from apps.argus.src.strategy.qq_strategy import QQStrategy
 
 
 def _message_text(obs: Observation) -> str:

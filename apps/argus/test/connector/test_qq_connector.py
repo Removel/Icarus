@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from apps.argus.src.connector.QQConnector import QQConnector
+from apps.argus.src.connector.qq_connector import QQConnector
 from apps.argus.src.config.config_model import QQConfig
 from apps.argus.src.dao.observation_store import ObservationStore
 from apps.argus.src.queue import InboundQueue

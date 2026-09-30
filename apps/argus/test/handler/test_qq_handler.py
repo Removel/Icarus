@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from apps.argus.src.handler.QQHandler import QQHandler
-from apps.argus.src.entity.QQObservation import QQObservation
+from apps.argus.src.handler.qq_handler import QQHandler
+from apps.argus.src.entity.qq_observation import QQObservation
 
 
 def test_group_message_preserves_order_and_mention():

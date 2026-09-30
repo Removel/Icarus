@@ -18,7 +18,7 @@ def test_health_tracks_worker_lifecycle():
 
 def test_disabled_qq_does_not_consume_existing_pending_records(tmp_path):
     from apps.argus.src.dao.observation_store import ObservationStore
-    from apps.argus.src.handler.QQHandler import QQHandler
+    from apps.argus.src.handler.qq_handler import QQHandler
     from apps.argus.src.config.config_model import ArgusConfig
 
     store = ObservationStore(tmp_path)

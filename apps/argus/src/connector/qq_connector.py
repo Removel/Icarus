@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from apps.argus.src.config.config_model import QQConfig
 from apps.argus.src.dao.observation_store import ObservationConflictError, ObservationStore
-from apps.argus.src.handler.QQHandler import QQHandler
+from apps.argus.src.handler.qq_handler import QQHandler
 from apps.argus.src.queue import InboundQueue
 
 

@@ -1,9 +1,9 @@
 import asyncio
 
 from apps.argus.src.dao.observation_store import ObservationStore
-from apps.argus.src.handler.QQHandler import QQHandler
-from apps.argus.src.service.QQService import QQService
-from apps.argus.src.clients.IcarusClient import GatewayTransportError, GatewayBusinessError
+from apps.argus.src.handler.qq_handler import QQHandler
+from apps.argus.src.service.qq_service import QQService
+from apps.argus.src.clients.icarus_client import GatewayTransportError, GatewayBusinessError
 
 
 def make_obs(message_id=300):

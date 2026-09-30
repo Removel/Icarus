@@ -6,7 +6,7 @@ from math import isfinite
 from typing import Any
 from uuid import uuid4
 
-from apps.argus.src.entity.QQObservation import QQObservation
+from apps.argus.src.entity.qq_observation import QQObservation
 from apps.argus.src.entity.observation import ActorRef, ContentPart, SourceRef, SubjectRef
 
 

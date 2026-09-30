@@ -1,6 +1,6 @@
 import asyncio
 
-from apps.argus.src.clients.JevClient import JevClient
+from apps.argus.src.clients.jev_client import JevClient
 
 
 QUESTIONS = {"should_wake": object()}

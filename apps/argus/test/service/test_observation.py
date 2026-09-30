@@ -1,10 +1,10 @@
 import asyncio
 import time
 
-from apps.argus.src.clients.JevClient import Judgement
+from apps.argus.src.clients.jev_client import Judgement
 from apps.argus.src.dao.observation_store import ObservationStore, SessionLink
-from apps.argus.src.handler.QQHandler import QQHandler
-from apps.argus.src.service.QQService import QQService
+from apps.argus.src.handler.qq_handler import QQHandler
+from apps.argus.src.service.qq_service import QQService
 
 
 class CapturingJudge:

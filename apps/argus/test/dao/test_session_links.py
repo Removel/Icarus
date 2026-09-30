@@ -1,7 +1,7 @@
 import asyncio
 
 from apps.argus.src.dao.observation_store import ObservationStore, SessionLink
-from apps.argus.src.handler.QQHandler import QQHandler
+from apps.argus.src.handler.qq_handler import QQHandler
 
 
 def test_session_link_replacement_keeps_only_one_current(tmp_path):

@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 from apps.argus.src.dao.observation_store import ObservationConflictError, ObservationStore
-from apps.argus.src.entity.QQObservation import QQObservation
-from apps.argus.src.handler.QQHandler import QQHandler
+from apps.argus.src.entity.qq_observation import QQObservation
+from apps.argus.src.handler.qq_handler import QQHandler
 
 
 def observation(message_id=301, group_id=42, message="你好", self_id=10000):

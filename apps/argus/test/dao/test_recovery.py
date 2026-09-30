@@ -1,7 +1,7 @@
 import asyncio
 
 from apps.argus.src.dao.observation_store import ObservationStore
-from apps.argus.src.handler.QQHandler import QQHandler
+from apps.argus.src.handler.qq_handler import QQHandler
 from apps.argus.src.queue import InboundQueue
 from apps.argus.src.worker import recover_pending
 

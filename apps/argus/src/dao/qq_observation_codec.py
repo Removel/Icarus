@@ -2,7 +2,7 @@
 
 from datetime import UTC
 
-from apps.argus.src.entity.QQObservation import QQObservation
+from apps.argus.src.entity.qq_observation import QQObservation
 from apps.argus.src.entity.observation import ActorRef, ContentPart, SourceRef, SubjectRef
 from .entities import _ObservationRow
 

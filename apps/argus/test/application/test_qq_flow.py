@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from apps.argus.src.clients.JevClient import Judgement
+from apps.argus.src.clients.jev_client import Judgement
 from apps.argus.src.config.config_model import ArgusConfig, QQConfig
 from apps.argus.src.dao.observation_store import ObservationStore
 from apps.argus.src.main import create_app

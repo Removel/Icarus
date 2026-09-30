@@ -4,10 +4,10 @@ from pathlib import Path
 import pytest
 from sqlalchemy import update
 
-from apps.argus.src.dao.QQObservationCodec import UnsupportedObservationError
+from apps.argus.src.dao.qq_observation_codec import UnsupportedObservationError
 from apps.argus.src.dao.entities import _ObservationRow
 from apps.argus.src.dao.observation_store import ObservationStore
-from apps.argus.src.handler.QQHandler import QQHandler
+from apps.argus.src.handler.qq_handler import QQHandler
 
 
 def test_unknown_detail_version_is_not_silently_downgraded(tmp_path: Path):

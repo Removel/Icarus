@@ -2,9 +2,9 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from apps.argus.src.entity.QQObservation import QQObservation
+from apps.argus.src.entity.qq_observation import QQObservation
 from apps.argus.src.entity.observation import Observation
-from apps.argus.src.handler.QQHandler import QQHandler
+from apps.argus.src.handler.qq_handler import QQHandler
 
 
 def test_qq_observation_inherits_immutable_common_facts():
