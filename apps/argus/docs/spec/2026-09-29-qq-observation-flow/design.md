@@ -33,13 +33,13 @@ HTTP 204 仅表示消息已安全提交数据库，不承诺已交给 Icarus；�
 
 ## QQ connector、handler 与业务实体
 
-命名约定：`connector/QQConnector.py` 定义 `QQConnector`，`handler/QQHandler.py` 定义 `QQHandler`，`entity/QQObservation.py` 定义 `QQObservation`。后续平台特定实现也采用对应平台名加职责名；通用模块沿用现有 Python 命名习惯。测试文件镜像实现文件。
+命名约定：`connector/qq_connector.py` 定义 `QQConnector`，`handler/qq_handler.py` 定义 `QQHandler`，`entity/qq_observation.py` 定义 `QQObservation`。后续平台特定实现也采用对应平台名加职责名；通用模块沿用现有 Python 命名习惯。测试文件镜像实现文件。
 
 QQ 是可选 connector：未启用时不挂载 `/onebot/events`，全栈 `icarus start` 保持可用；启用时要求单个机器人 `bot_id`、非空上报密钥和 Gateway/工作区配置，缺失则启动失败。非机密选项放 Argus `settings.json`，密钥在仓库根 `.env` 的专用环境变量中，用 `load_icarus_environment()` 加载，绝不写入 JSON 或日志。监听保持 loopback。正式 QQ 路由没有无鉴权的手工事件注入。
 
-`connector/QQConnector.py` 中的 `QQConnector` 在读取 JSON 前限制请求字节数，按 SnowLuma 的 `X-Signature: sha1=<HMAC-SHA1>` 对**未经修改的请求体字节**作常量时间比较，并校验 `X-Self-ID` 与事件 `self_id` 和配置机器人 ID 一致。签名缺失/错误拒绝；JSON 无效、账号不符或消息不符合协议拒绝，不落库、不入队。客户端成功响应必须是无 JSON 体的 204，避免 SnowLuma 将 JSON 当作快捷操作执行。不复制或分发 SnowLuma 源码，只走 OneBot 网络协议。
+`connector/qq_connector.py` 中的 `QQConnector` 在读取 JSON 前限制请求字节数，按 SnowLuma 的 `X-Signature: sha1=<HMAC-SHA1>` 对**未经修改的请求体字节**作常量时间比较，并校验 `X-Self-ID` 与事件 `self_id` 和配置机器人 ID 一致。签名缺失/错误拒绝；JSON 无效、账号不符或消息不符合协议拒绝，不落库、不入队。客户端成功响应必须是无 JSON 体的 204，避免 SnowLuma 将 JSON 当作快捷操作执行。不复制或分发 SnowLuma 源码，只走 OneBot 网络协议。
 
-`handler/QQHandler.py` 中的 `QQHandler` 仅解析群聊和私聊的 `message` / `message_sent`：要求有效且非零的 OneBot `message_id`（SnowLuma 的有符号 32 位哈希可能为负），QQ 身份则按正整数或正整数字符串校验；纯文本和消息段数组均可解析，带 CQ 码的字符串明确拒绝而不假装已解析。保留文本、图片引用等有序片段，不下载远程媒体，不把不认识的段误标成文本；真正提及机器人仅由 `at` 消息段判定，`@all` 或普通文字不算。自发消息通过 post_type 或 sender ID 识别；自发私聊使用 `target_id` 指向对端；群临时私聊仍是私聊。非聊天事件 `notice/request/meta_event` 暂不生成聊天观察、也不进入策略；入口明确拒绝这些尚未支持的类别。
+`handler/qq_handler.py` 中的 `QQHandler` 仅解析群聊和私聊的 `message` / `message_sent`：要求有效且非零的 OneBot `message_id`（SnowLuma 的有符号 32 位哈希可能为负），QQ 身份则按正整数或正整数字符串校验；纯文本和消息段数组均可解析，带 CQ 码的字符串明确拒绝而不假装已解析。保留文本、图片引用等有序片段，不下载远程媒体，不把不认识的段误标成文本；真正提及机器人仅由 `at` 消息段判定，`@all` 或普通文字不算。自发消息通过 post_type 或 sender ID 识别；自发私聊使用 `target_id` 指向对端；群临时私聊仍是私聊。非聊天事件 `notice/request/meta_event` 暂不生成聊天观察、也不进入策略；入口明确拒绝这些尚未支持的类别。
 
 业务实体位于 `entity/`，是不可变的数据对象，**不继承 SQLAlchemy ORM**：
 

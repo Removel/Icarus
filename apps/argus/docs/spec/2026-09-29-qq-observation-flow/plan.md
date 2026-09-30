@@ -1,6 +1,6 @@
 # Argus QQ 观测闭环实施计划
 
-> 执行记录：本计划保留实施时的任务拆分；后续按用户确认的职责边界，将 Jev/Gateway 通信放在 `src/clients/{JevClient,IcarusClient}.py`，将 QQ 业务编排与 Jev 判断归入 `src/service/QQService.py`。下文旧文件地图不代表当前架构；以同目录 `arch.md` 和代码、测试为准。
+> 执行记录：本计划保留实施时的任务拆分；后续按用户确认的职责边界，将 Jev/Gateway 通信放在 `src/clients/{JevClient,IcarusClient}.py`，将 QQ 业务编排与 Jev 判断归入 `src/service/qq_service.py`。下文旧文件地图不代表当前架构；以同目录 `arch.md` 和代码、测试为准。
 
 > **供执行者：**按任务逐项执行；开始实施前调用 `superpowers:executing-plans`（原生执行）或 `superpowers:subagent-driven-development`。每一步先写可失败的功能测试，看到预期失败，再写最小实现。本文是实施计划，不表示已完成。
 
@@ -17,7 +17,7 @@
 - 当前 `feat/argus` 上的骨架代码仍未提交；不要重置/覆盖已有文件。保留预先存在的 `apps/agent/settings.json`、`.env.bak-3010`、`apps/agent/settings.json.bak-argus`。不创建分支、不提交、不推送，除非用户之后明确要求。
 - 本期不修改 Agent/Gateway、`packages/`、SnowLuma 源码；不接 mem0/openkb，不直接发送 QQ，不建立策略 DSL/注册中心，不声称跨进程 exactly-once。
 - QQ connector 默认禁用；启用时必须配置单个 bot ID、非空上报签名密钥、Gateway 地址和绝对 workspace。服务只绑定 loopback。根 `.env` 加 **空值模板**，密钥绝不写入 `settings.json`、日志或测试输出。
-- 平台特定实现的**文件名与类名一致**，用平台名+职责名：`connector/QQConnector.py` 定义 `QQConnector`、`handler/QQHandler.py` 定义 `QQHandler`、`entity/QQObservation.py` 定义 `QQObservation`；对应测试镜像命名。通用模块仍采用现有 Python snake_case 命名。不创建 `qq.py` / `qq_reply.py` 等并行平台入口。
+- 平台特定实现的**模块使用 snake_case、类使用 PascalCase**，用平台名+职责名：`connector/qq_connector.py` 定义 `QQConnector`、`handler/qq_handler.py` 定义 `QQHandler`、`entity/qq_observation.py` 定义 `QQObservation`；对应测试镜像命名。通用模块仍采用现有 Python snake_case 命名。不创建 `qq.py` / `qq_reply.py` 等并行平台入口。
 - `POST /onebot/events` 只在启用 QQ 时挂载；原始字节 HMAC-SHA1 签名验证与请求大小限制先于 JSON 解析；成功必须返回无 JSON 体 204，仅表示 DB 已提交。
 - 入站保留一个有界内存 queue 和单 worker；worker 从 queue 获取对象，不以数据库轮询替代主路径；启动/运行期从 DB 补入待处理对象。DAO 负责读写而不判断是否唤醒。
 - `Observation` 业务对象不继承 ORM；通用事实为列，`content` 为有序 JSON，平台差异为 `subtype/detail_version/detail`；SQLAlchemy 独立 `$ICARUS_DATA_DIR/argus.db`，不读 `icarus.db`。
@@ -26,12 +26,12 @@
 
 ## 文件地图及接口锁定
 
-- `apps/argus/src/entity/observation.py` 与 `apps/argus/src/entity/QQObservation.py`：前者定义 `SourceRef`、`SubjectRef`、`ActorRef`、`ContentPart`、不可变 `Observation`；后者定义 QQ 特化的 `QQObservation`；`SubjectRef.key` 稳定编码 `qq:group:<id>` / `qq:private:<id>`。
-- `apps/argus/src/handler/QQHandler.py`：`QQHandler(bot_id: str).parse(raw: dict[str, object]) -> QQObservation` 校验并转换入站消息；`QQHandler.reply_hint(subject: str) -> str` 提供 QQ 回复目标提示。两者均不依赖 HTTP、DB、queue、Jev；通用 service 经注入的 callable 使用提示。
+- `apps/argus/src/entity/observation.py` 与 `apps/argus/src/entity/qq_observation.py`：前者定义 `SourceRef`、`SubjectRef`、`ActorRef`、`ContentPart`、不可变 `Observation`；后者定义 QQ 特化的 `QQObservation`；`SubjectRef.key` 稳定编码 `qq:group:<id>` / `qq:private:<id>`。
+- `apps/argus/src/handler/qq_handler.py`：`QQHandler(bot_id: str).parse(raw: dict[str, object]) -> QQObservation` 校验并转换入站消息；`QQHandler.reply_hint(subject: str) -> str` 提供 QQ 回复目标提示。两者均不依赖 HTTP、DB、queue、Jev；通用 service 经注入的 callable 使用提示。
 - `apps/argus/src/dao/{entities,observation_store}.py`：私有 SQLAlchemy row 与 `ObservationStore(data_dir)`，`start/close`、`insert(obs) -> bool`（true=新写入）、`get(id)`、`recent(platform, account_id, subject, limit)`、`claim(id)`、`transition(...)`、`recover()`、`current_link(...)`、`save_link(...)`。使用单次事务进行状态更新和来源去重。
-- `apps/argus/src/dao/QQObservationCodec.py`：QQ 专有的编解码器 `QQObservationCodec`，提供 `to_row_fields(obs) -> dict[str, object]` / `from_row(row) -> QQObservation`；不使用 pickle 或动态 import 未知类。只有第二个平台真正接入时才引入通用注册表。
-- `apps/argus/src/connector/QQConnector.py`：`QQConnector` 接收 `config, secret, store, queue` 并暴露 `router: APIRouter`；验请求字节与 headers，交 `QQHandler`，落库入队，响应 204；不执行业务策略。
-- `apps/argus/src/strategy/QQStrategy.py`：`QQStrategy` 提供固定策略版本和 Jev `Choice` 的 wake/silence 标准；不放 Gateway 操作。
+- `apps/argus/src/dao/qq_observation_codec.py`：QQ 专有的编解码器 `QQObservationCodec`，提供 `to_row_fields(obs) -> dict[str, object]` / `from_row(row) -> QQObservation`；不使用 pickle 或动态 import 未知类。只有第二个平台真正接入时才引入通用注册表。
+- `apps/argus/src/connector/qq_connector.py`：`QQConnector` 接收 `config, secret, store, queue` 并暴露 `router: APIRouter`；验请求字节与 headers，交 `QQHandler`，落库入队，响应 204；不执行业务策略。
+- `apps/argus/src/strategy/qq_strategy.py`：`QQStrategy` 提供固定策略版本和 Jev `Choice` 的 wake/silence 标准；不放 Gateway 操作。
 - `apps/argus/src/service/{judge,gateway,observation}.py`：可替换的异步 Jev/Gateway 客户端、state 组装和观察处理；QQ 回复提示由 `QQHandler.reply_hint(subject)` 提供，通用 service 通过传入的 callable 使用，不 import QQ 类型进行条件分叉。
 - `apps/argus/src/{queue,worker,main}.py`：保留现有类；为 queue 增加容量/满队列行为，为 worker 注入处理器并维持 `task_done()` 语义，由 main 持有周期补入任务；健康检查覆盖 DB、worker 与补入循环的活性。
 - `apps/argus/src/config/{config_model,config_loader}.py`、`settings.json`、`requirements*.txt`、根 `.example.env`：明确非机密配置及带验证的密钥加载，使用 TypeSafe SDK 的现成调用形状（对照 `D:\Projects\argus\scripts\try_jev.py`）；先核实 Python 包名和版本再写依赖，不猜 SDK API。
@@ -50,18 +50,18 @@
 
 ### Task 1: QQ 业务实体与 OneBot handler
 
-**文件：**创建 `apps/argus/src/entity/{observation.py,QQObservation.py}`、`apps/argus/src/handler/QQHandler.py` 和 `apps/argus/test/{entity/test_QQObservation.py,handler/test_QQHandler.py}`。
+**文件：**创建 `apps/argus/src/entity/{observation.py,qq_observation.py}`、`apps/argus/src/handler/qq_handler.py` 和 `apps/argus/test/{entity/test_qq_observation.py,handler/test_qq_handler.py}`。
 
 **接口：**`Observation(id, source: SourceRef, subject: SubjectRef, actor: ActorRef, content: tuple[ContentPart,...], received_at)` 为 frozen keyword-only dataclass；`QQObservation(Observation, message_type, group_id, is_self, mentions_bot)`。内容片段 `ContentPart(kind: Literal['text','image'], value: str)`。`QQHandler(bot_id).parse(raw)` 为纯函数式转换入口；非法消息抛 `ValueError`，无 IO。
 
 - [ ] **Step 1 RED：**写一个群消息测试：`self_id=10000,message_id=301,message_type=group,group_id=42,user_id=7,message=[at(10000),text('你好'),image('a.png')]`；断言 subject `qq:group:42`、来源 ID `301`、有序 text/image、`mentions_bot=True`、`is_self=False`。再写自发私聊（`message_sent,user_id=10000,target_id=7` → `qq:private:7`）及临时群私聊（仍 `private`）。
-- [ ] **Step 2 RED：**运行 `apps/argus/.venv/bin/python -m pytest apps/argus/test/handler/test_QQHandler.py -q`；预期因 handler/entity 尚不存在而失败。不要把 demo 的 `QQNormalizer` 源码复制进来。
+- [ ] **Step 2 RED：**运行 `apps/argus/.venv/bin/python -m pytest apps/argus/test/handler/test_qq_handler.py -q`；预期因 handler/entity 尚不存在而失败。不要把 demo 的 `QQNormalizer` 源码复制进来。
 - [ ] **Step 3 GREEN：**实现 QQ 身份正整数或正整数字符串校验、OneBot `message_id` 非零有符号整数并存为稳定字符串（SnowLuma 32 位哈希可能为负）；区分 `post_type=message/message_sent`，校验 `self_id`，构造 subject 和 UTC 时间；数组仅识别 text/image/at，未知段明确拒绝而不当文本，`@all` 与纯文本“@机器人”不算提及；纯文本中的 CQ 码拒绝。图片段只保存远程引用，不下载。所有 dataclass 使用 `frozen=True` 并把片段顺序保留为 tuple。
 - [ ] **Step 4 GREEN：**运行两个新测试目录；追加参数化错误测试：缺 message_id、错 self_id、群缺 group_id、非聊天事件、非法时间、CQ 字符串、错误段 data、未知段；看到预期异常而不是任何静默转换。运行 `./apps/argus/scripts/test.sh`。
 
 ### Task 2: 独立数据库与跨平台观察映射
 
-**文件：**创建 `apps/argus/src/dao/{entities.py,QQObservationCodec.py,observation_store.py}`、`apps/argus/test/dao/{test_QQObservationCodec.py,test_observation_store.py}`；修改 `apps/argus/requirements.txt` 加 `SQLAlchemy[asyncio]>=2,<3` 与 `aiosqlite>=0.20,<1`。不动 Agent 数据库。
+**文件：**创建 `apps/argus/src/dao/{entities.py,qq_observation_codec.py,observation_store.py}`、`apps/argus/test/dao/{test_qq_observation_codec.py,test_observation_store.py}`；修改 `apps/argus/requirements.txt` 加 `SQLAlchemy[asyncio]>=2,<3` 与 `aiosqlite>=0.20,<1`。不动 Agent 数据库。
 
 **接口：**`ObservationStore(data_dir: Path)` 在该目录建立 `argus.db`；`async start()/close()`；`async insert(obs: Observation) -> bool`（首次 true，完全相同来源事件重复 false）；`async get(id: str) -> Observation`；`async recent(platform, account_id, subject, limit=20) -> tuple[Observation,...]`。`QQObservationCodec` 保存普通列和 subtype/version/detail JSON；QQ 行必须可还原 QQ 子类。
 
@@ -83,7 +83,7 @@
 
 ### Task 4: 可选、安全的 SnowLuma HTTP connector
 
-**文件：**创建 `apps/argus/src/connector/QQConnector.py`、`apps/argus/test/connector/test_QQConnector.py`；修改 `apps/argus/src/config/{config_model,config_loader}.py`、`apps/argus/settings.json`、`apps/argus/src/main.py`、根 `.example.env`。沿用任务 1 的 handler、任务 2/3 的 store 与 queue。
+**文件：**创建 `apps/argus/src/connector/qq_connector.py`、`apps/argus/test/connector/test_qq_connector.py`；修改 `apps/argus/src/config/{config_model,config_loader}.py`、`apps/argus/settings.json`、`apps/argus/src/main.py`、根 `.example.env`。沿用任务 1 的 handler、任务 2/3 的 store 与 queue。
 
 **接口：**`QQConfig(enabled: bool=False, bot_id: str|None=None, max_body_bytes: int=1048576, workspace_path: str|None=None, gateway_url: str|None=None)` 为非机密设置；签名密钥 `ARGUS_QQ_REPORT_SECRET` 只从根 `.env` 加载并在启用时校验非空，API 不通过 HTTP 暴露配置。`QQConnector(config, secret, store, queue).router: APIRouter` 注册 `/onebot/events`，成功为 `Response(status_code=204)`。未启用时根本不 include router。
 
@@ -93,7 +93,7 @@
 
 ### Task 5: 简单 Jev 策略、有限上下文与可测判断器
 
-**文件：**创建 `apps/argus/src/strategy/QQStrategy.py`、`apps/argus/src/service/{judge,observation}.py`、`apps/argus/test/{strategy/test_QQStrategy.py,service/test_judge.py,service/test_observation.py}`；按验证过的包名在 `apps/argus/requirements.txt` 加 TypeSafe SDK。Jev 失败与有效 silence 要有不同 `reason`。
+**文件：**创建 `apps/argus/src/strategy/qq_strategy.py`、`apps/argus/src/service/{judge,observation}.py`、`apps/argus/test/{strategy/test_qq_strategy.py,service/test_judge.py,service/test_observation.py}`；按验证过的包名在 `apps/argus/requirements.txt` 加 TypeSafe SDK。Jev 失败与有效 silence 要有不同 `reason`。
 
 **接口：**`judge(obs: Observation, recent: tuple[Observation,...], current_session: bool) -> Decision(outcome: Literal['wake','silence'], reason: str|None, strategy_version: str)`；适配器 `JevJudge` 注入可替换异步调用函数；只在单个 strategy 文件定义 `Choice` 和版本。`ObservationService.process(obs: Observation)` 负责 claim、同 subject/账号有限 `recent()`、调用 judge、DAO 记录结果；当 outcome 为 wake 调用下一任务的 `SessionDispatcher`。调用方提供 platform-specific `reply_hint(subject)`，通用 service 不 import QQ 实体做 `isinstance`。
 
@@ -103,7 +103,7 @@
 
 ### Task 6: Icarus Gateway 会话核实与一次安全提交
 
-**文件：**创建 `apps/argus/src/service/gateway.py`、`apps/argus/test/service/{test_gateway.py,test_dispatch.py}`；扩展 `apps/argus/src/handler/QQHandler.py` 中的 QQ 回复提示、`apps/argus/src/dao/{entities,observation_store}.py`、`apps/argus/test/dao/test_session_links.py`。只使用 Gateway WebSocket JSON-RPC 2.0 `/rpc`，不 import Agent 内部。
+**文件：**创建 `apps/argus/src/service/gateway.py`、`apps/argus/test/service/{test_gateway.py,test_dispatch.py}`；扩展 `apps/argus/src/handler/qq_handler.py` 中的 QQ 回复提示、`apps/argus/src/dao/{entities,observation_store}.py`、`apps/argus/test/dao/test_session_links.py`。只使用 Gateway WebSocket JSON-RPC 2.0 `/rpc`，不 import Agent 内部。
 
 **接口：**`GatewayClient.connect()/close()/call(method,params)` 加 `session_get/create/submit/get_history/task_get_status/subscribe` 的窄方法；`SessionDispatcher.dispatch(obs: Observation, prompt: str, reply_hint: str) -> str|None` 保存并校验 session，提交成功返 task_id。`store.current_link(platform,account_id,subject)`、`store.save_link(...)`、`store.reserve_submission(observation_id,workspace_path,workspace_key,session_id,submission_id)`、`store.mark_submitted(id,task_id)`、`store.mark_submission_unknown(id,error_type)`；提交预留状态在网络调用前提交事务。Gateway 返回 workspace_key 必须来自服务端，不能自己计算。同步调用不用于业务流程。
 

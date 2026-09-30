@@ -1,6 +1,6 @@
 # Argus
 
-Argus 是 Icarus 的 QQ 观察、判断与唤醒桥接应用。SnowLuma 通过 OneBot v11 HTTP 上报消息；Argus 验签并落库，worker 从有界队列消费、按最小 Jev 策略判断是否调用 Icarus Gateway。Argus 自身**不向 QQ 发送消息**。
+Argus 是 Icarus 的 QQ 观察与触发应用。签名上报先落库，Observation 经队列交给 worker，按会话成批后运行由 QQService 编排的决策图。代码能确定时不调用模型，有歧义时才通过 Jev 判断；最终由 service 执行 submit 或 steer。Argus 自身**不向 QQ 发送消息**。
 
 ## 安装与生命周期
 
@@ -20,6 +20,22 @@ make test-argus
 
 SnowLuma 上报签名为 `X-Signature: sha1=<原始 body 的 HMAC-SHA1>`，同时提供与 bot ID 一致的 `X-Self-ID`。有效聊天消息必须包含非零 `message_id` 与 Unix 秒 `time`；缺少这些字段或收到非聊天事件时会拒绝。成功返回无 JSON 响应体的 **204**：仅表示观察已提交 Argus 数据库，不表示 Jev 已判断或 Icarus 已回复。来源 ID 重投不会生成第二条记录。消息队列满时已提交记录会在运行期补入；重启也会恢复可安全重试的记录。
 
-Jev 使用 `typesafe/jev-1.13`；调用失败最多尝试三次，仍失败会记录 `judge_fallback` 并以 silence 结束。`session.submit` 若在发送后失去响应，状态为 `submission_unknown`，Argus 不自动再次提交。通过本机 `GET /observations/<observation_id>/status` 查看状态、session/submission/task ID 与错误类型；**不能仅凭 Gateway 历史中相似文本认定提交结果**。该端点不回显聊天内容，但尚无单独认证，只能保持 loopback 监听。
+## 升级已有数据库
 
-自动测试使用合成 OneBot 事件、临时数据库及假 Jev/Gateway，不发送 QQ、不产生付费模型请求。真实 SnowLuma/付费 Jev 冒烟尚未执行，需事先确认账号、目标与费用。设计、实施计划与当前实现架构见 `docs/spec/2026-09-29-qq-observation-flow/`。
+新版使用 schema v2（三张业务表）。已有旧库不能直接启动，需在确认停止 Argus 后执行：
+
+```bash
+./bin/icarus stop argus
+./apps/argus/scripts/migrate.sh
+./bin/icarus start argus
+```
+
+维护脚本检测仍在运行的 Argus 会拒绝迁移；如果 stop 报 external，不要继续迁移，先确认进程已停止。SQLite 需 3.35+。升级先生成 `argus.db.backup-<时间>`（包含 WAL 数据），事务内将旧裁决、错误、session/task/submission 身份移至批次，再删除旧处理列；历史已提交消息不重放。本轮开发没有执行用户真实数据库迁移，部署前应保留备份；升级后不要用旧版本进程打开新版库。
+
+## 批次与判断
+
+群聊默认静默 5 秒、20 条或开批 60 秒先到先关闭；私聊即时，at/称呼会提前关闭群批次。配置字段为 `batch_quiet_seconds`、`batch_max_messages`、`batch_max_seconds`，默认值来自配置模型；这些是批次窗口，不是每分钟调用上限，也没有额外冷却。原 300 秒自动丢弃规则已移除。
+
+JevClient 支持一次多问题 Noul/Choice/Score，最多尝试三次，最终故障记录为失败 silence，并打 warn；不混同于正常判断 silence。批次默认 graph 预算为 30 秒 / 32 步，可用 `graph_timeout_seconds`、`graph_max_steps` 配置。`submit` 或 `steer` 发送结果未知时为 `submission_unknown`，不自动重发；该 subject 后续批次会等待人工核实。通过本机 `GET /observations/<observation_id>/status` 查看 `batch_id`、批次状态和目标身份；不能用历史相似文本猜测提交是否成功。端点无单独认证，只能保持 loopback。
+
+自动测试使用临时配置、临时库及假 Jev/Gateway，标准 `make test-argus` 也不读取用户密钥或真实库。上一期单消息 QQ 流程已做真实验证；本次批次/图流程仅经合成测试，尚未进行真实外部冒烟。当前架构和计划见 `docs/spec/2026-09-30-judgement-graph/`；命名规则见 `docs/spec/2026-09-30-module-naming/`。
