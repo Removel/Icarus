@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import os
 import selectors
+import shutil
 import signal
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from apps.agent.src.agent_orchestration.tools.base_tool import BaseTool
@@ -86,12 +89,20 @@ class BashTool(BaseTool):
         task_messages: tuple[Message, ...] = (),
         timeout_seconds: float | None = None,
     ) -> ToolExecutionResult:
+        if os.name == "nt":
+            # Windows selectors cannot monitor anonymous subprocess pipes. A
+            # dedicated event loop also supports sync callers inside an async app.
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                return executor.submit(
+                    asyncio.run,
+                    self.ainvoke(arguments, timeout_seconds=timeout_seconds),
+                ).result()
         del task_id, run_id, step, task_messages
         command, workdir, timeout = self._validate_arguments(arguments)
         timeout = _minimum_timeout(timeout, timeout_seconds)
         try:
             process = subprocess.Popen(
-                ["bash", "-lc", command],
+                [_bash_executable(), "-lc", command],
                 cwd=workdir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -116,15 +127,19 @@ class BashTool(BaseTool):
         del task_id, run_id, step, task_messages
         command, workdir, timeout = self._validate_arguments(arguments)
         timeout = _minimum_timeout(timeout, timeout_seconds)
-        process = await asyncio.create_subprocess_exec(
-            "bash",
-            "-lc",
-            command,
-            cwd=workdir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
+        try:
+            spawn = asyncio.create_task(_spawn_bash(command, workdir))
+            try:
+                process, job = await asyncio.shield(spawn)
+            except asyncio.CancelledError:
+                # Cancellation during Windows pipe setup must not orphan the
+                # just-created process or its transports.
+                process, job = await spawn
+                await self._terminate(process, job)
+                await process.communicate()
+                raise
+        except OSError as error:
+            return ToolExecutionResult(success=False, error=str(error))
         capture = _BoundedCapture(self.max_output_bytes)
         limit_reached = asyncio.Event()
         readers = [
@@ -146,19 +161,23 @@ class BashTool(BaseTool):
             )
             timed_out = not done
             if timed_out or limit_task in done:
-                await self._terminate(process)
+                await self._terminate(process, job)
             else:
                 await wait_task
                 if _process_group_exists(process.pid):
-                    await self._terminate(process)
+                    await self._terminate(process, job)
             await asyncio.gather(*readers)
         except asyncio.CancelledError:
-            await asyncio.shield(self._terminate(process))
+            await asyncio.shield(self._terminate(process, job))
+            await asyncio.gather(*readers, return_exceptions=True)
             raise
         except BaseException:
-            await asyncio.shield(self._terminate(process))
+            await asyncio.shield(self._terminate(process, job))
+            await asyncio.gather(*readers, return_exceptions=True)
             raise
         finally:
+            if job is not None:
+                job.close()
             for task in (wait_task, limit_task, *readers):
                 if not task.done():
                     task.cancel()
@@ -184,9 +203,7 @@ class BashTool(BaseTool):
         terminated = False
         try:
             while selector.get_map():
-                remaining = (
-                    None if deadline is None else deadline - time.monotonic()
-                )
+                remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     timed_out = True
                     self._terminate_sync(process)
@@ -207,16 +224,12 @@ class BashTool(BaseTool):
                         break
                 if terminated:
                     break
-                if process.poll() is not None and _process_group_exists(
-                    process.pid
-                ):
+                if process.poll() is not None and _process_group_exists(process.pid):
                     self._terminate_sync(process)
                     terminated = True
                     break
             if not terminated:
-                remaining = (
-                    None if deadline is None else deadline - time.monotonic()
-                )
+                remaining = None if deadline is None else deadline - time.monotonic()
                 try:
                     process.wait(timeout=remaining)
                 except subprocess.TimeoutExpired:
@@ -269,22 +282,36 @@ class BashTool(BaseTool):
         return command, workdir, timeout
 
     @classmethod
-    async def _terminate(cls, process: asyncio.subprocess.Process) -> None:
+    async def _terminate(cls, process: asyncio.subprocess.Process, job=None) -> None:
         pid = getattr(process, "pid", None)
+        if os.name == "nt" and job is not None:
+            job.close()
+            await process.wait()
+            return
+        if os.name == "nt" and pid is not None:
+            if process.returncode is None:
+                await asyncio.to_thread(_terminate_windows_tree, pid)
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                await process.wait()
+            return
         if process.returncode is not None and not _process_group_exists(pid):
             return
         started_at = time.monotonic()
         _signal_process_group(pid, signal.SIGTERM, process.terminate)
         try:
-            await asyncio.wait_for(
-                process.wait(), timeout=cls.TERMINATE_GRACE_SECONDS
-            )
+            await asyncio.wait_for(process.wait(), timeout=cls.TERMINATE_GRACE_SECONDS)
         except TimeoutError:
             pass
         remaining = cls.TERMINATE_GRACE_SECONDS - (time.monotonic() - started_at)
         await _await_process_group_exit(pid, remaining)
         if process.returncode is None or _process_group_exists(pid):
-            _signal_process_group(pid, signal.SIGKILL, process.kill)
+            _signal_process_group(
+                pid, getattr(signal, "SIGKILL", signal.SIGTERM), process.kill
+            )
         if process.returncode is None:
             await process.wait()
 
@@ -302,7 +329,9 @@ class BashTool(BaseTool):
         remaining = cls.TERMINATE_GRACE_SECONDS - (time.monotonic() - started_at)
         _wait_for_process_group_exit(pid, remaining)
         if process.poll() is None or _process_group_exists(pid):
-            _signal_process_group(pid, signal.SIGKILL, process.kill)
+            _signal_process_group(
+                pid, getattr(signal, "SIGKILL", signal.SIGTERM), process.kill
+            )
         if process.poll() is None:
             process.wait()
 
@@ -351,9 +380,7 @@ class BashTool(BaseTool):
         return arguments.get("parallel", False) is True
 
 
-def _signal_process_group(
-    pid: int | None, sig: signal.Signals, fallback
-) -> None:
+def _signal_process_group(pid: int | None, sig: signal.Signals, fallback) -> None:
     if pid is None:
         fallback()
         return
@@ -394,8 +421,73 @@ def _minimum_timeout(
     tool_timeout: float | None, framework_timeout: float | None
 ) -> float | None:
     values = [
-        float(value)
-        for value in (tool_timeout, framework_timeout)
-        if value is not None
+        float(value) for value in (tool_timeout, framework_timeout) if value is not None
     ]
     return min(values) if values else None
+
+
+def _bash_executable() -> str:
+    if os.name == "nt":
+        # WindowsApps/bash.exe launches WSL, which may have no user distro.
+        # Resolve the native Git Bash shipped beside the installed Git first.
+        git = shutil.which("git")
+        if git:
+            candidate = Path(git).resolve().parent.parent / "bin" / "bash.exe"
+            if candidate.is_file():
+                return str(candidate)
+        bash = shutil.which("bash")
+        if (
+            bash
+            and "windowsapps" not in bash.lower()
+            and "system32" not in bash.lower()
+        ):
+            return bash
+        raise FileNotFoundError(
+            "Bash is unavailable. Install Git for Windows and add Git to PATH."
+        )
+    return "bash"
+
+
+def _terminate_windows_tree(pid: int | None) -> None:
+    if pid is not None:
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=1,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            pass
+
+
+async def _spawn_bash(command: str, workdir: str | None):
+    process = await asyncio.create_subprocess_exec(
+        _bash_executable(),
+        "-lc",
+        command,
+        cwd=workdir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+        **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}),
+    )
+    job = None
+    if os.name == "nt":
+        from apps.agent.src.agent_orchestration.tools.builtin.windows_process import (
+            WindowsProcessJob,
+        )
+
+        try:
+            job = WindowsProcessJob(process.pid)
+        except OSError:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            await process.communicate()
+            raise
+    return process, job

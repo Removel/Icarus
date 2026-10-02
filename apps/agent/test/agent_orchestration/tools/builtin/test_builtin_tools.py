@@ -262,3 +262,55 @@ def test_bash_终止超时后kill并回收子进程():
     assert process.terminated is True
     assert process.killed is True
     assert process.returncode == -9
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_bash_unavailable_returns_failure(monkeypatch, async_mode):
+    from apps.agent.src.agent_orchestration.tools.builtin import bash_tool
+
+    def missing():
+        raise FileNotFoundError("Bash is unavailable")
+
+    monkeypatch.setattr(bash_tool, "_bash_executable", missing)
+    tool = BashTool()
+    result = (
+        asyncio.run(tool.ainvoke({"command": "printf ok"}))
+        if async_mode
+        else tool.invoke({"command": "printf ok"})
+    )
+    assert not result.success
+    assert "Bash is unavailable" in result.error
+
+
+def test_bash_early_cancellation_reaps_process(tmp_path):
+    async def run():
+        task = asyncio.create_task(
+            BashTool().ainvoke(
+                {
+                    "command": "sleep 0.4; printf leaked > early-leak.txt",
+                    "workdir": str(tmp_path),
+                }
+            )
+        )
+        await asyncio.sleep(0.001)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    time.sleep(0.5)
+    assert not (tmp_path / "early-leak.txt").exists()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_bash_reaps_background_children_after_shell_exit(tmp_path, async_mode):
+    tool = BashTool()
+    arguments = {
+        "command": "(sleep 0.4; printf leaked > background-leak.txt) >/dev/null 2>&1 & printf done",
+        "workdir": str(tmp_path),
+    }
+    result = asyncio.run(tool.ainvoke(arguments)) if async_mode else tool.invoke(arguments)
+    assert result.success
+    assert result.output["stdout"] == "done"
+    time.sleep(0.5)
+    assert not (tmp_path / "background-leak.txt").exists()
