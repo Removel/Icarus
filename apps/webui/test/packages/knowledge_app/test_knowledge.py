@@ -116,6 +116,7 @@ def test_quality_report_and_remove_preview_use_service(page):
     page.get_by_role('link', name='知识页面', exact=True).click()
     page.get_by_role('link', name='质量检查', exact=True).click()
     page.get_by_role('button', name='查看报告', exact=True).click()
+    page.get_by_text('无结构问题。').wait_for()
     assert page.get_by_text('无结构问题。').is_visible()
     page.keyboard.press('Escape')
     assert sum(path == 'lint' for path, _ in calls) == 1

@@ -1,6 +1,13 @@
 import pytest
 
 
+def wait_for_sidebar_width(page, width):
+    page.wait_for_function(
+        "width => document.querySelector('.app-sidebar').getBoundingClientRect().width === width",
+        arg=width,
+    )
+
+
 @pytest.fixture
 def knowledge_service(page):
     def respond(route):
@@ -59,18 +66,24 @@ def test_sidebar_collapse_preserves_page_state(page):
     page.get_by_role("textbox", name="搜索记忆…").fill("Semi")
     expanded_width = page.locator(".app-sidebar").bounding_box()["width"]
     page.get_by_role("button", name="收起侧边栏", exact=True).click()
+    wait_for_sidebar_width(page, 64)
     assert page.locator(".app-sidebar").bounding_box()["width"] == 64
     assert page.get_by_role("link", name="记忆", exact=True).is_visible()
     assert page.get_by_role("textbox", name="搜索记忆…").input_value() == "Semi"
     # Semi debounces repeated clicks on the same control for 100 ms.
     page.wait_for_timeout(120)
     page.get_by_role("button", name="展开侧边栏", exact=True).click()
+    wait_for_sidebar_width(page, expanded_width)
     assert page.locator(".app-sidebar").bounding_box()["width"] == expanded_width
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280])
 def test_navigation_does_not_cover_content(page, width):
     page.set_viewport_size({"width": width, "height": 844})
+    # Chromium can apply dynamic viewport units after the resize command returns.
+    page.wait_for_function(
+        "document.querySelector('.app-layout').getBoundingClientRect().height === 844"
+    )
     header = page.get_by_role("banner").bounding_box()
     sidebar = page.locator(".app-sidebar").bounding_box()
     content = page.locator(".shell-main").bounding_box()
@@ -111,6 +124,7 @@ def test_knowledge_subnavigation_belongs_to_knowledge(page, knowledge_service, w
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     if width == 1280:
         page.get_by_role("button", name="收起侧边栏", exact=True).click()
+        wait_for_sidebar_width(page, 64)
         assert page.locator(".app-sidebar").bounding_box()["width"] == 64
         box = submenu.bounding_box()
         assert box["y"] + box["height"] <= page.get_by_role("link", name="对话", exact=True).bounding_box()["y"]
