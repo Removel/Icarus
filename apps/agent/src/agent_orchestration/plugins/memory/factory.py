@@ -11,7 +11,10 @@ from apps.agent.src.agent_orchestration.plugins.blackboard import (
     RegionRegistry,
 )
 from apps.agent.src.agent_orchestration.plugins.memory.mem0_http_adapter import Mem0HttpAdapter
-from apps.agent.src.agent_orchestration.plugins.memory.plugin import MemoryPlugin
+from apps.agent.src.agent_orchestration.plugins.memory.plugin import (
+    DEFAULT_RECALL_DEADLINE_MS,
+    MemoryPlugin,
+)
 from apps.agent.src.agent_orchestration.plugins.memory.tools import create_memory_tools
 from apps.agent.src.agent_orchestration.plugins.persistence import SessionIdentity
 
@@ -61,7 +64,7 @@ def create_plugin(
     top_k = recall.get("top_k", 3)
     threshold = recall.get("threshold", 0.25)
     max_context_chars = recall.get("max_context_chars", 6000)
-    deadline_ms = recall.get("deadline_ms", 1000)
+    deadline_ms = recall.get("deadline_ms", DEFAULT_RECALL_DEADLINE_MS)
     backend = Mem0HttpAdapter(
         endpoint, user_id=user_id, agent_id=agent_id, api_key=api_key,
         preserve_input_language=preserve_input_language,

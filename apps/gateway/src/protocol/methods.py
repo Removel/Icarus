@@ -44,6 +44,10 @@ class WorkspaceParams(StrictModel):
     workspace_path: str = Field(min_length=1, pattern=r".*\S.*")
 
 
+class MemoryContextParams(StrictModel):
+    workspace_path: str | None = Field(default=None, min_length=1, pattern=r".*\S.*")
+
+
 class SessionParams(WorkspaceParams):
     session_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9._-]+$")
 
@@ -107,6 +111,7 @@ class GatewayMethods:
         subscriptions: set[tuple[str, str]],
     ) -> Any:
         handlers = {
+            "memory.get_context": self._memory_context,
             "runtime.get_status": self._runtime_status,
             "session.create": self._session_create,
             "session.list": self._session_list,
@@ -151,6 +156,13 @@ class GatewayMethods:
         except Exception as error:
             self.logger.exception("Gateway method failed: method=%s", method)
             raise GatewayRpcError(INTERNAL_ERROR, "Internal error") from error
+
+    async def _memory_context(self, params):
+        value = self._validate(MemoryContextParams, params)
+        try:
+            return self.runtime.get_memory_context(value.workspace_path)
+        except ValueError as error:
+            raise GatewayRpcError(INVALID_PARAMS, str(error)) from error
 
     async def _runtime_status(self, params):
         self._validate(StrictModel, params)

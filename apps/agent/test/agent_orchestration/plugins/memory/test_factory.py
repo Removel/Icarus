@@ -112,7 +112,7 @@ def test_factory显式工具超时不受自动召回deadline影响(tmp_path, mon
         ({"user_id": "u"}, "agent_id"),
         ({"user_id": "u", "agent_id": "a", "unknown": 1}, "unknown fields"),
         ({"user_id": "u", "agent_id": "a", "preserve_input_language": "yes"}, "preserve_input_language"),
-        ({"user_id": "u", "agent_id": "a", "recall": {"deadline_ms": 1001}}, "deadline_ms"),
+        ({"user_id": "u", "agent_id": "a", "recall": {"deadline_ms": 30001}}, "deadline_ms"),
     ],
 )
 def test_factory严格校验配置(tmp_path, config, message):
