@@ -1,6 +1,8 @@
 import asyncio
 
 from textual.app import App, ComposeResult
+from textual import events
+from textual.document._document import Selection
 
 from apps.tui.src.widgets.composer import PersistentComposer
 from apps.tui.src.submission import DraftImage, PendingMessage
@@ -30,6 +32,45 @@ class ComposerTestApp(App):
     ) -> None:
         del event
         self.image_paste_requests += 1
+
+
+def test右键请求粘贴且保留选区():
+    async def run():
+        app = ComposerTestApp()
+        async with app.run_test() as pilot:
+            composer = app.query_one(PersistentComposer)
+            composer.load_text("你好世界")
+            composer.selection = Selection((0, 1), (0, 3))
+            await pilot.click("#composer", offset=(0, 0), button=3)
+            await pilot.pause()
+            assert app.image_paste_requests == 1
+            assert composer.selection == Selection((0, 1), (0, 3))
+            composer.post_message(events.Paste("中文\n粘贴"))
+            await pilot.pause()
+            assert composer.text == "你中文\n粘贴界"
+            assert app.submissions == []
+            composer.action_undo()
+            assert composer.text == "你好世界"
+            composer.read_only = True
+            await pilot.click("#composer", button=3)
+            await pilot.pause()
+            assert app.image_paste_requests == 1
+
+    asyncio.run(run())
+
+
+def test输入框保留光标闪烁且中文输入后保持位置():
+    async def run():
+        app = ComposerTestApp()
+        async with app.run_test() as pilot:
+            composer = app.query_one(PersistentComposer)
+            await pilot.press("你", "好")
+            assert composer.cursor_blink is True
+            assert composer.text == "你好"
+            assert composer.cursor_location == (0, 2)
+            assert app.cursor_position == composer.cursor_screen_offset
+
+    asyncio.run(run())
 
 
 def run_case(keys):

@@ -1,5 +1,7 @@
 import base64
+import ctypes
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -8,6 +10,43 @@ from apps.tui.src.clipboard import (
     ClipboardImage,
     ClipboardImageReadError,
 )
+
+
+def test非windows文本使用内部剪贴板(monkeypatch):
+    monkeypatch.setattr(clipboard.sys, "platform", "linux")
+    assert clipboard.read_clipboard_text() is None
+
+
+@pytest.mark.parametrize("failure", [None, "open", "format", "data", "lock", "decode"])
+def test_windows文本剪贴板读取并释放资源(monkeypatch, failure):
+    buffer = ctypes.create_unicode_buffer("中文拼音 😀\r\n第二行\n")
+    user32 = SimpleNamespace(
+        OpenClipboard=Mock(return_value=failure != "open"),
+        CloseClipboard=Mock(),
+        IsClipboardFormatAvailable=Mock(return_value=failure != "format"),
+        GetClipboardData=Mock(return_value=0 if failure == "data" else 123),
+    )
+    kernel32 = SimpleNamespace(
+        GlobalLock=Mock(return_value=0 if failure == "lock" else ctypes.addressof(buffer)),
+        GlobalUnlock=Mock(),
+    )
+    monkeypatch.setattr(clipboard.sys, "platform", "win32")
+    monkeypatch.setattr(
+        ctypes, "WinDLL",
+        lambda name, **kwargs: user32 if name == "user32" else kernel32,
+        raising=False,
+    )
+    if failure == "decode":
+        monkeypatch.setattr(ctypes, "wstring_at", Mock(side_effect=ValueError("decode")))
+    if failure in {"open", "data", "lock", "decode"}:
+        with pytest.raises((OSError, ValueError)):
+            clipboard.read_clipboard_text()
+    else:
+        assert clipboard.read_clipboard_text() == (
+            "" if failure == "format" else "中文拼音 😀\n第二行\n"
+        )
+    assert user32.CloseClipboard.call_count == (0 if failure == "open" else 1)
+    assert kernel32.GlobalUnlock.call_count == (1 if failure in {None, "decode"} else 0)
 
 
 def test_read_clipboard_image只在macos分发(monkeypatch):
