@@ -1,0 +1,74 @@
+{
+  "openai_base_url": "https://api.deepseek.com",
+  "anthropic_base_url": "https://api.deepseek.com/anthropic",
+  "skill": {
+    "allow_produce": false,
+    "allow_evolve": false
+  },
+  "agent": {
+    "max_steps": 1024,
+    "tool_execution": {
+      "default_timeout_seconds": 120.0,
+      "default_output_tokens": 3000
+    }
+  },
+  "runtime": {
+    "plugin_dirs": [],
+    "plugin_config": {
+      "memory": {
+        "user_id": "your-user",
+        "agent_id": "icarus"
+      },
+      "knowledge": {
+        "knowledge_base": "your-knowledge-base"
+      }
+    },
+    "required_plugin_ids": [
+      "persistence",
+      "builtin-tools",
+      "agent",
+      "user-input",
+      "skill",
+      "blackboard",
+      "runtime-update",
+      "mcp",
+      "memory",
+      "knowledge",
+      "process"
+    ]
+  },
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.80",
+        "--headless",
+        "--isolated",
+        "--browser",
+        "chrome"
+      ]
+    },
+    "snowluma": {
+      "command": "/path/to/snowluma-mcp",
+      "args": []
+    }
+  },
+  "model_settings": {
+    "thinking": {
+      "model_name": "deepseek-v4-flash-vision-exp",
+      "context_window": 1000000,
+      "max_tokens": 9192,
+      "temperature": 0.9,
+      "default_think_level": "high"
+    },
+    "perception": {
+      "model_name": "deepseek-v4-flash",
+      "context_window": 1000000,
+      "max_tokens": 9192,
+      "temperature": 0.6,
+      "default_think_level": "high"
+    }
+  },
+  "use_protocol": "openai"
+}
