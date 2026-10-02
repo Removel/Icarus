@@ -6,3 +6,8 @@
 *
 !.gitignore
 !golden-principles.md
+
+# Icarus application-owned delivery plan.
+!spec/
+!spec/2026-10-01-quality-report-management/
+!spec/2026-10-01-quality-report-management/plan.md

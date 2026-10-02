@@ -82,6 +82,15 @@ Do not fix unrelated failures in a focused change.
 
 ## Git
 
+- `feat/<app-name>` branches contain application work and target `feature` for integration.
+- Before starting application work, synchronize with the intended remote's `feature`; before
+  opening a PR, verify that the branch contains that baseline and identify the target remote.
+  Do not assume `origin/feature` and `upstream/feature` are the same.
+- `feature` is the development integration branch; `dev` prepares the next release; the production
+  branch holds the deployed release. The current remotes name the production branch `main`
+  (the role also referred to as `master`); verify the actual name instead of creating or renaming it.
+- Promote application work through `feat/<app-name>` -> `feature` -> `dev` -> `main`.
+  These conventions do not authorize automatic merges or other Git mutations.
 - Split commits by logical feature or architectural layer.
 - Keep implementation and its tests together.
 - Keep documentation-only changes separate when practical.

@@ -8,6 +8,16 @@ embedded Git repository or require Git submodules.
 
 Current modifications:
 
+- Source listings expose `doc_name` and `source_path`; exact registry hashes take priority
+  when identifying documents for removal.
+- Authenticated `POST /api/v1/report/delete` removes a report within its knowledge base,
+  with canonical path and symlink checks, without modifying wiki pages or source documents.
+- Managed startup applies the deployment model to the template for REST-created knowledge
+  bases while preserving other template settings and existing knowledge-base configuration.
+- `.dockerignore` excludes local environments, credentials and generated frontend assets;
+  the managed Dockerfile builds its own frontend bundle.
+- The managed Dockerfile uses Debian's HTTPS package endpoint with bounded retries so
+  dependency installation also works on networks that cannot reach its HTTP endpoint.
 - `OPENKB_CONFIG_DIR` can override the upstream `~/.config/openkb` location.
 - The package has a fixed Icarus version because vendored source intentionally has no
   nested Git metadata for Hatch-VCS to inspect.

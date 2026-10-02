@@ -7,9 +7,10 @@ Icarus 希望通过长期共处逐渐理解用户、用户正在经历的事情�
 上，在需要时创建一次 Agent Run 完成思考与行动，结束后释放计算资源，同时保留可恢复的连续性。
 远程模型可以接收完成当前任务所必需的上下文，但不会成为用户长期数据和 Agent 身份的事实源。
 
-项目当前处于本地 TUI 技术预览阶段，已经可以创建和恢复多个 Session，发送文本或图片，让 Agent
-调用本地工具完成任务，并在退出后恢复对话内容与上下文。长期 Memory 的 Agent 侧能力已经接入，
-使用时需要另行启动仓库内的自建 Mem0 与 OpenKB；持续环境感知、多端产品和更完整的自主成长仍属于后续方向。
+项目当前提供本地 TUI 与单用户 WebUI。TUI 支持文本和图片输入；WebUI 提供记忆管理、知识库和
+Agent 文本对话，可创建和恢复 Session、查看工具执行，并在刷新后恢复历史。长期 Memory 的
+Agent 侧能力已经接入，使用时需要另行启动仓库内的自建 Mem0 与 OpenKB；持续环境感知、多端产品
+和更完整的自主成长仍属于后续方向。
 
 ## 产品方向
 
@@ -30,10 +31,11 @@ apps/
 │   ├── requirements.txt
 │   └── scripts/
 ├── tui/         Textual 终端客户端
-    ├── requirements.txt
-    └── scripts/
+│   ├── requirements.txt
+│   └── scripts/
 ├── mem0/        Apache-2.0 Mem0 源码与 Icarus 自建服务修改
-└── openkb/      Apache-2.0 OpenKB 源码与 Icarus 自建服务修改
+├── openkb/      Apache-2.0 OpenKB 源码与 Icarus 自建服务修改
+└── webui/       记忆、知识库、对话工作台及 Node 同源代理入口
 packages/        应用间共享的数据模型和环境配置
 docs/            项目定位、路线图和待办
 scripts/         整个仓库的安装、启动和测试编排
@@ -45,8 +47,8 @@ Makefile         根目录统一命令入口
 架构文档以当前源代码和测试为事实依据，用于描述架构与系统设计，不反向限制源代码演进。
 不可拆分的跨应用需求使用根目录 `spec/YYYY-MM-DD-<feature>.md`。
 完整产品定位见 [`docs/product-positioning.md`](docs/product-positioning.md)。
-每个 App 使用自己的 `.venv` 和 requirements；根目录不集中安装某一种语言的依赖，只调用各 App
-提供的脚本。
+Python App 使用自己的 `.venv` 和 requirements；WebUI 使用应用目录内的 pnpm workspace。
+根目录不集中安装某一种语言的依赖，只调用各 App 提供的脚本。
 
 ## 技术特色
 
@@ -83,8 +85,8 @@ Plugin 通过 Manifest 声明 Capability、Tool、Event 和状态范围，并由
 
 ### 稳定的模型与客户端边界
 
-模型厂商差异收敛在模型接入层，Agent 和 Plugin 不需要处理 OpenAI、Anthropic 等具体协议。TUI 和
-未来 Backend 通过同一 Gateway 使用 Agent，只消费稳定的公共 RuntimeUpdate，不依赖内部 Python
+模型厂商差异收敛在模型接入层，Agent 和 Plugin 不需要处理 OpenAI、Anthropic 等具体协议。TUI、
+WebUI 和未来 Backend 通过同一 Gateway 使用 Agent，只消费稳定的公共 RuntimeUpdate，不依赖内部 Python
 Event 或 Plugin 拓扑。
 
 ### 可控任务与安全资源传递
@@ -99,7 +101,7 @@ Event 用于业务通信，Blackboard 表达当前上下文状态，Hook 只负�
 
 ## 快速开始
 
-首次从源码安装全部 App 的运行依赖：
+首次从源码安装 Python App 和后端服务的运行依赖（WebUI 单独使用下文的 pnpm 命令）：
 
 ```bash
 ./bin/icarus install
@@ -161,7 +163,7 @@ ICARUS_OPENKB_LLM_API_KEY=your-knowledge-model-key
 和图片 Asset。Agent、Gateway、TUI、Mem0 和 OpenKB 都读取仓库根 `.env`。本版本不迁移旧 JSONL Session 数据；首次
 使用需要配置不包含旧 Session 目录的新数据目录。
 
-启动全部能力：
+启动后端服务并打开 TUI：
 
 ```bash
 icarus start
@@ -263,6 +265,24 @@ HTTP health: http://127.0.0.1:8765/health
 WebSocket RPC: ws://127.0.0.1:8765/rpc
 ```
 
+### 启动 WebUI
+
+先在仓库根目录启动 `mem0`、`openkb` 和 `gateway`，再使用 Node.js 22.12+ 与 pnpm 10.32.1：
+
+```bash
+cd apps/webui
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+打开 <http://127.0.0.1:5173>。开发代理读取仓库根 `.env` 中的后端地址和凭据。
+对话页填写服务端工作区绝对路径，选择或新建会话。`icarus start` 暂不管理 WebUI 进程。
+
+生产部署使用 `pnpm build` 与 `node --env-file=.env.local server/index.mjs`，默认端口 8080；
+`.env.local` 从 WebUI 的 `.env.example` 创建。生产入口支持单用户 Basic 认证、HTTP/WebSocket
+代理，非本机部署需配合 HTTPS。完整步骤见 [WebUI README](apps/webui/README.md) 和
+[部署说明](apps/webui/docs/deployment.md)。
+
 ## 当前能力
 
 - 创建和恢复多个相互隔离的 Session；
@@ -278,6 +298,8 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 - 自动卸载长时间空闲的 Session，同时保留本地数据供下次恢复。
 - 自动召回全局和当前 Workspace 记忆，并由主 Agent 显式维护 Mem0 记忆。
 - 按需查询、读取、上传和重编译 OpenKB 知识，不向 Agent 开放删除接口。
+- WebUI 支持记忆新增、归属与范围、详情修正、属性历史和暂停恢复；知识资料导入、阅读、编辑、
+  文档关联与质量报告管理；Agent 文本流、工具状态、取消和断线后历史恢复。
 
 当前已经形成可完整体验的本机闭环：
 
@@ -293,9 +315,10 @@ WebSocket RPC: ws://127.0.0.1:8765/rpc
 - Session 列表暂不支持搜索、筛选、重命名或删除非空 Session；
 - Gateway 首次不可用时不会持续后台重连；
 - TUI 未被 Runtime 接受的 Pending Queue 不跨 TUI 进程持久化；
-- 长会话历史暂未分页；
-- Backend、WebUI、GUI 和远程认证尚未接入。
-- Memory 依赖本机 Mem0；服务不可用时当前轮在 1 秒内降级为无记忆运行。
+- WebUI 对话按游标读取历史；TUI 当前仍一次性恢复 Conversation。
+- WebUI 为单用户部署，支持入口认证；独立多用户 Backend、GUI 和 Gateway 远程认证尚未接入。
+- Memory 依赖本机 Mem0；自动召回默认截止时间为 5 秒，可通过
+  `runtime.plugin_config.memory.recall.deadline_ms` 配置为 1–30000 毫秒，超时后当前轮降级。
 - Knowledge 依赖本机 OpenKB；服务不可用时当前 Tool 失败，但 Session 保持可用。
 
 ## 第三方源码
@@ -314,3 +337,14 @@ make test-agent
 make test-gateway
 make test-tui
 ```
+
+WebUI 的回归、lint、格式、类型和构建命令见 [应用验证说明](apps/webui/README.md#验证)。
+浏览器回归默认使用模拟后端；真实服务与模型验收需要显式开启
+[集成测试开关](apps/webui/test/integration/README.md)。
+
+## 分支与贡献
+
+应用开发使用 `feat/<app-name>`，开始前同步目标远端的 `feature`，完成后向 `feature` 提 PR。
+`feature` 汇总开发成果，`dev` 用于下一次发布前的验证，正式分支保存线上版本；当前远端正式分支
+实际名为 `main`（也称 master 的角色）。推进顺序为 `feat/<app-name>` → `feature` → `dev` → `main`。
+核对 PR 的目标仓库和分支，避免混用不同远端的 `feature`；详细约定见 [AGENTS.md](AGENTS.md#git)。

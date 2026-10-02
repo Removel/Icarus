@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Icarus WebUI 设计规范 · 内部参考</title>
+<style>
+
+:root { --accent:#3370ff; --ink:#1f2329; --muted:#626977; --canvas:#f6f7f9; --surface:#fff; --line:#e5e6eb; --subtle:#f6f7f9; --semi-color-text-1:#434a54; }
+* { box-sizing:border-box; } body { margin:0; background:var(--surface); color:var(--ink); font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
+h1,h2,h3,p { margin:0; } button,input,select { font:inherit; } button,a,input,select { -webkit-tap-highlight-color:transparent; } button { cursor:pointer; } button:disabled { cursor:not-allowed; opacity:.45; }
+a { color:inherit; text-decoration:none; } button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.page { width:100%; margin:0 auto; padding:40px 32px 64px; } .page-heading { margin-bottom:12px; } .page-title-row { display:flex; align-items:center; flex-wrap:wrap; gap:16px; } h1 { font-size:30px; line-height:1.3; font-weight:650; } .heading-count { color:var(--muted); font-size:13px; }
+.demo-button { display:inline-flex; justify-content:center; align-items:center; min-height:36px; padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font-weight:500; } .demo-button:hover:not(:disabled) { background:var(--subtle); } .demo-button.primary { color:white; background:var(--accent); border-color:var(--accent); } .demo-button.primary:hover { background:#2860e6; } .demo-button.borderless { border-color:transparent; } .icon-button { width:36px; padding:0; }
+.component-samples input:not([type=checkbox]),.component-samples select { max-width:100%; height:36px; border:1px solid var(--line); border-radius:8px; padding:6px 10px; background:var(--surface); color:var(--ink); } .component-samples input:not([type=checkbox]) { width:200px; } .component-samples select { min-width:120px; } .demo-toggle { display:flex; align-items:center; gap:8px; } .demo-toggle input { accent-color:var(--accent); width:18px; height:18px; }
+.status { display:inline-flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap; } .status-dot { width:5px; height:5px; border-radius:50%; background:currentColor; } .status-green { color:#28733c; } .status-blue { color:var(--accent); } .status-amber { color:#946000; } .status-gray { color:var(--muted); }
+dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:16px; color:var(--ink); background:var(--surface); } dialog::backdrop { background:#14192366; } .demo-dialog-header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:20px 24px 16px; border-bottom:1px solid var(--line); } .demo-dialog-header h2 { font-size:18px; } .demo-dialog-body { padding:20px 24px 24px; overflow:auto; max-height:calc(100dvh - 130px); }
+#demo-toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); padding:10px 18px; background:var(--ink); color:white; border-radius:8px; box-shadow:0 4px 18px #0002; } #demo-toast:empty { display:none; } .document-context { margin:0 0 18px; color:var(--muted); font-size:12px; }
+@media(max-width:700px) { .page { padding:24px 18px 40px; } h1 { font-size:25px; } }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; animation:none!important; } }
+@media print { .design-toc,.component-grid,.design-demo-action,#demo-toast,dialog { display:none; } .page { padding:0; } .design-section { break-inside:auto; } tr,.color-swatch { break-inside:avoid; } h2 { break-after:avoid; } }
+.design-section { margin: 44px 0; }
+.design-section > h2 { scroll-margin-top: 24px; font-size: 18px; font-weight: 600; margin-bottom: 18px; }
+.color-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+.color-swatch > div { height: 80px; border: 1px solid var(--line); border-radius: 10px; }
+.color-swatch h3 { font-size: 12px; font-weight: 500; margin: 12px 0 6px; }
+.color-swatch code { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.component-grid { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.component-spec { padding: 24px; border-bottom: 1px solid var(--line); }
+.component-spec:nth-child(odd) { border-right: 1px solid var(--line); }
+.component-spec:nth-child(n+3) { border-bottom: 0; }
+.component-spec h3 { font-size: 12px; font-weight: 500; }
+.component-samples { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 36px; margin: 20px 0; }
+.component-samples > input { width: 200px; }
+.component-samples > select { min-width: 120px; }
+.spec-note { line-height: 1.8; font-size: 12px; color: var(--muted); }
+@media (max-width: 900px) { .color-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 700px) {
+  .component-grid { grid-template-columns: 1fr; }
+  .component-spec, .component-spec:nth-child(odd), .component-spec:nth-child(n+3) { border-right: 0; border-bottom: 1px solid var(--line); padding: 20px; }
+  .component-spec:last-child { border-bottom: 0; }
+  .color-grid { gap: 18px 10px; }
+}
+
+.design-page { max-width: 1200px; }
+.design-page .page-heading { margin-bottom: 12px; }
+.design-intro { max-width: 780px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+.design-toc { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 16px; padding: 20px 0; margin-top: 20px; border-block: 1px solid var(--line); }
+.design-toc a { display: flex; align-items: baseline; gap: 10px; padding: 10px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; font-size: 13px; }
+.design-toc a:hover { background: var(--subtle); color: var(--accent); }
+.design-toc a span { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.color-swatch p { margin-top: 8px; font-size: 12px; line-height: 1.8; color: var(--muted); }
+.design-table-wrap { margin-top: 20px; }
+.design-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; line-height: 1.8; text-align: left; }
+.design-table th, .design-table td { padding: 14px 16px; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.design-table thead th { background: var(--subtle); color: var(--muted); font-size: 12px; font-weight: 500; }
+.design-table th:first-child { width: 20%; }
+.design-table tbody th { color: var(--ink); font-weight: 500; }
+.design-table td { color: var(--semi-color-text-1); }
+.design-note { padding: 14px 16px; margin-top: 16px; border-left: 2px solid var(--accent); background: var(--subtle); font-size: 13px; line-height: 1.8; }
+.design-demo-action { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.design-demo-action span { font-size: 12px; line-height: 1.8; color: var(--muted); }
+.design-dialog-copy { margin-top: 16px; font-size: 14px; line-height: 2; }
+.component-spec { min-width: 0; }
+.component-samples > input { max-width: 100%; }
+@media (max-width: 700px) {
+  .design-toc { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .design-section { margin-block: 32px; }
+  .design-table { font-size: 12px; }
+  .design-table th, .design-table td { padding: 12px 7px; }
+  .design-table th:first-child { width: 24%; }
+  .color-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+</style>
+</head>
+<body>
+<main class="page design-page">
+<p class="document-context">内部设计参考 · 独立离线文档 · 根据当前实现整理</p>
+<header class="page-heading">
+<div class="page-heading-main">
+<div class="page-title-row">
+<h1>设计规范</h1><span class="heading-count">Icarus WebUI · Semi Universe</span>
+</div>
+</div>
+</header>
+<p class="design-intro">基于当前实现的界面规范，供设计、开发与验收共同使用。优先呈现内容，通过明确的层级与直接操作减少阅读和操作成本。</p>
+<nav class="design-toc" aria-label="设计规范目录">
+<a href="#design-foundation"><span>01</span>颜色与层级</a>
+<a href="#design-layout"><span>02</span>布局与响应式</a>
+<a href="#design-content"><span>03</span>内容呈现</a>
+<a href="#design-dialogs"><span>04</span>弹窗与阅读</a>
+<a href="#design-graph"><span>05</span>关系画布</a>
+<a href="#design-controls"><span>06</span>控件与反馈</a>
+<a href="#design-accessibility"><span>07</span>键盘与无障碍</a>
+<a href="#design-scope"><span>08</span>实现与边界</a>
+</nav>
+<section class="design-section" aria-labelledby="design-foundation">
+<h2 id="design-foundation" tabindex="-1">颜色与层级</h2>
+<div class="color-grid">
+<div class="color-swatch">
+<div style="background: var(--accent);">
+</div>
+<h3>主色 / 选中 / 焦点</h3><code>--accent</code>
+<p>引用 Semi 主色，不用于普通正文。</p>
+</div>
+<div class="color-swatch">
+<div style="background: var(--ink);">
+</div>
+<h3>主要文字</h3><code>--ink</code>
+<p>标题、正文和可操作内容。</p>
+</div>
+<div class="color-swatch">
+<div style="background: var(--muted);">
+</div>
+<h3>辅助文字</h3><code>--muted</code>
+<p>摘要、元信息和次级说明。</p>
+</div>
+<div class="color-swatch">
+<div style="background: var(--canvas);">
+</div>
+<h3>画布背景</h3><code>--canvas</code>
+<p>关系画布与背景分层，#f6f7f9。</p>
+</div>
+<div class="color-swatch">
+<div style="background: var(--surface);">
+</div>
+<h3>内容表面</h3><code>--surface</code>
+<p>工作区、卡片和弹窗。</p>
+</div>
+<div class="color-swatch">
+<div style="background: var(--line);">
+</div>
+<h3>分隔边界</h3><code>--line</code>
+<p>1 px 分隔线、输入边界与容器边框。</p>
+</div>
+</div>
+<div class="design-table-wrap">
+<table class="design-table">
+<thead>
+<tr>
+<th scope="col">要素</th>
+<th scope="col">当前规格</th>
+<th scope="col">使用规则</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">字体</th>
+<td>系统无衬线字体；代码使用 Cascadia Code / Consolas</td>
+<td>中文与英文共用字体栈，代码保留等宽排版。</td>
+</tr>
+<tr>
+<th scope="row">字号</th>
+<td>页面标题 30 px；知识卡片标题 15 px；阅读正文 14 px</td>
+<td>手机页面标题 25 px；知识阅读标题桌面 26 px、手机 22 px。</td>
+</tr>
+<tr>
+<th scope="row">行高</th>
+<td>卡片标题 1.6；摘要 1.8；知识正文 2</td>
+<td>列表用于扫读，阅读弹窗优先保证长文舒适度。</td>
+</tr>
+<tr>
+<th scope="row">辅助信息</th>
+<td>12–13 px；关系图类型标签 11 px</td>
+<td>使用辅助色，避免与正文、标题争夺注意力。</td>
+</tr>
+<tr>
+<th scope="row">间距</th>
+<td>常用 8 / 12 / 16 / 24 / 32 px</td>
+<td>同级元素使用一致间距；容器之间大于容器内部。</td>
+</tr>
+<tr>
+<th scope="row">圆角与边界</th>
+<td>控件 8 px；记忆列表 10 px；知识卡片 14 px；通用弹窗 16 px</td>
+<td>边界以细线为主，阴影仅用于悬浮反馈和必要的层级区分。</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="design-section" aria-labelledby="design-layout">
+<h2 id="design-layout" tabindex="-1">布局与响应式</h2>
+<div class="design-table-wrap">
+<table class="design-table">
+<thead>
+<tr>
+<th scope="col">视口</th>
+<th scope="col">外壳布局</th>
+<th scope="col">内容行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">≥ 992 px</th>
+<td>顶栏高 64 px；侧栏宽 208 px，可收起至 64 px</td>
+<td>页面内边距 28 / 32 / 40 px；内容区独立纵向滚动，导航保持原位。</td>
+</tr>
+<tr>
+<th scope="row">768–991 px</th>
+<td>顶栏高 64 px；侧栏自动切换为 64 px 图标导航</td>
+<td>页面内边距 24 px；图标保留可访问名称。</td>
+</tr>
+<tr>
+<th scope="row">≤ 767 px</th>
+<td>顶栏高 56 px；模块导航置于顶栏下；知识库子导航为两列</td>
+<td>页面内边距 24 / 18 / 32 px；筛选允许换行，弹窗接近全屏。</td>
+</tr>
+<tr>
+<th scope="row">内容宽度</th>
+<td>通用页面最大 1440 px；知识列表最大 1200 px</td>
+<td>文档关联取消页面最大宽度限制，画布使用可用空间。</td>
+</tr>
+<tr>
+<th scope="row">业务断点</th>
+<td>部分表单、排版在 700 px 调整；阅读区在 1000 px 调整</td>
+<td>外壳与组件按各自空间需求响应，不假定只有一组断点。</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p class="design-note">标题和工具栏按任务设置：记忆常驻用户与作用范围；知识列表显示知识库、搜索与类型筛选；文档关联直接显示当前知识库画布，不展示顶部工具栏。</p>
+</section>
+<section class="design-section" aria-labelledby="design-content">
+<h2 id="design-content" tabindex="-1">内容呈现</h2>
+<div class="design-table-wrap">
+<table class="design-table">
+<thead>
+<tr>
+<th scope="col">页面</th>
+<th scope="col">信息结构</th>
+<th scope="col">交互规则</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">记忆</th>
+<td>连续紧凑列表；正文最多两行，分类与更新时间作为辅助信息</td>
+<td>点击条目打开详情弹窗；多选模式独立处理，批量操作只作用于当前筛选结果。</td>
+</tr>
+<tr>
+<th scope="row">原始资料</th>
+<td>自适应卡片；名称优先，辅助显示页数与派生知识数量</td>
+<td>整张卡片可点击；不展示文件格式标签，不把正文加载状态放进卡片。</td>
+</tr>
+<tr>
+<th scope="row">知识页面</th>
+<td>自适应卡片；标题 + 最多两行摘要</td>
+<td>不展示知识类型标签；类型仍可用于筛选。搜索匹配标题与摘要，不随正文加载改变。</td>
+</tr>
+<tr>
+<th scope="row">知识卡片尺寸</th>
+<td>列宽下限 260 px，空间不足时单列；间距 12 px</td>
+<td>桌面内边距 16 × 18 px，窄屏 14 × 16 px；不设固定最小高度。</td>
+</tr>
+<tr>
+<th scope="row">筛选与返回</th>
+<td>资料、知识页面分别保留搜索和类型条件</td>
+<td>关闭阅读弹窗保留列表筛选、滚动位置并恢复原入口焦点；普通刷新不持久化会话筛选。</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="design-section" aria-labelledby="design-dialogs">
+<h2 id="design-dialogs" tabindex="-1">弹窗与阅读</h2>
+<div class="design-table-wrap">
+<table class="design-table">
+<thead>
+<tr>
+<th scope="col">场景</th>
+<th scope="col">规格与信息</th>
+<th scope="col">操作行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">通用弹窗</th>
+<td>居中；标题和关闭按钮固定；正文独立滚动</td>
+<td>仅有阅读内容时不添加确认按钮；需要提交时在底部提供明确的动作名称。</td>
+</tr>
+<tr>
+<th scope="row">记忆详情</th>
+<td>宽 640 px；原文、属性、默认折叠的变更记录</td>
+<td>修正、暂停或恢复、删除集中在弹窗；删除与放弃草稿使用同一弹窗的确认状态。</td>
+</tr>
+<tr>
+<th scope="row">资料 / 知识阅读</th>
+<td>宽度上限 1120 px；正文最大 780 px；高度上限 860 px</td>
+<td>不设置“返回列表”或资料索引；通过关闭按钮、Esc 或遮罩返回。正文链接直接打开目标内容。</td>
+</tr>
+<tr>
+<th scope="row">知识阅读工具</th>
+<td>Markdown、代码、表格、引用、链接与可折叠文章目录</td>
+<td>文章目录只导航当前正文。编辑位于阅读页，Ctrl / ⌘ + Enter 保存。</td>
+</tr>
+<tr>
+<th scope="row">文档关联弹窗</th>
+<td>宽度上限 720 px；文档名 + 内容来源 / 引用的页面 / 引用此内容的页面</td>
+<td>只显示非空分组；点文档名直接阅读。缺失或同名歧义在该行说明并禁用打开。</td>
+</tr>
+<tr>
+<th scope="row">关联信息边界</th>
+<td>不重复正文摘要、探索路径、入链出链统计和二次操作面板</td>
+<td>共同来源推测不混入引用关系；节点阅读和连线关系使用各自明确的弹窗。</td>
+</tr>
+<tr>
+<th scope="row">未保存内容</th>
+<td>编辑草稿与已保存内容分开处理</td>
+<td>关闭、导航、浏览器返回前保护草稿；保存失败保留输入；刷新使用浏览器未保存提示。</td>
+</tr>
+<tr>
+<th scope="row">资料危险操作</th>
+<td>重新生成与移除放在“资料操作”菜单</td>
+<td>重新生成说明覆盖影响；移除先获取影响预览，再明确确认。</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="design-demo-action">
+<button class="demo-button" id="open-dialog">预览阅读弹窗</button><span>离线示例使用原生 HTML 模拟交互，正式应用使用共用组件。</span>
+</div>
+</section>
+<section class="design-section" aria-labelledby="design-graph">
+<h2 id="design-graph" tabindex="-1">关系画布</h2>
+<div class="design-table-wrap">
+<table class="design-table">
+<thead>
+<tr>
+<th scope="col">要素</th>
+<th scope="col">当前规则</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">画布入口</th>
+<td>继承当前知识库，直接显示关系网；顶部不重复知识库选择、搜索和设置。</td>
+</tr>
+<tr>
+<th scope="row">节点</th>
+<td>宽 218 px；保留资料 / 知识类型与名称；标题最多三行，悬停可看完整标题。不可用节点以虚线边界区分。</td>
+</tr>
+<tr>
+<th scope="row">连线</th>
+<td>实线箭头表示正文引用；虚线箭头表示声明来源。箭头由引用方指向被引用对象，不代表时间或执行顺序。</td>
+</tr>
+<tr>
+<th scope="row">查看内容</th>
+<td>点击节点或在节点上按 Enter 打开阅读弹窗；点击连线或在连线上按 Enter 打开关联弹窗并突出对应条目。</td>
+</tr>
+<tr>
+<th scope="row">关注关系</th>
+<td>悬停节点突出直接关联、淡化其他连线；离开后恢复。由详情进入画布时定位并突出对应节点。</td>
+</tr>
+<tr>
+<th scope="row">画布工具</th>
+<td>缩放、平移、适应画布与重置布局；节点超过 15 个时显示缩略图，手机隐藏缩略图。</td>
+</tr>
+<tr>
+<th scope="row">视图状态</th>
+<td>阅读弹窗关闭后保留视角与节点位置；拖动只改变当前画布会话，不写入知识内容。</td>
+</tr>
+<tr>
+<th scope="row">当前布局</th>
+<td>按原始资料、摘要、概念、实体分列；尚未按引用关系自动分组，也未解决复杂图的连线交叉。</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="design-section" aria-labelledby="design-controls">
+<h2 id="design-controls" tabindex="-1">控件与反馈</h2>
+<div class="component-grid">
+<div class="component-spec">
+<h3>操作层级</h3>
+<div class="component-samples">
+<button class="demo-button primary" data-toast="示例操作已完成">主要操作</button>
+<button class="demo-button" data-toast="示例反馈">次要操作</button>
+<button class="demo-button borderless" data-toast="示例反馈">文字操作</button>
+<button class="demo-button icon-button" aria-label="规范示例图标操作" title="图标操作" data-toast="示例反馈">✎</button>
+</div>
+<p class="spec-note">标准按钮、输入框、选择器高 36 px；图标按钮 36 × 36 px。关闭按钮与画布控件使用各自的紧凑尺寸。</p>
+</div>
+<div class="component-spec">
+<h3>状态语义</h3>
+<div class="component-samples"><span class="status status-green"><span class="status-dot" aria-hidden="true"></span>生效中</span><span class="status status-blue"><span class="status-dot" aria-hidden="true"></span>处理中</span><span class="status status-amber"><span class="status-dot" aria-hidden="true"></span>需重试</span><span class="status status-gray"><span class="status-dot" aria-hidden="true"></span>已停用</span>
+</div>
+<p class="spec-note">颜色辅助表达状态，文字必须独立可理解。危险提交使用 danger，普通阅读操作不使用警告色。</p>
+</div>
+<div class="component-spec">
+<h3>输入与选择</h3>
+<div class="component-samples">
+<input aria-label="规范示例输入" placeholder="搜索内容…">
+<select aria-label="规范示例范围"><option>工作区</option><option>全局</option>
+</select>
+</div>
+<p class="spec-note">输入焦点使用主色边界和浅色外环；检索范围通过名称或占位文字明确。</p>
+</div>
+<div class="component-spec">
+<h3>设置与不可用</h3>
+<div class="component-samples">
+<label class="demo-toggle">
+<input type="checkbox" role="switch" aria-label="规范示例开关" checked=""><span id="switch-label">已启用</span>
+</label>
+<button class="demo-button" disabled="">暂不可用</button>
+</div>
+<p class="spec-note">保存中防止重复提交；只读示例禁用写操作。开关应直接表达当前状态。</p>
+</div>
+</div>
+<div class="design-table-wrap">
+<table class="design-table">
+<thead>
+<tr>
+<th scope="col">状态</th>
+<th scope="col">呈现方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">加载 / 刷新</th>
+<td>首次加载提供状态文字；刷新时保留已显示内容，完成后替换。</td>
+</tr>
+<tr>
+<th scope="row">空数据 / 无匹配</th>
+<td>区分“还没有内容”与“没有匹配结果”；只在存在有效下一步时提供操作。</td>
+</tr>
+<tr>
+<th scope="row">请求失败</th>
+<td>在受影响区域显示具体错误与重试；不伪装成空数据。关联服务失败时仍可阅读和导入资料。</td>
+</tr>
+<tr>
+<th scope="row">成功反馈</th>
+<td>短操作使用 Toast；逐文件导入、检查和移除预览使用可持续阅读的结果区域。</td>
+</tr>
+<tr>
+<th scope="row">质量检查</th>
+<td>独立页面，用户主动开始后才请求服务；同一知识库内切换页面保留当前报告。</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="design-section" aria-labelledby="design-accessibility">
+<h2 id="design-accessibility" tabindex="-1">键盘与无障碍</h2>
+<div class="design-table-wrap">
+<table class="design-table">
+<thead>
+<tr>
+<th scope="col">要求</th>
+<th scope="col">实现与验收</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">语义结构</th>
+<td>导航使用 link，操作使用 button；当前页面标记 aria-current；弹窗使用独立且可读的名称。</td>
+</tr>
+<tr>
+<th scope="row">键盘焦点</th>
+<td>可交互元素提供可见焦点；图标操作提供 aria-label；关闭阅读弹窗后恢复入口焦点。</td>
+</tr>
+<tr>
+<th scope="row">快捷键</th>
+<td>Enter 阅读图节点或查看连线；Ctrl / ⌘ + Enter 保存编辑；输入法组合输入期间不触发快捷操作。</td>
+</tr>
+<tr>
+<th scope="row">Esc</th>
+<td>关闭阅读弹窗；有草稿先确认。记忆的删除 / 放弃确认状态优先回到上一状态。</td>
+</tr>
+<tr>
+<th scope="row">内容安全与可读性</th>
+<td>Markdown 不执行原始 HTML，危险链接不作为可点击链接；长文换行，宽表格和代码块在自身区域滚动。</td>
+</tr>
+<tr>
+<th scope="row">动效与适配</th>
+<td>遵循 prefers-reduced-motion；窄屏不允许页面级横向溢出；错误和状态不能只靠颜色传达。</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="design-section" aria-labelledby="design-scope">
+<h2 id="design-scope" tabindex="-1">实现与边界</h2>
+<div class="design-table-wrap">
+<table class="design-table">
+<thead>
+<tr>
+<th scope="col">职责</th>
+<th scope="col">当前约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">共用组件</th>
+<td>packages/ui 提供主题、基础控件封装、弹窗、导航与草稿保护；外壳负责模块导航和滚动容器。</td>
+</tr>
+<tr>
+<th scope="row">业务组件</th>
+<td>memory-app 与 knowledge-app 各自维护内容、筛选与操作；不相互引用业务实现，不为单一页面增加共享抽象。</td>
+</tr>
+<tr>
+<th scope="row">示例与真实数据</th>
+<td>记忆仍是会话内示例，刷新恢复；知识库连接 OpenKB，另有独立只读示例模式。不可将演示反馈描述为真实保存。</td>
+</tr>
+<tr>
+<th scope="row">能力边界</th>
+<td>知识搜索是本地索引匹配；没有服务端全文搜索、语义搜索或大规模分页。重新生成可能覆盖人工修改，暂无历史恢复。</td>
+</tr>
+<tr>
+<th scope="row">验收顺序</th>
+<td>先受影响页面测试，再完整 WebUI 测试，最后类型检查、构建和 diff 检查；布局覆盖桌面、平板与手机视口。</td>
+</tr>
+<tr>
+<th scope="row">维护原则</th>
+<td>规范描述当前代码与已验证行为；实现调整后同步修订。尚未完成的能力明确标注，不把规划写成既有功能。</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</main>
+<dialog id="reading-dialog" aria-labelledby="reading-dialog-title">
+<header class="demo-dialog-header">
+<h2 id="reading-dialog-title">阅读弹窗示例</h2>
+<button class="demo-button borderless icon-button" id="close-dialog" aria-label="关闭阅读弹窗">×</button>
+</header>
+<div class="demo-dialog-body">
+<h3>让内容成为第一层信息</h3>
+<p class="design-dialog-copy">详情使用弹窗承载。列表与画布保留在背景，关闭后继续原来的浏览；弹窗中不重复列表导航，也不增加仅用于关闭的确认操作。</p>
+</div>
+</dialog>
+<div id="demo-toast" role="status" aria-live="polite"></div>
+<script>
+const dialog = document.getElementById('reading-dialog');
+document.getElementById('open-dialog').addEventListener('click', () => dialog.showModal());
+document.getElementById('close-dialog').addEventListener('click', () => dialog.close());
+dialog.addEventListener('click', event => { const box = dialog.getBoundingClientRect(); if (event.target === dialog && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom)) dialog.close(); });
+document.querySelector('[role="switch"]').addEventListener('change', event => { document.getElementById('switch-label').textContent = event.target.checked ? '已启用' : '已停用'; });
+let timer;
+document.querySelectorAll('[data-toast]').forEach(button => button.addEventListener('click', () => { const toast = document.getElementById('demo-toast'); toast.textContent = button.dataset.toast; clearTimeout(timer); timer = setTimeout(() => { toast.textContent = ''; }, 2400); }));
+document.querySelectorAll('.design-toc a').forEach(link => link.addEventListener('click', () => { document.querySelector(link.hash)?.focus({ preventScroll:true }); }));
+</script>
+</body>
+</html>
