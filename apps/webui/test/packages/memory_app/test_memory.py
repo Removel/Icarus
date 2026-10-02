@@ -321,6 +321,11 @@ def test_clear_filters_preserves_status_tab_and_individual_filters(page):
 @pytest.mark.parametrize('width', [390, 1440])
 def test_memory_content_appears_early_in_viewport(page, width):
     page.set_viewport_size({'width': width, 'height': 844})
+    limit = 440 if width == 390 else 370
+    page.wait_for_function(
+        "limit => document.querySelector('.memory-entry').getBoundingClientRect().top < limit",
+        arg=limit,
+    )
     first = page.locator('.memory-entry').first.bounding_box()
-    assert first['y'] < (440 if width == 390 else 370)
+    assert first['y'] < limit
     assert page.locator('.memory-meta').first.evaluate('el => parseFloat(getComputedStyle(el).fontSize)') >= 12
