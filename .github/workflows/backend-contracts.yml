@@ -1,0 +1,120 @@
+name: Backend contracts
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'apps/agent/**'
+      - 'apps/gateway/**'
+      - 'apps/mem0/mem0/**'
+      - 'apps/mem0/tests/memory/**'
+      - 'apps/mem0/pyproject.toml'
+      - 'apps/openkb/**'
+      - 'apps/webui/**'
+      - 'packages/**'
+      - '.github/workflows/backend-contracts.yml'
+  pull_request:
+    paths:
+      - 'apps/agent/**'
+      - 'apps/gateway/**'
+      - 'apps/mem0/mem0/**'
+      - 'apps/mem0/tests/memory/**'
+      - 'apps/mem0/pyproject.toml'
+      - 'apps/openkb/**'
+      - 'apps/webui/**'
+      - 'packages/**'
+      - '.github/workflows/backend-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  agent-gateway:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Use an empty local configuration for offline tests
+        run: python -c "from pathlib import Path; Path('.env').touch()"
+      - name: Agent memory, runtime and tool regressions
+        run: >-
+          uv run --no-project --with-requirements apps/agent/requirements-dev.txt
+          python -m pytest
+          apps/agent/test/agent_orchestration/plugins/memory/test_factory.py
+          apps/agent/test/agent_orchestration/plugins/memory/test_plugin.py
+          apps/agent/test/agent_orchestration/plugins/memory/test_adapter.py
+          apps/agent/test/agent_orchestration/plugins/memory/test_tools.py
+          apps/agent/test/agent_orchestration/tools/builtin/test_builtin_tools.py
+          apps/agent/test/application/test_memory_context.py
+          apps/agent/test/application/test_agent_runtime.py
+          -q --junitxml=test-results/agent.xml
+      - name: Gateway application suite
+        run: >-
+          uv run --no-project --with-requirements apps/agent/requirements.txt
+          --with-requirements apps/gateway/requirements-dev.txt
+          python -m pytest apps/gateway/test -q --junitxml=test-results/gateway.xml
+      - name: Agent application suite on Linux
+        if: runner.os == 'Linux'
+        run: >-
+          uv run --no-project --with-requirements apps/agent/requirements-dev.txt
+          python -m pytest apps/agent/test -q --junitxml=test-results/agent-full.xml
+      - name: Compile
+        run: python -m compileall -q apps/agent/src apps/gateway/src packages
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-gateway-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: ignore
+  mem0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/mem0
+    env:
+      MEM0_TELEMETRY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Memory update and history contracts (optional provider suites are separate)
+        run: uvx hatch run icarus:python -m pytest tests/memory/test_main.py tests/memory/test_storage.py -q --junitxml=test-results/mem0.xml
+      - run: uvx hatch run icarus:python -m compileall -q mem0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mem0-test-results
+          path: apps/mem0/test-results/
+          if-no-files-found: ignore
+  openkb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/openkb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uv sync --locked --extra dev --extra web
+      - name: Source, report and managed-template contracts
+        run: >-
+          uv run --no-sync python -m pytest
+          tests/test_api.py tests/test_remove.py tests/test_report_ops.py
+          tests/test_managed_kb_template.py -q --junitxml=test-results/openkb.xml
+      - run: uv run --no-sync python -m compileall -q openkb scripts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: openkb-test-results
+          path: apps/openkb/test-results/
+          if-no-files-found: ignore

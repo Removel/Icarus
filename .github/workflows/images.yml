@@ -1,0 +1,30 @@
+name: Build application images
+on:
+  workflow_dispatch:
+  push:
+    paths: ['apps/webui/**', 'apps/mem0/**', 'apps/openkb/**', '.github/workflows/images.yml']
+  pull_request:
+    paths: ['apps/webui/**', 'apps/mem0/**', 'apps/openkb/**', '.github/workflows/images.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: webui
+            context: apps/webui
+            dockerfile: apps/webui/Dockerfile
+          - app: mem0
+            context: apps/mem0
+            dockerfile: apps/mem0/server/dev.Dockerfile
+          - app: openkb
+            context: apps/openkb
+            dockerfile: apps/openkb/Dockerfile.icarus
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build from repository Dockerfile without publishing
+        run: docker build --pull --no-cache -t icarus-${{ matrix.app }}:check -f ${{ matrix.dockerfile }} ${{ matrix.context }}

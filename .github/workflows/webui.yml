@@ -1,0 +1,42 @@
+name: WebUI
+on:
+  workflow_dispatch:
+  push:
+    paths: ['apps/webui/**', '.github/workflows/webui.yml']
+  pull_request:
+    paths: ['apps/webui/**', '.github/workflows/webui.yml']
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/webui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/webui/pnpm-lock.yaml
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: pnpm install --frozen-lockfile
+      - run: uv run --no-project --with-requirements test/requirements.txt python -m playwright install --with-deps chromium
+      - run: |
+          pnpm dev > /tmp/icarus-webui.log 2>&1 &
+          pnpm test --junitxml=test-results/junit.xml
+      - run: pnpm lint && pnpm format:check && pnpm typecheck && pnpm build
+      - run: git diff --check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webui-test-results
+          path: apps/webui/test-results/
+          if-no-files-found: ignore
