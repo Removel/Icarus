@@ -1,0 +1,13 @@
+{
+  "name": "@icarus/chat-app",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/ChatApp.tsx"
+  },
+  "dependencies": {
+    "@icarus/ui": "workspace:*",
+    "react": "19.2.4",
+    "lucide-react": "0.577.0"
+  }
+}

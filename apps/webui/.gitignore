@@ -1,5 +1,7 @@
 node_modules/
-dist/
-.pytest_cache/
+**/dist/
 test-results/
-playwright-report/
+.pytest_cache/
+.ruff_cache/
+.env.local
+.env.production.local

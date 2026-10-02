@@ -7,11 +7,21 @@
     "build": "pnpm --filter @icarus/shell build",
     "typecheck": "tsc --noEmit",
     "test": "uv run --no-project --with-requirements test/requirements.txt python -m pytest -c pytest.ini",
-    "preview": "pnpm --filter @icarus/shell preview"
+    "preview": "pnpm --filter @icarus/shell preview",
+    "start": "node server/index.mjs",
+    "check:services": "node server/check-services.mjs",
+    "lint": "eslint apps packages server",
+    "format": "prettier --write apps packages server *.json *.mjs",
+    "format:check": "prettier --check apps packages server *.json *.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "typescript": "5.9.3"
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "prettier": "^3.9.9",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.71.0"
   }
 }

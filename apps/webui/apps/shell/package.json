@@ -8,6 +8,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort"
   },
   "dependencies": {
+    "@icarus/chat-app": "workspace:*",
     "@icarus/knowledge-app": "workspace:*",
     "@icarus/memory-app": "workspace:*",
     "@icarus/ui": "workspace:*",
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@douyinfe/semi-vite-plugin": "2.103.0",
     "@semi-bot/semi-theme-universedesign": "1.0.13",
+    "@types/node": "^22.20.4",
     "@vitejs/plugin-react": "5.1.4",
     "vite": "7.3.1"
   }

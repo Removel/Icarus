@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.tsx",
+    "./gateway": "./src/gateway.ts",
     "./styles.css": "./src/styles.css"
   },
   "dependencies": {
