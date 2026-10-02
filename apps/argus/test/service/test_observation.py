@@ -1,10 +1,10 @@
 import asyncio
 from datetime import UTC,datetime
 from typesafe_sdk import ChoiceAnswer,SystemOneResponse,Usage
-from apps.argus.src.dao.observation_store import ObservationStore,SessionLink
-from apps.argus.src.dao.batch_store import BatchStore
+from apps.argus.test.persistence_fakes import ObservationStore,SessionLink
+from apps.argus.test.persistence_fakes import BatchStore
 from apps.argus.src.handler.qq_handler import QQHandler
-from apps.argus.src.service.qq_service import QQService
+from apps.argus.test.persistence_fakes import QQService
 from apps.argus.src.entity.decision import ObservationBatch
 from apps.argus.src.clients.jev_client import JevCallError
 
@@ -48,14 +48,14 @@ def test_fault_is_not_normal_silence_and_does_not_dispatch(tmp_path):
         await QQService(store,Fail(),None,workspace_path=str(tmp_path)).process_batch(batch.id)
         record=await batches.record(batch.id)
         assert record['status']=='failed' and record['route']['action']=='silence'
-        assert any(t['error_type']=='JevCallError' for t in record['trace'])
+        assert any(t['error_type']=='JevCallError' for t in record['trace'][0]['nodes'])
         await store.close()
     asyncio.run(exercise())
 
 
 def test_image_name_is_not_text_name_mention():
-    from apps.argus.src.strategy.qq.qq_batch_facts_policy import QQBatchFactsPolicy
+    from apps.argus.src.evidence.qq.qq_facts import QQBatchFactsReader
     obs=message(4,[{'type':'image','data':{'file':'icarus.png'}}])
     batch=ObservationBatch('b','qq','10000',obs.subject.key,(obs,),obs.received_at,datetime.now(UTC))
-    facts=asyncio.run(QQBatchFactsPolicy(('icarus',)).evaluate(batch))
+    facts=asyncio.run(QQBatchFactsReader(('icarus',)).evaluate(batch))
     assert facts.state['name_mentioned'] is False

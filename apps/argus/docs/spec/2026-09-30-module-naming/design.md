@@ -9,7 +9,8 @@
 - `QQ` 为缩写，类名中仍大写；Jev/Icarus 按名字写为 `JevClient/IcarusClient`。
 - 测试模块使用 `test_` 前缀和对应 snake_case 名称；以业务场景组织的现有测试不强制合并成一个文件。
 - 通用类型可以在同一职责模块内组织，不强制一个类一个文件。
-- 保留 `connector/handler/service/strategy/dao/entity/clients/utils` 现有目录，不为单复数整理而改层次。
+- 保留 `connector/handler/service/strategy/dao/entity/clients/utils` 现有目录；当前另有职责明确的 `evidence` 与 `decision_graph` 包，不为单复数整理而改层次。
+- 应用内源码使用相对导入；对象/表记录归entity，事实与prompt归evidence，判断轨迹归strategy。2026-10-02整理后的实际调用链与图能力见[当前架构](../2026-10-01-evidence-and-pacing/arch.md)，本目录plan保留最初命名整理记录。
 
 ## 范围
 

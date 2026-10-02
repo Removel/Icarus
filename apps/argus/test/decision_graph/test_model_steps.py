@@ -1,8 +1,11 @@
 import asyncio
 from typesafe_sdk import Choice, ChoiceAnswer, SystemOneResponse, Usage
 from apps.argus.src.clients.jev_client import JevClient
-from apps.argus.src.decision_graph.graph import DecisionGraph, NodeBinding, Edge
+from apps.argus.src.decision_graph.graph import DecisionGraph
+from apps.argus.src.decision_graph.node import NodeBinding
+from apps.argus.src.decision_graph.edge import Edge
 from apps.argus.src.decision_graph.runner import GraphRunner
+from apps.argus.src.decision_graph.compiler import GraphCompiler
 from apps.argus.src.entity.decision import RouteDecision
 
 
@@ -22,9 +25,9 @@ def test_dependent_model_step_receives_previous_answer():
                                  questions={'action': Choice(criteria={'submit': 'start task'})})
         return RouteDecision(result.answers['action'].choice, 'model')
     graph = DecisionGraph((
-        NodeBinding('first', first, lambda root, _: root),
-        NodeBinding('second', second, lambda _, results: results['first'], requires=('first',)),
+        NodeBinding('first', first, lambda root, _: {'value': root}),
+        NodeBinding('second', second, lambda _, results: {'value': results['first']}, requires=('first',)),
     ), (Edge('first', 'second'),), 'first', 'second')
-    run = asyncio.run(GraphRunner().run(graph, {'content': 'test'}))
-    assert run.decision.action == 'submit'
+    run = asyncio.run(GraphRunner().run(GraphCompiler().compile(graph), {'content': 'test'}))
+    assert run.output.action == 'submit'
     assert calls == [{'content': 'test'}, {'previous': 'read_history'}]

@@ -1,20 +1,17 @@
 import asyncio
-from apps.argus.src.decision_graph.graph import DecisionGraph, NodeBinding
+from apps.argus.src.decision_graph.graph import DecisionGraph
+from apps.argus.src.decision_graph.node import NodeBinding
 from apps.argus.src.decision_graph.runner import GraphRunner
+from apps.argus.src.decision_graph.compiler import GraphCompiler
 from apps.argus.src.entity.decision import RouteDecision
-from apps.argus.src.strategy.base_policy import BasePolicy
+from apps.argus.src.strategy.decision_trace import safe_trace
 
 
-class SilentPolicy(BasePolicy):
-    name, version = 'quiet', '7'
-    async def evaluate(self, value):
+def test_safe_routing_summary_does_not_include_root_input():
+    async def silence(value):
         return RouteDecision('silence', 'no_human')
-
-
-def test_trace_records_policy_version_and_safe_routing_result():
-    graph = DecisionGraph((NodeBinding('end', SilentPolicy().evaluate, lambda root, _: root),), (), 'end', 'end')
-    result = asyncio.run(GraphRunner().run(graph, 'sensitive input'))
-    trace = result.trace()[0]
-    assert trace['version'] == '7'
-    assert trace['result'] == {'action': 'silence', 'reason': 'no_human', 'target_task_id': None}
-    assert 'sensitive input' not in str(result.trace())
+    graph = DecisionGraph((NodeBinding('end', silence, lambda root, _: {'value': root}),), (), 'end', 'end')
+    result = asyncio.run(GraphRunner().run(GraphCompiler().compile(graph), 'sensitive input'))
+    trace = safe_trace(result)
+    assert trace['nodes'][0]['result']['action'] == 'silence'
+    assert 'sensitive input' not in str(trace)

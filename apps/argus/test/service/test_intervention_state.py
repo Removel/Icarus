@@ -1,9 +1,9 @@
 import asyncio
 from typesafe_sdk import ChoiceAnswer, SystemOneResponse, Usage
-from apps.argus.src.dao.observation_store import ObservationStore, SessionLink
-from apps.argus.src.dao.batch_store import BatchStore
+from apps.argus.test.persistence_fakes import ObservationStore, SessionLink
+from apps.argus.test.persistence_fakes import BatchStore
 from apps.argus.src.handler.qq_handler import QQHandler
-from apps.argus.src.service.qq_service import QQService
+from apps.argus.test.persistence_fakes import QQService
 
 
 class Gateway:
@@ -12,7 +12,9 @@ class Gateway:
     async def session_get(self, workspace_path, session_id):
         return dict(session_id=session_id, workspace_key='key', lifecycle='running',
                     active_task_ids=self.active)
-    async def session_get_history(self, *args):
+    async def task_get_status(self, path, sid, task):
+        return dict(workspace_key='key', session_id=sid, task_id=task, lifecycle='running')
+    async def session_get_history(self, *args, **kwargs):
         return {'records': []}
 
 
@@ -68,7 +70,7 @@ def test_intervention_state_reports_absent_session(tmp_path):
 
 
 def test_transcript_marks_bot_messages():
-    from apps.argus.src.strategy.qq.qq_batch_facts_policy import transcript
+    from apps.argus.src.evidence.qq.qq_transcript import transcript
     own = QQHandler('10000').parse(dict(
         post_type='message_sent', self_id=10000, time=1, message_id=82,
         message_type='group', group_id=42, user_id=10000, message='我查到了'))

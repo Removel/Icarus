@@ -1,10 +1,10 @@
 import asyncio
 
-from apps.argus.src.dao.observation_store import ObservationStore
+from apps.argus.test.persistence_fakes import ObservationStore
 from apps.argus.src.handler.qq_handler import QQHandler
-from apps.argus.src.dao.batch_store import BatchStore
+from apps.argus.test.persistence_fakes import BatchStore
 from apps.argus.src.entity.decision import RouteDecision
-from apps.argus.src.service.qq_service import QQService
+from apps.argus.test.persistence_fakes import QQService
 from apps.argus.src.clients.icarus_client import GatewayTransportError, GatewayBusinessError
 
 
@@ -39,6 +39,9 @@ class FakeGateway:
         self.calls.append(("create", session_id))
         self.sessions[session_id] = {"session_id": session_id, "workspace_key": "server-key", "lifecycle": "unloaded"}
         return self.sessions[session_id]
+
+    async def session_get_history(self, *args, **kwargs):
+        return {'records': [], 'history_cursor': 0, 'has_more': False}
 
     async def session_submit(self, workspace_path, session_id, prompt, submission_id):
         self.calls.append(("submit", session_id, submission_id, prompt))
@@ -81,7 +84,7 @@ def test_missing_recorded_session_creates_new_one(tmp_path):
         obs = make_obs()
         await store.insert(obs)
         obs = await prepare(store, obs)
-        from apps.argus.src.dao.observation_store import SessionLink
+        from apps.argus.src.entity.session_link import SessionLink
         await store.save_link(SessionLink("qq", "10000", "qq:group:42", str(tmp_path), "old-key", "missing"))
         await service.apply_decision(obs, RouteDecision("submit", "test"))
         assert (await BatchStore(store).record(obs.id))["status"] == "submitted"
@@ -99,7 +102,7 @@ def test_link_from_other_workspace_is_not_used(tmp_path):
         obs = make_obs()
         await store.insert(obs)
         obs = await prepare(store, obs)
-        from apps.argus.src.dao.observation_store import SessionLink
+        from apps.argus.src.entity.session_link import SessionLink
         await store.save_link(SessionLink("qq", "10000", "qq:group:42", "/other", "server-key", "old"))
         gateway.sessions["old"] = {"session_id": "old", "workspace_key": "server-key", "lifecycle": "ready"}
         await service.apply_decision(obs, RouteDecision("submit", "test"))
@@ -137,7 +140,7 @@ def test_mismatched_gateway_workspace_does_not_submit_or_kill_worker(tmp_path):
         obs = make_obs()
         await store.insert(obs)
         obs = await prepare(store, obs)
-        from apps.argus.src.dao.observation_store import SessionLink
+        from apps.argus.src.entity.session_link import SessionLink
         await store.save_link(SessionLink("qq", "10000", obs.subject, str(tmp_path), "old-key", "existing"))
         gateway.sessions["existing"] = {"session_id": "existing", "workspace_key": "wrong-key", "lifecycle": "ready"}
         await service.apply_decision(obs, RouteDecision("submit", "test"))
@@ -177,11 +180,13 @@ def test_unavailable_gateway_before_submit_releases_observation_for_recovery(tmp
         obs = make_obs()
         await store.insert(obs)
         obs = await prepare(store, obs)
-        from apps.argus.src.dao.observation_store import SessionLink
+        from apps.argus.src.entity.session_link import SessionLink
         await store.save_link(SessionLink("qq", "10000", obs.subject, str(tmp_path), "server-key", "old"))
         await service.apply_decision(obs, RouteDecision("submit", "test"))
         assert (await BatchStore(store).record(obs.id))["status"] == "decided"
-        assert await BatchStore(store).recover_batches() == (obs.id,)
+        record = await BatchStore(store).record(obs.id)
+        assert await BatchStore(store).recover_batches() == ()
+        assert await BatchStore(store).recover_batches(now=record['next_check_at']) == (obs.id,)
         await store.close()
     asyncio.run(exercise())
 

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
+from ..entity.api_result import DeliveryOutcome
 
 
 class GatewayTransportError(ConnectionError):
@@ -109,18 +110,59 @@ class IcarusClient:
     async def session_create(self, workspace_path: str, session_id: str) -> dict:
         return await self.call("session.create", {"workspace_path": workspace_path, "session_id": session_id})
 
+    async def ensure_session(self, workspace_path, session_id):
+        try:
+            status = await self.session_get(workspace_path,session_id)
+        except GatewayBusinessError as error:
+            if error.code != 'session_not_found':
+                raise
+            try:
+                status = await self.session_create(workspace_path,session_id)
+            except GatewayBusinessError as error:
+                if error.code != 'session_exists':
+                    raise
+                status = await self.session_get(workspace_path,session_id)
+            except GatewayTransportError:
+                status = await self.session_get(workspace_path,session_id)
+        if status['session_id'] != session_id:
+            raise ValueError('Session identity mismatch')
+        return status
+
+    @staticmethod
+    def delivery_outcome(method, result, *, target_task_id=None):
+        if not isinstance(result, dict):
+            return DeliveryOutcome('unknown',error_type='invalid_receipt')
+        if method == 'session.steer':
+            if target_task_id is not None and result.get('task_id') not in (None,target_task_id):
+                return DeliveryOutcome('unknown',result,error_type='invalid_receipt')
+            if result.get('status') in {'not_running','already_finished'}:
+                return DeliveryOutcome('rejected',result,result.get('task_id'))
+            valid = result.get('status') == 'accepted'
+        else:
+            valid = isinstance(result.get('task_id'),str) and bool(result['task_id'])
+        return DeliveryOutcome('accepted',result,result.get('task_id')) if valid else DeliveryOutcome(
+            'unknown',result,error_type='invalid_receipt')
+
+    async def _deliver(self, method, params):
+        try:
+            result = await self.call(method,params)
+        except GatewayBusinessError as error:
+            kind = 'failed' if error.code in {'session_not_found','submission_conflict','runtime_stopping','-32602'} else 'unknown'
+            return DeliveryOutcome(kind,error_type=error.code)
+        except (GatewayTransportError, TimeoutError):
+            return DeliveryOutcome('unknown',error_type='transport')
+        return self.delivery_outcome(method,result,target_task_id=params.get('task_id'))
+
     async def session_submit(self, workspace_path: str, session_id: str,
-                             prompt: str, submission_id: str) -> dict:
-        return await self.call("session.submit", {
-            "workspace_path": workspace_path, "session_id": session_id,
-            "prompt": prompt, "submission_id": submission_id,
-        })
+                             prompt: str, submission_id: str) -> DeliveryOutcome:
+        return await self._deliver('session.submit', dict(workspace_path=workspace_path,
+            session_id=session_id,prompt=prompt,submission_id=submission_id))
 
     async def task_get_status(self, workspace_path, session_id, task_id):
         return await self.call("task.get_status", dict(workspace_path=workspace_path, session_id=session_id, task_id=task_id))
 
     async def session_steer(self, workspace_path, session_id, task_id, prompt, submission_id):
-        return await self.call("session.steer", dict(workspace_path=workspace_path, session_id=session_id,
+        return await self._deliver('session.steer', dict(workspace_path=workspace_path, session_id=session_id,
             task_id=task_id, prompt=prompt, submission_id=submission_id))
 
     async def session_get_history(self, workspace_path, session_id, *, after_sequence=0, max_pages=5):
@@ -129,8 +171,8 @@ class IcarusClient:
             page=await self.call("session.get_history", dict(workspace_path=workspace_path, session_id=session_id,
                 after_sequence=after_sequence, limit=200))
             records.extend(page["records"])
-            if not page["has_more"]: return dict(records=records, has_more=False)
+            if not page["has_more"]: return dict(records=records, has_more=False, history_cursor=page.get("history_cursor", page.get("next_after_sequence", after_sequence)))
             next_sequence=page["next_after_sequence"]
             if next_sequence<=after_sequence: raise GatewayTransportError("History pagination did not advance")
             after_sequence=next_sequence
-        return dict(records=records, has_more=True)
+        return dict(records=records, has_more=True, history_cursor=page.get("history_cursor", after_sequence))

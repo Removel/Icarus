@@ -1,6 +1,6 @@
 import asyncio
 
-from apps.argus.src.dao.observation_store import ObservationStore, SessionLink
+from apps.argus.test.persistence_fakes import ObservationStore, SessionLink
 from apps.argus.src.handler.qq_handler import QQHandler
 
 

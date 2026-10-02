@@ -6,18 +6,17 @@ from httpx import ASGITransport, AsyncClient
 from apps.argus.src.main import create_app
 
 
-def test_health_tracks_worker_lifecycle():
+def test_disabled_health_does_not_require_an_ingress_worker():
     app = create_app()
     with TestClient(app) as client:
-        assert client.get("/health").json() == {"status": "ready"}
-        app.state.worker.task.cancel()
-        assert client.get("/health").status_code == 503
-
-    assert not app.state.worker.is_running
+        assert client.get('/health').json() == {'status':'ready'}
+        app.state.ready = False
+        assert client.get('/health').status_code == 503
+    assert not app.state.accepting
 
 
 def test_disabled_qq_does_not_consume_existing_pending_records(tmp_path):
-    from apps.argus.src.dao.observation_store import ObservationStore
+    from apps.argus.test.persistence_fakes import ObservationStore
     from apps.argus.src.handler.qq_handler import QQHandler
     from apps.argus.src.config.config_model import ArgusConfig
 
@@ -41,7 +40,7 @@ def test_disabled_qq_does_not_consume_existing_pending_records(tmp_path):
         return await original_recover(*args, **kwargs)
     paused_store.unassigned_scopes = count_recover
     config = ArgusConfig(host="127.0.0.1", port=8766, log_level="INFO", queue_capacity=1, worker_count=1)
-    with TestClient(create_app(config, store=paused_store)) as client:
+    with TestClient(create_app(config, database=paused_store.database)) as client:
         assert client.get("/health").status_code == 200
         assert client.get(f"/observations/{observation_id}/status").json()["status"] == "pending"
         assert not recover_calls

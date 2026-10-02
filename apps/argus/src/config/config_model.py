@@ -51,9 +51,16 @@ class ArgusConfig(BaseModel):
     judge_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     jev_base_url: str = "https://openrouter.ai/api"
     jev_model: str = "typesafe/jev-1.13"
-    batch_quiet_seconds: float = Field(default=5.0, gt=0, allow_inf_nan=False)
+    batch_quiet_seconds: float = Field(default=6.0, gt=0, allow_inf_nan=False)
     batch_max_messages: int = Field(default=20, gt=0, le=100)
     batch_max_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     graph_timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
     graph_max_steps: int = Field(default=32, gt=0)
+    no_action_backoff_base_seconds: float = Field(default=15, gt=0, allow_inf_nan=False)
+    no_action_backoff_start_count: int = Field(default=2, gt=0)
+    no_action_backoff_cap_seconds: float = Field(default=300, gt=0, allow_inf_nan=False)
+    submission_window_seconds: float = Field(default=300, gt=0, allow_inf_nan=False)
+    submission_spacing_seconds: float = Field(default=15, gt=0, allow_inf_nan=False)
+    pacing_bypass_messages: int = Field(default=6, gt=0)
+    waiting_check_seconds: float = Field(default=5, gt=0, allow_inf_nan=False)
     qq: QQConfig = Field(default_factory=QQConfig)

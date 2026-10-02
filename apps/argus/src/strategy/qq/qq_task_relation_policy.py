@@ -1,21 +1,31 @@
+"""Decide whether pending content belongs in the one verified running task."""
 from typesafe_sdk import Choice
 from ..base_policy import BasePolicy
 from ...entity.decision import TaskRelationResult
+from ...entity.policy_inputs import RelationInput
+from ..work_state import running_tasks, has_unknown_work, has_queued_work, confirmed_idle
 
 
-class QQTaskRelationPolicy(BasePolicy):
-    name,version='qq-task-relation','1'
-    def __init__(self,client,gateway):self.client=client;self.gateway=gateway
-    async def evaluate(self,value):
-        facts,snapshot=value
-        if not snapshot.active_task_ids:return TaskRelationResult('new_topic','no_active_task')
-        if len(snapshot.active_task_ids)!=1:raise ValueError('Ambiguous task target')
-        history=await self.gateway.session_get_history(snapshot.workspace_path,snapshot.session_id)
-        task_id=snapshot.active_task_ids[0]
-        records=[r for r in history['records'] if r.get('task_id')==task_id and r['type'] in ('user.message','user.correction')]
-        if not records:raise ValueError('Task context unavailable')
-        state=dict(facts.state,active_task_messages=[r['payload'].get('text','')[:4000] for r in records[-10:]])
-        response=await self.client.ask(state=state,questions={'relation':Choice(
-            instructions='这批内容是在补充当前任务还是开始新话题？',
-            criteria={'supplement':'修正或补充所列任务的请求。','new_topic':'与所列任务无关的新请求。'})})
-        return TaskRelationResult(response.answers['relation'].choice,'jev')
+class QQTaskRelationPolicy(BasePolicy[RelationInput, TaskRelationResult]):
+    name = 'qq-task-relation'
+
+    def __init__(self, client):
+        self.client = client
+
+    async def evaluate(self, value):
+        facts, snapshot = value.facts, value.snapshot
+        if confirmed_idle(snapshot):
+            return TaskRelationResult('undetermined', 'idle')
+        running = running_tasks(snapshot)
+        if has_unknown_work(snapshot) or has_queued_work(snapshot) or len(running) != 1:
+            return TaskRelationResult('wait', 'work_state_unresolved')
+        task_id = running[0].task_id
+        requests = [r for r in snapshot.history_records if r.get('task_id') == task_id
+                    and r['type'] in {'user.message','user.correction'} and r['payload'].get('text')]
+        if not requests:
+            return TaskRelationResult('wait', 'task_context_missing')
+        response = await self.client.ask(state=facts.state, questions={'relation': Choice(
+            instructions='本批待处理内容是否适合现在补充到当前执行中的任务？背景消息不是待执行请求。',
+            criteria={'steer':'是当前工作的必要补充或纠正，适合现在追加。',
+                      'wait':'仍需处理，但不适合打断当前工作，保留等待后重判。'})})
+        return TaskRelationResult(response.answers['relation'].choice, 'jev')

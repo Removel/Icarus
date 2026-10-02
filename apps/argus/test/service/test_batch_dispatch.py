@@ -1,9 +1,9 @@
 import asyncio
 from datetime import UTC,datetime
-from apps.argus.src.dao.observation_store import ObservationStore
-from apps.argus.src.dao.batch_store import BatchStore
+from apps.argus.test.persistence_fakes import ObservationStore
+from apps.argus.test.persistence_fakes import BatchStore
 from apps.argus.src.handler.qq_handler import QQHandler
-from apps.argus.src.service.qq_service import QQService
+from apps.argus.test.persistence_fakes import QQService
 from apps.argus.src.entity.decision import RouteDecision
 from apps.argus.src.clients.icarus_client import GatewayTransportError,GatewayBusinessError
 
@@ -12,7 +12,8 @@ class Gateway:
     def __init__(self,result):self.result=result;self.calls=[];self.sessions={}
     async def session_get(self,workspace_path,session_id):
         return dict(session_id=session_id,workspace_key='k',lifecycle='running',active_task_ids=['t'])
-    async def task_get_status(self,*args):return {'lifecycle':'running'}
+    async def task_get_status(self,path,sid,task):return dict(workspace_key='k',session_id=sid,task_id=task,lifecycle='running')
+    async def session_get_history(self,*args,**kwargs):return dict(records=[],history_cursor=0,has_more=False)
     async def session_steer(self,**params):
         self.calls.append(('steer',params))
         if isinstance(self.result,Exception):raise self.result
@@ -22,7 +23,7 @@ class Gateway:
 
 def test_malformed_receipt_is_unknown_and_identity_is_saved(tmp_path):
     async def exercise():
-        from apps.argus.src.dao.observation_store import SessionLink
+        from apps.argus.src.entity.session_link import SessionLink
         store=ObservationStore(tmp_path);await store.start();batches=BatchStore(store)
         obs=QQHandler('10000').parse(dict(post_type='message',self_id=10000,time=1,message_id=70,
             message_type='private',user_id=7,message='hi'))
@@ -41,7 +42,7 @@ def test_malformed_receipt_is_unknown_and_identity_is_saved(tmp_path):
 
 def test_missing_steer_task_is_reconciled_with_session_snapshot(tmp_path):
     async def exercise():
-        from apps.argus.src.dao.observation_store import SessionLink
+        from apps.argus.src.entity.session_link import SessionLink
         store=ObservationStore(tmp_path);await store.start();batches=BatchStore(store)
         obs=QQHandler('10000').parse(dict(post_type='message',self_id=10000,time=1,message_id=71,
             message_type='private',user_id=7,message='hi'))
@@ -54,17 +55,17 @@ def test_missing_steer_task_is_reconciled_with_session_snapshot(tmp_path):
         async def idle(*_): return dict(session_id='s',workspace_key='k',lifecycle='ready',active_task_ids=[],queued_task_count=0)
         gateway.task_get_status=absent;gateway.session_get=idle
         await QQService(store,object(),gateway,workspace_path=str(tmp_path)).apply_decision(batch,RouteDecision('steer','supplement','t'))
-        assert [c[0] for c in gateway.calls]==['submit']
-        assert (await batches.record(batch.id))['status']=='submitted'
+        assert gateway.calls == []
+        assert (await batches.record(batch.id))['status']=='waiting'
         await store.close()
     asyncio.run(exercise())
 
 
-def test_steer_negative_receipt_allows_one_submit_but_unknown_does_not(tmp_path):
+def test_steer_rejection_waits_without_submit_and_unknown_does_not_resend(tmp_path):
     async def exercise():
-        from apps.argus.src.dao.observation_store import SessionLink
+        from apps.argus.src.entity.session_link import SessionLink
         store=ObservationStore(tmp_path);await store.start();batches=BatchStore(store)
-        for n,result,expected in [(1,{'status':'not_running'},'submitted'),(2,GatewayTransportError('lost'),'submission_unknown'),(3,{'status':'accepted','task_id':'t'},'submitted')]:
+        for n,result,expected in [(1,{'status':'not_running'},'waiting'),(2,GatewayTransportError('lost'),'submission_unknown'),(3,{'status':'accepted','task_id':'t'},'submitted')]:
             obs=QQHandler('10000').parse(dict(post_type='message',self_id=10000,time=1,message_id=n,
                 message_type='private',user_id=7,message='supplement'))
             await store.insert(obs)
@@ -75,9 +76,8 @@ def test_steer_negative_receipt_allows_one_submit_but_unknown_does_not(tmp_path)
             service=QQService(store,object(),gateway,workspace_path=str(tmp_path))
             await service.apply_decision(batch,RouteDecision('steer','supplement','t'))
             assert (await batches.record(batch.id))['status']==expected
-            assert [c[0] for c in gateway.calls]==(['steer','submit'] if n==1 else ['steer'])
-            if n==1:assert gateway.calls[0][1]['submission_id']!=gateway.calls[1][1]['submission_id']
+            assert [c[0] for c in gateway.calls]==['steer']
             await service.apply_decision(batch,RouteDecision('steer','supplement','t'))
-            assert len(gateway.calls)==(2 if n==1 else 1)
+            assert len(gateway.calls)==1
         await store.close()
     asyncio.run(exercise())

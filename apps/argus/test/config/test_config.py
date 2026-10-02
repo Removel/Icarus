@@ -12,6 +12,7 @@ def test_default_config():
     assert config.port == 8766
     assert config.queue_capacity == 1000
     assert config.worker_count == 1
+    assert config.batch_quiet_seconds == 6
 
 
 @pytest.mark.parametrize("change", [
@@ -44,3 +45,15 @@ def test_bot_names_default_empty_and_accept_aliases():
 def test_gateway_url_rejects_nonlocal_or_ambiguous_authority(url):
     with pytest.raises(ValidationError):
         QQConfig(enabled=True, bot_id="10000", workspace_path="/tmp/work", gateway_url=url)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('no_action_backoff_base_seconds',0),('no_action_backoff_cap_seconds',float('nan')),
+    ('submission_window_seconds',float('inf')),('submission_spacing_seconds',-1),
+    ('waiting_check_seconds',0),('pacing_bypass_messages',0),('no_action_backoff_start_count',0),
+])
+def test_invalid_pacing_values_are_rejected(field,value):
+    values=dict(host='127.0.0.1',port=8766,log_level='INFO',queue_capacity=5,worker_count=1)
+    values[field]=value
+    with pytest.raises(ValidationError):
+        ArgusConfig.model_validate(values)

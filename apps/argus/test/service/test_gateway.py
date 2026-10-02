@@ -40,12 +40,8 @@ def test_closed_socket_during_send_becomes_transport_uncertainty():
             raise ConnectionClosed(None, None)
         socket.send = closed_send
         try:
-            try:
-                await client.session_submit("/work", "s", "prompt", "submission-1")
-            except GatewayTransportError:
-                pass
-            else:
-                raise AssertionError("Closed WebSocket must be a transport-unknown result")
+            result = await client.session_submit('/work','s','prompt','submission-1')
+            assert result.kind == 'unknown' and result.error_type == 'transport'
         finally:
             await client.close()
     asyncio.run(exercise())

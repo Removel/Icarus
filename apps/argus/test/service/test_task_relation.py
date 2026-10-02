@@ -1,9 +1,9 @@
 import asyncio
 from typesafe_sdk import SystemOneResponse, Usage, ChoiceAnswer
-from apps.argus.src.dao.observation_store import ObservationStore, SessionLink
-from apps.argus.src.dao.batch_store import BatchStore
+from apps.argus.test.persistence_fakes import ObservationStore, SessionLink
+from apps.argus.test.persistence_fakes import BatchStore
 from apps.argus.src.handler.qq_handler import QQHandler
-from apps.argus.src.service.qq_service import QQService
+from apps.argus.test.persistence_fakes import QQService
 
 
 def test_existing_task_requires_relation_judgment_before_steer(tmp_path):
@@ -21,22 +21,24 @@ def test_existing_task_requires_relation_judgment_before_steer(tmp_path):
         class Gateway:
             async def session_get(self, *args):
                 return dict(session_id='s', workspace_key='key', lifecycle='running', active_task_ids=['t'])
-            async def session_get_history(self, *args):
+            async def task_get_status(self, path, sid, task):
+                return dict(workspace_key='key',session_id=sid,task_id=task,lifecycle='running')
+            async def session_get_history(self, *args, **kwargs):
                 return {'records': [dict(task_id='t', type='user.message', payload={'text': '原问题'})]}
         class Judge:
             def __init__(self):
                 self.calls = []
-                self.choice = 'supplement'
+                self.choice = 'steer'
             async def ask(self, *, state, questions):
                 self.calls.append((state, questions))
                 return SystemOneResponse(model='fake', usage=Usage(), answers={
-                    'relation': ChoiceAnswer(choice=self.choice, confidence=1., probabilities={self.choice: 1.})})
+                    key: ChoiceAnswer(choice='yes' if key=='intervene' else self.choice, confidence=1., probabilities={('yes' if key=='intervene' else self.choice):1.}) for key in questions})
         judge = Judge()
         service = QQService(store, judge, Gateway(), workspace_path=str(tmp_path))
         result = await service.evaluate_batch(batch)
-        assert result.decision.action == 'steer' and result.decision.target_task_id == 't'
+        assert result.output.action == 'steer' and result.output.target_task_id == 't'
         assert judge.calls[0][0]['active_task_messages'] == ['原问题']
-        judge.choice = 'new_topic'
-        assert (await service.evaluate_batch(batch)).decision.action == 'submit'
+        judge.choice = 'wait'
+        assert (await service.evaluate_batch(batch)).output.action == 'wait'
         await store.close()
     asyncio.run(exercise())

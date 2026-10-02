@@ -1,9 +1,9 @@
 import asyncio
 from typesafe_sdk import SystemOneResponse,Usage,ChoiceAnswer
-from apps.argus.src.dao.observation_store import ObservationStore
-from apps.argus.src.dao.batch_store import BatchStore
+from apps.argus.test.persistence_fakes import ObservationStore
+from apps.argus.test.persistence_fakes import BatchStore
 from apps.argus.src.handler.qq_handler import QQHandler
-from apps.argus.src.service.qq_service import QQService
+from apps.argus.test.persistence_fakes import QQService
 
 
 def test_second_batch_can_use_previous_subject_messages(tmp_path):

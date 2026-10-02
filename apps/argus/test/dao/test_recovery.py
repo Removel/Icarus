@@ -1,6 +1,6 @@
 import asyncio
-from apps.argus.src.dao.observation_store import ObservationStore
-from apps.argus.src.dao.batch_store import BatchStore
+from apps.argus.test.persistence_fakes import ObservationStore
+from apps.argus.test.persistence_fakes import BatchStore
 from apps.argus.src.handler.qq_handler import QQHandler
 
 

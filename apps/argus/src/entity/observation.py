@@ -5,6 +5,10 @@ from datetime import datetime
 from typing import Literal
 
 
+class ObservationConflictError(ValueError):
+    """A source identity was reused with different immutable facts."""
+
+
 @dataclass(frozen=True, kw_only=True)
 class SourceRef:
     platform: str

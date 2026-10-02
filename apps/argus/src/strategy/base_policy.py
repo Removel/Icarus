@@ -1,4 +1,4 @@
-"""Typed, side-effect-free policy contract."""
+"""Typed judgment contract; external queries are injected by callers."""
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
@@ -8,7 +8,6 @@ OutputT = TypeVar('OutputT')
 
 class BasePolicy(ABC, Generic[InputT, OutputT]):
     name: str
-    version: str
 
     @abstractmethod
     async def evaluate(self, value: InputT) -> OutputT:

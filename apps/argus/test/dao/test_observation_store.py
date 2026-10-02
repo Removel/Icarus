@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from apps.argus.src.dao.observation_store import ObservationConflictError, ObservationStore
+from apps.argus.src.dao.observation_store import ObservationConflictError
+from apps.argus.test.persistence_fakes import ObservationStore
 from apps.argus.src.entity.qq_observation import QQObservation
 from apps.argus.src.handler.qq_handler import QQHandler
 

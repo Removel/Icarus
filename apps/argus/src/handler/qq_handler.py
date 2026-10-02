@@ -1,13 +1,12 @@
 """Convert SnowLuma OneBot messages into QQ observations."""
 
-import json
 from datetime import UTC, datetime
 from math import isfinite
 from typing import Any
 from uuid import uuid4
 
-from apps.argus.src.entity.qq_observation import QQObservation
-from apps.argus.src.entity.observation import ActorRef, ContentPart, SourceRef, SubjectRef
+from ..entity.qq_observation import QQObservation
+from ..entity.observation import ActorRef, ContentPart, SourceRef, SubjectRef
 
 
 def _positive_id(value: Any, field: str) -> str:
@@ -32,28 +31,32 @@ def _message_id(value: Any) -> str:
     raise ValueError("message_id must be a nonzero signed integer")
 
 
-class QQHandler:
-    def __init__(self, bot_id: str) -> None:
-        self.bot_id = _positive_id(bot_id, "bot_id")
+class IgnoredOneBotEvent(ValueError):
+    """A recognized, authenticated event outside the chat observation scope."""
 
-    @staticmethod
-    def reply_hint(subject: str) -> str:
-        platform, kind, target = subject.split(":", 2)
-        if platform != "qq" or kind not in {"group", "private"}:
-            raise ValueError("Unsupported QQ reply target")
-        action = "send_group_msg" if kind == "group" else "send_private_msg"
-        key = "group_id" if kind == "group" else "user_id"
-        example = json.dumps({
-            "action": action,
-            "params": {key: int(target), "message": [{"type": "text", "data": {"text": "回复内容"}}]},
-        }, ensure_ascii=False)
-        return f"\n请用 snowluma 的 invoke_action 将回复发到 QQ：{example}；只在会话里回复，对方收不到。"
+
+class QQHandler:
+    def __init__(self, bot_id: str, *, receive=None) -> None:
+        self.bot_id = _positive_id(bot_id, 'bot_id')
+        self.receive = receive
+
+    async def handle(self, raw):
+        try:
+            observation = self.parse(raw)
+        except IgnoredOneBotEvent:
+            return None
+        if self.receive is None:
+            raise RuntimeError('Handler has no receiving service')
+        await self.receive(observation)
+        return observation
 
     def parse(self, raw: dict[str, Any]) -> QQObservation:
         if not isinstance(raw, dict):
             raise ValueError("OneBot event must be an object")
         if _positive_id(raw.get("self_id"), "self_id") != self.bot_id:
             raise ValueError("self_id does not match the configured bot")
+        if raw.get("post_type") in {"meta_event", "notice", "request"}:
+            raise IgnoredOneBotEvent("Non-chat OneBot event acknowledged without processing")
         if raw.get("post_type") not in {"message", "message_sent"}:
             raise ValueError("Only OneBot chat messages are supported")
         message_id = _message_id(raw.get("message_id"))
