@@ -1,3 +1,4 @@
+import json
 import logging
 import sqlite3
 import threading
@@ -48,7 +49,13 @@ class SQLiteManager:
                     "is_deleted",
                     "actor_id",
                     "role",
+                    "changes",
                 }
+
+                if old_cols == expected_cols - {"changes"}:
+                    cur.execute("ALTER TABLE history ADD COLUMN changes TEXT")
+                    self.connection.execute("COMMIT")
+                    return
 
                 if old_cols == expected_cols:
                     self.connection.execute("COMMIT")
@@ -75,7 +82,8 @@ class SQLiteManager:
                         updated_at   DATETIME,
                         is_deleted   INTEGER,
                         actor_id     TEXT,
-                        role         TEXT
+                        role         TEXT,
+                        changes      TEXT
                     )
                 """
                 )
@@ -115,7 +123,8 @@ class SQLiteManager:
                         updated_at   DATETIME,
                         is_deleted   INTEGER,
                         actor_id     TEXT,
-                        role         TEXT
+                        role         TEXT,
+                        changes      TEXT
                     )
                 """
                 )
@@ -159,6 +168,7 @@ class SQLiteManager:
         is_deleted: int = 0,
         actor_id: Optional[str] = None,
         role: Optional[str] = None,
+        changes: Optional[Dict[str, Any]] = None,
     ) -> None:
         with self._lock:
             try:
@@ -167,9 +177,9 @@ class SQLiteManager:
                     """
                     INSERT INTO history (
                         id, memory_id, old_memory, new_memory, event,
-                        created_at, updated_at, is_deleted, actor_id, role
+                        created_at, updated_at, is_deleted, actor_id, role, changes
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         str(uuid.uuid4()),
@@ -182,6 +192,7 @@ class SQLiteManager:
                         is_deleted,
                         actor_id,
                         role,
+                        json.dumps(changes, ensure_ascii=False) if changes is not None else None,
                     ),
                 )
                 self.connection.execute("COMMIT")
@@ -229,10 +240,10 @@ class SQLiteManager:
             cur = self.connection.execute(
                 """
                 SELECT id, memory_id, old_memory, new_memory, event,
-                       created_at, updated_at, is_deleted, actor_id, role
+                       created_at, updated_at, is_deleted, actor_id, role, changes
                 FROM history
                 WHERE memory_id = ?
-                ORDER BY created_at ASC, DATETIME(updated_at) ASC
+                ORDER BY COALESCE(updated_at, created_at) ASC, rowid ASC
             """,
                 (memory_id,),
             )
@@ -250,6 +261,7 @@ class SQLiteManager:
                 "is_deleted": bool(r[7]),
                 "actor_id": r[8],
                 "role": r[9],
+                "changes": json.loads(r[10]) if r[10] else None,
             }
             for r in rows
         ]

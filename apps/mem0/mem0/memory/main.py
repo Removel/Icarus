@@ -2096,6 +2096,11 @@ class Memory(MemoryBase):
             updated_at=new_metadata["updated_at"],
             actor_id=new_metadata.get("actor_id"),
             role=new_metadata.get("role"),
+            changes={
+                key: {"before": existing_memory.payload.get(key), "after": new_metadata.get(key)}
+                for key in ("expiration_date", "category")
+                if existing_memory.payload.get(key) != new_metadata.get(key)
+            },
         )
 
         # Entity-store cleanup: strip this memory's id from old-text entities,
@@ -3801,6 +3806,11 @@ class AsyncMemory(MemoryBase):
             updated_at=new_metadata["updated_at"],
             actor_id=new_metadata.get("actor_id"),
             role=new_metadata.get("role"),
+            changes={
+                key: {"before": existing_memory.payload.get(key), "after": new_metadata.get(key)}
+                for key in ("expiration_date", "category")
+                if existing_memory.payload.get(key) != new_metadata.get(key)
+            },
         )
 
         # Entity-store cleanup: strip this memory's id from old-text entities,

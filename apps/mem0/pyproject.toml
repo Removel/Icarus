@@ -148,6 +148,11 @@ test = [
     "pytest tests/ {args}",
 ]
 
+# Icarus core-memory regression gate; optional provider suites use dev_py_*.
+[tool.hatch.envs.icarus]
+features = ["test"]
+installer = "uv"
+
 [tool.ruff]
 line-length = 120
 
