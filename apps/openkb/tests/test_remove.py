@@ -288,6 +288,18 @@ def test_resolve_identifier_exact_doc_name(tmp_path):
     assert [h for h, _ in matches] == ["h2"]
 
 
+def test_resolve_identifier_exact_hash_with_duplicate_names(tmp_path):
+    reg = _make_registry(
+        tmp_path,
+        {
+            "h1": {"name": "paper.pdf", "doc_name": "paper-1"},
+            "h2": {"name": "paper.pdf", "doc_name": "paper-2"},
+        },
+    )
+    assert [h for h, _ in _resolve_doc_identifier(reg, "h2")] == ["h2"]
+    assert len(_resolve_doc_identifier(reg, "paper.pdf")) == 2
+
+
 def test_resolve_identifier_fuzzy_returns_all(tmp_path):
     reg = _make_registry(
         tmp_path,

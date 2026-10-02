@@ -7,7 +7,21 @@ from pathlib import Path
 
 from openkb.api_helpers import _is_kb_dir
 from openkb.cli import initialize_kb
-from openkb.config import kb_root_dir, register_kb_alias, validate_kb_name
+from openkb.config import (
+    kb_root_dir,
+    load_config,
+    register_kb_alias,
+    save_config,
+    validate_kb_name,
+)
+
+
+def configure_template(model: str) -> None:
+    """Keep REST-created KBs on the model selected for this deployment."""
+    template = Path.cwd() / "config.yaml"
+    config = load_config(template)
+    config["model"] = model
+    save_config(template, config)
 
 
 def main() -> None:
@@ -19,6 +33,7 @@ def main() -> None:
     ).strip()
     if not model:
         raise SystemExit("OPENKB_ICARUS_MODEL must be a non-empty model name.")
+    configure_template(model)
     target = (kb_root_dir() / knowledge_base).resolve()
     if not _is_kb_dir(target):
         initialize_kb(target, model=model)

@@ -24,8 +24,23 @@ from openkb.api_models import (
     PageResponse,
 )
 from openkb.page_ops import delete_wiki_page, edit_wiki_page, page_link_context
+from openkb.report_ops import delete_report
 
 pages_router = APIRouter()
+
+
+@pages_router.post("/api/v1/report/delete", response_model=PageDeleteResponse)
+async def delete_report_endpoint(
+    request: PageRequest,
+    _: None = Depends(require_bearer_token),
+) -> PageDeleteResponse:
+    try:
+        result = await run_in_threadpool(delete_report, _resolve_kb(request.kb), request.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail="Report not found.")
+    return PageDeleteResponse(**result)
 
 
 @pages_router.post("/api/v1/page", response_model=PageResponse)

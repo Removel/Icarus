@@ -806,7 +806,7 @@ def test_list_endpoint_returns_structured_inventory(monkeypatch, kb_dir):
     client = _client(monkeypatch)
     kb = _use_named_kb(monkeypatch, kb_dir)
     hashes = {
-        "abc123": {"name": "paper.pdf", "type": "pdf", "pages": 12},
+        "abc123": {"name": "paper.pdf", "doc_name": "paper-abc123", "source_path": "wiki/sources/paper-abc123.json", "type": "pdf", "pages": 12},
         "def456": {"name": "notes.md", "type": "md"},
     }
     (kb_dir / ".openkb" / "hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
@@ -828,6 +828,8 @@ def test_list_endpoint_returns_structured_inventory(monkeypatch, kb_dir):
         {
             "hash": "abc123",
             "name": "paper.pdf",
+            "doc_name": "paper-abc123",
+            "source_path": "wiki/sources/paper-abc123.json",
             "type": "pdf",
             "display_type": "short",
             "pages": 12,
@@ -835,6 +837,8 @@ def test_list_endpoint_returns_structured_inventory(monkeypatch, kb_dir):
         {
             "hash": "def456",
             "name": "notes.md",
+            "doc_name": "notes",
+            "source_path": None,
             "type": "md",
             "display_type": "short",
             "pages": None,
