@@ -53,6 +53,7 @@ class SessionParams(WorkspaceParams):
 
 
 class CreateSessionParams(WorkspaceParams):
+    load_runtime: bool = True
     session_id: str | None = Field(
         default=None, min_length=1, pattern=r"^[A-Za-z0-9._-]+$"
     )
@@ -115,7 +116,9 @@ class GatewayMethods:
             "runtime.get_status": self._runtime_status,
             "session.create": self._session_create,
             "session.list": self._session_list,
+            "session.generate_title": self._session_generate_title,
             "session.discard_empty": self._session_discard_empty,
+            "session.delete": self._session_delete,
             "session.get": self._session_get,
             "session.submit": self._session_submit,
             "session.steer": self._session_steer,
@@ -171,7 +174,7 @@ class GatewayMethods:
     async def _session_create(self, params):
         value = self._validate(CreateSessionParams, params)
         session_id = await self.runtime.create_session(
-            value.workspace_path, value.session_id
+            value.workspace_path, value.session_id, load_runtime=value.load_runtime
         )
         return _wire(
             await self.runtime.get_session_status(value.workspace_path, session_id)
@@ -189,6 +192,12 @@ class GatewayMethods:
         )
         return result.model_dump(mode="json")
 
+    async def _session_generate_title(self, params):
+        value = self._validate(SessionParams, params)
+        return {"title": await self.runtime.generate_session_title(
+            value.workspace_path, value.session_id
+        )}
+
     async def _session_discard_empty(self, params):
         value = self._validate(SessionParams, params)
         result = await self.runtime.discard_empty_session(
@@ -205,6 +214,11 @@ class GatewayMethods:
                 value.workspace_path, value.session_id
             )
         )
+
+    async def _session_delete(self, params):
+        value = self._validate(SessionParams, params)
+        result = await self.runtime.delete_session(value.workspace_path, value.session_id)
+        return DiscardEmptySessionResultModel.from_domain(result).model_dump(mode="json")
 
     async def _session_submit(self, params):
         value = self._validate(SubmitParams, params)
