@@ -26,6 +26,7 @@ from apps.agent.src.application.session_entities import (
     _Base,
     _ConversationUpdateRow,
     _SessionRow,
+    _SessionTitleRow,
     _WorkspaceRow,
 )
 from apps.agent.src.runtime_update import RuntimeUpdate, RuntimeUpdateType
@@ -206,8 +207,13 @@ class SessionStore:
     ) -> tuple[SessionSummary, ...]:
         sessions = self._require_started()
         async with sessions() as db:
-            rows = await db.scalars(
-                select(_SessionRow)
+            rows = await db.execute(
+                select(_SessionRow, _SessionTitleRow.title)
+                .outerjoin(
+                    _SessionTitleRow,
+                    (_SessionRow.workspace_key == _SessionTitleRow.workspace_key)
+                    & (_SessionRow.session_id == _SessionTitleRow.session_id),
+                )
                 .where(
                     _SessionRow.workspace_key == workspace_key,
                     _SessionRow.deleted_at.is_(None),
@@ -219,9 +225,49 @@ class SessionStore:
                 )
             )
             return tuple(
-                SessionSummary(row.session_id, row.first_user_input or "")
-                for row in rows
+                SessionSummary(
+                    session_id=row.session_id,
+                    first_user_input=row.first_user_input or "",
+                    title=title,
+                    created_at=_as_utc(row.created_at),
+                    updated_at=_as_utc(row.updated_at),
+                )
+                for row, title in rows
             )
+
+    async def get_title(self, identity: SessionIdentity) -> str | None:
+        sessions = self._require_started()
+        async with sessions() as db:
+            row = await db.get(
+                _SessionTitleRow, (identity.workspace_key, identity.session_id)
+            )
+            return row.title if row is not None else None
+
+    async def save_title(self, identity: SessionIdentity, title: str) -> str:
+        title = " ".join(title.split()).strip()[:80]
+        if not title:
+            raise ValueError("Session title cannot be empty")
+        sessions = self._require_started()
+        async with sessions.begin() as db:
+            row = await db.get(
+                _SessionRow, (identity.workspace_key, identity.session_id)
+            )
+            if row is None or row.deleted_at is not None:
+                raise SessionNotFoundError(identity.session_id)
+            await db.execute(
+                sqlite_insert(_SessionTitleRow)
+                .values(
+                    workspace_key=identity.workspace_key,
+                    session_id=identity.session_id,
+                    title=title,
+                )
+                .on_conflict_do_nothing()
+            )
+            saved = await db.get(
+                _SessionTitleRow, (identity.workspace_key, identity.session_id)
+            )
+            assert saved is not None
+            return saved.title
 
     async def append_update(
         self, identity: SessionIdentity, update: RuntimeUpdate
@@ -335,6 +381,15 @@ class SessionStore:
         *,
         reason: str,
     ) -> SoftDeleteStatus:
+        return await self.soft_delete_session(identity, reason=reason, only_empty=True)
+
+    async def soft_delete_session(
+        self,
+        identity: SessionIdentity,
+        *,
+        reason: str,
+        only_empty: bool = False,
+    ) -> SoftDeleteStatus:
         if not reason.strip():
             raise ValueError("delete reason cannot be empty")
         sessions = self._require_started()
@@ -354,7 +409,7 @@ class SessionStore:
                     )
                 )
             )
-            if has_user_message:
+            if only_empty and has_user_message:
                 return "not_empty"
             now = datetime.now(UTC)
             row.deleted_at = now

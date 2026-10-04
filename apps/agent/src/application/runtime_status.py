@@ -56,6 +56,9 @@ class SessionStatus:
 class SessionSummary:
     session_id: str
     first_user_input: str
+    title: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 DiscardSessionStatus: TypeAlias = Literal[
