@@ -13,12 +13,25 @@
 
 # OpenKB: Open LLM Knowledge Base
 
-> Icarus vendors this Apache-2.0 project as ordinary Monorepo source at a locked
-> upstream commit. For the Icarus-managed service, use `icarus start openkb` from the
-> repository root. Runtime data is bind-mounted from
-> `$ICARUS_DATA_DIR/services/openkb`; see `MODIFICATIONS.md`. The standalone
-> upstream examples below may use local `.env` files, but Icarus-managed startup
-> uses only the repository-root `.env`.
+> **Icarus maintained subset.** Imported at
+> `ff54396e575ee6feb0113b631a34caa082b441cc` under Apache-2.0. The upstream source is
+> frozen, while Icarus patches/security maintenance continue. Start through
+> `icarus start openkb`; data is bind-mounted under `$ICARUS_DATA_DIR/services/openkb`
+> and configuration comes only from the repository-root `.env`.
+> See [MODIFICATIONS.md](MODIFICATIONS.md) and [LICENSE](LICENSE).
+>
+> This first cleanup removes upstream examples, plugin-distribution metadata, and
+> nested CI; links to examples below refer to the fixed upstream source, not local
+> files. CLI, REST, Workbench, Deck/Skill Factory, watch, and their tests remain.
+> The development navigation skill moved to
+> [the repository skill directory](../../.agents/skills/openkb/SKILL.md); the three
+> bundled deck skills still belong to this App.
+>
+> For development: `icarus install openkb --dev`, `make test-openkb` (offline gate),
+> `make test-openkb-full` (complete suite, real exit status). The private environment
+> uses `uv sync --locked --extra dev --extra api`; Docker currently uses pip and does
+> not consume `uv.lock`. Repository conventions are in
+> [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 <p align="center"><i>Scale to long documents  •  Reasoning-based retrieval  •  Native multi-modality  •  No Vector DB</i></p>
 
@@ -134,7 +147,7 @@ pip install "openkb[web]"
 openkb-web                       # serves the API + Workbench at http://127.0.0.1:7566/
 ```
 
-Open `http://127.0.0.1:7566/` for the Workbench. Auth is off by default (local-first); set `OPENKB_API_TOKEN` to require a bearer token before exposing the server. See the [full Web UI guide](examples/rest-api/README.md#knowledge-workbench-web-ui).
+Open `http://127.0.0.1:7566/` for the Workbench. Auth is off by default (local-first); set `OPENKB_API_TOKEN` to require a bearer token before exposing the server. See the [full Web UI guide](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/rest-api/README.md#knowledge-workbench-web-ui).
 
 > Working on the UI itself? Run the Vite dev server with `cd frontend && npm install && npm run dev` (it proxies `/api` to a running `openkb-web`), or `npm run build` to regenerate the bundled `openkb/web/`.
 
@@ -171,7 +184,7 @@ A single source might touch 10--15 wiki pages. Knowledge accumulates: each docum
 
 # ⚙️ Usage
 
-OpenKB commands fall into two layers: the **wiki foundation** (compile + manage your knowledge) and **generators** (turn that wiki into useful output). Each links to a concrete walkthrough — a real artifact OpenKB generated from one sample paper (browse them all in [`examples/`](examples/)).
+OpenKB commands fall into two layers: the **wiki foundation** (compile + manage your knowledge) and **generators** (turn that wiki into useful output). Each links to a concrete walkthrough — a real artifact OpenKB generated from one sample paper (browse them all in [`examples/`](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples)).
 
 ## Layer 1: 🧱 Wiki Foundation — compile and maintain
 
@@ -196,7 +209,7 @@ OpenKB commands fall into two layers: the **wiki foundation** (compile + manage 
 
 </details>
 
-→ **Example:** the everyday loop walked through end to end — [`examples/commands/`](examples/commands/).
+→ **Example:** the everyday loop walked through end to end — [`examples/commands/`](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/commands/).
 
 ## Layer 2: 💡 Generators — turn the wiki into output
 
@@ -204,15 +217,15 @@ A "generator" reads from the compiled wiki and produces something usable: an ans
 
 | Command                                                                               | Output                                                                                                         | Example                            |
 | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| <code>openkb&nbsp;query&nbsp;"question"</code>                                        | A grounded answer with citations (`--save` to persist to `wiki/explorations/`)                                 | [query & save](examples/commands/) |
-| <code>openkb&nbsp;chat</code>                                                         | Interactive multi-turn session over the wiki (`--resume`, `--list`, `--delete` to manage sessions)             | [chat](examples/chat/)             |
-| <code>openkb&nbsp;visualize</code>                                                    | A self-contained interactive knowledge graph at `output/visualize/graph.html` — 3D, mind-map, and radial views | [visualize](examples/visualize/)   |
-| <code>openkb&nbsp;skill&nbsp;new&nbsp;&lt;skill-name&gt;&nbsp;"&lt;intent&gt;"</code> | Distill a redistributable agent skill from your wiki (see [Skill Factory](#skill-factory) below)               | [skills](examples/skills/)         |
-| <code>openkb&nbsp;deck&nbsp;new&nbsp;&lt;name&gt;&nbsp;"&lt;intent&gt;"</code>        | Generate a single-file HTML slide deck (`--skill` picks a theme, `--critique` runs a quality pass)             | [slides](examples/slides/)         |
+| <code>openkb&nbsp;query&nbsp;"question"</code>                                        | A grounded answer with citations (`--save` to persist to `wiki/explorations/`)                                 | [query & save](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/commands/) |
+| <code>openkb&nbsp;chat</code>                                                         | Interactive multi-turn session over the wiki (`--resume`, `--list`, `--delete` to manage sessions)             | [chat](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/chat/)             |
+| <code>openkb&nbsp;visualize</code>                                                    | A self-contained interactive knowledge graph at `output/visualize/graph.html` — 3D, mind-map, and radial views | [visualize](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/visualize/)   |
+| <code>openkb&nbsp;skill&nbsp;new&nbsp;&lt;skill-name&gt;&nbsp;"&lt;intent&gt;"</code> | Distill a redistributable agent skill from your wiki (see [Skill Factory](#skill-factory) below)               | [skills](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/skills/)         |
+| <code>openkb&nbsp;deck&nbsp;new&nbsp;&lt;name&gt;&nbsp;"&lt;intent&gt;"</code>        | Generate a single-file HTML slide deck (`--skill` picks a theme, `--critique` runs a quality pass)             | [slides](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/slides/)         |
 
 ### (i) 💬 Query & Chat — *ask the wiki*
 
-`openkb query "..."` answers a single question with a grounded, cited answer from your wiki. `openkb chat` is interactive, an ongoing multi-turn session over the same wiki (`--resume`, `--list`, `--delete` to manage sessions). → Walked through with real saved output in **[`examples/commands/`](examples/commands/)** (query) and **[`examples/chat/`](examples/chat/)** (chat).
+`openkb query "..."` answers a single question with a grounded, cited answer from your wiki. `openkb chat` is interactive, an ongoing multi-turn session over the same wiki (`--resume`, `--list`, `--delete` to manage sessions). → Walked through with real saved output in **[`examples/commands/`](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/commands/)** (query) and **[`examples/chat/`](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/chat/)** (chat).
 
 Inside a chat, type `/` to access slash commands (Tab to complete).
 
@@ -238,7 +251,7 @@ Inside a chat, type `/` to access slash commands (Tab to complete).
 
 ### (ii) 🛠 Skill Factory — *drop in a book; out comes a digital expert.*
 
-`openkb skill new` distills a portable [agent skill](https://docs.claude.com/en/docs/build-with-claude/skills) from your wiki that Claude Code, Codex, and Gemini can install and load natively. Drop in a book's worth of papers; out comes a specialist other agents can call on. → A real generated skill, plus install / share / `eval` / rollback, is walked through in **[`examples/skills/`](examples/skills/)**.
+`openkb skill new` distills a portable [agent skill](https://docs.claude.com/en/docs/build-with-claude/skills) from your wiki that Claude Code, Codex, and Gemini can install and load natively. Drop in a book's worth of papers; out comes a specialist other agents can call on. → A real generated skill, plus install / share / `eval` / rollback, is walked through in **[`examples/skills/`](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/skills/)**.
 
 <details>
 <summary><i>More skill commands:</i></summary>
@@ -264,7 +277,7 @@ language: en                     # Wiki output language
 pageindex_threshold: 20          # PDF pages threshold for PageIndex
 ```
 
-The full settings reference — `entity_types`, OAuth providers (`chatgpt/*`, `github_copilot/*`), and LiteLLM tuning (timeouts for slow local runtimes like Ollama / LM Studio, `drop_params`, GitHub Copilot headers, install notes) — is in **[`examples/configuration/`](examples/configuration/)**.
+The full settings reference — `entity_types`, OAuth providers (`chatgpt/*`, `github_copilot/*`), and LiteLLM tuning (timeouts for slow local runtimes like Ollama / LM Studio, `drop_params`, GitHub Copilot headers, install notes) — is in **[`examples/configuration/`](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/configuration/)**.
 
 ### PageIndex Setup
 
@@ -286,7 +299,7 @@ Set `PAGEINDEX_API_KEY` in your `.env` to enable cloud features:
 PAGEINDEX_API_KEY=your_pageindex_api_key
 ```
 
-→ **Example:** local vs. cloud indexing, and importing a cloud-indexed doc — [`examples/pageindex-cloud/`](examples/pageindex-cloud/).
+→ **Example:** local vs. cloud indexing, and importing a cloud-indexed doc — [`examples/pageindex-cloud/`](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/pageindex-cloud/).
 
 ### AGENTS.md
 
@@ -344,13 +357,13 @@ gemini skills install https://github.com/VectifyAI/OpenKB.git --path skills/open
 
 </details>
 
-The skill is read-only. It won't run `openkb add`, `remove`, or `lint --fix` without you asking. See [`skills/openkb/SKILL.md`](skills/openkb/SKILL.md) for the full instruction set.
+The skill is read-only. It won't run `openkb add`, `remove`, or `lint --fix` without you asking. See [the development navigation skill](../../.agents/skills/openkb/SKILL.md) for the full instruction set.
 
 # REST API
 
 OpenKB ships a FastAPI service for HTTP clients. Install with `pip install -e ".[web]"`, then start with `python -m openkb.api`. The interactive API reference is at [`/docs`](http://127.0.0.1:7566/docs) (importable into Postman).
 
-See the [full REST API reference](examples/rest-api/README.md#rest-api) for endpoints, auth, and SSE streaming.
+See the [full REST API reference](https://github.com/VectifyAI/OpenKB/tree/ff54396e575ee6feb0113b631a34caa082b441cc/examples/rest-api/README.md#rest-api) for endpoints, auth, and SSE streaming.
 
 # 🧭 Learn More
 

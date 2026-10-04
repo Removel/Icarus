@@ -35,5 +35,28 @@ Current modifications:
 - The upstream app-local `.env.example` is omitted so the Monorepo root
   `.example.env` remains the single Icarus configuration template.
 
-The upstream Apache License 2.0 remains in `LICENSE`. Re-check upstream `LICENSE` and
-`NOTICE` files on every source sync.
+## Frozen subset and repository infrastructure
+
+The upstream import is frozen at the full commit above; Icarus patches and security
+maintenance continue. This first cleanup removes the repository-level upstream plugin
+marketplace, nested CI/PyPI release workflows, examples and the unused local-env
+preparation helper. Runtime knowledge-base marketplace generation and all original
+tests remain; those generated files are not the deleted repository manifest.
+
+The development navigation bundle moved to root `.agents/skills/openkb/`, with the
+OpenKB LICENSE attached and container/host path guidance. The three deck theme/critic
+bundles remain app-owned runtime resources; existing wheel force-include paths are
+unchanged. CLI/API helpers, Workbench, Deck/Skill Factory, watch, configuration template,
+lockfile, architecture asset, local development rules, and Icarus docs/spec remain.
+
+The existing `api` extra had changed to the `web` alias without refreshing uv.lock
+metadata. Only that metadata was aligned (no package/version changes) so locked dev
+installation works. The Dockerfile still uses pip and does not consume uv.lock.
+App-owned install/test scripts prepare a private locked dev environment. The default
+gate includes real bundled deck/critic discovery; root ignore and Dockerignore retain
+recursive private KB/data exclusions. Repository
+CI and control entry points replace nested infrastructure without upstream credentials.
+
+The upstream Apache License 2.0 remains in `LICENSE`; root `THIRD_PARTY_NOTICES.md`
+records source and relocated skill paths. Re-check license and NOTICE obligations
+before incorporating any future third-party source change.
