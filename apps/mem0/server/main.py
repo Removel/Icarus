@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from models import RequestLog, User
+from memory_page import memory_page, serialize_memory
 from pydantic import BaseModel, Field
 from rate_limit import limiter
 from routers import api_keys as api_keys_router
@@ -396,29 +397,37 @@ def add_memory(memory_create: MemoryCreate, _auth=Depends(verify_auth)):
 
 
 ALL_MEMORIES_LIMIT = 1000
-_RESERVED_PAYLOAD_KEYS = {"data", "user_id", "agent_id", "run_id", "hash", "created_at", "updated_at", "expiration_date"}
-
-
-def _serialize_memory(row: Any) -> Dict[str, Any]:
-    payload = getattr(row, "payload", None) or {}
-    return {
-        "id": getattr(row, "id", None),
-        "memory": payload.get("data"),
-        "user_id": payload.get("user_id"),
-        "agent_id": payload.get("agent_id"),
-        "run_id": payload.get("run_id"),
-        "hash": payload.get("hash"),
-        "expiration_date": payload.get("expiration_date"),
-        "metadata": {k: v for k, v in payload.items() if k not in _RESERVED_PAYLOAD_KEYS},
-        "created_at": payload.get("created_at"),
-        "updated_at": payload.get("updated_at"),
-    }
 
 
 def _list_all_memories(limit: int = ALL_MEMORIES_LIMIT) -> Dict[str, Any]:
     results = get_memory_instance().vector_store.list(top_k=limit)
     rows = results[0] if results and isinstance(results, list) and isinstance(results[0], list) else results or []
-    return {"results": [_serialize_memory(row) for row in rows]}
+    return {"results": [serialize_memory(row) for row in rows]}
+
+
+@app.get("/memories/page", summary="Browse memories by page")
+def browse_memories(
+    request: Request,
+    page: int = Query(1, ge=1), page_size: int = Query(12, ge=1, le=100),
+    query: str = Query("", max_length=1000), category: Optional[str] = None,
+    user_id: Optional[str] = None, run_id: Optional[str] = None,
+    state: str = Query("all", pattern="^(all|active|expired)$"),
+    descending: bool = True, _auth=Depends(verify_auth),
+):
+    """Admin browser: filter and sort the bounded snapshot before slicing a page."""
+    auth_type = getattr(request.state, "auth_type", "none")
+    if _auth is not None and _auth.role != "admin" and auth_type not in {"admin_api_key", "disabled"}:
+        raise HTTPException(status_code=403, detail="Admin role required to browse all memories.")
+    try:
+        rows = _list_all_memories(limit=ALL_MEMORIES_LIMIT + 1)["results"]
+        result = memory_page(
+            rows[:ALL_MEMORIES_LIMIT], page=page, page_size=page_size, query=query,
+            category=category, user_id=user_id, run_id=run_id, state=state, descending=descending,
+        )
+        result["truncated"] = len(rows) > ALL_MEMORIES_LIMIT
+        return result
+    except Exception:
+        raise upstream_error()
 
 
 @app.get("/memories", summary="Get memories")
