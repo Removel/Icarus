@@ -37,6 +37,16 @@ from apps.agent.src.model_config import (
 )
 from apps.agent.src.model_provider.types import ImagePart, Message, TextPart, Usage
 from apps.agent.src.runtime_update import RuntimeUpdate
+from apps.agent.src.agent_orchestration.plugins.memory.mem0_http_adapter import Mem0HttpAdapter
+from apps.agent.src.agent_orchestration.plugins.memory.models import MemoryRecallResult
+
+
+@pytest.fixture
+def empty_memory_backend(monkeypatch):
+    async def recall(self, query, **kwargs):
+        return MemoryRecallResult((), query)
+
+    monkeypatch.setattr(Mem0HttpAdapter, "arecall", recall)
 
 
 def make_config(data_dir):
@@ -649,7 +659,7 @@ def test_agent_runtime用户消息落库失败后取消task并锁存session(tmp_
     assert entry.lifecycle == "failed"
 
 
-def test_agent_runtime真实session提交不重入锁且终态回到ready(tmp_path):
+def test_agent_runtime真实session提交不重入锁且终态回到ready(tmp_path, empty_memory_backend):
     async def run():
         config = make_config(tmp_path / "data")
         runtime = AgentRuntime(config_loader=lambda: config)
@@ -708,7 +718,7 @@ def test_agent_runtime真实session提交不重入锁且终态回到ready(tmp_pa
     assert task.lifecycle == "completed"
 
 
-def test_agent_runtime真实session在接受task前导入resource(tmp_path):
+def test_agent_runtime真实session在接受task前导入resource(tmp_path, empty_memory_backend):
     async def run():
         config = make_config(tmp_path / "data")
         incoming = config.icarus_data_dir / "incoming" / "client"
@@ -751,7 +761,7 @@ def test_agent_runtime真实session在接受task前导入resource(tmp_path):
     assert assets[0].read_bytes().startswith(b"\x89PNG")
 
 
-def test_agent_runtime持久化公共历史并在终态checkpoint(tmp_path):
+def test_agent_runtime持久化公共历史并在终态checkpoint(tmp_path, empty_memory_backend):
     async def run():
         config = make_config(tmp_path / "data")
         runtime = AgentRuntime(config_loader=lambda: config)
@@ -782,7 +792,7 @@ def test_agent_runtime持久化公共历史并在终态checkpoint(tmp_path):
             / "blackboard.json"
         )
         await runtime.stop()
-        return accepted, records, cursor, blackboard_path.read_text()
+        return accepted, records, cursor, blackboard_path.read_text(encoding="utf-8")
 
     accepted, records, cursor, blackboard = asyncio.run(run())
     assert [item.type for item in records] == [

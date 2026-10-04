@@ -279,3 +279,26 @@ def test_explicit_recall不同指纹重新查询():
     )
 
     assert backend.calls[0][0] == "recall"
+
+
+def test_default_recall_budget_allows_remote_embedding_and_context_delivery():
+    async def run():
+        target = MemoryPlugin('memory', BackendStub([item()], delay=1.1),
+                              workspace_key='wk', user_id='u', agent_id='a', session_id='s')
+        assert target.deadline_ms == 5000
+        events = []
+        bind_background(target, events)
+        await target.consume('user-input', UserInputEvent(task_id='task', prompt='q'))
+        await asyncio.gather(*target._recall_tasks)
+        return events
+
+    events = asyncio.run(run())
+    assert any(isinstance(event, TaskContextInputEvent) for event in events)
+    assert events[-1].output.error is None
+    assert events[-1].output.refs == ('memory:1',)
+
+
+@pytest.mark.parametrize('deadline', [True, 0, 30001, 1.5])
+def test_recall_budget_is_a_bounded_integer(deadline):
+    with pytest.raises(ValueError, match='deadline_ms'):
+        plugin(BackendStub(), deadline_ms=deadline)

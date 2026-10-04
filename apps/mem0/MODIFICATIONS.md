@@ -8,6 +8,12 @@ embedded Git repository or require Git submodules.
 
 Current modifications:
 
+- Memory updates record category and expiration changes in both sync and async history.
+  SQLite adds the `changes` column without discarding existing history; back up history.db
+  before upgrading and preserve that backup when rolling back to older schema handling.
+- The `icarus` Hatch environment runs core memory regressions with test dependencies;
+  provider-wide suites retain their existing optional dependency environments.
+- `.dockerignore` excludes local environments, caches and credentials from image build context.
 - `server/docker-compose.yaml` stores PostgreSQL and history data under
   `$ICARUS_DATA_DIR/services/mem0` through explicit bind mounts.
 - `scripts/icarus-compose.sh` and `scripts/icarus_compose.py` use only the system

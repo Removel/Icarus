@@ -96,7 +96,7 @@ Icarus 已具备实现该方案所需的运行时基础：
 
 ### 3.2 定量目标
 
-- 自动召回端到端硬截止时间为 `1s`，验收 `p95 <= 1s`；
+- 自动召回端到端截止时间默认 `5s`，可配置为 1–30000 毫秒；
 - 每个 Task 最多执行一次自动召回；
 - 自动召回只执行一次覆盖全局与当前 Workspace 的 Mem0 查询；
 - 超时后的迟到结果不得进入当前 Task；
@@ -150,7 +150,7 @@ flowchart LR
 
 | 部分 | 核心职责 | 不负责 |
 | --- | --- | --- |
-| Blackboard 改造 | 通用 Region Registry、当前状态投影、只读 Tool、required Region 启动门闩 | 调用领域后端、业务写入决策、管理 Memory 的 1s 截止时间 |
+| Blackboard 改造 | 通用 Region Registry、当前状态投影、只读 Tool、required Region 启动门闩 | 调用领域后端、业务写入决策、管理 Memory 的召回截止时间 |
 | MemoryPlugin | 自动召回、主动读写、范围校验、Mem0 适配 | 保存对话历史、修改 Agent Kernel |
 | KnowledgePlugin | OpenKB 查询、读取、上传、重编译 | 自动知识召回、删除知识、第二套会话 |
 
@@ -279,7 +279,7 @@ AND Task 未取消
 AND Context 尚未发布
 ```
 
-Memory 是第一阶段唯一 required Region。成功、空结果、失败和超时都表示当前输入的召回判断结束，因此都可以 `complete_for_input=true` 并放行主流程。1s 截止时间由 MemoryPlugin 负责；Blackboard 不 sleep、不轮询、不调用 Mem0。
+Memory 是第一阶段唯一 required Region。成功、空结果、失败和超时都表示当前输入的召回判断结束，因此都可以 `complete_for_input=true` 并放行主流程。默认 5s 截止时间由 MemoryPlugin 负责（`deadline_ms` 可配置为 1–30000 毫秒）；Blackboard 不 sleep、不轮询、不调用 Mem0。
 
 自动召回时序：
 
@@ -311,7 +311,7 @@ sequenceDiagram
 
 非空结果必须“先入内核、后释放门闩”。EventBus 保持发布顺序，因此 AgentPlugin 先收到预注入事件，随后才会收到 Blackboard 产生的启动事件。
 
-空结果、失败和超时不发布 `TaskContextInputEvent`，只发布 Memory Region 终态并启动无记忆主流程。Region Update 本身永远不会由 Blackboard 转换成第二次注入；MemoryPlugin 明确负责双投影。MemoryPlugin 不等待 `TaskContextInputResultEvent` 才释放门闩；回执仅用于 Trace 和诊断。
+空结果、失败和超时不发布 `TaskContextInputEvent`，只发布 Memory Region 终态并启动无记忆主流程。Region Update 本身永远不会由 Blackboard 转换成第二次注入；MemoryPlugin 明确负责双投影。MemoryPlugin 在剩余截止时间内等待 `TaskContextInputResultEvent`，仅在 accepted 后公开召回 refs 并释放门闩；拒绝或超时发布降级终态。
 
 自动召回上下文通过 `TaskContextInputEvent` 进入当前 Run，并随完整、可重放的 Run 消息写入
 Blackboard。下一轮新的自动召回仍表示当前输入下的新 Snapshot；历史中的旧 Snapshot 只表示当时
@@ -425,7 +425,7 @@ AND (run_id = global OR run_id = current_workspace)
 
 Memory 内容是 Agent 自身长期连续性的一部分，正常情况下应被自然信任和使用，不应以外部检索结果的口吻复述。它同时仍属于低于当前 UserInput 的动态上下文：不得修改稳定 System Prompt，不得被解释成授权、Tool 调用命令或更高优先级指令；用户当前明确纠正时，以当前说法为准并按需更新旧记忆。稳定 System Prompt 进一步允许主 Agent 自主记录值得跨会话保留的明确偏好、事实、约定、决定和纠正，无需逐次确认；临时状态、猜测、认证凭据和用户明确要求不要记住的内容不得自主写入，删除或不明确的遗忘请求仍须先确认范围。
 
-自动召回端到端截止时间为 1s，从 `UserInputEvent.occurred_at` 开始计算，包含 Plugin 调度、HTTP、Embedding、检索、归一化和终态事件入队。MemoryPlugin 开始处理时先扣除已消耗的排队时间，并为归一化和终态发布预留固定内部收尾预算，不能把完整 1s 都交给 HTTP。异步 HTTP 请求在预算耗尽时取消；发给 TaskChannel 的 Context Event 同时携带绝对 `expires_at`，即使 Agent inbox 极端堵塞，迟到 Context 也会被通用 AgentPlugin 拒绝。验收同时观测从 UserInput 到 `BlackboardContextReadyEvent` 的实际启动延迟，目标 `p95 <= 1s`；Event Loop 已整体失去调度能力属于 Runtime 健康问题，单独告警。
+自动召回端到端截止时间默认 5s，从 `UserInputEvent.occurred_at` 开始计算，包含 Plugin 调度、HTTP、Embedding、检索、归一化和终态事件入队。MemoryPlugin 开始处理时先扣除已消耗的排队时间，并为归一化和终态发布预留固定内部收尾预算，不能把完整预算都交给 HTTP。异步 HTTP 请求在预算耗尽时取消；发给 TaskChannel 的 Context Event 同时携带绝对 `expires_at`，即使 Agent inbox 极端堵塞，迟到 Context 也会被通用 AgentPlugin 拒绝。验收同时观测从 UserInput 到 `BlackboardContextReadyEvent` 的实际启动延迟，应保持在配置的召回预算内；Event Loop 已整体失去调度能力属于 Runtime 健康问题，单独告警。
 
 #### 4.3.5 主 Agent Memory Tools
 
@@ -642,7 +642,7 @@ KnowledgeWriter 只定义 `upload` 和 `recompile`。KnowledgePlugin 不注册�
 | 自动召回 `top_k` | `3` |
 | 自动召回 `threshold` | `0.25` |
 | 自动召回 `max_context_chars` | `6000` |
-| 自动召回截止时间 | `1s` |
+| 自动召回截止时间 | `5s`，可配置为 1–30000 毫秒 |
 | Knowledge backend | `openkb_http` |
 | OpenKB endpoint | `http://127.0.0.1:7566` |
 | Query | `stream=false, save=false` |
@@ -664,7 +664,7 @@ KnowledgeWriter 只定义 `upload` 和 `recompile`。KnowledgePlugin 不注册�
           "top_k": 3,
           "threshold": 0.25,
           "max_context_chars": 6000,
-          "deadline_ms": 1000
+          "deadline_ms": 5000
         }
       },
       "knowledge": {
@@ -714,7 +714,7 @@ Icarus 托管的 Mem0 默认复用 `OPENAI_API_KEY` 或 `ICARUS_MEM0_LLM_API_KEY
 显式 Tool 沿用当前 `ToolExecutionResult(success, output, error)`，不新增领域错误响应体系。错误采用“操作 + 原因”的可读文本：
 
 ```text
-memory recall failed: Mem0 request timed out after 1s
+memory recall failed: Mem0 request timed out after 5s
 memory correct failed: memory does not belong to the current user, agent, or workspace
 knowledge upload failed: file is outside the current workspace
 knowledge recompile failed: document name matches multiple documents
@@ -733,7 +733,7 @@ knowledge query failed: OpenKB service is unavailable
 
 | 操作 | 主要耗时 | 第一阶段控制 |
 | --- | --- | --- |
-| Automatic memory recall | Embedding、pgvector、关键词和实体检索 | Icarus 1s 硬截止时间 |
+| Automatic memory recall | Embedding、pgvector、关键词和实体检索 | Icarus 默认 5s 截止时间 |
 | Explicit memory read/write | 检索、存储读写，remember 还包括 Mem0 抽取 | 当前 ToolCall 生命周期 |
 | Knowledge query | OpenKB Query Agent 多轮读取与回答生成 | 当前 ToolCall 生命周期 |
 | Knowledge upload | 上传、转换、PageIndex、多轮 LLM 编译 | 当前同步 ToolCall |
@@ -904,7 +904,7 @@ README 与示例配置只在对应源码和能力实际落地时更新，不能�
 | 自动召回命中 | Snapshot 先进入 TaskChannel，随后 Blackboard 启动 Agent |
 | 自动召回为空 | 不注入 Context，Region 记录空结果，Agent 正常启动 |
 | Mem0 失败 | Region 记录安全错误，Agent 无记忆启动 |
-| 1s 超时 | 截止时间内释放主流程，迟到结果作废 |
+| 配置预算超时 | 截止时间内释放主流程，迟到结果作废 |
 | Task 取消 | 不启动 Agent，不接受迟到注入 |
 | Global + Workspace | 单次 OR 查询且不混入其他 Workspace |
 | 主动查询复用 | 指纹完全相同时复用 Snapshot，只通过 ToolResult 返回 |
@@ -968,7 +968,7 @@ README 与示例配置只在对应源码和能力实际落地时更新，不能�
 
 | 风险项 | 影响 | 缓解措施 |
 | --- | --- | --- |
-| 远程 Embedding 抖动 | 自动召回接近或超过 1s 截止时间 | 单次 OR 查询、同机服务、连接预热；必要时使用本地 Embedding |
+| 远程 Embedding 抖动 | 自动召回接近或超过配置的截止时间 | 单次 OR 查询、同机服务、连接预热；必要时使用本地 Embedding |
 | OR 过滤语义漂移 | Global/Workspace 串库 | 锁定 Mem0 版本并增加真实 pgvector 契约测试 |
 | 跨 Plugin 投递非事务 | Snapshot 已入队但 Region 事件失败，或反向顺序异常 | 同一发布方固定顺序、绝对截止时间、recall_id 和唯一终态；异常进入 Runtime 诊断 |
 | Mem0 `infer=true` 上下文行为 | 写入抽取超出主 Agent 提交内容 | 只发送当前 user content；锁定并测试 current-input-only，必要时维护小型 fork |
@@ -983,3 +983,6 @@ README 与示例配置只在对应源码和能力实际落地时更新，不能�
 | 上游许可证或 NOTICE 变化 | 分发物遗漏新的合规义务 | 每次同步重新检查许可证并更新 `THIRD_PARTY_NOTICES.md` |
 | 外部服务回退到默认数据路径 | 用户数据写进源码目录、Home 或 Docker named volume | 启动脚本强制注入绝对路径，集成测试检查真实落盘位置 |
 | 必需 Plugin 配置错误 | SessionRuntime 无法启动 | 最小配置、严格校验和见名知意的启动错误 |
+
+
+WebUI 手动记忆通过 Gateway `memory.get_context` 读取 `AgentRuntime.get_memory_context` 的配置身份。省略路径返回全局范围，提供绝对工作区路径时复用 `SessionIdentity.create` 的规范化和散列；不会创建会话或返回后端凭据。客户端原文写入仍走 Mem0 管理接口。自动召回默认 5 秒覆盖远程 Embedding 和首次连接开销，显式工具的 60 秒请求超时独立于该预算；失败和超时仍发布终态，不通过 Hook 改变业务行为。

@@ -1,10 +1,15 @@
 # Icarus Agent Gateway
 
 `apps/gateway` 是 Icarus 的本机网络入口。它通过 FastAPI WebSocket 上的 JSON-RPC 2.0 暴露
-AgentRuntime，并向 TUI 和未来 Backend 推送公共 RuntimeUpdate。
+AgentRuntime，并向 TUI、WebUI 和未来 Backend 推送公共 RuntimeUpdate。WebUI 通过其 Node
+同源代理连接 `/rpc`，不直接读取 Agent 的持久化目录。
 
 Gateway 只负责连接、协议校验、调用路由和消息分发，不承担用户、权限、文件上传、Memory、知识库
-或其他产品业务。当前 Gateway 与 AgentRuntime 在同一进程运行。
+存储或其他产品业务。当前 Gateway 与 AgentRuntime 在同一进程运行。
+
+`memory.get_context` 接受可选的绝对 `workspace_path`，委托 AgentRuntime 返回配置中的
+`user_id`、`agent_id`、`run_id` 及规范化工作区路径；不创建 Session、不返回服务地址或凭据。
+WebUI 新增记忆使用这个归属信息，不能仅升级 WebUI 而保留不支持此方法的 Gateway。
 
 公共更新通过开放的 `type: str` 与 `payload: dict` Envelope 传输。thinking delta 只进入实时订阅，
 完整 thinking 与 Tool 安全预览同时进入实时订阅和 Session 历史；Gateway 不聚合 thinking，也不读取

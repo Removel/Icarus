@@ -1,0 +1,68 @@
+name: Backend contracts
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'apps/agent/**'
+      - 'apps/gateway/**'
+      - 'apps/webui/**'
+      - 'packages/**'
+      - '.github/workflows/backend-contracts.yml'
+  pull_request:
+    paths:
+      - 'apps/agent/**'
+      - 'apps/gateway/**'
+      - 'apps/webui/**'
+      - 'packages/**'
+      - '.github/workflows/backend-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  agent-gateway:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Use an empty local configuration for offline tests
+        run: python -c "from pathlib import Path; Path('.env').touch()"
+      - name: Agent memory, runtime and tool regressions
+        run: >-
+          uv run --no-project --with-requirements apps/agent/requirements-dev.txt
+          python -m pytest
+          apps/agent/test/agent_orchestration/plugins/memory/test_factory.py
+          apps/agent/test/agent_orchestration/plugins/memory/test_plugin.py
+          apps/agent/test/agent_orchestration/plugins/memory/test_adapter.py
+          apps/agent/test/agent_orchestration/plugins/memory/test_tools.py
+          apps/agent/test/agent_orchestration/tools/builtin/test_builtin_tools.py
+          apps/agent/test/application/test_memory_context.py
+          apps/agent/test/application/test_agent_runtime.py
+          -q --junitxml=test-results/agent.xml
+      - name: Gateway application suite
+        run: >-
+          uv run --no-project --with-requirements apps/agent/requirements.txt
+          --with-requirements apps/gateway/requirements-dev.txt
+          python -m pytest apps/gateway/test -q --junitxml=test-results/gateway.xml
+      - name: Agent application suite on Linux
+        if: runner.os == 'Linux'
+        run: >-
+          uv run --no-project --with-requirements apps/agent/requirements-dev.txt
+          python -m pytest apps/agent/test -q --junitxml=test-results/agent-full.xml
+      - name: Compile
+        run: python -m compileall -q apps/agent/src apps/gateway/src packages
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-gateway-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: ignore

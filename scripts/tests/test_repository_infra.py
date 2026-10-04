@@ -116,7 +116,7 @@ def test_image_workflow_builds_app_owned_inputs_without_publishing():
     assert doc["permissions"] == {"contents": "read"}
     job = doc["jobs"]["build"]
     matrix = job["strategy"]["matrix"]["include"]
-    assert {entry["app"] for entry in matrix} == {"mem0", "openkb"}
+    assert {entry["app"] for entry in matrix} == {"mem0", "openkb", "webui"}
     for entry in matrix:
         assert (ROOT / entry["context"]).is_dir()
         assert (ROOT / entry["dockerfile"]).is_file()

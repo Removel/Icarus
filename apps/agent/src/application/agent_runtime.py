@@ -170,6 +170,24 @@ class AgentRuntime:
     def subscribe_updates(self) -> RuntimeUpdateSubscription:
         return self._updates.subscribe()
 
+    def get_memory_context(self, workspace_path: str | Path | None = None) -> dict:
+        """Return the configured memory identity without loading a session or exposing secrets."""
+        config = self._config_loader()
+        memory = config.runtime.plugin_config.get("memory", {})
+        user_id = memory.get("user_id")
+        agent_id = memory.get("agent_id")
+        if not all(isinstance(value, str) and value.strip() for value in (user_id, agent_id)):
+            raise ValueError("Memory user_id and agent_id must be configured")
+        result = {"user_id": user_id.strip(), "agent_id": agent_id.strip(), "run_id": "global"}
+        if workspace_path is not None:
+            path = Path(workspace_path).expanduser()
+            if not path.is_absolute():
+                raise ValueError("Workspace path must be absolute")
+            identity = SessionIdentity.create(path)
+            result.update(workspace_path=str(identity.workspace_path),
+                          run_id=f"workspace:{identity.workspace_key}")
+        return result
+
     async def create_session(
         self,
         workspace_path: str | Path,

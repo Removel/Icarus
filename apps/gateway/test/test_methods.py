@@ -353,3 +353,21 @@ def test_gateway_methods非法参数和业务错误不泄漏内部异常():
     assert unavailable.code == BUSINESS_ERROR
     assert unavailable.data == {"code": "task_status_unavailable"}
     assert "missing" not in unavailable.message
+
+
+def test_memory_context_uses_runtime_and_validates_parameters():
+    class MemoryRuntime:
+        def get_memory_context(self, workspace_path):
+            return {'user_id': 'actual-user', 'agent_id': 'actual-agent', 'run_id': 'global' if workspace_path is None else 'workspace:server-key'}
+
+    async def run():
+        methods = GatewayMethods(MemoryRuntime())
+        result = await methods.dispatch('memory.get_context', {}, set())
+        assert result == {'user_id': 'actual-user', 'agent_id': 'actual-agent', 'run_id': 'global'}
+        result = await methods.dispatch('memory.get_context', {'workspace_path': '/workspace'}, set())
+        assert result['run_id'] == 'workspace:server-key'
+        for params in ({'workspace_path': ''}, {'workspace_path': '   '}, {'secret': True}):
+            with pytest.raises(GatewayRpcError) as error:
+                await methods.dispatch('memory.get_context', params, set())
+            assert error.value.code == -32602
+    asyncio.run(run())

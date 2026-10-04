@@ -40,6 +40,10 @@ class MemoryOperationError(RuntimeError):
     pass
 
 
+DEFAULT_RECALL_DEADLINE_MS = 5000
+MAX_RECALL_DEADLINE_MS = 30000
+
+
 class MemoryPlugin(BasePlugin):
     def __init__(
         self,
@@ -54,7 +58,7 @@ class MemoryPlugin(BasePlugin):
         top_k: int = 3,
         threshold: float = 0.25,
         max_context_chars: int = 6000,
-        deadline_ms: int = 1000,
+        deadline_ms: int = DEFAULT_RECALL_DEADLINE_MS,
     ) -> None:
         super().__init__(plugin_id)
         if not workspace_key or not user_id or not agent_id:
@@ -65,8 +69,8 @@ class MemoryPlugin(BasePlugin):
             raise ValueError("memory recall threshold must be from 0 to 1")
         if max_context_chars < 100:
             raise ValueError("memory max_context_chars must be at least 100")
-        if not 1 <= deadline_ms <= 1000:
-            raise ValueError("memory deadline_ms must be from 1 to 1000")
+        if isinstance(deadline_ms, bool) or not isinstance(deadline_ms, int) or not 1 <= deadline_ms <= MAX_RECALL_DEADLINE_MS:
+            raise ValueError(f"memory deadline_ms must be an integer from 1 to {MAX_RECALL_DEADLINE_MS}")
         self.backend = backend
         self.workspace_key = workspace_key
         self.user_id = user_id

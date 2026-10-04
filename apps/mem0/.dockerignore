@@ -1,10 +1,14 @@
 .venv/
 .env
 **/.env
+**/.env.*
+.git
 **/__pycache__/
 **/*.pyc
 .pytest_cache/
+**/.pytest_cache/
 .ruff_cache/
+**/.ruff_cache/
 .mypy_cache/
 build/
 dist/
@@ -16,3 +20,4 @@ server/history/
 **/test-db/
 **/db/
 **/*.egg-info/
+test-results/
