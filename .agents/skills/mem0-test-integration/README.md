@@ -5,7 +5,7 @@ Verify a Mem0 integration produced by [`/mem0-integrate`](../mem0-integrate/SKIL
 > **This is a pipeline skill, not a reference skill.** Invoke it as `/mem0-test-integration` after `/mem0-integrate` has produced a branch to verify. It catches compile and runtime bugs by design — logical integration errors (wrong data stored, wrong scoping) are for human review.
 >
 > **Part of the Mem0 Skill Graph:**
-> - Reference: [mem0](../mem0/SKILL.md) · [mem0-cli](../mem0-cli/SKILL.md) · [mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md)
+> - Reference: [mem0](../mem0/SKILL.md) · [mem0-cli](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/skills/mem0-cli/SKILL.md) · [mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md)
 > - Pipeline: [mem0-integrate](../mem0-integrate/SKILL.md) → **mem0-test-integration** (this skill)
 
 ## What This Skill Does
@@ -44,7 +44,7 @@ npx skills add https://github.com/mem0ai/mem0 --skill mem0-integrate
 
 ### Claude.ai
 
-1. Download this `skills/mem0-test-integration` folder as a ZIP
+1. Download this `.agents/skills/mem0-test-integration` folder as a ZIP
 2. Go to **Settings > Capabilities > Skills**
 3. Click **Upload skill** and select the ZIP
 

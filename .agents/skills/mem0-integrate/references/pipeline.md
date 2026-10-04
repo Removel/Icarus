@@ -148,7 +148,7 @@ Write `.mem0-integration/goal.md` and **require user approval before step 6**.
 
     **Delegated skill:** <raw URL of the published skill being used
     from the delegation table in SKILL.md, or "none, custom integration
-    against `skills/mem0`">.
+    against `.agents/skills/mem0`">.
 
     **Out of scope:** <anything explicitly excluded: "no graph memory,"
     "no multimodal," "no migration from existing store">
@@ -278,7 +278,7 @@ Test assertion shapes must match the **canonical signatures**:
 - Platform method signatures: `https://docs.mem0.ai/openapi.json`, the request
   body schemas for `/v1/memories/` and `/v1/memories/search/`.
 - OSS method signatures: the delegated skill named in `plan.md` (fetched from
-  its raw URL), or `skills/mem0/SKILL.md` as the default.
+  its raw URL), or `.agents/skills/mem0/SKILL.md` as the default.
 - Do not hand-roll request shapes. If the delegated skill has an example
   block, lift it verbatim.
 

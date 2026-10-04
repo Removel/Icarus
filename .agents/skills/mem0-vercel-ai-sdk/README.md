@@ -21,7 +21,7 @@ npx skills add https://github.com/mem0ai/mem0 --skill mem0-vercel-ai-sdk
 
 ### Claude.ai
 
-1. Download this `skills/mem0-vercel-ai-sdk` folder as a ZIP
+1. Download this `.agents/skills/mem0-vercel-ai-sdk` folder as a ZIP
 2. Go to **Settings > Capabilities > Skills**
 3. Click **Upload skill** and select the ZIP
 
@@ -60,7 +60,7 @@ After installing, just ask Claude:
 ## What's Inside
 
 ```text
-skills/mem0-vercel-ai-sdk/
+.agents/skills/mem0-vercel-ai-sdk/
 ├── SKILL.md                          # Skill definition and instructions
 ├── README.md                         # This file
 ├── LICENSE                           # Apache-2.0

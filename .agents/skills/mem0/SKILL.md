@@ -25,7 +25,7 @@ compatibility: Requires Python 3.10+ or Node.js 18+, pip install mem0ai or npm i
 
 > **Skill Graph:** This skill is part of the Mem0 skill graph:
 > - **mem0** (this skill) -- Platform Client SDK + OSS (Python + TypeScript)
-> - **[mem0-cli](../mem0-cli/SKILL.md)** ([GitHub](https://github.com/mem0ai/mem0/tree/main/skills/mem0-cli)) -- Command-line interface
+> - **[mem0-cli](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/skills/mem0-cli/SKILL.md)** ([GitHub](https://github.com/mem0ai/mem0/tree/main/skills/mem0-cli)) -- Command-line interface
 > - **[mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md)** ([GitHub](https://github.com/mem0ai/mem0/tree/main/skills/mem0-vercel-ai-sdk)) -- Vercel AI SDK provider
 
 Mem0 is a managed memory layer for AI applications. It stores, retrieves, and manages user memories via API — no infrastructure to deploy. For self-hosted usage, see the OSS section in the client references below.
@@ -189,5 +189,5 @@ Load these on demand for deeper detail:
 
 | Skill | When to use | Link |
 |-------|-------------|------|
-| mem0-cli | Terminal commands, scripting, CI/CD, agent tool loops | [local](../mem0-cli/SKILL.md) / [GitHub](https://github.com/mem0ai/mem0/tree/main/skills/mem0-cli) |
+| mem0-cli | Terminal commands, scripting, CI/CD, agent tool loops | [local](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/skills/mem0-cli/SKILL.md) / [GitHub](https://github.com/mem0ai/mem0/tree/main/skills/mem0-cli) |
 | mem0-vercel-ai-sdk | Vercel AI SDK provider with automatic memory | [local](../mem0-vercel-ai-sdk/SKILL.md) / [GitHub](https://github.com/mem0ai/mem0/tree/main/skills/mem0-vercel-ai-sdk) |

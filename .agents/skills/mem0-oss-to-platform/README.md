@@ -5,7 +5,7 @@ Migrate a project from the Mem0 Open Source (self-hosted) SDK to the Mem0 Platfo
 > **This is a pipeline skill, not a reference skill.** Invoke it when you want your agent to migrate an existing project's Mem0 integration from OSS to the Platform. For day-to-day SDK coding help, install [`mem0`](../mem0/SKILL.md) instead.
 >
 > **Part of the Mem0 Skill Graph:**
-> - Reference: [mem0](../mem0/SKILL.md) · [mem0-cli](../mem0-cli/SKILL.md) · [mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md)
+> - Reference: [mem0](../mem0/SKILL.md) · [mem0-cli](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/skills/mem0-cli/SKILL.md) · [mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md)
 > - Pipeline: [mem0-integrate](../mem0-integrate/SKILL.md) → [mem0-test-integration](../mem0-test-integration/SKILL.md) · **mem0-oss-to-platform** (this skill)
 
 ## What This Skill Does
@@ -39,7 +39,7 @@ npx skills add https://github.com/mem0ai/mem0 --skill mem0-oss-to-platform
 
 ### Claude.ai
 
-1. Download this `skills/mem0-oss-to-platform` folder as a ZIP
+1. Download this `.agents/skills/mem0-oss-to-platform` folder as a ZIP
 2. Go to **Settings > Capabilities > Skills**
 3. Click **Upload skill** and select the ZIP
 

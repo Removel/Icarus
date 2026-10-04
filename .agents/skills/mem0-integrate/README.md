@@ -5,7 +5,7 @@ Wire [Mem0](https://mem0.ai) into an existing repository end-to-end, using a goa
 > **This is a pipeline skill, not a reference skill.** Invoke it as `/mem0-integrate` when you want your assistant to do the work of integrating Mem0 into a target repo. For day-to-day SDK coding help, install [`mem0`](../mem0/SKILL.md) instead.
 >
 > **Part of the Mem0 Skill Graph:**
-> - Reference: [mem0](../mem0/SKILL.md) · [mem0-cli](../mem0-cli/SKILL.md) · [mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md)
+> - Reference: [mem0](../mem0/SKILL.md) · [mem0-cli](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/skills/mem0-cli/SKILL.md) · [mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md)
 > - Pipeline: **mem0-integrate** (this skill) → [mem0-test-integration](../mem0-test-integration/SKILL.md)
 
 ## What This Skill Does
@@ -27,7 +27,7 @@ Trigger phrases:
 - "Wire Mem0 into `<repo>`"
 - "How do I add memory to an existing project?"
 
-Do **not** use this skill for general SDK usage (install [`mem0`](../mem0/SKILL.md)), terminal workflows (install [`mem0-cli`](../mem0-cli/SKILL.md)), or Vercel AI SDK integration (install [`mem0-vercel-ai-sdk`](../mem0-vercel-ai-sdk/SKILL.md)).
+Do **not** use this skill for general SDK usage (install [`mem0`](../mem0/SKILL.md)), terminal workflows (install [`mem0-cli`](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/skills/mem0-cli/SKILL.md)), or Vercel AI SDK integration (install [`mem0-vercel-ai-sdk`](../mem0-vercel-ai-sdk/SKILL.md)).
 
 ## Installation
 
@@ -45,7 +45,7 @@ npx skills add https://github.com/mem0ai/mem0 --skill mem0-test-integration
 
 ### Claude.ai
 
-1. Download this `skills/mem0-integrate` folder as a ZIP
+1. Download this `.agents/skills/mem0-integrate` folder as a ZIP
 2. Go to **Settings > Capabilities > Skills**
 3. Click **Upload skill** and select the ZIP
 

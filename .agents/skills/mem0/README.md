@@ -2,7 +2,7 @@
 
 Add persistent memory to any AI application in minutes using [Mem0 Platform](https://app.mem0.ai?utm_source=oss&utm_medium=skill-mem0-readme) or the open-source self-hosted SDK.
 
-> **Part of the Mem0 Skill Graph:** See also [mem0-cli](../mem0-cli/SKILL.md) (terminal) and [mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md) (Vercel AI SDK).
+> **Part of the Mem0 Skill Graph:** See also [mem0-cli](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/skills/mem0-cli/SKILL.md) (terminal) and [mem0-vercel-ai-sdk](../mem0-vercel-ai-sdk/SKILL.md) (Vercel AI SDK).
 
 ## What This Skill Does
 
@@ -23,7 +23,7 @@ npx skills add https://github.com/mem0ai/mem0 --skill mem0
 
 ### Claude.ai
 
-1. Download this `skills/mem0` folder as a ZIP
+1. Download this `.agents/skills/mem0` folder as a ZIP
 2. Go to **Settings > Capabilities > Skills**
 3. Click **Upload skill** and select the ZIP
 
@@ -59,7 +59,7 @@ After installing, just ask Claude:
 ## What's Inside
 
 ```text
-skills/mem0/
+.agents/skills/mem0/
 ├── SKILL.md                    # Skill definition and instructions
 ├── README.md                   # This file
 ├── LICENSE                     # Apache-2.0

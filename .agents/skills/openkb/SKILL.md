@@ -30,6 +30,29 @@ The wiki holds these kinds of pages:
 - **Source files** at `wiki/sources/*.{md,json}` — full text for short
   docs (`.md`) or a paginated content array for long PDFs (`.json`).
 
+## Icarus development environment
+
+This is a development reference, not an Icarus runtime skill. When the host does not
+have an `openkb` executable, use the managed Compose service from the Icarus repository
+root (the service must already be running):
+
+```bash
+bash apps/openkb/scripts/icarus-compose.sh exec -T openkb openkb status
+```
+
+Run subsequent `openkb`, `ls`, and `cat` commands through the same wrapper, for example:
+
+```bash
+bash apps/openkb/scripts/icarus-compose.sh exec -T openkb cat /data/kbs/icarus-project/wiki/index.md
+```
+
+Use the KB path actually returned by status; the example is not a fixed identity.
+`/data/kbs/...` is a container path, not a host path for a Read tool. Read inside the
+container, or verify the bind-mount mapping to `$ICARUS_DATA_DIR/services/openkb/kbs`
+before reading on the host. Do not initialize a second knowledge base or install a CLI
+merely because the host executable is absent. If the service is unavailable, ask about
+starting the existing service rather than creating replacement data.
+
 ## First: find where the KB lives
 
 The user may invoke you from anywhere — the active knowledge base is

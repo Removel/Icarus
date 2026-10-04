@@ -107,10 +107,10 @@ the target stack. If yes, delegate — copy its call-site pattern into
 
 | Detected in target repo | Delegate to | Why |
 |---|---|---|
-| `@ai-sdk/*` + `ai` in `package.json` | `skills/mem0-vercel-ai-sdk` | Integration is via `createMem0` provider wrapper, not raw `MemoryClient`. |
-| CLI-only repo (Typer, Commander, Click, Cobra) with no LLM call sites | `skills/mem0-cli` | Call sites are command handlers, not model wrappers. Consider whether mem0 actually fits first. |
+| `@ai-sdk/*` + `ai` in `package.json` | `.agents/skills/mem0-vercel-ai-sdk` | Integration is via `createMem0` provider wrapper, not raw `MemoryClient`. |
+| CLI-only repo (Typer, Commander, Click, Cobra) with no LLM call sites | `.agents/skills/mem0-cli` | Call sites are command handlers, not model wrappers. Consider whether mem0 actually fits first. |
 | Target is an MCP client / editor config (Claude Code, Cursor, Codex settings) | `integrations/mem0-agent-plugin` | Wire via MCP server URL + hooks; no SDK code usually needed. |
-| Any other Python or TS repo with an LLM call site | `skills/mem0` | Default SDK integration path. |
+| Any other Python or TS repo with an LLM call site | `.agents/skills/mem0` | Default SDK integration path. |
 
 Record the delegated skill's raw URL in `plan.md` under a
 **"Delegated skill:"** field. The test writer in step 7 and the
