@@ -32,13 +32,12 @@ type DocumentEdge = Edge<
 const nodeId = (target: Target) => JSON.stringify([target.kind, target.id]);
 const DEFAULT_ZOOM = 0.87;
 const colors = {
-  source: '#249778',
-  summaries: '#8965c7',
-  concepts: '#447ad5',
-  entities: '#c88732',
+  source: 'var(--graph-source)',
+  summaries: 'var(--graph-summary)',
+  concepts: 'var(--graph-concept)',
+  entities: 'var(--graph-entity)',
 };
-const edgeColors = { source: '#759b8c', outlink: '#8da0bd' };
-const activeEdgeColors = { source: '#24866b', outlink: '#396dbe' };
+const edgeColors = { source: 'var(--graph-source)', outlink: 'var(--graph-reference)' };
 
 function DocumentPoint({ data, selected }: NodeProps<DocumentNode>) {
   return (
@@ -101,6 +100,7 @@ function FlowCanvas({
   const [hovered, setHovered] = useState<string | null>(null);
   const [keyboardFocus, setKeyboardFocus] = useState<string | null>(null);
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
+  const [allLinks, setAllLinks] = useState(false);
   const model = useMemo(() => {
     const nodes = new Map<string, DocumentNode>();
     const edges = new Map<string, DocumentEdge>();
@@ -228,6 +228,32 @@ function FlowCanvas({
     });
   }, [focus?.kind, focus?.id, initialized, flow, model.edges]);
   const activeId = hovered ?? keyboardFocus ?? (focus ? nodeId(focus) : null);
+  // A spanning forest of real relationships keeps every connected component
+  // visible without drawing the entire dense network in the overview.
+  const overviewEdges = useMemo(() => {
+    const parents = new Map(model.nodes.map((node) => [node.id, node.id]));
+    function root(id: string): string {
+      const parent = parents.get(id)!;
+      if (parent === id) return id;
+      const result = root(parent);
+      parents.set(id, result);
+      return result;
+    }
+    const visible = new Set<string>();
+    const ordered = [...model.edges].sort(
+      (a, b) =>
+        Number(a.data!.kind === 'source') - Number(b.data!.kind === 'source') ||
+        a.id.localeCompare(b.id),
+    );
+    for (const edge of ordered) {
+      const source = root(edge.source),
+        target = root(edge.target);
+      if (source === target) continue;
+      parents.set(source, target);
+      visible.add(edge.id);
+    }
+    return visible;
+  }, [model]);
   const neighbors = new Set(
     activeId
       ? [
@@ -240,11 +266,16 @@ function FlowCanvas({
   );
   const edges = model.edges.map((edge) => {
     const highlighted = activeId && (edge.source === activeId || edge.target === activeId);
-    const color = activeEdgeColors[edge.data!.kind];
+    const color = edgeColors[edge.data!.kind];
     return {
       ...edge,
+      hidden: allLinks ? false : activeId ? !highlighted : !overviewEdges.has(edge.id),
       className: highlighted ? 'is-highlighted' : activeId ? 'is-muted' : undefined,
-      style: { ...edge.style, ...(highlighted ? { stroke: color } : {}) },
+      style: {
+        ...edge.style,
+        opacity: highlighted ? 1 : allLinks ? 0.45 : 0.6,
+        strokeWidth: highlighted ? 1.8 : 1,
+      },
       markerEnd: highlighted
         ? { type: MarkerType.ArrowClosed, color, width: 16, height: 16 }
         : undefined,
@@ -333,6 +364,7 @@ function FlowCanvas({
         <span>
           {nodes.length} 个节点 · {edges.length} 条关系
         </span>
+        <span>{allLinks ? '全部连线' : '精简连线 · 悬浮查看全部关联'}</span>
       </div>
       <div className="canvas-legend">
         {Object.entries(colors).map(([kind, color]) => (
@@ -351,6 +383,15 @@ function FlowCanvas({
         </span>
       </div>
       <span className="graph-zoom">{Math.round(zoom * 100)}%</span>
+      <Button
+        className="canvas-link-toggle"
+        theme="borderless"
+        type="tertiary"
+        aria-pressed={allLinks}
+        onClick={() => setAllLinks((value) => !value)}
+      >
+        {allLinks ? '精简连线' : '全部连线'}
+      </Button>
       <Button
         className="canvas-reset"
         theme="light"

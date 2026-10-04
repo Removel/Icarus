@@ -1,16 +1,99 @@
 :root,
-body {
+html body,
+html body[theme-mode='light'],
+html body[theme-mode='dark'] {
   --semi-font-family-regular:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC',
     Arial, sans-serif;
-  --canvas: #f6f7f9;
-  --surface: var(--semi-color-bg-1);
-  --subtle: var(--semi-color-fill-0);
-  --ink: var(--semi-color-text-0);
-  --muted: #626977;
-  --line: var(--semi-color-border);
-  --accent: var(--semi-color-primary);
+  color-scheme: light;
+  --canvas: #f7f7f8;
+  --surface: #ffffff;
+  --subtle: #f0f0f2;
+  --raised: #fafafa;
+  --selected: #e8e8ec;
+  --ink: #232327;
+  --muted: #71717a;
+  --line: #dedee3;
+  --strong-line: #b8b8bf;
+  --accent: #a45b70;
+  --success: #287447;
+  --danger: #b64657;
+  --user: #55555f;
+  --tool: #85858e;
+  --faint: #8b8b94;
+  --graph-source: #458868;
+  --graph-summary: #9370a8;
+  --graph-concept: #b86783;
+  --graph-entity: #b17a3e;
+  --graph-reference: #9a7180;
+  --semi-color-bg-0: var(--canvas);
+  --semi-color-bg-1: var(--surface);
+  --semi-color-bg-2: var(--subtle);
+  --semi-color-bg-3: var(--raised);
+  --semi-color-bg-4: var(--subtle);
+  --semi-color-text-0: var(--ink);
+  --semi-color-text-1: var(--user);
+  --semi-color-text-2: var(--muted);
+  --semi-color-text-3: var(--faint);
+  --semi-color-border: var(--line);
+  --semi-color-border-1: var(--line);
+  --semi-color-border-2: var(--strong-line);
+  --semi-color-fill-0: var(--subtle);
+  --semi-color-fill-1: var(--selected);
+  --semi-color-fill-2: color-mix(in srgb, var(--selected) 85%, var(--ink));
+  --semi-color-primary: var(--accent);
+  --semi-color-primary-hover: color-mix(in srgb, var(--accent) 85%, var(--ink));
+  --semi-color-primary-active: color-mix(in srgb, var(--accent) 75%, var(--ink));
+  --semi-color-primary-disabled: color-mix(in srgb, var(--accent) 40%, var(--surface));
+  --semi-color-primary-light-default: var(--selected);
+  --semi-color-primary-light-hover: var(--semi-color-fill-1);
+  --semi-color-primary-light-active: var(--semi-color-fill-2);
+  --semi-color-secondary: var(--user);
+  --semi-color-secondary-hover: var(--ink);
+  --semi-color-secondary-active: var(--muted);
+  --semi-color-secondary-light-default: var(--subtle);
+  --semi-color-tertiary: var(--user);
+  --semi-color-tertiary-hover: var(--ink);
+  --semi-color-tertiary-light-default: var(--subtle);
+  --semi-color-tertiary-light-hover: var(--selected);
+  --semi-color-link: var(--accent);
+  --semi-color-link-hover: var(--semi-color-primary-hover);
+  --semi-color-link-active: var(--semi-color-primary-active);
+  --semi-color-success: var(--success);
+  --semi-color-success-light-default: var(--subtle);
+  --semi-color-danger: var(--danger);
+  --semi-color-danger-hover: color-mix(in srgb, var(--danger) 85%, var(--ink));
+  --semi-color-danger-active: color-mix(in srgb, var(--danger) 75%, var(--ink));
+  --semi-color-danger-light-default: var(--subtle);
+  --semi-color-warning: var(--user);
+  --semi-color-warning-light-default: var(--subtle);
+  --semi-color-info: var(--user);
+  --semi-color-info-light-default: var(--subtle);
+  --semi-color-focus-border: var(--accent);
   --radius: 10px;
+}
+html[data-theme='dark'] body {
+  color-scheme: dark;
+  --canvas: #0c0c0e;
+  --surface: #131315;
+  --subtle: #1c1c1f;
+  --raised: #18181b;
+  --selected: #29292e;
+  --ink: #f1f1f2;
+  --muted: #97979e;
+  --line: #35353b;
+  --strong-line: #4b4b51;
+  --accent: #e0a8b6;
+  --success: #75bd92;
+  --danger: #db737f;
+  --user: #b8b8bf;
+  --tool: #626269;
+  --faint: #73737b;
+  --graph-source: #83bea3;
+  --graph-summary: #bd99d2;
+  --graph-concept: #e0a8b6;
+  --graph-entity: #d8ae79;
+  --graph-reference: #c18f9f;
 }
 * {
   box-sizing: border-box;
@@ -99,6 +182,13 @@ svg {
   border-radius: 8px;
   font-weight: 500;
   padding: 7px 12px;
+}
+.semi-button-primary.semi-button-solid,
+.semi-button-primary.semi-button-solid:hover {
+  color: var(--surface);
+}
+html[data-theme='dark'] .semi-button-primary.semi-button-solid {
+  color: var(--canvas);
 }
 .semi-button-content {
   gap: 6px;
@@ -410,13 +500,13 @@ h1 {
   flex-shrink: 0;
 }
 .status-green {
-  color: #28733c;
+  color: var(--success);
 }
 .status-blue {
   color: var(--semi-color-primary);
 }
 .status-amber {
-  color: #946000;
+  color: var(--user);
 }
 .status-gray {
   color: var(--muted);
@@ -621,4 +711,12 @@ kbd {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+.loading-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  width: 100%;
 }

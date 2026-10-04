@@ -1,7 +1,7 @@
 """Stateful Mem0 HTTP contract fixture; data survives browser reloads."""
 
 from datetime import datetime, timezone
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urlsplit, unquote, parse_qs
 from uuid import uuid4
 
 
@@ -35,7 +35,28 @@ def fake_mem0(page):
         body = request.post_data_json if request.post_data else {}
         calls.append((request.method, path, body, request.url))
         now = datetime.now(timezone.utc).isoformat()
-        if path == '/memories' and request.method == 'GET':
+        if path == '/memories/page' and request.method == 'GET':
+            params = {k: v[0] for k, v in parse_qs(urlsplit(request.url).query).items()}
+            all_rows = list(rows.values())
+            today = datetime.now(timezone.utc).date().isoformat()
+            expired = lambda row: bool(row.get('expiration_date') and row['expiration_date'] < today)
+            category = lambda row: row.get('metadata', {}).get('category') or '未分类'
+            state = params.get('state', 'all')
+            matches = [row for row in all_rows
+                       if (state == 'all' or expired(row) == (state == 'expired'))
+                       and all(not params.get(key) or row.get(key) == params[key] for key in ('user_id', 'run_id'))
+                       and (not params.get('category') or category(row) == params['category'])
+                       and params.get('query', '').strip().lower() in f"{row['memory']} {category(row)} {row.get('user_id', '')}".lower()]
+            matches.sort(key=lambda row: row.get('updated_at', ''), reverse=params.get('descending', 'true') == 'true')
+            size = int(params.get('page_size', 12))
+            current = min(int(params.get('page', 1)), max(1, (len(matches) + size - 1) // size))
+            active = sum(not expired(row) for row in all_rows)
+            result = dict(results=matches[(current - 1) * size:current * size], page=current,
+                          total=len(matches), counts=dict(all=len(all_rows), active=active, expired=len(all_rows) - active),
+                          categories=sorted({category(row) for row in all_rows}),
+                          users=sorted({row.get('user_id', '') for row in all_rows}),
+                          scopes=sorted({row.get('run_id', '') for row in all_rows}), truncated=False)
+        elif path == '/memories' and request.method == 'GET':
             result = {'results': list(rows.values())}
         elif path == '/memories' and request.method == 'POST':
             assert body['infer'] is False

@@ -2,11 +2,14 @@ import type { RuntimeUpdate } from './gateway';
 
 export type ChatItem = {
   id: string;
+  taskId?: string;
   kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error';
   text: string;
   label?: string;
   detail?: string;
   final: boolean;
+  pending?: boolean;
+  live?: boolean;
 };
 export type Transcript = {
   items: ChatItem[];
@@ -21,7 +24,7 @@ export const emptyTranscript = (): Transcript => ({
   finished: new Set(),
 });
 
-export function applyUpdate(previous: Transcript, update: RuntimeUpdate): Transcript {
+export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = false): Transcript {
   if (update.sequence && previous.seen.has(update.sequence)) return previous;
   const seen = new Set(previous.seen);
   if (update.sequence) seen.add(update.sequence);
@@ -37,6 +40,11 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate): Transc
   if (update.type === 'task.finished')
     return {
       ...state,
+      items: state.items.map((item) =>
+        item.taskId === task && item.pending && item.label
+          ? { ...item, pending: false, label: '引导未应用' }
+          : item,
+      ),
       tasks: state.tasks.filter((id) => id !== task),
       finished: new Set([...state.finished, task]),
     };
@@ -49,6 +57,7 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate): Transc
       kind: 'user',
       text,
       final: true,
+      label: update.type === 'user.correction' ? '引导已应用' : undefined,
     };
   } else if (
     [
@@ -88,6 +97,15 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate): Transc
       final: true,
     };
   } else return state;
+  item.taskId = task;
+  item.live = live;
+  if (update.type === 'user.message' || update.type === 'user.correction') {
+    const pending = state.items.find(
+      (row) => row.pending && row.text === text && (!row.taskId || row.taskId === task),
+    );
+    if (pending)
+      return { ...state, items: state.items.map((row) => (row === pending ? item : row)) };
+  }
   return {
     ...state,
     items: state.items.some((row) => row.id === item.id)

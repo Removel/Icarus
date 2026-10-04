@@ -30,7 +30,8 @@ def test_navigation_preserves_changes_and_theme(page, knowledge_service):
     page.get_by_role("link", name="知识库", exact=True).click()
     assert page.get_by_role("link", name="原始资料", exact=True).get_attribute("aria-current") == "page"
     assert page.get_by_role("link", name="设计规范", exact=True).count() == 0
-    assert page.locator("body").evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == "rgba(51,112,255,1)"
+    assert page.locator("body").evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == "#a45b70"
+    assert page.locator("body").evaluate("el => getComputedStyle(el).getPropertyValue('--canvas').trim()") == "#f7f7f8"
     assert page.locator(".app-dock").count() == 0
     assert page.locator(".app-layout.semi-layout").count() == 1
     assert page.get_by_role("banner").is_visible()
@@ -104,10 +105,13 @@ def test_design_reference_is_not_an_application_route(page):
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280])
-def test_knowledge_subnavigation_belongs_to_knowledge(page, knowledge_service, width):
+def test_knowledge_subnavigation_stays_expanded(page, knowledge_service, width):
     page.set_viewport_size({"width": width, "height": 844})
-    page.get_by_role("link", name="知识库", exact=True).click()
     submenu = page.get_by_role("navigation", name="知识库分类")
+    assert submenu.is_visible()
+    assert submenu.locator('[aria-current="page"]').count() == 0
+    submenu.get_by_role('link', name='原始资料', exact=True).click()
+    assert submenu.locator('.nav-category-label').count() == 0
     assert page.locator(".nav-group-knowledge").get_by_role("navigation", name="知识库分类").is_visible()
     knowledge = page.get_by_role("link", name="知识库", exact=True).bounding_box()
     chat = page.get_by_role("link", name="对话", exact=True).bounding_box()
@@ -121,6 +125,16 @@ def test_knowledge_subnavigation_belongs_to_knowledge(page, knowledge_service, w
         assert box["y"] + box["height"] <= page.locator(".shell-main").bounding_box()["y"]
     for label in ["原始资料", "知识页面", "文档关联", "质量检查"]:
         assert submenu.get_by_role("link", name=label, exact=True).is_visible()
+    page.get_by_role('banner').hover()
+    page.wait_for_function("getComputedStyle(document.querySelector('.nav-link.is-parent-active')).backgroundColor === 'rgba(0, 0, 0, 0)'")
+    page.screenshot(path=f'test-results/navigation-flat-tree-{width}.png', full_page=True)
+    parent = page.get_by_role('link', name='知识库', exact=True)
+    assert parent.get_attribute('aria-current') is None
+    assert parent.evaluate('el => getComputedStyle(el).backgroundColor') == 'rgba(0, 0, 0, 0)'
+    if width != 768:
+        assert submenu.evaluate('el => getComputedStyle(el).borderLeftWidth') == '0px'
+    assert page.get_by_role('button', name='收起知识库分类', exact=True).count() == 0
+    assert page.get_by_role('button', name='展开知识库分类', exact=True).count() == 0
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     if width == 1280:
         page.get_by_role("button", name="收起侧边栏", exact=True).click()
@@ -128,6 +142,44 @@ def test_knowledge_subnavigation_belongs_to_knowledge(page, knowledge_service, w
         assert page.locator(".app-sidebar").bounding_box()["width"] == 64
         box = submenu.bounding_box()
         assert box["y"] + box["height"] <= page.get_by_role("link", name="对话", exact=True).bounding_box()["y"]
+    if width >= 768:
+        parent_icon = parent.locator('svg').bounding_box()
+        child_icon = submenu.get_by_role('link', name='原始资料', exact=True).locator('svg').bounding_box()
+        assert child_icon['width'] < parent_icon['width']
+        assert child_icon['x'] + child_icon['width'] / 2 > parent_icon['x'] + parent_icon['width'] / 2
+        assert submenu.evaluate('el => getComputedStyle(el).borderLeftWidth') == '1px'
+        page.screenshot(path=f'test-results/navigation-compact-hierarchy-{width}.png', full_page=True)
     page.get_by_role("link", name="记忆", exact=True).click()
     assert submenu.is_visible()
-    assert submenu.locator('[aria-current=page]').count() == 0
+    assert submenu.locator('[aria-current="page"]').count() == 0
+    page.screenshot(path=f'test-results/navigation-{width}.png', full_page=True)
+    submenu.get_by_role('link', name='知识页面', exact=True).click()
+    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('aria-current') == 'page'
+    page.get_by_role('link', name='对话', exact=True).click()
+    assert submenu.is_visible()
+    assert submenu.locator('[aria-current="page"]').count() == 0
+    submenu.get_by_role('link', name='原始资料', exact=True).click()
+    assert submenu.get_by_role('link', name='原始资料', exact=True).is_visible()
+
+def test_theme_follows_system_and_remembers_explicit_choice(page):
+    from playwright.sync_api import expect
+    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
+    page.emulate_media(color_scheme='dark')
+    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')
+    assert page.locator('body').evaluate("el => getComputedStyle(el).getPropertyValue('--canvas').trim()") == '#0c0c0e'
+    assert page.locator('body').evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == '#e0a8b6'
+    page.get_by_role('button', name='切换主题，当前跟随系统').click()
+    page.get_by_role('menuitem', name='浅色', exact=True).click()
+    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
+    page.reload()
+    expect(page.get_by_role('button', name='切换主题，当前浅色')).to_be_visible()
+    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
+    page.get_by_role('button', name='切换主题，当前浅色').click()
+    page.get_by_role('menuitem', name='深色', exact=True).click()
+    page.emulate_media(color_scheme='light')
+    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')
+    page.get_by_role('button', name='切换主题，当前深色').click()
+    page.get_by_role('menuitem', name='跟随系统', exact=True).click()
+    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
+    page.emulate_media(color_scheme='dark')
+    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')

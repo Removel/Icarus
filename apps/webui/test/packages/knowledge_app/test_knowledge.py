@@ -108,6 +108,8 @@ def test_quality_report_and_remove_preview_use_service(page):
     page.get_by_role('link', name='质量检查', exact=True).click()
     assert not any(path == 'lint' for path, _ in calls)
     page.get_by_role('button', name='开始检查', exact=True).click()
+    expect(page.get_by_text('检查完成', exact=True)).to_be_visible()
+    expect(page.locator('.quality-workspace')).not_to_contain_text('检查完成，报告已保存到知识库。')
     page.get_by_role('button', name='查看报告', exact=True).click()
     page.get_by_role('heading', name='结构报告', exact=True, level=2).wait_for()
     assert sum(path == 'lint' for path, _ in calls) == 1
@@ -432,6 +434,7 @@ def test_graph_canvas_navigation_and_layout_survive_reader(page):
     open_knowledge(page)
     page.get_by_role('link', name='文档关联', exact=True).click()
     expect(page.locator('.react-flow__node')).to_have_count(5)
+    page.get_by_role('button', name='全部连线', exact=True).click()
     expect(page.locator('.react-flow__edge')).to_have_count(4)
     assert not any(path == 'lint' for path, _ in calls)
     node = page.locator('.react-flow__node[aria-label="选择节点：Agent 约束"]')
@@ -476,6 +479,7 @@ def test_graph_edge_keyboard_selection_explains_direction(page):
     fake_openkb(page)
     open_knowledge(page)
     page.get_by_role('link', name='文档关联', exact=True).click()
+    page.get_by_role('button', name='全部连线', exact=True).click()
     edge = page.locator('.react-flow__edge[aria-label="正文引用"]')
     edge.focus()
     edge.press('Enter')
@@ -534,6 +538,7 @@ def test_quality_reports_survive_reload_export_and_delete(page):
 
 def test_quality_actions_and_empty_state_have_separate_areas(page):
     fake_openkb(page)
+    page.get_by_role('link', name='知识库', exact=True).click()
     page.get_by_role('link', name='质量检查', exact=True).click()
     expect(page.get_by_role('heading', name='还没有检查报告')).to_be_visible()
     context = page.locator('.knowledge-context').bounding_box()
@@ -542,3 +547,26 @@ def test_quality_actions_and_empty_state_have_separate_areas(page):
     assert context['y'] + context['height'] <= actions['y']
     assert actions['y'] + actions['height'] <= reports['y']
     assert page.get_by_role('combobox', name='选择知识库').bounding_box()['width'] <= 200
+
+def test_quality_export_preserves_page_and_report_dialog(page):
+    fake_openkb(page)
+    open_knowledge(page)
+    page.get_by_role('link', name='质量检查', exact=True).click()
+    expect(page.get_by_role('heading', name='还没有检查报告')).to_be_visible()
+    assert page.get_by_text('检查知识内容与引用关系，生成可回看的检查报告。').count() == 0
+    assert page.locator('.quality-empty p').count() == 0
+    page.get_by_role('button', name='开始检查', exact=True).click()
+    page.get_by_role('button', name='查看报告', exact=True).click()
+    dialog = page.get_by_role('dialog', name='质量检查报告', exact=True)
+    expect(dialog).to_be_visible()
+    before = dialog.bounding_box()
+    url = page.url
+    with page.expect_download() as download:
+        dialog.get_by_role('button', name='导出报告', exact=True).click()
+    assert '无结构问题' in Path(download.value.path()).read_text(encoding='utf-8')
+    page.wait_for_timeout(1200)
+    expect(dialog).to_be_visible()
+    assert page.url == url
+    assert dialog.bounding_box() == before
+    assert page.locator('.quality-start .semi-spin').count() == 0
+    expect(page.locator('.quality-report-row')).to_have_count(1)

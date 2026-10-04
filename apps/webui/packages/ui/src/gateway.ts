@@ -7,7 +7,13 @@ export type RuntimeUpdate = {
   payload: Record<string, unknown>;
   sequence: number | null;
 };
-export type Session = { session_id: string; first_user_input: string };
+export type Session = {
+  session_id: string;
+  first_user_input: string;
+  title?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
 export type SessionStatus = {
   workspace_key: string;
   session_id: string;

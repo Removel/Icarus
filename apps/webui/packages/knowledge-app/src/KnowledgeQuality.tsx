@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ShieldCheck, FileCheck2 } from 'lucide-react';
-import { Button, EmptyState, Modal } from '@icarus/ui';
+import { Button, EmptyState, Modal, LoadingIndicator, Toast } from '@icarus/ui';
 import Reading from './Reading';
 import * as api from './openkb';
 
@@ -9,28 +9,21 @@ function reportDate(file: string) {
   return date ? `${date[1]}-${date[2]}-${date[3]} ${date[4]}:${date[5]}:${date[6]}` : file;
 }
 
-export default function KnowledgeQuality({
-  name,
-  preview,
-  active,
-}: {
-  name: string;
-  preview: boolean;
-  active: boolean;
-}) {
+export default function KnowledgeQuality({ name, active }: { name: string; active: boolean }) {
   const [reports, setReports] = useState<string[]>([]);
   const [selected, setSelected] = useState<{ name: string; content: string }>();
   const [removing, setRemoving] = useState<string>();
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState<string>();
+  const exportingRef = useRef(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const working = useRef(false);
   const pages = Math.max(1, Math.ceil(reports.length / 10));
   const current = Math.min(page, pages);
   useEffect(() => {
-    if (preview) return;
     const controller = new AbortController();
     setLoading(true);
     api
@@ -43,9 +36,9 @@ export default function KnowledgeQuality({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [name, preview]);
+  }, [name]);
   async function perform(action: () => Promise<void>) {
-    if (preview || working.current) return;
+    if (working.current) return;
     working.current = true;
     setBusy(true);
     setError('');
@@ -64,23 +57,33 @@ export default function KnowledgeQuality({
   function run() {
     return perform(async () => {
       const report = await api.lint(name);
-      setNotice(
-        report.skipped
-          ? `本次检查已跳过：${report.reason ?? report.message}`
-          : '检查完成，报告已保存到知识库。',
-      );
+      setNotice(report.skipped ? `本次检查已跳过：${report.reason ?? report.message}` : '');
+      if (!report.skipped) Toast.success('检查完成');
       await refresh();
       setPage(1);
     });
   }
   async function download(file: string, content?: string) {
-    const text = content ?? (await api.loadPage(name, 'reports/' + file)).content;
-    const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = file;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (exportingRef.current) return;
+    exportingRef.current = true;
+    setExporting(file);
+    try {
+      const text = content ?? (await api.loadPage(name, 'reports/' + file)).content;
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file;
+      link.hidden = true;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (error) {
+      setError(api.errorMessage(error));
+    } finally {
+      exportingRef.current = false;
+      setExporting(undefined);
+    }
   }
   return (
     <section className="quality-workspace" aria-label="检查报告">
@@ -88,12 +91,11 @@ export default function KnowledgeQuality({
         <ShieldCheck size={24} />
         <div>
           <h2>知识库质量检查</h2>
-          <p>检查知识内容与引用关系，生成可回看的检查报告。</p>
         </div>
-        <Button disabled={preview || busy || loading} onClick={() => perform(refresh)}>
+        <Button disabled={busy || loading} onClick={() => perform(refresh)}>
           刷新报告
         </Button>
-        <Button theme="solid" disabled={preview || busy || loading} loading={busy} onClick={run}>
+        <Button theme="solid" disabled={busy || loading} loading={busy} onClick={run}>
           {busy ? '正在处理…' : reports.length ? '重新检查' : '开始检查'}
         </Button>
       </div>
@@ -103,7 +105,7 @@ export default function KnowledgeQuality({
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
-      {loading && <p role="status">正在读取报告…</p>}
+      {loading && <LoadingIndicator label="正在读取报告" />}
       <div className="quality-reports-heading">
         <h3>检查报告</h3>
         <span>{reports.length} 份</span>
@@ -113,7 +115,6 @@ export default function KnowledgeQuality({
           <EmptyState
             title="还没有检查报告"
             icon={<FileCheck2 size={36} strokeWidth={1.5} aria-hidden="true" />}
-            description="点击上方「开始检查」，了解知识库中需要完善的内容。生成的报告会保存在这里，支持查看、导出和删除。"
           />
         </div>
       )}
@@ -138,7 +139,11 @@ export default function KnowledgeQuality({
               >
                 查看报告
               </Button>
-              <Button disabled={busy} onClick={() => perform(() => download(file))}>
+              <Button
+                disabled={busy || Boolean(exporting)}
+                loading={exporting === file}
+                onClick={() => download(file)}
+              >
                 导出
               </Button>
               <Button
@@ -205,7 +210,8 @@ export default function KnowledgeQuality({
         onCancel={() => setSelected(undefined)}
         footer={
           <Button
-            onClick={() => selected && perform(() => download(selected.name, selected.content))}
+            disabled={Boolean(exporting)}
+            onClick={() => selected && download(selected.name, selected.content)}
           >
             导出报告
           </Button>
