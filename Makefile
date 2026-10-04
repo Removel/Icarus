@@ -3,7 +3,7 @@ ARGS ?=
 APP ?=
 REPO_ROOT := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
-.PHONY: install install-dev install-commands install-agent install-gateway install-tui start stop status gateway tui mem0-up mem0-down mem0-logs openkb-up openkb-down openkb-logs test test-agent test-gateway test-tui test-mem0 test-openkb test-mem0-full test-openkb-full
+.PHONY: install install-dev install-commands install-agent install-gateway install-tui start stop status gateway tui mem0-up mem0-down mem0-logs openkb-up openkb-down openkb-logs webui-up webui-down webui-logs test test-agent test-gateway test-tui test-mem0 test-openkb test-mem0-full test-openkb-full
 
 install:
 	PYTHON="$(PYTHON)" "$(REPO_ROOT)/bin/icarus" install $(APP)
@@ -55,6 +55,15 @@ openkb-down:
 
 openkb-logs:
 	bash "$(REPO_ROOT)/apps/openkb/scripts/icarus-compose.sh" logs -f
+
+webui-up:
+	"$(REPO_ROOT)/bin/icarus" start webui
+
+webui-down:
+	"$(REPO_ROOT)/bin/icarus" stop webui
+
+webui-logs:
+	tail -f "$${ICARUS_DATA_DIR}/logs/webui.log"
 
 test:
 	"$(REPO_ROOT)/scripts/test.sh"

@@ -32,6 +32,7 @@ class IcarusControlTest(unittest.TestCase):
         (root / "apps/tui/scripts").mkdir(parents=True, exist_ok=True)
         (root / "apps/mem0/scripts").mkdir(parents=True, exist_ok=True)
         (root / "apps/openkb/scripts").mkdir(parents=True, exist_ok=True)
+        (root / "apps/webui/scripts").mkdir(parents=True, exist_ok=True)
         return IcarusControl(root, cwd=cwd or root, environ={})
 
     def test_start_all_orders_dependencies_then_opens_tui(self):
@@ -45,7 +46,13 @@ class IcarusControlTest(unittest.TestCase):
 
             self.assertEqual(
                 events,
-                ["mem0", "openkb", "gateway", ("tui", ["--session-id", "demo"])],
+                [
+                    "mem0",
+                    "openkb",
+                    "gateway",
+                    "webui",
+                    ("tui", ["--session-id", "demo"]),
+                ],
             )
             self.assertEqual(result, 7)
 
@@ -378,6 +385,124 @@ class IcarusControlTest(unittest.TestCase):
             status = control.project_status("openkb")
 
             self.assertEqual(status.state, "stopped")
+
+    def test_install_webui_uses_its_private_installer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            control = self.make_control(root)
+            (root / ".example.env").write_text("ICARUS_DATA_DIR=\n")
+            commands: list[list[str]] = []
+            control._run_checked = lambda command: commands.append(list(command))
+
+            self.assertEqual(control.run(["install", "webui"]), 0)
+            self.assertEqual(
+                commands,
+                [
+                    [str(root / "apps/webui/scripts/install.sh")],
+                    [str(root / "scripts/install-commands.sh")],
+                ],
+            )
+
+            commands.clear()
+            self.assertEqual(control.run(["install", "webui", "--dev"]), 0)
+            self.assertEqual(
+                commands,
+                [
+                    [str(root / "apps/webui/scripts/install.sh"), "--dev"],
+                    [str(root / "scripts/install-commands.sh")],
+                ],
+            )
+
+    def test_start_webui_spawns_launcher_and_writes_runtime_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            control = self.make_control(root)
+            data_dir = root / "data"
+            control.environ["ICARUS_DATA_DIR"] = str(data_dir)
+            build = root / "apps/webui/apps/shell/dist"
+            build.mkdir(parents=True)
+            (build / "index.html").write_text("<!doctype html>")
+            control.project_status = lambda project: ProjectStatus(
+                project, "stopped"
+            )
+            control._port_open = lambda port: False
+            control._wait_until_healthy = lambda project: None
+            control._process_started_at = lambda pid: ""
+
+            with patch.object(
+                control_module.shutil, "which", return_value="/usr/bin/node"
+            ), patch.object(control_module.subprocess, "Popen") as popen:
+                popen.return_value.pid = 4242
+                control.start_background("webui")
+
+            self.assertEqual(
+                popen.call_args.args[0],
+                [str(root / "apps/webui/scripts/start.sh")],
+            )
+            record = control._read_record(data_dir / "runtime/webui.json")
+            self.assertEqual(record["pid"], 4242)
+            self.assertEqual(record["project"], "webui")
+
+    def test_start_webui_requires_node_and_build_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            control = self.make_control(root)
+            with patch.object(
+                control_module.shutil, "which", return_value=None
+            ):
+                with self.assertRaisesRegex(ControlError, "Node.js"):
+                    control._require_process_environment("webui")
+            with patch.object(
+                control_module.shutil, "which", return_value="/usr/bin/node"
+            ):
+                with self.assertRaisesRegex(ControlError, "install webui"):
+                    control._require_process_environment("webui")
+
+    def test_stop_all_orders_webui_before_its_dependencies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            control = self.make_control(Path(directory))
+            events: list[str] = []
+            control.stop_project = lambda project: events.append(project)
+
+            self.assertEqual(control.run(["stop"]), 0)
+
+            self.assertEqual(
+                events, ["tui", "webui", "gateway", "openkb", "mem0"]
+            )
+
+    def test_record_matches_tolerates_small_start_time_skew(self):
+        with tempfile.TemporaryDirectory() as directory:
+            control = self.make_control(Path(directory))
+            control._process_command = (
+                lambda pid: "python -m apps.gateway.src.main"
+            )
+            record = {
+                "pid": 321,
+                "process_started_at": "Mon Oct  5 00:00:46 2026",
+            }
+
+            control._process_started_at = (
+                lambda pid: "Mon Oct  5 00:00:44 2026"
+            )
+            self.assertTrue(control._record_matches(record, "gateway"))
+
+            control._process_started_at = (
+                lambda pid: "Mon Oct  5 00:02:00 2026"
+            )
+            self.assertFalse(control._record_matches(record, "gateway"))
+
+    def test_webui_status_reports_running_when_record_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            control = self.make_control(Path(directory))
+            with patch.object(
+                control, "_read_record", return_value={"pid": 4242}
+            ), patch.object(
+                control, "_record_matches", return_value=True
+            ), patch.object(control, "_healthy", return_value=True):
+                status = control.project_status("webui")
+
+            self.assertEqual(status.state, "running")
+            self.assertEqual(status.detail, "http://127.0.0.1:8080/health")
 
 
 class EnvironmentTest(unittest.TestCase):

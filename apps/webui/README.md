@@ -19,6 +19,20 @@ pnpm dev
 
 开发服务同时把 `/api/mem0` 代理到 `127.0.0.1:8888`、`/rpc` 代理到 `127.0.0.1:8765`。通过 `ICARUS_MEM0_ENDPOINT`、`ICARUS_OPENKB_ENDPOINT`、`ICARUS_GATEWAY_ENDPOINT` 覆盖地址，Mem0 管理 Key 使用 `ICARUS_MEM0_API_KEY`。对话页填写服务端工作区绝对路径，连接后选择或新建会话。生产运行使用 `pnpm build` 和 `node --env-file=.env.local server/index.mjs`，完整配置、容器、验收、回滚和排障见 [部署说明](docs/deployment.md)。
 
+## 通过 Icarus 控制面启动
+
+WebUI 也可以作为仓库原生后台进程运行，由 `icarus` 统一管理（不使用 Docker）：
+
+```sh
+icarus install webui   # 安装依赖并构建 apps/shell/dist
+icarus start webui     # 后台启动 node server/index.mjs
+icarus status          # 与其他应用一起查看状态
+icarus stop webui
+```
+
+启动配置来自仓库根 `.env`（同名进程环境变量优先）：`ICARUS_WEBUI_HOST`（默认 `127.0.0.1`）、`ICARUS_WEBUI_PORT`（默认 `8080`）、`ICARUS_WEBUI_USER`、`ICARUS_WEBUI_PASSWORD`，以及 `ICARUS_MEM0_ENDPOINT`、`ICARUS_OPENKB_ENDPOINT`、`ICARUS_GATEWAY_ENDPOINT` 与对应 `ICARUS_MEM0_API_KEY`、`ICARUS_OPENKB_API_TOKEN` 覆盖项。非回环 `ICARUS_WEBUI_HOST` 必须同时设置用户名与密码，否则启动器拒绝启动。`make webui-up` / `make webui-down` / `make webui-logs` 是对应的便捷入口。
+
+
 ## 这版可以体验什么
 
 - 记忆：彩色分类与范围标签的卡片网格和全列表更新时间排序；文本搜索、分类/作用范围/用户筛选、多选与批量暂停或恢复；详情弹窗展示原文、归属与有效期，变更记录默认折叠；在同一弹窗内修正、启停、确认删除或放弃未保存修改。Esc、遮罩与关闭按钮可关闭详情，编辑草稿未保存时需确认；浏览器返回也保留草稿并询问是否放弃。手机使用接近全屏的详情弹窗。
