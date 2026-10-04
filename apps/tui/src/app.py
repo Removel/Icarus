@@ -24,6 +24,7 @@ from apps.tui.src.clipboard import (
     ClipboardImage,
     ClipboardImageReadError,
     read_clipboard_image,
+    read_clipboard_text,
 )
 from apps.tui.src.commands import (
     CommandDefinition,
@@ -909,6 +910,11 @@ class IcarusTextualApp(App[int]):
     async def _paste_clipboard_image(self) -> None:
         try:
             image = await asyncio.to_thread(read_clipboard_image)
+            text = (
+                await asyncio.to_thread(read_clipboard_text)
+                if image is None
+                else None
+            )
         except asyncio.CancelledError:
             raise
         except ClipboardImageReadError as error:
@@ -922,7 +928,10 @@ class IcarusTextualApp(App[int]):
             return
         composer = self.query_one(PersistentComposer)
         if image is None:
-            composer.paste_text_from_clipboard()
+            if text is None:
+                composer.paste_text_from_clipboard()
+            elif text:
+                composer.post_message(events.Paste(text))
             return
 
         try:
@@ -958,8 +967,8 @@ class IcarusTextualApp(App[int]):
         if not self._accepting_input:
             return
         self._safe_notify(
-            f"Unable to paste clipboard image: {error}",
-            title="Image paste failed",
+            f"Unable to paste clipboard content: {error}",
+            title="Paste failed",
             severity="warning",
         )
 
