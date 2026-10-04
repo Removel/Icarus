@@ -10,11 +10,12 @@ ENV PATH="/root/.local/bin:$PATH"
 COPY server/requirements.txt .
 RUN pip install -r requirements.txt
 
-# Install mem0 in editable mode using Poetry
+# Install the vendored SDK with its package metadata and license.
 WORKDIR /app/packages
 COPY pyproject.toml .
 COPY poetry.lock .
 COPY README.md .
+COPY LICENSE .
 COPY mem0 ./mem0
 RUN pip install -e .
 
