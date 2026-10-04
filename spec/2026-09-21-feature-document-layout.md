@@ -93,6 +93,22 @@ apps/tui/docs/spec/2026-09-02-tui-session-management/
 
 仓库根 spec 使用 `spec/YYYY-MM-DD-<feature>.md`，日期同样取首次进入 Git 的日期并保持稳定。
 `spec/2026-09-02-session-management.md` 继续作为不可拆分的跨应用需求入口，并链接到三个应用 spec。
+根入口只保留公共需求、应用边界、阶段依赖和索引，不重复各应用的具体设计与实施步骤。
+
+### 仓库基建文档
+
+仓库级控制面、CI、构建与开发规范不属于任一业务应用，也不需要为其创建 `apps/infra`。
+这些功能的具体设计与计划放在：
+
+```text
+docs/spec/YYYY-MM-DD-<feature>/
+├── arch.md
+├── plan.md
+└── plan-<phase-or-purpose>.md
+```
+
+日期、文件命名和单侧文档规则与应用 spec 一致。不可拆分的跨应用要求仍由根 `spec/*.md`
+链接此目录；应用内细节仍归 `apps/<app>/docs/spec/`。本约定不要求迁移既有产品定位或待办文档。
 
 ## 迁移清单
 

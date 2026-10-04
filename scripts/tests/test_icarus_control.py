@@ -149,6 +149,8 @@ class IcarusControlTest(unittest.TestCase):
                     [str(root / "scripts/install.sh"), "--dev"],
                     ["bash", str(root / "apps/mem0/scripts/icarus-compose.sh"), "build"],
                     ["bash", str(root / "apps/openkb/scripts/icarus-compose.sh"), "build"],
+                    ["bash", str(root / "apps/mem0/scripts/install.sh"), "--dev"],
+                    ["bash", str(root / "apps/openkb/scripts/install.sh"), "--dev"],
                     [str(root / "scripts/install-commands.sh")],
                 ],
             )
