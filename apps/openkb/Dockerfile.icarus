@@ -9,7 +9,6 @@ RUN npm run build
 FROM python:3.12-slim
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -22,7 +21,10 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.l
 
 COPY . /app
 COPY --from=web-builder /app/openkb/web /app/openkb/web
-RUN pip install ".[web]"
+# This layer re-runs whenever any source file changes. Keep a BuildKit cache for
+# pip's wheel downloads (and no PIP_NO_CACHE_DIR) so a re-run installs the pinned
+# versions from the local cache instead of re-downloading every dependency.
+RUN --mount=type=cache,target=/root/.cache/pip pip install ".[web]"
 
 EXPOSE 7566
 
