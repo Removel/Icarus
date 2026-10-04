@@ -35,13 +35,17 @@ apps/
 ├── mem0/        Apache-2.0 Mem0 源码与 Icarus 自建服务修改
 └── openkb/      Apache-2.0 OpenKB 源码与 Icarus 自建服务修改
 packages/        应用间共享的数据模型和环境配置
-docs/            项目定位、路线图和待办
+docs/            项目定位、路线图、仓库基建 spec 与 SDD 模板
+.agents/skills/  开发期技能参考（不自动运行）
+skills/          生产基础技能源约定（当前没有 bundle）
 scripts/         整个仓库的安装、启动和测试编排
 Makefile         根目录统一命令入口
 ```
 
-各应用的说明放在自己的 `README.md`；架构设计和实施计划按功能聚合在
-`docs/spec/YYYY-MM-DD-<feature>/` 中，分别使用 `arch.md`、`plan.md` 或带用途后缀的计划文件。
+各应用的说明放在自己的 `README.md`；应用设计和实施计划按功能聚合在
+`apps/<app>/docs/spec/YYYY-MM-DD-<feature>/` 中；仓库基建使用根
+`docs/spec/YYYY-MM-DD-<feature>/`，分别使用 `arch.md`、`plan.md` 或带用途后缀的计划文件。
+开发与验证入口见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 架构文档以当前源代码和测试为事实依据，用于描述架构与系统设计，不反向限制源代码演进。
 不可拆分的跨应用需求使用根目录 `spec/YYYY-MM-DD-<feature>.md`。
 完整产品定位见 [`docs/product-positioning.md`](docs/product-positioning.md)。

@@ -1,0 +1,61 @@
+name: Service application contracts
+on:
+  workflow_dispatch:
+  push:
+    paths: ['apps/mem0/**', 'apps/openkb/**', 'apps/agent/**', 'packages/**', 'scripts/**', 'Makefile', '.gitattributes', '.gitignore', '.github/workflows/apps.yml']
+  pull_request:
+    paths: ['apps/mem0/**', 'apps/openkb/**', 'apps/agent/**', 'packages/**', 'scripts/**', 'Makefile', '.gitattributes', '.gitignore', '.github/workflows/apps.yml']
+permissions:
+  contents: read
+concurrency:
+  group: service-contracts-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [mem0, openkb]
+    env:
+      MEM0_TELEMETRY: 'false'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - run: bash apps/${{ matrix.app }}/scripts/install.sh --dev
+      - name: Run application-owned contracts
+        shell: bash
+        run: |
+          mkdir -p test-results
+          set -o pipefail
+          make test-${{ matrix.app }} 2>&1 | tee test-results/${{ matrix.app }}.log
+      - name: Verify OpenKB lock without rewriting it
+        if: matrix.app == 'openkb'
+        run: uv lock --check --project apps/openkb
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: service-contracts-${{ matrix.app }}
+          path: test-results/
+          if-no-files-found: ignore
+  repository-control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Use empty local config for offline control tests
+        run: python -c "from pathlib import Path; Path('.env').touch()"
+      - run: bash apps/agent/scripts/install.sh --dev
+      - run: apps/agent/.venv/bin/python -m pytest scripts/tests -q

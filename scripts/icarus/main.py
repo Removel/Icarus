@@ -119,6 +119,13 @@ Legacy 'icarus --session-id ID' still opens the TUI."""
             self._run_checked(command)
             self._install_service("mem0")
             self._install_service("openkb")
+            if dev:
+                for service in COMPOSE_PROJECTS:
+                    self._run_checked([
+                        "bash",
+                        str(self.repo_root / f"apps/{service}/scripts/install.sh"),
+                        "--dev",
+                    ])
             self._run_checked(
                 [str(self.repo_root / "scripts/install-commands.sh")]
             )
@@ -133,9 +140,14 @@ Legacy 'icarus --session-id ID' still opens the TUI."""
             self._run_checked(command)
         else:
             if dev:
-                raise ControlError(f"--dev does not apply to {project}")
-            self._check_docker()
-            self._install_service(project)
+                self._run_checked([
+                    "bash",
+                    str(self.repo_root / f"apps/{project}/scripts/install.sh"),
+                    "--dev",
+                ])
+            else:
+                self._check_docker()
+                self._install_service(project)
         self._run_checked([str(self.repo_root / "scripts/install-commands.sh")])
         return 0
 
