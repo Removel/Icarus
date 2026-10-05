@@ -5,25 +5,24 @@ The `mem0ai` package on PyPI. Memory core plus five pluggable provider categorie
 ## Commands
 
 ```bash
-hatch shell dev_py_3_11   # or dev_py_3_9 / dev_py_3_10 / dev_py_3_12
-pre-commit install        # first time only; runs ruff + isort on commit
+# From the Icarus root:
+icarus install mem0 --dev
+make test-mem0
+make test-mem0-full
 
-make lint                 # ruff check
-make format               # ruff format
-make sort                 # isort mem0/
-make test                 # pytest tests/
-make test-py-3.9          # pin a Python version (3.9 through 3.12)
-make install_all          # optional deps; run before the full test suite
-make build                # hatch build
+# From apps/mem0:
+.venv/bin/python -m pytest tests/llms/test_openai.py -q
+.venv/bin/ruff check mem0
 ```
 
-Use `hatch` for environments and dependencies. Do not use `pip` or `conda`.
+Icarus uses an app-owned `.venv` for development; service runtime remains Docker.
+Retained Hatch environment metadata is reference, not a second repository gate.
 
 ## Conventions
 
-- **Python 3.9 through 3.12.** Code must run on 3.9.
-- **Ruff**, line length **120**. `cli/python/` uses 100; do not carry that config across.
-- **isort**, `profile = "black"`, first-party `mem0` and `mem0_cli`.
+- **Python:** preserve `pyproject.toml`'s `>=3.10,<4.0` SDK requirement; Icarus dev/CI uses 3.12.
+- **Ruff**, line length **120**, using the app's existing config.
+- **isort**, `profile = "black"`, first-party `mem0`.
 - **Pydantic v2** for every data model and config class.
 - **pytest** with pytest-mock and pytest-asyncio. Tests live in `../tests/`.
 - Source files are `snake_case.py`.
@@ -63,7 +62,7 @@ Every category follows the same shape: a `base.py` with the abstract class, one 
 5. Add tests under `tests/<category>/<provider_name>/`.
 6. Put new dependencies in an **optional** group in `pyproject.toml`, never in core `dependencies`.
 7. Match an existing provider in the same category exactly: method signatures, error handling, config structure.
-8. Add an integration guide under `docs/integrations/`.
+8. Update the relevant Icarus documentation under `docs/spec/` or the app README.
 
 ## Public API
 

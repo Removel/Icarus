@@ -1,4 +1,4 @@
-# IDE
+# IDE and isolated development workspaces
 .idea/
 .superpowers/
 .claude/worktrees/
@@ -13,3 +13,37 @@ __pycache__/
 # Environment
 .env
 .icarus-data/
+
+# Development caches and generated packages
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+node_modules/
+apps/mem0/build/
+apps/mem0/dist/
+apps/openkb/build/
+apps/openkb/dist/
+
+# Service-local runtime data and generated web bundle
+apps/mem0/server/history/
+apps/mem0/server/.env
+apps/openkb/openkb/web/
+apps/openkb/**/raw/
+apps/openkb/**/wiki/
+apps/openkb/**/.openkb/
+apps/openkb/**/output/
+apps/openkb/**/kbs/
+apps/openkb/**/web/
+apps/openkb/.claude/
+apps/openkb/docs/internal/
+apps/mem0/**/*.db
+apps/mem0/**/qdrant_storage/
+apps/mem0/**/test-db/
+apps/mem0/**/db/
+apps/openkb/**/*.db
+.DS_Store

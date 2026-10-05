@@ -85,6 +85,20 @@ class PersistentComposer(TextArea):
             return
         await super()._on_key(event)
 
+    async def _on_mouse_down(self, event: events.MouseDown) -> None:
+        event.prevent_default()
+        if event.button == 3:
+            event.stop()
+            self.action_paste()
+            return
+        await super()._on_mouse_down(event)
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        # Handle once, without dispatching the base handler a second time.
+        event.stop()
+        event.prevent_default()
+        await super()._on_paste(event)
+
     def submit(self) -> bool:
         value = self.text
         images = referenced_images(value, tuple(self._images.values()))

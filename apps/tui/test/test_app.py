@@ -1382,7 +1382,44 @@ def test_ctrl_v图片生成marker并向runtime提交映射和路径(
     assert image_path.exists() is False
 
 
+@pytest.mark.parametrize("trigger", ["right_click", "ctrl_v"])
+def test系统剪贴板文本只插入一次且不提交(monkeypatch, tmp_path, trigger):
+    caller_threads = []
+
+    def read_text():
+        caller_threads.append(threading.get_ident())
+        return "中文\n第二行"
+
+    monkeypatch.setattr("apps.tui.src.app.read_clipboard_image", lambda: None)
+    monkeypatch.setattr("apps.tui.src.app.read_clipboard_text", read_text)
+
+    async def run():
+        service = ControlledService()
+        app = make_app(service, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
+            composer = app.query_one(PersistentComposer)
+            composer.load_text("草稿")
+            composer.move_cursor(composer.document.end)
+            app.copy_to_clipboard("stale internal clipboard")
+            if trigger == "right_click":
+                await pilot.click(composer, button=3)
+            else:
+                await pilot.press("ctrl+v")
+            await wait_until(pilot, lambda: composer.text == "草稿中文\n第二行")
+            await pilot.pause()
+            assert composer.text == "草稿中文\n第二行"
+            assert app.chat_state.phase == RuntimePhase.READY
+            assert len(caller_threads) == 1
+            assert caller_threads[0] != threading.get_ident()
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: service.stopped)
+
+    asyncio.run(run())
+
+
 def test_ctrl_v没有图片时回退textual文本剪贴板(monkeypatch, tmp_path):
+    monkeypatch.setattr("apps.tui.src.app.read_clipboard_text", lambda: None)
     monkeypatch.setattr(
         "apps.tui.src.app.read_clipboard_image", lambda: None
     )

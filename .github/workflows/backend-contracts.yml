@@ -5,10 +5,6 @@ on:
     paths:
       - 'apps/agent/**'
       - 'apps/gateway/**'
-      - 'apps/mem0/mem0/**'
-      - 'apps/mem0/tests/memory/**'
-      - 'apps/mem0/pyproject.toml'
-      - 'apps/openkb/**'
       - 'apps/webui/**'
       - 'packages/**'
       - '.github/workflows/backend-contracts.yml'
@@ -16,10 +12,6 @@ on:
     paths:
       - 'apps/agent/**'
       - 'apps/gateway/**'
-      - 'apps/mem0/mem0/**'
-      - 'apps/mem0/tests/memory/**'
-      - 'apps/mem0/pyproject.toml'
-      - 'apps/openkb/**'
       - 'apps/webui/**'
       - 'packages/**'
       - '.github/workflows/backend-contracts.yml'
@@ -37,6 +29,8 @@ jobs:
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
@@ -71,50 +65,4 @@ jobs:
         with:
           name: agent-gateway-${{ matrix.os }}
           path: test-results/
-          if-no-files-found: ignore
-  mem0:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: apps/mem0
-    env:
-      MEM0_TELEMETRY: 'false'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '3.12'
-      - name: Memory update and history contracts (optional provider suites are separate)
-        run: uvx hatch run icarus:python -m pytest tests/memory/test_main.py tests/memory/test_storage.py -q --junitxml=test-results/mem0.xml
-      - run: uvx hatch run icarus:python -m compileall -q mem0
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: mem0-test-results
-          path: apps/mem0/test-results/
-          if-no-files-found: ignore
-  openkb:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: apps/openkb
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '3.12'
-      - run: uv sync --locked --extra dev --extra web
-      - name: Source, report and managed-template contracts
-        run: >-
-          uv run --no-sync python -m pytest
-          tests/test_api.py tests/test_remove.py tests/test_report_ops.py
-          tests/test_managed_kb_template.py -q --junitxml=test-results/openkb.xml
-      - run: uv run --no-sync python -m compileall -q openkb scripts
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: openkb-test-results
-          path: apps/openkb/test-results/
           if-no-files-found: ignore

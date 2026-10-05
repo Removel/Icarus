@@ -16,6 +16,8 @@ jobs:
         working-directory: apps/webui
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10.32.1

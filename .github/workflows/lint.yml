@@ -1,0 +1,40 @@
+name: Repository syntax
+on:
+  workflow_dispatch:
+  push:
+    paths: ['apps/**', 'packages/**', 'scripts/**', '.github/workflows/**']
+  pull_request:
+    paths: ['apps/**', 'packages/**', 'scripts/**', '.github/workflows/**']
+permissions:
+  contents: read
+concurrency:
+  group: syntax-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+      - run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      - run: actionlint
+      - name: Compile retained Python code
+        run: >-
+          python -m compileall -q scripts packages apps/agent/src apps/gateway/src
+          apps/tui/src apps/mem0/mem0 apps/mem0/server apps/mem0/scripts
+          apps/openkb/openkb apps/openkb/scripts
+      - name: Check application shell entrypoints
+        run: |
+          bash -n apps/mem0/scripts/install.sh apps/mem0/scripts/test.sh
+          bash -n apps/openkb/scripts/install.sh apps/openkb/scripts/test.sh
+          bash -n scripts/install.sh scripts/test.sh
+      - run: git diff --check

@@ -27,6 +27,12 @@ enters Git and keep the filename stable afterward. If a cross-application requir
 into app-owned parts, keep each part in the corresponding application's docs instead. Do not put a
 single-application spec in the root `spec/`.
 
+Repository-owned infrastructure that does not belong to an application uses
+`docs/spec/YYYY-MM-DD-<feature>/` with the same `arch.md`, `plan.md`, and optional
+`plan-<phase-or-purpose>.md` convention. Root cross-application specs keep only shared
+requirements, boundaries, dependencies, and links to the owning feature documents; do
+not duplicate application implementation details in the root entry.
+
 Architecture documents describe the current source-code architecture and system design. They are
 derived from the implementation and do not constrain how source code may evolve. Before changing or
 writing architecture documentation, inspect the relevant code and tests. When implementation and
@@ -79,6 +85,13 @@ git diff --check
 Add focused tests for model, Agent, Tool, stream, Event, or Plugin changes. When credentials are available, use a small real-model smoke test without exposing secrets.
 
 Do not fix unrelated failures in a focused change.
+
+## Repository infrastructure
+
+See `CONTRIBUTING.md` for development, dependency, CI, and SDD entry points.
+Development skill references live in `.agents/skills/`; production baseline skill
+sources belong in `skills/`. Neither directory changes runtime discovery automatically.
+App-owned build files, dependencies, locks, and environments stay in the application.
 
 ## Git
 

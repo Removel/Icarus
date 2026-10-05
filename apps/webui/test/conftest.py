@@ -3,12 +3,14 @@ import json
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
 from test.mem0_service import fake_mem0
 
 
 @pytest.fixture(scope="session")
 def browser():
+    # Imported lazily so non-browser tests can run without the Playwright extra.
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             channel=os.environ.get("WEBUI_BROWSER_CHANNEL") or None,

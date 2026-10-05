@@ -100,9 +100,15 @@ apps/tui/scripts/install.sh
 ```
 
 每个 Python App 继续把依赖安装到自己的 `.venv`。根目录不创建 `.venv`，也不聚合 requirements。
-`--dev` 同样透传到每个 App。安装流程还会安装命令链接、检查 Docker 与 Docker Compose 是否可用，
-但不替用户安装系统软件、不启动服务，也不要求安装阶段已经填写所有运行 Secret。Mem0 和 OpenKB
-的依赖由各自 Compose 在安装阶段构建到独立镜像中。
+`--dev` 同样透传到每个 App。普通 Mem0/OpenKB 安装仍通过各自 Compose 构建镜像；
+`icarus install mem0 --dev` / `icarus install openkb --dev` 仅调用各自 `scripts/install.sh --dev`
+创建私有开发测试环境，不要求 Docker、服务运行 Secret，也不启动服务。全仓 `icarus install --dev`
+保留两服务镜像构建，另外准备两个服务的 dev 环境；最后安装命令链接。
+安装流程不替用户安装系统软件、不启动服务，也不要求安装阶段已填写运行 Secret。
+
+OpenKB dev/CI 使用 `uv sync --locked` 消费应用的 `uv.lock`；其现有 Dockerfile 仍为 pip 安装。
+Mem0 保留 `poetry.lock`，但当前 pip 开发/镜像安装不消费此锁；构建成功不等于锁定安装。
+服务运行依赖不安装到 Agent/Gateway 或仓库根环境。
 
 根 `.env` 缺失时，安装流程可以从 `.example.env` 创建空模板，但不得覆盖已有 `.env`。服务启动时
 继续由各服务适配器校验实际所需变量并给出见名知意的错误。
@@ -138,10 +144,11 @@ apps/tui/scripts/install.sh
 - `icarus install` 最后将 `bin/icarus` 与 `bin/icarus-gateway` 链接到用户命令目录；默认
   `~/.local/bin`，可由 `ICARUS_BIN_DIR` 覆盖。
 - `make install-commands` 只安装命令入口，不修改任何 App 依赖环境。
-- `make install-dev` 安装三个 App 各自的测试环境。
+- `make install-dev` 安装三个 Python App 及 Mem0/OpenKB 各自的私有测试环境；服务运行仍使用 Docker。
 - Makefile 是开发与 CI 的兼容快捷入口，安装和生命周期命令转发给同一套根控制面，不能复制一份
   启停逻辑。
-- `make test` 分别使用各 App 的 `.venv` 运行对应测试。
+- `make test` 分别使用各 App 的 `.venv`；Mem0/OpenKB 使用明确的离线契约子集。
+- `make test-mem0-full` / `make test-openkb-full` 跑完整保留套件，返回真实失败；缺依赖和既有红基线单独报告。
 - 根目录不保存聚合 requirements、Python 虚拟环境或 Python 发布包。
 - 根脚本不得改变调用者当前目录的 Workspace 语义。
 

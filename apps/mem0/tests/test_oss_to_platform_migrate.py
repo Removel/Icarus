@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "oss-to-platform-migrate.sh"
+SCRIPT = Path(__file__).resolve().parent / "fixtures" / "oss-to-platform-migrate.sh"
 
 
 class MigrationHTTPServer:

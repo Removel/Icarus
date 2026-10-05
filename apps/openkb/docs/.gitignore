@@ -1,13 +1,7 @@
-# Default-closed: docs/ content stays out of git unless explicitly
-# allowlisted below. This repo publishes code, not design/spec docs — the
-# allowlist restores the safety net the old blanket `docs/` ignore provided,
-# so a doc accidentally written outside docs/internal/ can't be swept into a
-# commit by `git add -A`. To publish a new doc, add a `!its-name.md` line.
+# Keep maintainer-local docs ignored; publish Icarus feature specs and the
+# existing development principles explicitly.
 *
 !.gitignore
 !golden-principles.md
-
-# Icarus application-owned delivery plan.
 !spec/
-!spec/2026-10-01-quality-report-management/
-!spec/2026-10-01-quality-report-management/plan.md
+!spec/**

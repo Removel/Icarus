@@ -37,5 +37,32 @@ Current modifications:
 - Icarus runtime credentials are injected by the parent environment; secrets are not
   committed in this directory.
 
-The upstream Apache License 2.0 remains in `LICENSE`. Re-check upstream `LICENSE` and
-`NOTICE` files on every source sync.
+## Frozen subset and repository infrastructure
+
+The upstream import is frozen at the full commit above; Icarus patches and security
+maintenance continue. This first cleanup removes external integration packages,
+standalone Node/Python CLI and its mem0-cli skill, TypeScript SDK, examples, the
+upstream documentation site, marketplace manifests, nested CI/release automation,
+and obsolete upstream contribution/development entry points. Icarus `docs/spec/`,
+Python core/providers, runtime JSON, server/auth/migrations, dashboard, maintenance
+scripts, and the original test suite remain.
+
+Five development skill bundles moved to root `.agents/skills/` with their own LICENSE
+and support files. Only relocation references were adjusted. The SDK
+`preserve_input_language` documentation previously added to upstream add.mdx is recorded
+here and in the Icarus README; the runtime patch and tests remain unchanged.
+
+The OSS-to-Platform script moved to `tests/fixtures/oss-to-platform-migrate.sh` with
+its original regression tests; it is not a managed Icarus CLI. The server image now
+copies the required LICENSE alongside package metadata. Its pip installation still
+does not consume `poetry.lock` as a locked resolution.
+
+App-owned install/test scripts provide a private development environment. The installer
+checks virtual-environment ownership and isolates pip configuration/destination overrides.
+Root CI,
+text/SDD/governance conventions and test aggregation replace the removed nested
+infrastructure, without inheriting upstream release secrets or community gates.
+
+The upstream Apache License 2.0 remains in `LICENSE`; root `THIRD_PARTY_NOTICES.md`
+records the source subset and relocated skills. Re-check license and NOTICE obligations
+before incorporating any future third-party source change.
