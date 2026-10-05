@@ -550,6 +550,95 @@ def test_resume选择session后复用历史激活路径并清理旧空session(tm
     assert has_input is True
 
 
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ({"lifecycle": "ready"}, True),
+        ({"lifecycle": "unloaded"}, True),
+        # Background work keeps the Session in "running" but must not block
+        # resuming or clearing.
+        ({"lifecycle": "running", "background_work_count": 1}, True),
+        ({"lifecycle": "running", "active_task_ids": ["task-1"]}, False),
+        ({"lifecycle": "loading"}, False),
+        ({"lifecycle": "unloading"}, False),
+        ({"lifecycle": "failed"}, False),
+        ({"lifecycle": "ready", "queued_task_count": 1}, False),
+        ({"lifecycle": "ready", "pending_event_count": 1}, False),
+        ({"lifecycle": "ready", "pending_plugin_event_count": 1}, False),
+    ],
+)
+def test_status_is_idle判定(status, expected):
+    assert IcarusTextualApp._status_is_idle(status) is expected
+
+
+def test_resume有后台进程的当前session仍可切换(tmp_path):
+    async def run():
+        current = ControlledService()
+        current.session_id = "current-bg"
+        current.session_status.update(
+            {
+                "session_id": current.session_id,
+                "lifecycle": "running",
+                "background_work_count": 1,
+            }
+        )
+        current.session_summaries = (
+            SessionSummaryModel(
+                session_id="old-session",
+                first_user_input="old question",
+            ),
+        )
+        target = ControlledService()
+        target.session_id = "old-session"
+        target.session_status.update(
+            {
+                "session_id": target.session_id,
+                "lifecycle": "running",
+                "background_work_count": 1,
+            }
+        )
+        target.history = SessionHistoryModel(
+            records=(
+                RuntimeUpdateModel(
+                    workspace_key="workspace",
+                    session_id="old-session",
+                    task_id="old-task",
+                    type="user.message",
+                    payload={"text": "old question", "resources": []},
+                    occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    sequence=1,
+                ),
+            ),
+            history_cursor=1,
+        )
+        app, _ = make_session_app(current, {"old-session": target}, tmp_path)
+        async with app.run_test() as pilot:
+            await wait_until(
+                pilot, lambda: app.chat_state.phase == RuntimePhase.READY
+            )
+            await enter_text(pilot, "/resume")
+            await wait_until(pilot, lambda: isinstance(app.screen, SessionPicker))
+            await pilot.press("enter")
+            await wait_until(
+                pilot,
+                lambda: (
+                    app.service is target
+                    and app.chat_state.phase == RuntimePhase.READY
+                ),
+            )
+            result = (
+                app.service is target,
+                [item.message_text for item in app.query(UserMessage)],
+            )
+            app.request_shutdown(return_code=0)
+            await wait_until(pilot, lambda: target.stopped)
+            return result
+
+    switched, messages = asyncio.run(run())
+    assert switched is True
+    assert messages == ["old question"]
+
+
 def test_clear从非空session创建新session并显示空会话(tmp_path):
     async def run():
         current = ControlledService()
@@ -752,7 +841,7 @@ def test_session命令带图片时恢复完整草稿(tmp_path):
 @pytest.mark.parametrize(
     ("target_status", "start_error"),
     [
-        ({"lifecycle": "running"}, None),
+        ({"lifecycle": "running", "active_task_ids": ["target-task"]}, None),
         ({"lifecycle": "ready"}, RuntimeError("missing Session")),
     ],
 )
