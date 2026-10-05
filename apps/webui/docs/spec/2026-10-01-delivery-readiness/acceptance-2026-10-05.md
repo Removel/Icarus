@@ -26,7 +26,8 @@ Windows 工作区的部分未改动文件是 CRLF，Git blob 为 LF。验证副�
 | --- | --- |
 | 记忆服务、Shell、对话受影响专项 | 97 passed |
 | 批量启停异步断言修正后的记忆列表目录 | 24 passed |
-| WebUI 最终全套 | 170 passed、13 skipped，293.11 秒 |
+| 同步基线前的 WebUI 全套 | 170 passed、13 skipped，293.11 秒 |
+| 合入 feature 后的 WebUI 最终全套 | 180 passed、13 skipped，288.91 秒 |
 | 最新 feature 的 WebUI 生命周期测试（独立导出预览） | 10 passed |
 | WSL 真实服务与模型联调 | 5 passed、8 deselected |
 | Agent 会话标题、存储与 Runtime 专项 | 46 passed |
@@ -48,7 +49,7 @@ Windows 工作区的部分未改动文件是 CRLF，Git blob 为 LF。验证副�
 
 目标仓库为 `Removel/Icarus`，目标分支为 `feature`，来源为 `xilele777:feat/webui`。已确认此前 PR #6 已合入；当前主仓库基线为 `c5f21cf`，`origin/feature` 仍为 `2633c14`，二者不同。
 
-当前应用分支尚未包含最新 `upstream/feature`。只读 `git merge-tree --write-tree HEAD upstream/feature` 检查无冲突；实际同步基线、推送及创建 PR 待用户确认。远端 CI 尚未执行。
+用户授权提交 PR 后，已通过 `889cdf0` 将最新 `upstream/feature`（`c5f21cf`）无冲突合入 `feat/webui`，并通过 `git merge-base --is-ancestor upstream/feature HEAD` 确认包含目标基线。合并后的最终 WSL 回归为 180 passed、13 skipped，完整工程检查、构建与 Node/Python 编译通过。远端 CI 以 PR 的检查结果为准。
 
 额外导出最新基线中的 WebUI 生命周期脚本、测试和仓库控制依赖到 Linux 验证副本，10 项测试通过；此操作没有合并或改写 Git 分支。另逐文件核对 73 个已提交的 WebUI 源码、配置和测试文件，与实际验收副本一致（按 LF 换行比较）。
 
