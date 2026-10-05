@@ -448,7 +448,7 @@ def test_real_memory_pages_filter_before_slicing(live):
     marker = 'WEBUI_PAGE_' + uuid4().hex
     ids = []
     try:
-        for index in range(13):
+        for index in range(16):
             result = api(live, '/api/mem0/memories', 'POST', {
                 'user_id': marker, 'agent_id': 'webui-live-test', 'run_id': 'global',
                 'messages': [{'role': 'user', 'content': f'{marker} 内容 {index}'}],
@@ -458,10 +458,10 @@ def test_real_memory_pages_filter_before_slicing(live):
         prefix = '/api/mem0/memories/page?' + urlencode({'user_id': marker, 'page_size': 12})
         first = api(live, prefix + '&page=1')
         second = api(live, prefix + '&page=2')
-        assert first['total'] == second['total'] == 13
-        assert len(first['results']) == 12 and len(second['results']) == 1
+        assert first['total'] == second['total'] == 16
+        assert len(first['results']) == 12 and len(second['results']) == 4
         assert {row['id'] for row in first['results'] + second['results']} == set(ids)
-        narrowed = api(live, prefix + '&' + urlencode({'query': '内容 12', 'page': 2}))
+        narrowed = api(live, prefix + '&' + urlencode({'query': '内容 15', 'page': 2}))
         assert narrowed['total'] == 1 and narrowed['page'] == 1
         assert narrowed['results'][0]['id'] == ids[-1]
         assert context.request.get(origin + '/api/mem0/memories/page?page_size=0').status == 422
@@ -469,8 +469,8 @@ def test_real_memory_pages_filter_before_slicing(live):
         page.goto(origin + '/#/memory/all')
         page.get_by_role('textbox', name='搜索记忆…').fill(marker)
         paging = page.get_by_role('navigation', name='记忆分页')
-        expect(paging).to_contain_text('共 13 条 · 第 1 / 2 页')
-        expect(page.locator('.memory-entry')).to_have_count(12)
+        expect(paging).to_contain_text('共 16 条 · 每页 15 条 · 第 1 / 2 页')
+        expect(page.locator('.memory-entry')).to_have_count(15)
         paging.get_by_role('button', name='下一页').click()
         expect(paging).to_contain_text('第 2 / 2 页')
         expect(page.locator('.memory-entry')).to_have_count(1)

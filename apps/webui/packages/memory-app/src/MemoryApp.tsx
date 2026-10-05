@@ -56,14 +56,19 @@ export default function MemoryApp({
   const entryTrigger = useRef<HTMLButtonElement | null>(null);
   const listScroll = useRef(0);
   const restoreBulkFocus = useRef(false);
+  const pageSize = api.pageSize;
   const filterKey = JSON.stringify([search.trim(), category, scope, user, tab, descending]);
   const [pagination, setPagination] = useState({ key: filterKey, page: 1 });
   const requestedPage = pagination.key === filterKey ? pagination.page : 1;
+  useEffect(() => {
+    setPagination((current) => (current.key === filterKey ? current : { key: filterKey, page: 1 }));
+  }, [filterKey]);
   const query = new URLSearchParams({
     state: tab,
     query: search.trim(),
     descending: String(descending),
     page: String(requestedPage),
+    page_size: String(pageSize),
   });
   if (category !== 'all') query.set('category', category);
   if (scope !== 'all') query.set('run_id', scope);
@@ -104,7 +109,7 @@ export default function MemoryApp({
   useEffect(() => {
     setChecked([]);
     setSelecting(false);
-  }, [search, category, scope, user, tab, active, requestedPage, descending]);
+  }, [search, category, scope, user, tab, active, descending]);
   useEffect(() => {
     if (selecting)
       document
@@ -188,7 +193,10 @@ export default function MemoryApp({
     setCreate(false);
     data.refresh();
     clearFilters();
-    setPagination({ key: JSON.stringify(['', 'all', 'all', 'all', 'all', descending]), page: 1 });
+    setPagination({
+      key: JSON.stringify(['', 'all', 'all', 'all', 'all', descending]),
+      page: 1,
+    });
     go('all', id);
     Toast.success('已添加记忆');
   }
@@ -380,7 +388,7 @@ export default function MemoryApp({
             className="memory-bulk-trigger"
             type="tertiary"
             theme="borderless"
-            disabled={busy || data.loading || !filtered.length}
+            disabled={busy || data.loading || data.page_size !== pageSize || !filtered.length}
             onClick={() => {
               setChecked([]);
               setSelecting(true);
@@ -446,7 +454,7 @@ export default function MemoryApp({
         aria-label="记忆列表"
         aria-busy={data.loading}
       >
-        {data.loading && <LoadingIndicator label="正在加载记忆" />}
+        {data.loading && !filtered.length && <LoadingIndicator label="正在加载记忆" />}
         {filtered.length ? (
           <div className="memory-list">
             {filtered.map((item) => {
@@ -489,6 +497,7 @@ export default function MemoryApp({
                   data-memory-id={item.id}
                   className={`memory-entry ${checked.includes(item.id) ? 'is-checked' : ''} ${isExpired(item) ? 'is-inactive' : ''}`}
                   key={item.id}
+                  style={{ viewTransitionName: `memory-${CSS.escape(item.id)}` }}
                 >
                   {selecting ? (
                     <Checkbox
@@ -534,7 +543,8 @@ export default function MemoryApp({
       {data.total > 0 && (
         <nav className="memory-pagination" aria-label="记忆分页">
           <span role="status">
-            共 {data.total} 条 · 第 {data.page} / {Math.ceil(data.total / api.pageSize)} 页
+            共 {data.total} 条 · 每页 {data.page_size} 条 · 第 {data.page} /{' '}
+            {Math.ceil(data.total / data.page_size)} 页
           </span>
           <Button
             disabled={data.loading || busy || data.page <= 1}
@@ -543,7 +553,7 @@ export default function MemoryApp({
             上一页
           </Button>
           <Button
-            disabled={data.loading || busy || data.page * api.pageSize >= data.total}
+            disabled={data.loading || busy || data.page * data.page_size >= data.total}
             onClick={() => changePage(data.page + 1)}
           >
             下一页

@@ -67,8 +67,18 @@
 }
 .memory-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
+}
+@media (max-width: 991px) {
+  .memory-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 599px) {
+  .memory-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .memory-entry {
   display: flex;
@@ -86,6 +96,21 @@
 .memory-entry:focus-within {
   border-color: var(--accent);
   box-shadow: 0 4px 16px #0000000a;
+}
+::view-transition-group(*) {
+  animation-duration: 180ms;
+  animation-timing-function: ease-out;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
 }
 .memory-entry.is-checked {
   background: var(--semi-color-primary-light-default);

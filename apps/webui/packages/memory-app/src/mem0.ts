@@ -1,9 +1,10 @@
 import { memoryDate, type MemoryEntry } from './types';
 
-export const pageSize = 12;
+export const pageSize = 15;
 export type MemoryPage = {
   results: MemoryEntry[];
   page: number;
+  page_size: number;
   total: number;
   counts: { all: number; active: number; expired: number };
   categories: string[];
@@ -76,7 +77,7 @@ function record(value: unknown): MemoryEntry {
 
 export async function list(query: string, signal?: AbortSignal): Promise<MemoryPage> {
   const result = await request<Omit<MemoryPage, 'results'> & { results: unknown[] }>(
-    `/memories/page?${query}&page_size=${pageSize}`,
+    `/memories/page?${query}`,
     'GET',
     undefined,
     signal,
@@ -85,6 +86,9 @@ export async function list(query: string, signal?: AbortSignal): Promise<MemoryP
     !Array.isArray(result.results) ||
     !result.counts ||
     !Number.isInteger(result.total) ||
+    !Number.isInteger(result.page_size) ||
+    result.page_size < 1 ||
+    result.page_size > 100 ||
     !Array.isArray(result.categories) ||
     !Array.isArray(result.users) ||
     !Array.isArray(result.scopes)

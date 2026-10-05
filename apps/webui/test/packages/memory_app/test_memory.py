@@ -76,9 +76,9 @@ def test_bulk_lifecycle_and_selection_scope(page):
     expect(page.get_by_role("button", name="多选", exact=True)).to_be_focused()
     assert page.get_by_role("checkbox").count() == 0
     page.get_by_role("tab", name=re.compile("^生效中")).click()
-    assert page.get_by_role("heading", name="没有找到匹配的内容").is_visible()
+    expect(page.get_by_role("heading", name="没有找到匹配的内容")).to_be_visible()
     page.get_by_role("tab", name=re.compile("^已失效")).click()
-    assert page.locator(".memory-entry").count() == 8
+    expect(page.locator(".memory-entry")).to_have_count(8)
     page.get_by_role("button", name="多选", exact=True).click()
     page.get_by_text("全选当前结果", exact=True).click()
     assert page.get_by_role("button", name=re.compile("^暂停使用")).count() == 0
@@ -87,7 +87,7 @@ def test_bulk_lifecycle_and_selection_scope(page):
     assert page.get_by_role("heading", name="没有找到匹配的内容").is_visible()
     expect(page.get_by_role("region", name="记忆列表", exact=True)).to_be_focused()
     page.get_by_role("tab", name=re.compile("^生效中")).click()
-    assert page.locator(".memory-entry").count() == 8
+    expect(page.locator(".memory-entry")).to_have_count(8)
 
 
 def test_bulk_rows_keyboard_and_filtered_results(page):

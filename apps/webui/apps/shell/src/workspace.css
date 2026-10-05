@@ -76,6 +76,14 @@ body,
   flex-direction: column;
   min-height: 0;
 }
+@media (min-width: 992px) and (prefers-reduced-motion: no-preference) {
+  .app-sidebar {
+    transition:
+      flex-basis 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      width 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      padding-inline 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
 .app-sidebar nav {
   display: flex;
   flex-direction: column;
@@ -92,6 +100,39 @@ body,
 .nav-group-heading {
   position: relative;
 }
+.nav-toggle {
+  display: none;
+  flex: 0 0 32px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: var(--user);
+  background: transparent;
+  cursor: pointer;
+}
+.nav-toggle:hover {
+  color: var(--ink);
+  background: var(--raised);
+}
+.nav-toggle[aria-expanded='true'] > svg {
+  transform: rotate(90deg);
+}
+@media (min-width: 992px) {
+  .app-layout:not(.is-collapsed) .nav-group-heading {
+    display: flex;
+    align-items: center;
+  }
+  .app-layout:not(.is-collapsed) .nav-group-heading > .nav-link {
+    flex: 1;
+    min-width: 0;
+  }
+  .app-layout:not(.is-collapsed) .nav-toggle {
+    display: flex;
+  }
+}
 .nav-link {
   display: flex;
   align-items: center;
@@ -106,6 +147,7 @@ body,
 }
 .nav-link > svg {
   color: var(--muted);
+  flex-shrink: 0;
 }
 .nav-link:hover {
   background: var(--raised);
@@ -126,18 +168,22 @@ body,
 }
 .app-sidebar .knowledge-subnav {
   gap: 2px;
-  margin: 4px 0 6px;
-  padding: 0 0 0 16px;
+  margin: 4px 0 6px 21px;
+  padding: 0 0 0 12px;
+  border-left: 1px solid var(--line);
+}
+.knowledge-subnav.is-closed {
+  display: none;
 }
 .nav-child {
-  min-height: 32px;
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: 13px;
+  min-height: 40px;
+  padding: 8px;
+  color: var(--user);
+  font-size: 14px;
 }
 .nav-child > svg {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
 }
 .nav-child.active {
   background: var(--subtle);
@@ -189,19 +235,53 @@ body,
   display: none;
 }
 .is-collapsed .app-sidebar .knowledge-subnav {
-  margin: 4px 0 8px 8px;
-  padding: 0 0 0 5px;
-  border-left: 1px solid var(--line);
+  display: flex;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 0;
+  border-left: 0;
 }
 .is-collapsed .nav-link,
 .is-collapsed .sidebar-footer .semi-button {
   justify-content: center;
   padding-inline: 0;
 }
-.is-collapsed .nav-child > svg {
-  display: block;
-  width: 14px;
-  height: 14px;
+@media (min-width: 768px) {
+  .is-collapsed .app-sidebar #app-navigation {
+    gap: 14px;
+  }
+  .is-collapsed .nav-group-knowledge {
+    margin-inline: 2px;
+    padding-block: 4px;
+    border-radius: 10px;
+    background: var(--subtle);
+    box-shadow: 0 1px 6px 1px color-mix(in srgb, var(--line) 20%, transparent);
+  }
+  .is-collapsed .app-sidebar .knowledge-subnav {
+    margin-inline: 1px;
+    padding-block: 3px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--subtle) 80%, var(--line));
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--line) 20%, transparent);
+  }
+  .is-collapsed .nav-link,
+  .is-collapsed .sidebar-footer .semi-button {
+    display: flex;
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    margin-inline: auto;
+    padding: 0;
+  }
+  .is-collapsed .nav-link > svg {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+  }
+  .is-collapsed .nav-child > svg {
+    width: 16px;
+    height: 16px;
+  }
 }
 .skip-link {
   position: absolute;
@@ -225,6 +305,16 @@ body,
   min-height: 0;
 }
 @media (min-width: 768px) and (max-width: 991px) {
+  .app-sidebar #app-navigation {
+    gap: 14px;
+  }
+  .nav-group-knowledge {
+    margin-inline: 2px;
+    padding-block: 4px;
+    border-radius: 10px;
+    background: var(--subtle);
+    box-shadow: 0 1px 6px 1px color-mix(in srgb, var(--line) 20%, transparent);
+  }
   .app-sidebar {
     flex-basis: 64px;
     width: 64px;
@@ -236,17 +326,30 @@ body,
   }
   .nav-link {
     justify-content: center;
-    padding-inline: 0;
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    margin-inline: auto;
+    padding: 0;
   }
-  .nav-child > svg {
-    display: block;
-    width: 14px;
-    height: 14px;
+  .nav-link > svg {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
   }
   .app-sidebar .knowledge-subnav {
-    margin: 4px 0 8px 8px;
-    padding: 0 0 0 5px;
-    border-left: 1px solid var(--line);
+    display: flex;
+    gap: 2px;
+    margin: 6px 1px 0;
+    padding: 3px 0;
+    border-left: 0;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--subtle) 80%, var(--line));
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--line) 20%, transparent);
+  }
+  .nav-child > svg {
+    width: 16px;
+    height: 16px;
   }
   .page {
     padding: 24px;
@@ -303,6 +406,7 @@ body,
     grid-column: 1 / -1;
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
     margin: 2px 0 0;
     padding: 6px 0 0;
     border-left: 0;

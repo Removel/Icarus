@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { ArrowDown, Search, X, SearchX } from 'lucide-react';
+import { flushSync } from 'react-dom';
 import {
   Button,
   Input,
@@ -31,6 +32,30 @@ export {
   Dropdown,
 } from '@douyinfe/semi-ui';
 export { navigate, useHashLocation, useUnsavedChanges } from './navigation';
+
+let layoutTransition: ViewTransition | undefined;
+
+export function transitionLayout(update: () => void, animate = true) {
+  layoutTransition?.skipTransition();
+  layoutTransition = undefined;
+  if (
+    !animate ||
+    !document.startViewTransition ||
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
+    update();
+    return;
+  }
+  const transition = document.startViewTransition(() => flushSync(update));
+  layoutTransition = transition;
+  void transition.ready.catch(() => {});
+  const clear = () => {
+    if (layoutTransition === transition) {
+      layoutTransition = undefined;
+    }
+  };
+  void transition.finished.then(clear, clear);
+}
 
 export function LoadingIndicator({ label = '正在加载' }: { label?: string }) {
   return (

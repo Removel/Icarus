@@ -51,7 +51,7 @@ def fake_mem0(page):
             size = int(params.get('page_size', 12))
             current = min(int(params.get('page', 1)), max(1, (len(matches) + size - 1) // size))
             active = sum(not expired(row) for row in all_rows)
-            result = dict(results=matches[(current - 1) * size:current * size], page=current,
+            result = dict(results=matches[(current - 1) * size:current * size], page=current, page_size=size,
                           total=len(matches), counts=dict(all=len(all_rows), active=active, expired=len(all_rows) - active),
                           categories=sorted({category(row) for row in all_rows}),
                           users=sorted({row.get('user_id', '') for row in all_rows}),
@@ -71,7 +71,7 @@ def fake_mem0(page):
                 route.fulfill(body="null", content_type="application/json")
                 return
             if path.endswith('/history'):
-                result = histories[id]
+                result = histories.get(id, [])
             elif request.method == 'GET':
                 result = rows[id]
             elif request.method == 'PUT':

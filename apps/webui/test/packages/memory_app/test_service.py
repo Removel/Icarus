@@ -1,4 +1,38 @@
+import math
+import re
+
 from playwright.sync_api import expect
+
+
+def memory_page_size(page):
+    # Observe a settled response and layout, including the initial card-height measurement.
+    page.evaluate('window.memoryPageSettlement = undefined')
+    page.wait_for_function('''() => {
+        const board = document.querySelector('.memory-board');
+        const footer = document.querySelector('.memory-pagination');
+        if (!board || !footer || board.getAttribute('aria-busy') !== 'false') {
+            window.memoryPageSettlement = undefined;
+            return false;
+        }
+        const signature = [footer.textContent, board.clientWidth, board.clientHeight,
+            board.querySelectorAll('.memory-entry').length].join('|');
+        const previous = window.memoryPageSettlement;
+        if (!previous || previous.signature !== signature) {
+            window.memoryPageSettlement = {signature, time: performance.now()};
+            return false;
+        }
+        return performance.now() - previous.time >= 300;
+    }''')
+    text = page.get_by_role('navigation', name='记忆分页').inner_text()
+    return int(re.search(r'每页 (\d+) 条', text).group(1))
+
+
+def seed_paged_memories(page, count=60):
+    template = page.mem0_rows['mem_a8f2c1']
+    for index in range(count):
+        row = dict(template, id=f'page-{index}', memory=f'分页记忆 {index}',
+                   updated_at=f'2026-10-02T{index // 60:02}:{index % 60:02}:00Z')
+        page.mem0_rows[row['id']] = row
 
 
 def test_service_update_preserves_metadata_and_survives_reload(page):
@@ -126,32 +160,168 @@ def test_legacy_scope_can_be_recreated_without_destroying_old_memory(page):
 
 
 def test_memory_paging_filter_sort_and_selection_scope(page):
-    template = page.mem0_rows['mem_a8f2c1']
-    for index in range(30):
-        row = dict(template, id=f'page-{index}', memory=f'分页记忆 {index}',
-                   updated_at=f'2026-10-02T00:{index:02}:00Z')
-        page.mem0_rows[row['id']] = row
+    seed_paged_memories(page, 30)
     page.reload()
-    expect(page.locator('.memory-entry')).to_have_count(12)
+    size = memory_page_size(page)
+    pages = math.ceil(38 / size)
+    expect(page.locator('.memory-entry')).to_have_count(size)
     paging = page.get_by_role('navigation', name='记忆分页')
-    expect(paging).to_contain_text('共 38 条 · 第 1 / 4 页')
+    expect(paging).to_contain_text(f'共 38 条 · 每页 {size} 条 · 第 1 / {pages} 页')
     page.get_by_role('button', name='多选', exact=True).click()
     page.get_by_text('全选当前结果', exact=True).click()
-    expect(page.locator('.selection-count')).to_have_text('已选 12 条')
+    expect(page.locator('.selection-count')).to_have_text(f'已选 {size} 条')
     paging.get_by_role('button', name='下一页').click()
-    expect(paging).to_contain_text('第 2 / 4 页')
+    expect(paging).to_contain_text(f'第 2 / {pages} 页')
     expect(page.get_by_role('button', name='多选', exact=True)).to_be_visible()
-    expect(page.locator('.memory-content').first).to_have_text('分页记忆 17')
+    expect(page.locator('.memory-content').first).to_have_text(f'分页记忆 {29 - size}')
     search = page.get_by_role('textbox', name='搜索记忆…')
     search.fill('分页记忆 29')
     expect(page.locator('.memory-entry')).to_have_count(1)
-    expect(paging).to_contain_text('共 1 条 · 第 1 / 1 页')
+    expect(paging).to_contain_text('共 1 条')
+    expect(paging).to_contain_text('第 1 / 1 页')
     expect(page.locator('.memory-content')).to_have_text('分页记忆 29')
     search.fill('')
-    expect(page.locator('.memory-entry')).to_have_count(12)
+    size = memory_page_size(page)
+    expect(page.locator('.memory-entry')).to_have_count(size)
+    expect(paging).to_contain_text('第 1 /')
     page.get_by_role('button', name='更新时间：从新到旧', exact=True).click()
     expect(page.locator('.memory-content').first).to_have_text('本轮原型评审安排在九月第一周。')
     assert any('page=2' in url for method, path, _, url in page.mem0_calls if path == '/memories/page')
+
+
+def test_fixed_page_size_preserves_page_across_sidebar_and_window_resize(page):
+    seed_paged_memories(page)
+    page.set_viewport_size({'width': 1280, 'height': 1080})
+    page.reload()
+    assert memory_page_size(page) == 15
+    paging = page.get_by_role('navigation', name='记忆分页')
+    paging.get_by_role('button', name='下一页').click()
+    memory_page_size(page)
+    ids = page.locator('.memory-entry').evaluate_all('cards => cards.map(card => card.dataset.memoryId)')
+    requests = len(page.mem0_calls)
+    for action in ['收起侧边栏', '展开侧边栏']:
+        page.get_by_role('button', name=action, exact=True).click()
+        assert memory_page_size(page) == 15
+        assert page.locator('.memory-entry').evaluate_all('cards => cards.map(card => card.dataset.memoryId)') == ids
+        expect(paging).to_contain_text('第 2 / 5 页')
+    for width, height in [(1280, 600), (1920, 4000), (390, 844)]:
+        page.set_viewport_size({'width': width, 'height': height})
+        assert memory_page_size(page) == 15
+        expect(page.locator('.memory-entry')).to_have_count(15)
+        assert page.locator('.memory-entry').evaluate_all('cards => cards.map(card => card.dataset.memoryId)') == ids
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert len(page.mem0_calls) == requests
+
+
+def test_resize_keeps_bulk_selection_and_edit_draft_stable(page):
+    seed_paged_memories(page)
+    page.set_viewport_size({'width': 1280, 'height': 1080})
+    page.reload()
+    original_size = memory_page_size(page)
+    page.get_by_role('button', name='多选', exact=True).click()
+    page.get_by_text('全选当前结果', exact=True).click()
+    page.get_by_role('button', name='收起侧边栏', exact=True).click()
+    assert memory_page_size(page) == original_size
+    expect(page.locator('.selection-count')).to_have_text(f'已选 {original_size} 条')
+    expect(page.locator('.memory-entry')).to_have_count(original_size)
+    page.get_by_role('button', name='取消多选', exact=True).click()
+    resized_size = memory_page_size(page)
+    assert resized_size == original_size == 15
+
+    page.locator('.memory-entry-open').first.click()
+    detail = page.get_by_role('dialog')
+    detail.get_by_role('button', name='修正内容', exact=True).click()
+    editor = detail.get_by_role('textbox', name='修正记忆内容')
+    editor.fill('缩放时仍保留的草稿')
+    page.set_viewport_size({'width': 1920, 'height': 1400})
+    assert memory_page_size(page) == resized_size
+    expect(editor).to_have_value('缩放时仍保留的草稿')
+    page.keyboard.press('Escape')
+    detail.get_by_role('button', name='放弃修改', exact=True).click()
+    detail.wait_for(state='hidden')
+    assert memory_page_size(page) == resized_size
+
+
+def test_sidebar_animates_width_without_replacing_cards_or_changing_columns(page):
+    seed_paged_memories(page)
+    page.set_viewport_size({'width': 1280, 'height': 1080})
+    page.reload()
+    assert memory_page_size(page) == 15
+    page.emulate_media(reduced_motion='no-preference')
+    page.evaluate("window.memoryOriginalCards = [...document.querySelectorAll('.memory-entry')]")
+    requests = len(page.mem0_calls)
+    original = page.locator('.memory-entry').first.bounding_box()
+    columns = page.locator('.memory-list').evaluate(
+        'element => getComputedStyle(element).gridTemplateColumns.split(" ").length')
+    assert columns == 5
+    report = page.evaluate('''async () => {
+        let mutations = 0, minOpacity = 1, intermediateWidth = false;
+        const observer = new MutationObserver(records => mutations += records.length);
+        observer.observe(document.querySelector('.memory-list'), {childList: true});
+        document.querySelector('[aria-label="收起侧边栏"]').click();
+        const started = performance.now();
+        await new Promise(resolve => {
+            function sample() {
+                const width = document.querySelector('.app-sidebar').getBoundingClientRect().width;
+                intermediateWidth ||= width > 65 && width < 207;
+                for (const card of window.memoryOriginalCards)
+                    minOpacity = Math.min(minOpacity, Number(getComputedStyle(card).opacity));
+                if (performance.now() - started < 400) requestAnimationFrame(sample); else resolve();
+            }
+            requestAnimationFrame(sample);
+        });
+        observer.disconnect();
+        return {mutations, minOpacity, intermediateWidth,
+            retained: window.memoryOriginalCards.every((card, index) =>
+                card === document.querySelectorAll('.memory-entry')[index])};
+    }''')
+    assert report == {'mutations': 0, 'minOpacity': 1, 'intermediateWidth': True, 'retained': True}
+    assert len(page.mem0_calls) == requests
+    assert page.locator('.memory-list').evaluate(
+        'element => getComputedStyle(element).gridTemplateColumns.split(" ").length') == columns
+    current = page.locator('.memory-entry').first.bounding_box()
+    assert current['width'] > original['width']
+    assert abs(current['y'] - original['y']) <= 1
+    expect(page.locator('.memory-board')).to_have_attribute('aria-busy', 'false')
+    page.screenshot(path='test-results/memory-stable-collapsed.png', full_page=True)
+    page.get_by_role('button', name='展开侧边栏', exact=True).click()
+    memory_page_size(page)
+    assert len(page.mem0_calls) == requests
+
+
+def test_sidebar_resize_cancels_running_page_animation(page):
+    seed_paged_memories(page)
+    page.set_viewport_size({'width': 1280, 'height': 1080})
+    page.reload()
+    size = memory_page_size(page)
+    page.emulate_media(reduced_motion='no-preference')
+    page.add_style_tag(content='::view-transition-group(*) { animation-duration: 2s !important; }')
+    page.evaluate('''() => {
+        const start = document.startViewTransition.bind(document);
+        window.memorySkippedTransitions = 0;
+        document.startViewTransition = update => {
+            const transition = start(update);
+            const skip = transition.skipTransition.bind(transition);
+            transition.skipTransition = () => {
+                window.memorySkippedTransitions++;
+                skip();
+            };
+            window.memoryTransition = transition;
+            return transition;
+        };
+    }''')
+    page.get_by_role('navigation', name='记忆分页').get_by_role('button', name='下一页').click()
+    page.wait_for_function('window.memoryTransition !== undefined')
+    page.evaluate('''async () => {
+        await window.memoryTransition.ready;
+        document.querySelector('[aria-label="收起侧边栏"]').click();
+        await window.memoryTransition.finished;
+    }''')
+    assert page.evaluate('window.memorySkippedTransitions') == 1
+    assert memory_page_size(page) == size == 15
+    assert page.evaluate('''() => document.getAnimations().filter(animation =>
+        animation.effect?.pseudoElement?.startsWith('::view-transition')
+    ).length''') == 0
 
 
 def test_agent_record_source_properties_and_body_priority(page):

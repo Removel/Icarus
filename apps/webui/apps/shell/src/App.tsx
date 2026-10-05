@@ -13,6 +13,7 @@ import {
   Moon,
   Monitor,
   Check,
+  ChevronRight,
 } from 'lucide-react';
 import {
   BrandMark,
@@ -21,6 +22,7 @@ import {
   Layout,
   LoadingIndicator,
   navigate,
+  transitionLayout,
   useHashLocation,
 } from '@icarus/ui';
 import { useTheme, type Theme } from './theme';
@@ -73,6 +75,7 @@ export default function App() {
     return '#/knowledge/' + section + (params.size ? '?' + params : '');
   }
   const [collapsed, setCollapsed] = useState(false);
+  const [knowledgeExpanded, setKnowledgeExpanded] = useState(true);
 
   useEffect(() => {
     if (!routes.some((item) => item.id === route)) {
@@ -167,11 +170,24 @@ export default function App() {
                     <item.icon size={18} strokeWidth={1.5} />
                     <span>{item.label}</span>
                   </a>
+                  {item.id === 'knowledge' && (
+                    <button
+                      type="button"
+                      className="nav-toggle"
+                      onClick={() => setKnowledgeExpanded((value) => !value)}
+                      aria-label={knowledgeExpanded ? '收起知识库分类' : '展开知识库分类'}
+                      aria-expanded={knowledgeExpanded}
+                      aria-controls="knowledge-navigation"
+                      title={knowledgeExpanded ? '收起知识库分类' : '展开知识库分类'}
+                    >
+                      <ChevronRight size={16} strokeWidth={1.5} aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
                 {item.id === 'knowledge' && (
                   <nav
                     id="knowledge-navigation"
-                    className="knowledge-subnav"
+                    className={`knowledge-subnav${knowledgeExpanded ? '' : ' is-closed'}`}
                     aria-label="知识库分类"
                   >
                     {knowledgeLinks.map((child) => (
@@ -180,7 +196,7 @@ export default function App() {
                         className={`nav-link nav-child ${route === 'knowledge' && knowledgeSection === child.id ? 'active' : ''}`}
                         href={knowledgePath(child.id)}
                         onClick={followLink}
-                        title={child.label}
+                        title={`知识库 › ${child.label}`}
                         aria-label={child.label}
                         aria-current={
                           route === 'knowledge' && knowledgeSection === child.id
@@ -188,7 +204,7 @@ export default function App() {
                             : undefined
                         }
                       >
-                        <child.icon size={14} strokeWidth={1.5} />
+                        <child.icon size={18} strokeWidth={1.5} />
                         <span>{child.label}</span>
                       </a>
                     ))}
@@ -202,7 +218,7 @@ export default function App() {
               theme="borderless"
               type="tertiary"
               icon={collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-              onClick={() => setCollapsed((value) => !value)}
+              onClick={() => transitionLayout(() => setCollapsed((value) => !value), false)}
               aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
               aria-expanded={!collapsed}
               aria-controls="app-navigation"
