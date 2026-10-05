@@ -231,4 +231,3 @@ python apps/openkb/scripts/icarus_compose.py build
 不要为了普通重启更换或清空数据目录，否则旧会话、记忆和知识库可能无法继续使用。修改根 `.env` 后，Gateway 和 WebUI 需要重启才能可靠应用；服务容器配置有变化时，重新执行第 2 节的 `up` 命令。
 
 这份清单只记录本机操作步骤，不包含任何密钥。
-
