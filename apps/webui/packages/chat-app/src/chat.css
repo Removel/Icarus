@@ -368,6 +368,51 @@
   max-width: 100%;
   height: auto;
 }
+.chat-code-block {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--subtle);
+}
+.chat-code-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 4px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-code-heading > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-markdown .chat-code-block pre[class*='language-'] {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 360px;
+  border-radius: 0;
+  background: transparent;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.chat-code-block .semi-codeHighlight code[class*='language-'] {
+  background: transparent;
+  padding: 0;
+}
+.chat-message-actions {
+  display: flex;
+  margin-top: 6px;
+}
+.chat-copy.semi-button {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
 .chat-user {
   align-self: flex-end;
   width: fit-content;
@@ -717,6 +762,50 @@
 }
 .chat-process pre {
   margin-bottom: 4px;
+}
+.chat-process .chat-thinking {
+  padding: 0;
+}
+.chat-reasoning-pending {
+  padding: 6px 8px;
+}
+.chat-thinking .semi-ai-chat-dialogue-reasoning-wrapper {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  color: inherit;
+}
+.chat-thinking .semi-ai-chat-dialogue-reasoning-header {
+  height: 34px;
+  padding: 6px 8px;
+  gap: 6px;
+}
+.chat-thinking .semi-ai-chat-dialogue-reasoning-header-title {
+  font-size: 12px;
+  line-height: 22px;
+  font-weight: 400;
+}
+.chat-thinking .semi-ai-chat-dialogue-reasoning-header-prefix,
+.chat-thinking .semi-ai-chat-dialogue-reasoning-header-suffix {
+  width: 14px;
+  height: 14px;
+}
+.chat-thinking .semi-ai-chat-dialogue-reasoning-header svg {
+  width: 14px;
+  height: 14px;
+}
+.chat-thinking .semi-ai-chat-dialogue-reasoning-content {
+  padding: 0 8px 6px;
+  border: 0;
+  color: var(--ink);
+}
+.chat-thinking pre {
+  cursor: text;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking .semi-collapsible-wrapper {
+    transition: none;
+  }
 }
 .chat-navigation {
   position: absolute;

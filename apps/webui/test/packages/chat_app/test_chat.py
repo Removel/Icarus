@@ -243,7 +243,9 @@ def test_burst_output_and_thinking_reveal_progressively_and_history_is_immediate
     }''')
     thinking = '思考中的内容，应该渐进显示而不是整块突然出现。' * 20
     answer = '平滑输出的正文，包含完整结果和后续补全的文字。' * 30 + '🌷'
+    emit('task.started', {})
     emit('assistant.thinking_delta', {'step': 1, 'text': thinking})
+    expect(page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header')).to_have_count(1)
     emit('assistant.text_delta', {'step': 1, 'text': answer[:200]})
     emit('assistant.message', {'step': 1, 'text': answer})
     emit('assistant.thinking', {'step': 1, 'text': thinking})
@@ -264,6 +266,8 @@ def test_burst_output_and_thinking_reveal_progressively_and_history_is_immediate
     expect(content).to_have_text(answer)
     page.reload()
     expect(content).to_have_text(answer)
+    page.locator('.chat-process > summary').click()
+    page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header').click()
     expect(thought).to_have_text(thinking)
     expect(content).not_to_have_attribute('data-streaming', 'true')
 
@@ -595,7 +599,7 @@ def test_process_window_fits_five_rows_and_respects_manual_scroll(page, width):
     emit('assistant.thinking', {'step': 9, 'text': '新增过程'})
     expect(page.locator('.chat-thinking')).to_have_count(9)
     assert items.evaluate('el => el.scrollTop') == 0
-    page.locator('.chat-thinking summary').first.click()
+    page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header').first.click()
     assert items.evaluate('el => el.scrollTop') == 0
     assert items.evaluate('el => el.clientHeight') == 194
     items.evaluate('el => el.scrollTop = el.scrollHeight')
@@ -854,3 +858,158 @@ def test_long_session_title_scrolls_on_hover_and_tooltip_is_readable(page, theme
     short = page.get_by_role('button', name='短标题', exact=True)
     short.hover()
     assert short.locator('.chat-session-title-text').evaluate('el => getComputedStyle(el).animationName') == 'none'
+
+
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+@pytest.mark.parametrize('width', [390, 1440])
+def test_semi_code_highlight_copy_and_horizontal_scroll(page, theme, width):
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
+    _, emit = gateway(page)
+    code = 'print("' + 'long line ' * 60 + '")'
+    emit('assistant.text_delta', {'step': 1, 'text': '内联 `value`\n\n```python\n' + code})
+    block = page.locator('.chat-code-block')
+    expect(block.locator('.chat-code-heading > span')).to_have_text('python')
+    expect(block.locator('pre code')).to_have_text(code)
+    assert block.locator('.token').count() > 0
+    assert page.get_by_role('button', name='复制回答', exact=True).count() == 0
+    block.get_by_role('button', name='复制代码', exact=True).click()
+    expect(block.get_by_role('button', name='已复制代码', exact=True)).to_be_visible()
+    assert page.evaluate('navigator.clipboard.readText()') == code
+    assert block.locator('pre').evaluate('el => el.scrollWidth > el.clientWidth')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    expect(page.locator('.chat-markdown p > code')).to_have_text('value')
+    emit('assistant.message', {'step': 1, 'text': '内联 `value`\n\n```python\n' + code + '\n```'})
+    expect(page.get_by_role('button', name='复制回答', exact=True)).to_be_visible()
+    page.screenshot(path=f'test-results/chat-semi-code-{theme}-{width}.png', full_page=True)
+
+
+@pytest.mark.parametrize('language,code', [
+    ('javascript', 'const value = 1;'),
+    ('typescript', 'const value: number = 1;'),
+    ('json', '{"value": 1}'),
+    ('bash', 'echo "$HOME"'),
+    ('unknown-language', '<script>alert(1)</script>'),
+    ('', 'plain <text>'),
+])
+def test_code_languages_and_plain_fallback_survive_history_reload(page, language, code):
+    _, emit = gateway(page)
+    emit('assistant.message', {'step': 1, 'text': f'```{language}\n{code}\n```'})
+    block = page.locator('.chat-code-block')
+    expect(block.locator('.chat-code-heading > span')).to_have_text(language or '纯文本')
+    expect(block.locator('pre code')).to_have_text(code)
+    if language and language != 'unknown-language':
+        assert block.locator('.token').count() > 0
+    assert block.locator('script').count() == 0
+    page.reload()
+    expect(block.locator('pre code')).to_have_text(code)
+
+
+def test_message_copy_keeps_raw_markdown_and_does_not_submit_or_scroll(page):
+    page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
+    state, emit = gateway(page)
+    answer = '# 标题\n\n**完整回答** 🌷\n\n```python\nprint(1)\n```'
+    emit('assistant.text_delta', {'step': 1, 'text': '# 标题'})
+    expect(page.get_by_role('button', name='复制回答', exact=True)).to_have_count(0)
+    emit('assistant.message', {'step': 1, 'text': answer})
+    expect(page.locator('.chat-markdown h1')).to_have_text('标题')
+    container = page.locator('.chat-transcript')
+    top = container.evaluate('el => el.scrollTop')
+    page.get_by_role('button', name='复制回答', exact=True).click()
+    expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
+    assert page.evaluate('navigator.clipboard.readText()') == answer
+    assert container.evaluate('el => el.scrollTop') == top
+    page.reload()
+    page.get_by_role('button', name='复制回答', exact=True).click()
+    expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
+    assert page.evaluate('navigator.clipboard.readText()') == answer
+    assert not any(call['method'] in {'session.submit', 'session.steer'} for call in state['calls'])
+
+
+def test_copy_failure_keeps_button_available_without_success_feedback(page):
+    _, emit = gateway(page)
+    emit('assistant.message', {'step': 1, 'text': '需要复制的回答'})
+    page.evaluate("() => { navigator.clipboard.writeText = async () => { throw new Error('denied'); }; }")
+    page.get_by_role('button', name='复制回答', exact=True).click()
+    expect(page.get_by_text('复制失败，请选择文本后手动复制', exact=True)).to_be_visible()
+    expect(page.get_by_role('button', name='已复制回答', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='复制回答', exact=True)).to_be_enabled()
+
+
+def test_reasoning_loads_on_demand_without_blocking_message_copy(page):
+    pending = []
+    page.route('**/packages/ui/src/ai.ts*', lambda route: pending.append(route))
+    page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
+    _, emit = gateway(page)
+    emit('task.started', {})
+    answer = '```python\nprint(1)\n```'
+    emit('assistant.message', {'step': 1, 'text': answer})
+    expect(page.get_by_role('button', name='复制回答', exact=True)).to_be_visible()
+    assert not pending
+    emit('assistant.thinking_delta', {'step': 2, 'text': '继续分析'})
+    page.locator('.chat-process > summary').click()
+    expect(page.locator('.chat-reasoning-pending')).to_be_visible()
+    assert len(pending) == 1
+    page.get_by_role('button', name='复制回答', exact=True).click()
+    expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
+    assert page.evaluate('navigator.clipboard.readText()') == answer
+    pending[0].continue_()
+    expect(page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header')).to_contain_text('正在思考')
+    expect(page.locator('.chat-thinking pre')).to_have_text('继续分析')
+    expect(page.locator('.chat-reasoning-pending')).to_have_count(0)
+
+
+@pytest.mark.parametrize('motion', ['reduce', 'no-preference'])
+def test_semi_reasoning_preserves_manual_collapse_and_history(page, motion):
+    page.emulate_media(reduced_motion=motion)
+    _, emit = gateway(page)
+    emit('task.started', {})
+    emit('assistant.thinking_delta', {'step': 1, 'text': '第一段思考'})
+    page.locator('.chat-process > summary').click()
+    thought = page.locator('.chat-thinking')
+    header = thought.locator('.semi-ai-chat-dialogue-reasoning-header')
+    panel = thought.locator('.semi-collapsible-wrapper')
+    expect(header).to_contain_text('正在思考')
+    expect(thought.locator('pre')).to_have_text('第一段思考')
+    header.click()
+    page.wait_for_function("document.querySelector('.chat-thinking .semi-collapsible-wrapper').getBoundingClientRect().height === 0")
+    if motion == 'no-preference':
+        page.evaluate('''() => {
+            window.thoughtFrames = new Map();
+            window.thoughtFrameId = 0;
+            window.thoughtTime = performance.now();
+            window.requestAnimationFrame = callback => {
+                const id = ++window.thoughtFrameId;
+                window.thoughtFrames.set(id, callback);
+                return id;
+            };
+            window.cancelAnimationFrame = id => window.thoughtFrames.delete(id);
+        }''')
+    emit('assistant.thinking_delta', {'step': 1, 'text': '，第二段思考'})
+    emit('assistant.thinking', {'step': 1, 'text': '第一段思考，第二段思考'})
+    expect(header).to_contain_text('已思考完成')
+    assert panel.bounding_box()['height'] == 0
+    if motion == 'no-preference':
+        page.evaluate('''() => {
+            for (let i = 0; i < 80; i++) {
+                window.thoughtTime += 16;
+                const frames = [...window.thoughtFrames.values()];
+                window.thoughtFrames.clear();
+                frames.forEach(callback => callback(window.thoughtTime));
+            }
+        }''')
+    thought.get_by_role('button').focus()
+    thought.get_by_role('button').press('Enter')
+    expect(thought.locator('pre')).to_have_text('第一段思考，第二段思考')
+    expect(thought.locator('pre')).not_to_have_attribute('data-streaming', 'true')
+    thought.locator('pre').click()
+    expect(thought.locator('pre')).to_be_visible()
+    emit('task.finished', {'status': 'completed'})
+    page.reload()
+    page.locator('.chat-process > summary').click()
+    expect(header).to_contain_text('已思考完成')
+    assert panel.bounding_box()['height'] == 0
+    header.click()
+    expect(thought.locator('pre')).to_have_text('第一段思考，第二段思考')
+    page.screenshot(path=f'test-results/chat-semi-reasoning-{motion}.png', full_page=True)

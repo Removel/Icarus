@@ -19,6 +19,7 @@ import {
 } from '@douyinfe/semi-ui';
 
 export {
+  CodeHighlight,
   Button,
   Input,
   TextArea,

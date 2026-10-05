@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, List, MessageSquare } from 'lucide-react';
 import { Button, LoadingIndicator, SearchField } from '@icarus/ui';
 import ChatContent from './ChatContent';
+import ChatCopyButton from './ChatCopyButton';
 import ChatProcess from './ChatProcess';
 import ThinkingWave from './ThinkingWave';
 import { emptyTranscript } from './updates';
@@ -203,6 +204,11 @@ export default function ChatTranscript({
                 live={Boolean(item.kind === 'assistant' && item.live && active && !loading)}
                 onGrowth={onGrowth}
               />
+              {item.kind === 'assistant' && item.final && item.text && (
+                <div className="chat-message-actions">
+                  <ChatCopyButton text={item.text} label="复制回答" />
+                </div>
+              )}
             </article>
           );
         })}

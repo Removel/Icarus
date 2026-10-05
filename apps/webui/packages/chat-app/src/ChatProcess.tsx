@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef } from 'react';
-import ChatContent from './ChatContent';
+import ChatReasoning from './ChatReasoning';
 import ThinkingWave from './ThinkingWave';
 import type { ChatItem } from './updates';
 
@@ -70,23 +70,23 @@ export default function ChatProcess({
           if (follow.current) followedTop.current = node.scrollTop;
         }}
       >
-        {entries.map((entry) => (
-          <details className={`chat-message chat-${entry.kind}`} key={entry.id} onToggle={grow}>
-            <summary>
-              {entry.kind === 'thinking' ? '思考过程' : `${entry.label} · ${entry.text}`}
-            </summary>
-            {entry.kind === 'thinking' ? (
-              <ChatContent
-                text={entry.text}
-                live={Boolean(entry.live && active && !loading)}
-                plain
-                onGrowth={grow}
-              />
-            ) : (
+        {entries.map((entry) =>
+          entry.kind === 'thinking' ? (
+            <ChatReasoning
+              key={entry.id}
+              entry={entry}
+              running={running}
+              active={active}
+              loading={loading}
+              onGrowth={grow}
+            />
+          ) : (
+            <details className={`chat-message chat-${entry.kind}`} key={entry.id} onToggle={grow}>
+              <summary>{`${entry.label} · ${entry.text}`}</summary>
               <pre>{entry.detail}</pre>
-            )}
-          </details>
-        ))}
+            </details>
+          ),
+        )}
       </div>
     </details>
   );
