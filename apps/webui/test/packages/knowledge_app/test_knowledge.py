@@ -548,7 +548,9 @@ def test_quality_actions_and_empty_state_have_separate_areas(page):
     assert actions['y'] + actions['height'] <= reports['y']
     assert page.get_by_role('combobox', name='选择知识库').bounding_box()['width'] <= 200
 
-def test_quality_export_preserves_page_and_report_dialog(page):
+@pytest.mark.parametrize('motion', ['reduce', 'no-preference'])
+def test_quality_export_preserves_page_and_report_dialog(page, motion):
+    page.emulate_media(reduced_motion=motion)
     fake_openkb(page)
     open_knowledge(page)
     page.get_by_role('link', name='质量检查', exact=True).click()
@@ -559,6 +561,10 @@ def test_quality_export_preserves_page_and_report_dialog(page):
     page.get_by_role('button', name='查看报告', exact=True).click()
     dialog = page.get_by_role('dialog', name='质量检查报告', exact=True)
     expect(dialog).to_be_visible()
+    # Visibility can precede the end of the modal's scale-in animation.
+    dialog.evaluate('''element => Promise.all(
+        element.getAnimations().map(animation => animation.finished.catch(() => {}))
+    )''')
     before = dialog.bounding_box()
     url = page.url
     with page.expect_download() as download:
