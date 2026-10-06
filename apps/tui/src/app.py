@@ -877,7 +877,10 @@ class IcarusTextualApp(App[int]):
 
     @staticmethod
     def _status_is_idle(status: dict[str, Any]) -> bool:
-        if status.get("lifecycle") not in {"ready", "unloaded"}:
+        # Background work belongs to the Session and must not block the user
+        # from switching or resuming. Only an in-progress conversation
+        # (active tasks, queued or pending events) counts as busy here.
+        if status.get("lifecycle") not in {"ready", "running", "unloaded"}:
             return False
         if status.get("active_task_ids"):
             return False
@@ -887,7 +890,6 @@ class IcarusTextualApp(App[int]):
                 "queued_task_count",
                 "pending_event_count",
                 "pending_plugin_event_count",
-                "background_work_count",
             )
         )
 
