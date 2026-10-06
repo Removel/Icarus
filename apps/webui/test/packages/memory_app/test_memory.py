@@ -36,7 +36,7 @@ def test_filter_empty_and_reset(page):
     page.get_by_role("textbox", name="搜索记忆…").fill("没有这个内容_xyz")
     expect(page.get_by_role("heading", name="没有找到匹配的内容")).to_be_visible()
     page.get_by_role("button", name="清除筛选", exact=True).last.click()
-    assert page.get_by_role("button", name="查看记忆：", exact=False).count() == 8
+    expect(page.get_by_role("button", name="查看记忆：", exact=False)).to_have_count(8)
 
 
 def pick_option(page, combobox_label, option_text):
