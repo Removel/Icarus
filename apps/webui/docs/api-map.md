@@ -6,6 +6,8 @@
 
 依据 `apps/mem0/server/main.py`、`apps/mem0/tests/test_server_params.py` 及 Agent 的 `plugins/memory/mem0_http_adapter.py`。
 
+管理分页的服务职责、查询快照与字段归属见 [Mem0 分页架构](../../mem0/docs/spec/2026-10-05-memory-browser/arch.md)。
+
 | 页面操作 | 现有接口 | 接入要求 |
 | --- | --- | --- |
 | 列表、筛选、排序 | `GET /memories/page` | 管理接口；传 `page`、`page_size`、`state`、`query`、`category`、`user_id`、`run_id`、`descending`。服务先筛选、排序再分页，返回结果总数、实际页码、状态计数及筛选选项。前端固定传入每页 15 条，并用响应的 `page_size` 计算页数；接口默认 12 条、允许 1–100 条。查询快照沿用 1000 条上限，超出时返回 `truncated=true` 并在页面提示。 |

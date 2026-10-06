@@ -8,6 +8,9 @@ embedded Git repository or require Git submodules.
 
 Current modifications:
 
+- The administrative `GET /memories/page` endpoint filters and sorts a bounded
+  snapshot before pagination and preserves SDK identity/source field ownership.
+  See the [memory browser architecture](docs/spec/2026-10-05-memory-browser/arch.md).
 - Memory updates record category and expiration changes in both sync and async history.
   SQLite adds the `changes` column without discarding existing history; back up history.db
   before upgrading and preserve that backup when rolling back to older schema handling.

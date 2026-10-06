@@ -35,3 +35,6 @@ backups where appropriate. Do not run them merely to validate repository cleanup
 The server imports the modified SDK installed from local `mem0/` source. Development
 SDK tests use the private app `.venv`; production serving still uses Docker. See the
 [application README](../README.md) and [modification history](../MODIFICATIONS.md).
+
+The administrative memory paging endpoint and its snapshot/field boundaries are
+documented in the [memory browser architecture](../docs/spec/2026-10-05-memory-browser/arch.md).

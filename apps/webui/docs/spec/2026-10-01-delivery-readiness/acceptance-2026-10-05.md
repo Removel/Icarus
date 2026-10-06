@@ -53,4 +53,4 @@ Windows 工作区的部分未改动文件是 CRLF，Git blob 为 LF。验证副�
 
 额外导出最新基线中的 WebUI 生命周期脚本、测试和仓库控制依赖到 Linux 验证副本，10 项测试通过；此操作没有合并或改写 Git 分支。另逐文件核对 73 个已提交的 WebUI 源码、配置和测试文件，与实际验收副本一致（按 LF 换行比较）。
 
-实现与测试按记忆/导航、对话两组提交，文档单独提交。当前 PR 材料见 [后续 PR 正文](pr-description-follow-up.md)。
+实现与测试按记忆/导航、对话两组提交，文档单独提交。提交范围与远端检查见 [PR #8](https://github.com/Removel/Icarus/pull/8)，此前各轮改动过程见 [历史执行记录](execution-experience.md)。
