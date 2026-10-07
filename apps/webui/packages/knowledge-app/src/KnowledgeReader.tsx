@@ -6,6 +6,7 @@ import {
   TextArea,
   Status,
   EmptyState,
+  LoadingIndicator,
   Modal,
   useUnsavedChanges,
 } from '@icarus/ui';
@@ -220,7 +221,7 @@ export default function KnowledgeReader({
                   value={draft}
                   onChange={setDraft}
                   disabled={saving}
-                  autosize={{ minRows: 14, maxRows: 32 }}
+                  resize="vertical"
                   autoFocus
                 />
                 {error && (
@@ -239,7 +240,7 @@ export default function KnowledgeReader({
                 </div>
               </div>
             ) : item.readState === 'loading' || item.readState === 'unloaded' ? (
-              <p role="status">正在读取正文…</p>
+              <LoadingIndicator label="正在读取正文" />
             ) : item.readState === 'failed' ? (
               <div role="alert">
                 <p>{item.error}</p>

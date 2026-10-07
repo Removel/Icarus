@@ -6,14 +6,19 @@
 <title>Icarus WebUI 设计规范 · 内部参考</title>
 <style>
 
-:root { --accent:#3370ff; --ink:#1f2329; --muted:#626977; --canvas:#f6f7f9; --surface:#fff; --line:#e5e6eb; --subtle:#f6f7f9; --semi-color-text-1:#434a54; }
+
+:root { color-scheme:light; --accent:#a45b70; --ink:#232327; --muted:#71717a; --canvas:#f7f7f8; --surface:#fff; --line:#dedee3; --subtle:#f0f0f2; --semi-color-text-1:#55555f; --success:#287447; --danger:#b64657; }
+:root[data-theme=dark] { color-scheme:dark; --accent:#e0a8b6; --ink:#f1f1f2; --muted:#97979e; --canvas:#0c0c0e; --surface:#131315; --line:#35353b; --subtle:#1c1c1f; --semi-color-text-1:#b8b8bf; --success:#75bd92; --danger:#db737f; }
+:root[data-theme=dark] .demo-button.primary { color:var(--canvas); }
+#design-theme { margin-left:auto; padding:6px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); }
+
 * { box-sizing:border-box; } body { margin:0; background:var(--surface); color:var(--ink); font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
 h1,h2,h3,p { margin:0; } button,input,select { font:inherit; } button,a,input,select { -webkit-tap-highlight-color:transparent; } button { cursor:pointer; } button:disabled { cursor:not-allowed; opacity:.45; }
 a { color:inherit; text-decoration:none; } button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .page { width:100%; margin:0 auto; padding:40px 32px 64px; } .page-heading { margin-bottom:12px; } .page-title-row { display:flex; align-items:center; flex-wrap:wrap; gap:16px; } h1 { font-size:30px; line-height:1.3; font-weight:650; } .heading-count { color:var(--muted); font-size:13px; }
-.demo-button { display:inline-flex; justify-content:center; align-items:center; min-height:36px; padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font-weight:500; } .demo-button:hover:not(:disabled) { background:var(--subtle); } .demo-button.primary { color:white; background:var(--accent); border-color:var(--accent); } .demo-button.primary:hover { background:#2860e6; } .demo-button.borderless { border-color:transparent; } .icon-button { width:36px; padding:0; }
+.demo-button { display:inline-flex; justify-content:center; align-items:center; min-height:36px; padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font-weight:500; } .demo-button:hover:not(:disabled) { background:var(--subtle); } .demo-button.primary { color:white; background:var(--accent); border-color:var(--accent); } .demo-button.primary:hover { filter:brightness(1.08); } .demo-button.borderless { border-color:transparent; } .icon-button { width:36px; padding:0; }
 .component-samples input:not([type=checkbox]),.component-samples select { max-width:100%; height:36px; border:1px solid var(--line); border-radius:8px; padding:6px 10px; background:var(--surface); color:var(--ink); } .component-samples input:not([type=checkbox]) { width:200px; } .component-samples select { min-width:120px; } .demo-toggle { display:flex; align-items:center; gap:8px; } .demo-toggle input { accent-color:var(--accent); width:18px; height:18px; }
-.status { display:inline-flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap; } .status-dot { width:5px; height:5px; border-radius:50%; background:currentColor; } .status-green { color:#28733c; } .status-blue { color:var(--accent); } .status-amber { color:#946000; } .status-gray { color:var(--muted); }
+.status { display:inline-flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap; } .status-dot { width:5px; height:5px; border-radius:50%; background:currentColor; } .status-green { color:var(--success); } .status-blue { color:var(--accent); } .status-amber { color:var(--semi-color-text-1); } .status-gray { color:var(--muted); }
 dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:16px; color:var(--ink); background:var(--surface); } dialog::backdrop { background:#14192366; } .demo-dialog-header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:20px 24px 16px; border-bottom:1px solid var(--line); } .demo-dialog-header h2 { font-size:18px; } .demo-dialog-body { padding:20px 24px 24px; overflow:auto; max-height:calc(100dvh - 130px); }
 #demo-toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); padding:10px 18px; background:var(--ink); color:white; border-radius:8px; box-shadow:0 4px 18px #0002; } #demo-toast:empty { display:none; } .document-context { margin:0 0 18px; color:var(--muted); font-size:12px; }
 @media(max-width:700px) { .page { padding:24px 18px 40px; } h1 { font-size:25px; } }
@@ -80,7 +85,8 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <header class="page-heading">
 <div class="page-heading-main">
 <div class="page-title-row">
-<h1>设计规范</h1><span class="heading-count">Icarus WebUI · Semi Universe</span>
+<h1>设计规范</h1><span class="heading-count">Icarus WebUI · 中性灰与浅粉</span>
+<select id="design-theme" aria-label="规范主题"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select>
 </div>
 </div>
 </header>
@@ -97,12 +103,31 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </nav>
 <section class="design-section" aria-labelledby="design-foundation">
 <h2 id="design-foundation" tabindex="-1">颜色与层级</h2>
+<p class="design-note">提供浅色、深色、跟随系统三种模式，默认跟随系统。选择保存在当前浏览器，系统主题变化会即时应用；手动选择后不受系统变化影响。所有模块、弹窗、菜单和关系画布使用同一组主题变量。深色模式与 TUI 色板一致；浅色模式保持中性灰与粉色的颜色职责。</p>
+<div class="design-table-wrap"><table class="design-table"><thead><tr><th>职责</th><th>浅色</th><th>深色</th></tr></thead><tbody>
+<tr><th>外壳 / 画布</th><td>#f7f7f8</td><td>#0c0c0e</td></tr>
+<tr><th>内容表面</th><td>#ffffff</td><td>#131315</td></tr>
+<tr><th>输入 / 执行表面</th><td>#f0f0f2</td><td>#1c1c1f</td></tr>
+<tr><th>正文</th><td>#232327</td><td>#f1f1f2</td></tr>
+<tr><th>辅助文字</th><td>#71717a</td><td>#97979e</td></tr>
+<tr><th>品牌与焦点</th><td>#a45b70</td><td>#e0a8b6</td></tr>
+<tr><th>成功</th><td>#287447</td><td>#75bd92</td></tr>
+<tr><th>失败 / 危险</th><td>#b64657</td><td>#db737f</td></tr>
+<tr><th>分隔 / 强边界</th><td>#dedee3 / #b8b8bf</td><td>#35353b / #4b4b51</td></tr>
+<tr><th>图谱：资料 / 来源线</th><td>#458868</td><td>#83bea3</td></tr>
+<tr><th>图谱：摘要</th><td>#9370a8</td><td>#bd99d2</td></tr>
+<tr><th>图谱：概念</th><td>#b86783</td><td>#e0a8b6</td></tr>
+<tr><th>图谱：实体</th><td>#b17a3e</td><td>#d8ae79</td></tr>
+<tr><th>图谱：引用线</th><td>#9a7180</td><td>#c18f9f</td></tr>
+</tbody></table></div>
+<p class="design-note">灰阶区分对话与执行区域；运行中使用粉色波浪标记，绿色与红色表达最终状态。导航以中性底色和粉色小图标标记当前模块。图谱分类使用独立的绿、紫、玫瑰和橙色，来源线保留绿色，正文引用保留玫瑰色，不再复用灰阶文字变量。</p>
+
 <div class="color-grid">
 <div class="color-swatch">
 <div style="background: var(--accent);">
 </div>
-<h3>主色 / 选中 / 焦点</h3><code>--accent</code>
-<p>引用 Semi 主色，不用于普通正文。</p>
+<h3>品牌 / 主要操作 / 焦点</h3><code>--accent</code>
+<p>沿用 TUI 的浅粉品牌语义；浅色模式使用较深的粉色保证对比度。</p>
 </div>
 <div class="color-swatch">
 <div style="background: var(--ink);">
@@ -120,7 +145,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <div style="background: var(--canvas);">
 </div>
 <h3>画布背景</h3><code>--canvas</code>
-<p>关系画布与背景分层，#f6f7f9。</p>
+<p>外壳与画布背景；根据当前主题变化。</p>
 </div>
 <div class="color-swatch">
 <div style="background: var(--surface);">
@@ -181,6 +206,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </section>
 <section class="design-section" aria-labelledby="design-layout">
 <h2 id="design-layout" tabindex="-1">布局与响应式</h2>
+<p class="design-note">品牌图标采用展开书页与三个汇聚节点：书页表示知识沉淀，节点和分支表示资料、记忆与知识的关联。使用主题玫瑰色，顶栏以 28 px 展示；浏览器图标使用同一轮廓，跟随系统明暗配色。</p>
 <div class="design-table-wrap">
 <table class="design-table">
 <thead>
@@ -203,7 +229,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tr>
 <tr>
 <th scope="row">≤ 767 px</th>
-<td>顶栏高 56 px；模块导航置于顶栏下；知识库子导航为两列</td>
+<td>顶栏高 56 px；模块导航置于顶栏下；知识库子导航为四列</td>
 <td>页面内边距 24 / 18 / 32 px；筛选允许换行，弹窗接近全屏。</td>
 </tr>
 <tr>
@@ -219,7 +245,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tbody>
 </table>
 </div>
-<p class="design-note">标题和工具栏按任务设置：记忆常驻用户与作用范围；知识列表显示知识库、搜索与类型筛选；文档关联直接显示当前知识库画布，不展示顶部工具栏。</p>
+<p class="design-note">导航采用树形结构，主行和子行均为 40 px，字号 14 px，图标 18 px。展开侧栏通过子项缩进与浅色竖线表达层级，父级没有常驻背景或描边，仅当前页面高亮。知识库分类默认展开；父项文字进入上次访问页面，右侧箭头展开或收起分类，支持键盘 Enter / Space。图标描边统一 1.5 px；侧栏收起与窄屏图标栏保留四个分类快捷入口，取消缩进与层级线，父级图标 18 px、子级图标 16 px，点击区域仍为 40×40 px 并水平居中；整个知识库使用浅灰外层容器，四个子项再使用稍深的灰色内层容器，两层仅保留微弱灰色阴影，组内间隔 2 px、组间间隔 14 px，提示显示「知识库 › 分类名称」；手机常驻四列分类。桌面分类状态在当前页面会话中保留，切换到图标栏或手机仍显示全部分类入口，回到展开侧栏后恢复原状态。顶栏提供主题菜单。文档关联直接显示当前知识库画布，不重复知识库选择与搜索。</p>
 </section>
 <section class="design-section" aria-labelledby="design-content">
 <h2 id="design-content" tabindex="-1">内容呈现</h2>
@@ -235,8 +261,8 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <tbody>
 <tr>
 <th scope="row">记忆</th>
-<td>连续紧凑列表；正文最多两行，分类与更新时间作为辅助信息</td>
-<td>点击条目打开详情弹窗；多选模式独立处理，批量操作只作用于当前筛选结果。</td>
+<td>自适应紧凑卡片；正文最多两行，状态、分类、用户和范围紧凑排列，更新时间右置</td>
+<td>点击条目打开详情弹窗；多选模式独立处理，每页固定 15 条；桌面端每行 5 列，窄屏降为 2 列或 1 列，折叠或展开侧栏时保持列数与卡片顺序，只平滑改变卡片宽度。筛选与排序由服务端处理，批量操作只作用于当前页。</td>
 </tr>
 <tr>
 <th scope="row">原始资料</th>
@@ -254,6 +280,8 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <td>桌面内边距 16 × 18 px，窄屏 14 × 16 px；不设固定最小高度。</td>
 </tr>
 <tr>
+<th scope="row">会话列表</th><td>无逐条图标；单行标题截断，右侧显示相对时间；悬浮或聚焦可查看完整标题、最近对话和创建时间。</td><td>首条提交后后台生成 AI 标题并保存；失败时保留原消息摘要，不阻塞对话。选中行使用中性底色，删除入口在悬浮或聚焦时显示。</td></tr><tr>
+<th scope="row">对话内容</th><td>Markdown 正文；思考与工具按任务默认折叠。输入框从首次显示起为一行，多行输入自动增高。</td><td>消息定位提供搜索和上下跳转；新建不重连工作区，执行中拒绝删除；删除与放弃消息使用 360 px 确认弹窗，仅一句问题与两个操作。</td></tr><tr>
 <th scope="row">筛选与返回</th>
 <td>资料、知识页面分别保留搜索和类型条件</td>
 <td>关闭阅读弹窗保留列表筛选、滚动位置并恢复原入口焦点；普通刷新不持久化会话筛选。</td>
@@ -281,7 +309,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tr>
 <tr>
 <th scope="row">记忆详情</th>
-<td>宽 640 px；原文、属性、默认折叠的变更记录</td>
+<td>宽 640 px；原文、属性；来源标识与变更记录默认折叠，来源信息支持复制</td>
 <td>修正、暂停或恢复、删除集中在弹窗；删除与放弃草稿使用同一弹窗的确认状态。</td>
 </tr>
 <tr>
@@ -292,7 +320,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <tr>
 <th scope="row">知识阅读工具</th>
 <td>Markdown、代码、表格、引用、链接与可折叠文章目录</td>
-<td>文章目录只导航当前正文。编辑位于阅读页，Ctrl / ⌘ + Enter 保存。</td>
+<td>文章目录只导航当前正文。编辑位于阅读页，正文框初始高度随视口在 240–520 px 间调整，可垂直拖动加高；Ctrl / ⌘ + Enter 保存。</td>
 </tr>
 <tr>
 <th scope="row">文档关联弹窗</th>
@@ -338,11 +366,11 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tr>
 <tr>
 <th scope="row">节点</th>
-<td>宽 218 px；保留资料 / 知识类型与名称；标题最多三行，悬停可看完整标题。不可用节点以虚线边界区分。</td>
+<td>16 px 彩色圆点，48 px 操作区域；标题最多两行，悬浮显示全文。资料、摘要、概念、实体分别使用绿、紫、玫瑰、橙色；不可用节点使用空心虚线圆点。</td>
 </tr>
 <tr>
 <th scope="row">连线</th>
-<td>实线箭头表示正文引用；虚线箭头表示声明来源。箭头由引用方指向被引用对象，不代表时间或执行顺序。</td>
+<td>默认从真实关系中选取少量连线，保留节点和连通分组，不显示全部交叉线。玫瑰色实线表示正文引用，绿色虚线表示来源；悬浮或聚焦节点展开它的全部关系与方向箭头。可切换全部连线，双向及多类型关系保留独立路径。</td>
 </tr>
 <tr>
 <th scope="row">查看内容</th>
@@ -350,11 +378,11 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tr>
 <tr>
 <th scope="row">关注关系</th>
-<td>悬停节点突出直接关联、淡化其他连线；离开后恢复。由详情进入画布时定位并突出对应节点。</td>
+<td>精简模式仅显示当前节点的直接关联，离开后恢复少量连线；全部模式突出关联并淡化其他线。由详情进入画布时定位对应节点。</td>
 </tr>
 <tr>
 <th scope="row">画布工具</th>
-<td>缩放、平移、适应画布与重置布局；节点超过 15 个时显示缩略图，手机隐藏缩略图。</td>
+<td>缩放、平移、适应画布、重置布局及全部/精简连线；不显示缩略图。默认 87% 缩放。</td>
 </tr>
 <tr>
 <th scope="row">视图状态</th>
@@ -362,7 +390,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tr>
 <tr>
 <th scope="row">当前布局</th>
-<td>按原始资料、摘要、概念、实体分列；尚未按引用关系自动分组，也未解决复杂图的连线交叉。</td>
+<td>按真实关系运行固定的力布局；完成后停止运动。切换连线模式、悬浮和阅读不重新排列节点。</td>
 </tr>
 </tbody>
 </table>
@@ -394,7 +422,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <select aria-label="规范示例范围"><option>工作区</option><option>全局</option>
 </select>
 </div>
-<p class="spec-note">输入焦点使用主色边界和浅色外环；检索范围通过名称或占位文字明确。</p>
+<p class="spec-note">输入焦点使用品牌色边界和弱化外环；检索范围通过名称或占位文字明确。</p>
 </div>
 <div class="component-spec">
 <h3>设置与不可用</h3>
@@ -418,7 +446,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <tbody>
 <tr>
 <th scope="row">加载 / 刷新</th>
-<td>首次加载提供状态文字；刷新时保留已显示内容，完成后替换。</td>
+<td>加载使用居中转圈动画和可访问的状态名称；刷新保留内容，不展示冗余刷新说明。报告导出单独管理状态，不触发整个页面加载。</td>
 </tr>
 <tr>
 <th scope="row">空数据 / 无匹配</th>
@@ -461,7 +489,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tr>
 <tr>
 <th scope="row">快捷键</th>
-<td>Enter 阅读图节点或查看连线；Ctrl / ⌘ + Enter 保存编辑；输入法组合输入期间不触发快捷操作。</td>
+<td>对话 Enter 发送、Shift + Enter 换行；Enter 阅读图节点或查看连线；Ctrl / ⌘ + Enter 保存编辑；输入法组合输入期间不触发快捷操作。</td>
 </tr>
 <tr>
 <th scope="row">Esc</th>
@@ -496,11 +524,11 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tr>
 <tr>
 <th scope="row">业务组件</th>
-<td>memory-app 与 knowledge-app 各自维护内容、筛选与操作；不相互引用业务实现，不为单一页面增加共享抽象。</td>
+<td>memory-app、knowledge-app 与 chat-app 各自维护内容、筛选与操作；不相互引用业务实现，不为单一页面增加共享抽象。</td>
 </tr>
 <tr>
 <th scope="row">示例与真实数据</th>
-<td>记忆仍是会话内示例，刷新恢复；知识库连接 OpenKB，另有独立只读示例模式。不可将演示反馈描述为真实保存。</td>
+<td>记忆连接 Mem0，知识库连接 OpenKB，对话连接 Gateway；运行页面已移除示例入口。服务确认后更新列表，不将浏览器状态描述为真实保存。</td>
 </tr>
 <tr>
 <th scope="row">能力边界</th>
@@ -531,6 +559,12 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </dialog>
 <div id="demo-toast" role="status" aria-live="polite"></div>
 <script>
+const theme = document.getElementById('design-theme');
+const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+const applyTheme = () => { document.documentElement.dataset.theme = theme.value === 'dark' || (theme.value === 'system' && systemTheme.matches) ? 'dark' : 'light'; };
+theme.addEventListener('change', applyTheme);
+systemTheme.addEventListener('change', applyTheme);
+applyTheme();
 const dialog = document.getElementById('reading-dialog');
 document.getElementById('open-dialog').addEventListener('click', () => dialog.showModal());
 document.getElementById('close-dialog').addEventListener('click', () => dialog.close());

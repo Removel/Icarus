@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { Upload, ArrowRight, MoreHorizontal, X } from 'lucide-react';
+import { Upload, ArrowRight, Plus, RefreshCw, X } from 'lucide-react';
 import {
   Button,
-  Dropdown,
+  LoadingIndicator,
   Select,
   Modal,
   SearchField,
@@ -34,27 +34,7 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
   const section = hash.split('?')[0].split('/')[2];
   const view = ['pages', 'sources', 'graph', 'quality'].includes(section) ? section : 'sources';
   const target = routeTarget(params);
-  const preview = import.meta.env.DEV && params.get('preview') === '1';
-  const [previewData, setPreviewData] = useState<typeof import('./preview')>();
-  useEffect(() => {
-    if (import.meta.env.DEV && preview) void import('./preview').then(setPreviewData);
-  }, [preview]);
-  const liveData = useKnowledge(active && !preview, params.get('base'), target);
-  const data =
-    preview && previewData
-      ? {
-          ...liveData,
-          names: [previewData!.previewBase.name],
-          name: previewData!.previewBase.name,
-          base: previewData!.previewBase,
-          graph: previewData!.previewGraph,
-          loading: false,
-          error: '',
-          graphError: '',
-          listError: '',
-          refresh: () => {},
-        }
-      : liveData;
+  const data = useKnowledge(active, params.get('base'), target);
   const { base, graph, name } = data;
   const source =
     view === 'sources'
@@ -67,19 +47,13 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
   function validReturn(value: string | null): value is string {
     if (!value || !/^#\/knowledge\/(sources|pages|graph|quality)(\?|$)/.test(value)) return false;
     const query = new URLSearchParams(value.split('?')[1]);
-    return (
-      (!query.has('base') || query.get('base') === name) &&
-      (query.get('preview') === '1') === preview
-    );
+    return !query.has('base') || query.get('base') === name;
   }
   const origin = validReturn(params.get('origin'))
     ? params.get('origin')!
     : validReturn(readingFrom) && readingFrom.startsWith('#/knowledge/graph')
       ? readingFrom
-      : '#/knowledge/' +
-        view +
-        '?' +
-        new URLSearchParams({ base: name, ...(preview ? { preview: '1' } : {}) });
+      : '#/knowledge/' + view + '?' + new URLSearchParams({ base: name });
   const surface = readerOpen ? origin.split('?')[0].split('/')[2] : view;
   const [filters, setFilters] = useState<Record<string, { search: string; type: string }>>({});
   const filterKey = JSON.stringify([name, surface]);
@@ -91,7 +65,6 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
   const clearFilters = () =>
     setFilters((values) => ({ ...values, [filterKey]: { search: '', type: 'all' } }));
   const [action, setAction] = useState<Action | null>(null);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [compiling, setCompiling] = useState('');
   const [operationError, setOperationError] = useState('');
   const lastGraph = useRef('');
@@ -109,7 +82,6 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
   function go(nextView = view, fields: Record<string, string> = {}, replace = false) {
     scrollPositions.current.set(hash, document.querySelector('.shell-main')?.scrollTop ?? 0);
     const query = new URLSearchParams({
-      ...(preview ? { preview: '1' } : {}),
       base: name,
       ...fields,
     });
@@ -139,13 +111,11 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
   }
   useEffect(() => {
     setAction(null);
-    setMoreOpen(false);
     setOperationError('');
   }, [name, view]);
   useEffect(() => {
     if (!active) {
       setAction(null);
-      setMoreOpen(false);
     }
   }, [active]);
   useEffect(() => {
@@ -189,7 +159,7 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
   return (
     <div className={`page knowledge-page${surface === 'graph' ? ' is-graph' : ''}`}>
       <div
-        className="knowledge-background"
+        className={`knowledge-background${data.loading && base ? ' is-loading' : ''}`}
         inert={active && readerOpen}
         aria-hidden={active && readerOpen ? true : undefined}
       >
@@ -207,52 +177,16 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
             ) : (
               <span>知识库</span>
             )}
-            <Dropdown
-              trigger="click"
-              position="bottomRight"
-              visible={moreOpen}
-              onVisibleChange={setMoreOpen}
-              render={
-                <Dropdown.Menu>
-                  <Dropdown.Item
-                    disabled={preview || !data.names || Boolean(data.listError)}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      setAction({ kind: 'create' });
-                    }}
-                  >
-                    新建知识库
-                  </Dropdown.Item>
-                  <Dropdown.Item
-                    disabled={preview || data.loading}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      data.refresh();
-                    }}
-                  >
-                    刷新知识库
-                  </Dropdown.Item>
-                  {import.meta.env.DEV && (
-                    <Dropdown.Item
-                      onClick={() => {
-                        setMoreOpen(false);
-                        navigate(preview ? '#/knowledge/sources' : '#/knowledge/sources?preview=1');
-                      }}
-                    >
-                      {preview ? '返回真实知识库' : '浏览示例'}
-                    </Dropdown.Item>
-                  )}
-                </Dropdown.Menu>
-              }
+            <Button
+              icon={<Plus size={15} />}
+              disabled={!data.names || Boolean(data.listError)}
+              onClick={() => setAction({ kind: 'create' })}
             >
-              <Button
-                type="tertiary"
-                theme="borderless"
-                className="icon-button"
-                icon={<MoreHorizontal size={18} />}
-                aria-label="知识库设置"
-              />
-            </Dropdown>
+              新建知识库
+            </Button>
+            <Button icon={<RefreshCw size={15} />} disabled={data.loading} onClick={data.refresh}>
+              刷新知识库
+            </Button>
             {base && graph && (surface === 'sources' || surface === 'pages') && (
               <div className="knowledge-filters">
                 <SearchField
@@ -290,7 +224,7 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
                 className="knowledge-import"
                 theme="solid"
                 icon={<Upload size={16} />}
-                disabled={preview || !base || data.loading || Boolean(compiling)}
+                disabled={!base || data.loading || Boolean(compiling)}
                 onClick={() => setAction({ kind: 'import' })}
               >
                 导入资料
@@ -312,7 +246,9 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
             </Button>
           </div>
         )}
-        {!data.names && !data.listError && <p role="status">正在连接知识服务…</p>}
+        {((!data.names && !data.listError) || data.loading) && (
+          <LoadingIndicator label="正在加载知识库" />
+        )}
         {invalidBase && (
           <EmptyState
             title="知识库不存在或不可访问"
@@ -324,16 +260,8 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
             <Button onClick={() => setAction({ kind: 'create' })}>新建知识库</Button>
           </EmptyState>
         )}
-        {!base && data.loading && !invalidBase && data.names?.length ? (
-          <p role="status">正在加载知识库…</p>
-        ) : null}
         {base && graph && (
           <>
-            {data.loading && (
-              <p className="field-hint" role="status">
-                正在刷新；完成前保留上次读取的内容。
-              </p>
-            )}
             {(surface === 'pages' || surface === 'sources') && (
               <>
                 {(search || type !== 'all') && (
@@ -438,7 +366,7 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
             {surface === 'graph' && (
               <>
                 {!data.graphError && (
-                  <Suspense fallback={<p role="status">正在加载关联画布…</p>}>
+                  <Suspense fallback={<LoadingIndicator label="正在加载关联画布" />}>
                     <EvidenceMap
                       inspect={graphParams.get('details') === '1'}
                       onInspectClose={() =>
@@ -462,12 +390,7 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
               </>
             )}
             <div hidden={surface !== 'quality'}>
-              <KnowledgeQuality
-                key={(preview ? 'preview:' : 'live:') + name}
-                name={name}
-                preview={preview}
-                active={active && surface === 'quality'}
-              />
+              <KnowledgeQuality key={name} name={name} active={active && surface === 'quality'} />
             </div>
           </>
         )}
@@ -478,7 +401,6 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
           operationError={operationError}
           visible={active}
           onClose={closeReader}
-          readOnly={preview}
           relationsUnavailable={Boolean(data.graphError)}
           base={base}
           graph={graph}
@@ -519,7 +441,7 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
           {missingReader ? (
             <EmptyState title="内容不存在或已被移除" />
           ) : (
-            <p role="status">正在读取文档…</p>
+            <LoadingIndicator label="正在读取文档" />
           )}
           {(data.error || data.listError) && <p role="alert">{data.error || data.listError}</p>}
         </Modal>

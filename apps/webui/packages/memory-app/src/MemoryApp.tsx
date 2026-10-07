@@ -12,6 +12,7 @@ import {
   SearchField,
   Field,
   EmptyState,
+  LoadingIndicator,
   SortButton,
   navigate,
 } from '@icarus/ui';
@@ -38,8 +39,6 @@ export default function MemoryApp({
   const section = hash.split('?')[0].split('/')[2];
   const tab = ['all', 'active', 'expired'].includes(section) ? section : 'all';
   const selectedId = new URLSearchParams(hash.split('?')[1]).get('entry');
-  const data = useMemories(active, selectedId);
-  const { memories, selected } = data;
   const [busy, setBusy] = useState(false);
   const working = useRef(false);
   const [operationError, setOperationError] = useState('');
@@ -56,6 +55,41 @@ export default function MemoryApp({
   const boardRef = useRef<HTMLElement>(null);
   const entryTrigger = useRef<HTMLButtonElement | null>(null);
   const listScroll = useRef(0);
+  const restoreBulkFocus = useRef(false);
+  const pageSize = api.pageSize;
+  const filterKey = JSON.stringify([search.trim(), category, scope, user, tab, descending]);
+  const [pagination, setPagination] = useState({ key: filterKey, page: 1 });
+  const requestedPage = pagination.key === filterKey ? pagination.page : 1;
+  useEffect(() => {
+    setPagination((current) => (current.key === filterKey ? current : { key: filterKey, page: 1 }));
+  }, [filterKey]);
+  const query = new URLSearchParams({
+    state: tab,
+    query: search.trim(),
+    descending: String(descending),
+    page: String(requestedPage),
+    page_size: String(pageSize),
+  });
+  if (category !== 'all') query.set('category', category);
+  if (scope !== 'all') query.set('run_id', scope);
+  if (user !== 'all') query.set('user_id', user);
+  const data = useMemories(active, selectedId, query.toString());
+  const { memories, selected } = data;
+  useEffect(() => {
+    if (!restoreBulkFocus.current || selecting || data.loading || busy) return;
+    const frame = requestAnimationFrame(() => {
+      const trigger = document.querySelector<HTMLButtonElement>('.memory-bulk-trigger');
+      restoreBulkFocus.current = false;
+      (trigger && !trigger.disabled ? trigger : boardRef.current)?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selecting, data.loading, busy]);
+
+  function changePage(page: number) {
+    exitSelection();
+    setPagination({ key: filterKey, page });
+    boardRef.current?.focus({ preventScroll: true });
+  }
 
   function go(nextTab = tab, id?: string, replace = false) {
     navigate(`#/memory/${nextTab}${id ? `?entry=${encodeURIComponent(id)}` : ''}`, replace);
@@ -75,7 +109,7 @@ export default function MemoryApp({
   useEffect(() => {
     setChecked([]);
     setSelecting(false);
-  }, [search, category, scope, user, tab, active]);
+  }, [search, category, scope, user, tab, active, descending]);
   useEffect(() => {
     if (selecting)
       document
@@ -84,20 +118,14 @@ export default function MemoryApp({
   }, [selecting]);
 
   function exitSelection(restoreFocus = false) {
+    restoreBulkFocus.current = restoreFocus;
     setChecked([]);
     setSelecting(false);
-    if (restoreFocus)
-      requestAnimationFrame(() => {
-        const trigger = document.querySelector<HTMLButtonElement>('.memory-bulk-trigger');
-        (trigger && !trigger.disabled ? trigger : boardRef.current)?.focus({ preventScroll: true });
-      });
   }
 
-  const activeCount = memories.filter((item) => !isExpired(item)).length;
-  const categories = [...new Set(memories.map((item) => item.metadata.category))].filter((name) =>
-    memories.some((item) => item.metadata.category === name),
-  );
-  const users = [...new Set(memories.map((item) => item.user_id))];
+  const activeCount = data.counts.active;
+  const categories = data.categories;
+  const users = data.users;
   const filtered = memories
     .filter(
       (item) =>
@@ -151,6 +179,7 @@ export default function MemoryApp({
       expiration_date: changes.expiration_date,
     });
     await syncItem(id);
+    data.refresh();
     Toast.success('已保存修改');
   }
 
@@ -164,6 +193,10 @@ export default function MemoryApp({
     setCreate(false);
     data.refresh();
     clearFilters();
+    setPagination({
+      key: JSON.stringify(['', 'all', 'all', 'all', 'all', descending]),
+      page: 1,
+    });
     go('all', id);
     Toast.success('已添加记忆');
   }
@@ -189,6 +222,7 @@ export default function MemoryApp({
     working.current = false;
     setBusy(false);
     exitSelection(selecting);
+    data.refresh();
     if (failures.length)
       setOperationError(
         `已完成 ${ids.length - failures.length} 条，失败 ${failures.length} 条。${failures.join('；')}`,
@@ -227,11 +261,8 @@ export default function MemoryApp({
           </Button>
         </div>
       )}
-      {data.loading && <p role="status">正在加载记忆…</p>}
-      {memories.length >= api.listLimit && (
-        <p role="status">
-          当前最多展示 {api.listLimit} 条记忆，搜索、排序和筛选仅作用于已加载列表。
-        </p>
+      {data.truncated && (
+        <p role="status">当前查询最多覆盖 1000 条记忆，搜索、排序和筛选仅作用于这个范围。</p>
       )}
       <PageHeading
         title="记忆"
@@ -256,9 +287,10 @@ export default function MemoryApp({
                 onChange={(value) => setScope(String(value))}
                 optionList={[
                   { value: 'all', label: '所有范围' },
-                  ...[...new Set(['global', ...memories.map((item) => item.run_id)])].map(
-                    (value) => ({ value, label: scopeName(value) }),
-                  ),
+                  ...[...new Set(['global', ...data.scopes])].map((value) => ({
+                    value,
+                    label: scopeName(value),
+                  })),
                 ]}
               />
             </Field>
@@ -274,9 +306,9 @@ export default function MemoryApp({
           value={tab}
           onChange={(id) => go(id)}
           items={[
-            { id: 'all', label: '全部', count: memories.length },
+            { id: 'all', label: '全部', count: data.counts.all },
             { id: 'active', label: '生效中', count: activeCount },
-            { id: 'expired', label: '已失效', count: memories.length - activeCount },
+            { id: 'expired', label: '已失效', count: data.counts.expired },
           ]}
         />
         <Button
@@ -356,7 +388,7 @@ export default function MemoryApp({
             className="memory-bulk-trigger"
             type="tertiary"
             theme="borderless"
-            disabled={busy || !filtered.length}
+            disabled={busy || data.loading || data.page_size !== pageSize || !filtered.length}
             onClick={() => {
               setChecked([]);
               setSelecting(true);
@@ -369,12 +401,8 @@ export default function MemoryApp({
       {(filterCount > 0 || search) && (
         <div className="filter-summary">
           <span>
-            {filtered.length} 条结果 · 当前状态共{' '}
-            {tab === 'all'
-              ? memories.length
-              : tab === 'active'
-                ? activeCount
-                : memories.length - activeCount}{' '}
+            {data.total} 条结果 · 当前状态共{' '}
+            {tab === 'all' ? data.counts.all : tab === 'active' ? activeCount : data.counts.expired}{' '}
             条
           </span>
           {search && (
@@ -419,7 +447,14 @@ export default function MemoryApp({
           </button>
         </div>
       )}
-      <section ref={boardRef} tabIndex={-1} className="memory-board" aria-label="记忆列表">
+      <section
+        ref={boardRef}
+        tabIndex={-1}
+        className="memory-board"
+        aria-label="记忆列表"
+        aria-busy={data.loading}
+      >
+        {data.loading && !filtered.length && <LoadingIndicator label="正在加载记忆" />}
         {filtered.length ? (
           <div className="memory-list">
             {filtered.map((item) => {
@@ -428,32 +463,33 @@ export default function MemoryApp({
                   <span className="memory-entry-copy">
                     <span className="memory-content">{item.memory}</span>
                     <span className="memory-meta">
+                      <Status
+                        tone={
+                          isExpired(item) ? 'gray' : validScope(item.run_id) ? 'green' : 'amber'
+                        }
+                      >
+                        {isExpired(item)
+                          ? stateName(item)
+                          : validScope(item.run_id)
+                            ? '生效中'
+                            : '范围待修正'}
+                      </Status>
                       <span className="memory-category">{item.metadata.category}</span>
                       <span>{item.user_id}</span>
                       <span
+                        title={scopeName(item.run_id)}
                         className={`memory-scope ${item.run_id === 'global' ? 'is-global' : ''}`}
                       >
                         {scopeName(item.run_id)}
                       </span>
                     </span>
                   </span>
-                  <span className="memory-entry-state">
-                    <Status
-                      tone={isExpired(item) ? 'gray' : validScope(item.run_id) ? 'green' : 'amber'}
-                    >
-                      {isExpired(item)
-                        ? stateName(item)
-                        : validScope(item.run_id)
-                          ? '生效中'
-                          : '范围待修正'}
-                    </Status>
-                    <time
-                      dateTime={item.updated_at}
-                      title={new Date(item.updated_at).toLocaleString('zh-CN')}
-                    >
-                      {memoryDate(item.updated_at)}
-                    </time>
-                  </span>
+                  <time
+                    dateTime={item.updated_at}
+                    title={new Date(item.updated_at).toLocaleString('zh-CN')}
+                  >
+                    {memoryDate(item.updated_at)}
+                  </time>
                 </>
               );
               return (
@@ -461,6 +497,7 @@ export default function MemoryApp({
                   data-memory-id={item.id}
                   className={`memory-entry ${checked.includes(item.id) ? 'is-checked' : ''} ${isExpired(item) ? 'is-inactive' : ''}`}
                   key={item.id}
+                  style={{ viewTransitionName: `memory-${CSS.escape(item.id)}` }}
                 >
                   {selecting ? (
                     <Checkbox
@@ -492,8 +529,8 @@ export default function MemoryApp({
             })}
           </div>
         ) : !data.loading && !data.error ? (
-          <EmptyState title={memories.length ? '没有找到匹配的内容' : '还没有记忆'}>
-            {memories.length ? (
+          <EmptyState title={data.counts.all ? '没有找到匹配的内容' : '还没有记忆'}>
+            {data.counts.all ? (
               <Button onClick={clearFilters}>清除筛选</Button>
             ) : (
               <Button icon={<Plus size={15} />} onClick={() => openCreate()}>
@@ -503,6 +540,26 @@ export default function MemoryApp({
           </EmptyState>
         ) : null}
       </section>
+      {data.total > 0 && (
+        <nav className="memory-pagination" aria-label="记忆分页">
+          <span role="status">
+            共 {data.total} 条 · 每页 {data.page_size} 条 · 第 {data.page} /{' '}
+            {Math.ceil(data.total / data.page_size)} 页
+          </span>
+          <Button
+            disabled={data.loading || busy || data.page <= 1}
+            onClick={() => changePage(data.page - 1)}
+          >
+            上一页
+          </Button>
+          <Button
+            disabled={data.loading || busy || data.page * data.page_size >= data.total}
+            onClick={() => changePage(data.page + 1)}
+          >
+            下一页
+          </Button>
+        </nav>
+      )}
       <MemoryDetail
         onRecreate={(item) => {
           go(tab);
@@ -519,6 +576,7 @@ export default function MemoryApp({
         onDelete={async (item) => {
           await api.remove(item.id);
           data.removed(item.id);
+          data.refresh();
           setChecked((ids) => ids.filter((id) => id !== item.id));
           go(tab, undefined, true);
           Toast.success('已删除记忆');
@@ -546,26 +604,22 @@ export default function MemoryApp({
         <dl className="detail-properties">
           <div>
             <dt>全局</dt>
-            <dd>供同一用户与 Agent 在不同工作区使用</dd>
+            <dd>在你的所有工作区中使用。</dd>
           </div>
           <div>
             <dt>工作区</dt>
-            <dd>仅供对应工作区使用</dd>
+            <dd>只在指定工作区中使用。</dd>
           </div>
           <div>
             <dt>暂停 / 过期</dt>
-            <dd>暂停使用或超过有效期后，不再用于日常对话；记忆正文和变更记录仍会保留。</dd>
+            <dd>不再用于对话，内容和修改记录会保留。</dd>
           </div>
           <div>
             <dt>恢复</dt>
-            <dd>恢复后立即生效，并清除原有效期。如需限时使用，请在详情中重新设置。</dd>
+            <dd>重新启用，并清除原有效期。需要限时使用时，可在详情中设置。</dd>
           </div>
         </dl>
-        <p className="field-hint">
-          添加的记忆按原文保存，用户与 Agent
-          来自当前服务配置。工作区路径由服务端解析；记忆按相关性检索，不保证每次对话都引用。
-          搜索、排序和筛选仅覆盖当前加载的记录（最多 1000 条）。
-        </p>
+        <p className="field-hint">记忆会按原文保存。对话时会参考相关记忆，不一定每次都使用。</p>
       </Modal>
     </div>
   );

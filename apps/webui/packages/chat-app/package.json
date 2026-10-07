@@ -7,6 +7,9 @@
   },
   "dependencies": {
     "@icarus/ui": "workspace:*",
+    "prismjs": "1.30.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
     "react": "19.2.4",
     "lucide-react": "0.577.0"
   }

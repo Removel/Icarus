@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Pause, Pencil, Play, Trash2 } from 'lucide-react';
-import { Button, Field, Input, Modal, Status, TextArea, useUnsavedChanges } from '@icarus/ui';
+import { Check, Copy, Pause, Pencil, Play, Trash2 } from 'lucide-react';
+import {
+  Button,
+  Field,
+  Input,
+  LoadingIndicator,
+  Modal,
+  Status,
+  TextArea,
+  Toast,
+  useUnsavedChanges,
+} from '@icarus/ui';
 import { isExpired, memoryDate, type MemoryEntry } from './types';
 import { message } from './mem0';
 import MemoryHistory from './MemoryHistory';
@@ -53,6 +63,15 @@ export default function MemoryDetail({
   const editingItem = useRef<MemoryEntry | undefined>(undefined);
   const actionsRef = useRef<HTMLFieldSetElement>(null);
   const shown = editor ? editingItem.current : item;
+  const sourceFields = [
+    ['source_session_id', '来源会话'],
+    ['source_run_id', '来源执行'],
+    ['source_workspace_key', '来源工作区标识'],
+    ['source_operation_id', '来源操作标识'],
+  ].flatMap(([key, label]) => {
+    const value = shown?.metadata[key];
+    return typeof value === 'string' && value.trim() ? [{ label, value }] : [];
+  });
   const original = editingItem.current;
   const dirty = Boolean(
     editor &&
@@ -150,6 +169,16 @@ export default function MemoryDetail({
       setError('');
     });
   }
+  async function copySource() {
+    try {
+      await navigator.clipboard.writeText(
+        sourceFields.map(({ label, value }) => `${label}：${value}`).join('\n'),
+      );
+      Toast.success('已复制来源信息');
+    } catch {
+      Toast.error('复制失败，请选中文字手动复制');
+    }
+  }
   const title = discard
     ? '放弃未保存的修改？'
     : deleting
@@ -235,7 +264,7 @@ export default function MemoryDetail({
           {error || loadError}
         </p>
       )}
-      {(loading || busy) && <p role="status">{busy ? '正在保存…' : '正在读取详情…'}</p>}
+      {(loading || busy) && <LoadingIndicator label={busy ? '正在保存' : '正在读取详情'} />}
       {shown &&
         (discard ? (
           <p className="danger-copy">修改尚未保存。放弃后将离开编辑，原内容不会改变。</p>
@@ -284,6 +313,7 @@ export default function MemoryDetail({
           </div>
         ) : (
           <>
+            <p className="memory-detail-text">{shown.memory}</p>
             <dl className="memory-detail-properties">
               <div>
                 <dt>状态</dt>
@@ -331,10 +361,46 @@ export default function MemoryDetail({
                 </dd>
               </div>
               <div>
+                <dt>创建时间</dt>
+                <dd>{memoryDate(shown.created_at)}</dd>
+              </div>
+              <div>
                 <dt>最近更新</dt>
                 <dd>{memoryDate(shown.updated_at)}</dd>
               </div>
+              <div>
+                <dt>记录来源</dt>
+                <dd>
+                  {shown.metadata.source === 'webui'
+                    ? '手动记录'
+                    : shown.metadata.origin === 'explicit'
+                      ? 'Agent 记录'
+                      : '未提供'}
+                </dd>
+              </div>
             </dl>
+            {sourceFields.length > 0 && (
+              <details className="memory-source" key={`${shown.id}:${active}`}>
+                <summary>来源信息</summary>
+                <dl className="memory-detail-properties memory-source-properties">
+                  {sourceFields.map(({ label, value }) => (
+                    <div key={label}>
+                      <dt>{label}</dt>
+                      <dd className="mono">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <Button
+                  className="memory-source-copy"
+                  theme="borderless"
+                  type="tertiary"
+                  icon={<Copy size={14} />}
+                  onClick={copySource}
+                >
+                  复制来源信息
+                </Button>
+              </details>
+            )}
             {(!validScope(shown.run_id) ||
               (context &&
                 (context.user_id !== shown.user_id || context.agent_id !== shown.agent_id))) && (
@@ -349,7 +415,6 @@ export default function MemoryDetail({
                 </Button>
               </div>
             )}
-            <p className="memory-detail-text">{shown.memory}</p>
             <MemoryHistory key={shown.id} entries={shown.history} />
           </>
         ))}

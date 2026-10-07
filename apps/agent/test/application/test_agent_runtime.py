@@ -26,7 +26,6 @@ from apps.agent.src.application.agent_runtime import (
 from apps.agent.src.application.resource_ref import ResourceRef
 from apps.agent.src.application.runtime_status import (
     SessionRuntimeSnapshot,
-    SessionSummary,
     TaskStatus,
 )
 from apps.agent.src.model_config import (
@@ -846,7 +845,9 @@ def test_agent_runtime重启后枚举恢复并继续session(tmp_path):
         )
 
     accepted, summaries, records, cursor, continued, factory = asyncio.run(run())
-    assert summaries == (SessionSummary("persisted", "hello"),)
+    assert [(item.session_id, item.first_user_input) for item in summaries] == [("persisted", "hello")]
+    assert summaries[0].created_at is not None
+    assert summaries[0].updated_at is not None
     assert [item.type for item in records] == [
         "user.message",
         "task.finished",
@@ -1212,3 +1213,96 @@ def test_agent_runtime丢弃期间并发submit不会复活旧entry(tmp_path, mon
     result, entry_exists = asyncio.run(run())
     assert result.status == "discarded"
     assert entry_exists is False
+
+
+def test_agent_runtime删除非空会话保护执行并阻止复活(tmp_path):
+    async def run():
+        config = make_config(tmp_path / "data")
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(config_loader=lambda: config, session_factory=factory)
+        await runtime.start()
+        session = await runtime.create_session(tmp_path, "conversation")
+        identity = SessionIdentity.create(tmp_path, session)
+        await runtime._store().append_update(identity, RuntimeUpdate(workspace_key=identity.workspace_key, session_id=session, task_id="task", type="user.message", payload={"text": "hello"}, occurred_at=datetime.now(UTC)))
+        factory.created[0].busy = True
+        assert (await runtime.delete_session(tmp_path, session)).status == "busy"
+        assert await runtime._store().session_exists(identity)
+        factory.created[0].busy = False
+        assert (await runtime.delete_session(tmp_path, session)).status == "discarded"
+        assert factory.created[0].stop_reasons == ["user_delete"]
+        assert await runtime.list_session_summaries(tmp_path) == ()
+        with pytest.raises(SessionNotFoundError):
+            await runtime.submit(tmp_path, session, "late", submission_id="late")
+        assert (await runtime.delete_session(tmp_path, session)).status == "not_found"
+        await runtime.stop()
+    asyncio.run(run())
+
+
+def test_agent_runtime惰性创建仅在首次提交时加载(tmp_path):
+    async def run():
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(config_loader=lambda: make_config(tmp_path / "data"), session_factory=factory)
+        await runtime.start()
+        session = await runtime.create_session(tmp_path, "lazy", load_runtime=False)
+        assert factory.created == []
+        assert (await runtime.get_session_status(tmp_path, session)).lifecycle == "unloaded"
+        with pytest.raises(SessionAlreadyExistsError):
+            await runtime.create_session(tmp_path, session, load_runtime=False)
+        await runtime.submit(tmp_path, session, "hello", submission_id="first")
+        assert len(factory.created) == 1
+        await runtime.stop()
+    asyncio.run(run())
+
+def test_session_title_generated_once_and_persisted_without_changing_conversation(tmp_path, monkeypatch):
+    generated = []
+    async def generate(config, message):
+        generated.append(message)
+        await asyncio.sleep(0)
+        return '项目文档整理'
+    monkeypatch.setattr('apps.agent.src.application.agent_runtime.generate_title', generate)
+    async def run():
+        config = make_config(tmp_path / 'data')
+        factory = RuntimeFactory()
+        runtime = AgentRuntime(config_loader=lambda: config, session_factory=factory)
+        await runtime.start()
+        await runtime.create_session(tmp_path, 'title', load_runtime=False)
+        assert await runtime.generate_session_title(tmp_path, 'title') is None
+        assert generated == []
+        text = '请整理项目文档\n并说明使用方法'
+        await runtime.submit(tmp_path, 'title', text, submission_id='first')
+        before, cursor = await runtime.get_session_history(tmp_path, 'title')
+        values = await asyncio.gather(*[
+            runtime.generate_session_title(tmp_path, 'title') for _ in range(2)
+        ])
+        assert values == ['项目文档整理', '项目文档整理']
+        assert generated == [text]
+        after, after_cursor = await runtime.get_session_history(tmp_path, 'title')
+        assert before == after and cursor == after_cursor
+        await runtime.stop()
+        reopened = AgentRuntime(config_loader=lambda: config, session_factory=factory)
+        await reopened.start()
+        summary = (await reopened.list_session_summaries(tmp_path))[0]
+        assert summary.title == '项目文档整理'
+        assert summary.first_user_input == '请整理项目文档 并说明使用方法'
+        assert summary.created_at <= summary.updated_at
+        assert await reopened.generate_session_title(tmp_path, 'title') == '项目文档整理'
+        assert generated == [text]
+        await reopened.stop()
+    asyncio.run(run())
+
+
+def test_session_title_model_failure_preserves_message_fallback(tmp_path, monkeypatch):
+    async def fail(config, message):
+        raise TimeoutError('unavailable')
+    monkeypatch.setattr('apps.agent.src.application.agent_runtime.generate_title', fail)
+    async def run():
+        config = make_config(tmp_path / 'data')
+        runtime = AgentRuntime(config_loader=lambda: config, session_factory=RuntimeFactory())
+        await runtime.start()
+        await runtime.create_session(tmp_path, 'fallback', load_runtime=False)
+        await runtime.submit(tmp_path, 'fallback', '保留原摘要', submission_id='first')
+        assert await runtime.generate_session_title(tmp_path, 'fallback') is None
+        summary = (await runtime.list_session_summaries(tmp_path))[0]
+        assert summary.title is None and summary.first_user_input == '保留原摘要'
+        await runtime.stop()
+    asyncio.run(run())

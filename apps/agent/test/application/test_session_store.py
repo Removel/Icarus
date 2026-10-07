@@ -9,7 +9,6 @@ from apps.agent.src.application.session_store import (
     SessionNotFoundError,
     SessionStore,
 )
-from apps.agent.src.application.runtime_status import SessionSummary
 from apps.agent.src.runtime_update import RuntimeUpdate
 
 
@@ -290,4 +289,58 @@ def test_session_store摘要回退和长度限制(tmp_path, payload, expected):
         return summaries
 
     summaries = asyncio.run(run())
-    assert summaries == (SessionSummary("session", expected),)
+    assert [(item.session_id, item.first_user_input) for item in summaries] == [("session", expected)]
+    assert summaries[0].created_at is not None
+    assert summaries[0].updated_at is not None
+
+
+def test_session_store删除非空会话并在重启后保持隐藏(tmp_path):
+    async def run():
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        identity = SessionIdentity.create(tmp_path, "conversation")
+        await store.create_session(identity)
+        await store.append_update(identity, update(identity, "user.message", at=datetime.now(UTC), payload={"text": "history"}))
+        assert await store.soft_delete_session(identity, reason="user_delete") == "discarded"
+        assert await store.soft_delete_session(identity, reason="user_delete") == "not_found"
+        await store.close()
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        assert await store.list_session_summaries(identity.workspace_key) == ()
+        assert not await store.session_exists(identity)
+        deleted = await store.get_session(identity, include_deleted=True)
+        assert deleted is not None and deleted.last_sequence == 1
+        assert deleted.delete_reason == "user_delete"
+        with pytest.raises(SessionNotFoundError):
+            await store.read_updates(identity)
+        await store.close()
+    asyncio.run(run())
+
+def test_session_title_table_is_added_to_existing_database(tmp_path):
+    import sqlite3
+    async def run():
+        location = tmp_path / 'data'
+        identity = SessionIdentity.create(tmp_path, 'existing')
+        store = SessionStore(location)
+        await store.start()
+        await store.create_session(identity)
+        await store.append_update(identity, update(identity, 'user.message', at=datetime.now(UTC), payload={'text': '原会话'}))
+        await store.close()
+        with sqlite3.connect(location / 'icarus.db') as db:
+            db.execute('DROP TABLE session_titles')
+        reopened = SessionStore(location)
+        await reopened.start()
+        before = (await reopened.list_session_summaries(identity.workspace_key))[0]
+        assert before.title is None and before.first_user_input == '原会话'
+        assert await reopened.save_title(identity, '  新标题\n摘要  ') == '新标题 摘要'
+        assert await reopened.save_title(identity, '不覆盖') == '新标题 摘要'
+        after = (await reopened.list_session_summaries(identity.workspace_key))[0]
+        assert after.title == '新标题 摘要'
+        assert before.created_at == after.created_at and before.updated_at == after.updated_at
+        records, cursor = await reopened.read_updates(identity)
+        assert len(records) == cursor == 1
+        await reopened.soft_delete_session(identity, reason='test')
+        with pytest.raises(SessionNotFoundError):
+            await reopened.save_title(identity, '已删除')
+        await reopened.close()
+    asyncio.run(run())

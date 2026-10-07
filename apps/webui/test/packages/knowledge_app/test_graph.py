@@ -101,8 +101,9 @@ def test_mobile_pinch_zooms_the_graph_without_zooming_the_page(page):
     page.set_viewport_size({'width': 390, 'height': 900})
     cdp = page.context.new_cdp_session(page)
     cdp.send('Emulation.setTouchEmulationEnabled', {'enabled': True, 'maxTouchPoints': 2})
-    page.goto(os.environ.get('WEBUI_BASE_URL', 'http://127.0.0.1:5173') + '/#/knowledge/graph?preview=1')
-    expect(page.locator('.react-flow__node')).to_have_count(12)
+    fake_openkb(page)
+    page.goto(os.environ.get('WEBUI_BASE_URL', 'http://127.0.0.1:5173') + '/#/knowledge/graph')
+    expect(page.locator('.react-flow__node')).to_have_count(5)
     expect(page.locator('.document-canvas')).to_have_attribute('data-labels', 'all')
     box = page.locator('.document-canvas').bounding_box()
     zoom = page.locator('.graph-zoom')
@@ -135,6 +136,7 @@ def test_reciprocal_links_keep_direction_and_missing_sources_stay_distinct(page)
     }
     open_network(page, graph_data=graph)
     expect(page.locator('.react-flow__node')).to_have_count(6)
+    page.get_by_role('button', name='全部连线', exact=True).click()
     expect(page.locator('.react-flow__edge')).to_have_count(4)
     missing = page.locator('.document-node.is-unavailable')
     expect(missing).to_have_count(1)
@@ -149,3 +151,46 @@ def test_reciprocal_links_keep_direction_and_missing_sources_stay_distinct(page)
         expect(dialog.locator('.relation-title')).to_have_text(origin)
         expect(dialog.get_by_role('region', name='引用的页面').locator('.is-highlighted')).to_contain_text(target)
         dialog.get_by_role('button', name='close', exact=True).click()
+
+
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+@pytest.mark.parametrize('width', [390, 1440])
+def test_dense_graph_defaults_to_sparse_real_edges_and_keeps_category_colors(page, theme, width):
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({'width': width, 'height': 900})
+    ids = ['summaries/paper', 'concepts/agent', 'concepts/runtime', 'concepts/orphan']
+    titles = dict(zip(ids, ['paper', 'Agent 约束', '插件运行时', '独立页面']))
+    graph = {
+        'nodes': [{'id': id, 'label': titles[id], 'type': 'Concept', 'description': '',
+                   'sources': ['sources/paper.json' if id == 'summaries/paper' else 'summaries/paper'],
+                   'in': 3, 'out': 3} for id in ids],
+        'edges': [{'source': a, 'target': b} for a in ids for b in ids if a != b],
+        'types': ['Concept'],
+    }
+    open_network(page, graph_data=graph)
+    expect(page.locator('.graph-caption')).to_contain_text('5 个节点 · 16 条关系')
+    edges = page.locator('.react-flow__edge')
+    expect(edges).to_have_count(4)
+    expect(page.locator('.react-flow__node')).to_have_count(5)
+    colors = page.locator('.canvas-legend i').evaluate_all('els => els.map(el => getComputedStyle(el).backgroundColor)')
+    assert len(set(colors)) == 4
+    actual = page.locator('.document-node-dot').evaluate_all('els => els.map(el => getComputedStyle(el).backgroundColor)')
+    assert len(set(actual)) == 3
+    positions = page.locator('.react-flow__node').evaluate_all('els => els.map(el => el.style.transform)')
+    viewport = page.locator('.react-flow__viewport').get_attribute('style')
+    node = page.locator('.react-flow__node[aria-label="选择节点：Agent 约束"]')
+    node.hover()
+    expect(edges).to_have_count(7)
+    expect(page.locator('.react-flow__edge.is-highlighted')).to_have_count(7)
+    strokes = edges.locator('.react-flow__edge-path').evaluate_all('els => [...new Set(els.map(el => getComputedStyle(el).stroke))]')
+    assert len(strokes) == 2
+    page.get_by_role('button', name='全部连线', exact=True).hover()
+    expect(edges).to_have_count(4)
+    page.screenshot(path=f'test-results/graph-refined-{theme}-{width}.png', full_page=True)
+    page.get_by_role('button', name='全部连线', exact=True).click()
+    expect(edges).to_have_count(16)
+    assert page.locator('.react-flow__node').evaluate_all('els => els.map(el => el.style.transform)') == positions
+    assert page.locator('.react-flow__viewport').get_attribute('style') == viewport
+    page.get_by_role('button', name='精简连线', exact=True).click()
+    expect(edges).to_have_count(4)
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')

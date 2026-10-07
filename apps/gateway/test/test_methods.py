@@ -18,8 +18,9 @@ from apps.agent.src.runtime_update import RuntimeUpdate
 class RuntimeStub:
     is_running = True
 
-    async def create_session(self, workspace_path, session_id=None):
+    async def create_session(self, workspace_path, session_id=None, *, load_runtime=True):
         self.created = (workspace_path, session_id)
+        self.load_runtime = load_runtime
         return session_id or "generated"
 
     async def get_session_status(self, workspace_path, session_id):
@@ -33,11 +34,19 @@ class RuntimeStub:
         del workspace_path
         return (SessionSummary("session", "first message"),)
 
+    async def generate_session_title(self, workspace_path, session_id):
+        self.titled = (workspace_path, session_id)
+        return "生成的标题"
+
     async def discard_empty_session(self, workspace_path, session_id):
         self.discarded = (workspace_path, session_id)
         return DiscardSessionResult(
             "workspace", session_id, "discarded"
         )
+
+    async def delete_session(self, workspace_path, session_id):
+        self.deleted = (workspace_path, session_id)
+        return DiscardSessionResult("workspace", session_id, "discarded")
 
     async def submit(
         self,
@@ -320,7 +329,8 @@ def test_gateway_methods列出摘要并清理空session():
     runtime, sessions, discarded = asyncio.run(run())
     assert sessions == {
         "sessions": [
-            {"session_id": "session", "first_user_input": "first message"}
+            {"session_id": "session", "first_user_input": "first message",
+             "title": None, "created_at": None, "updated_at": None}
         ]
     }
     assert discarded == {
@@ -370,4 +380,34 @@ def test_memory_context_uses_runtime_and_validates_parameters():
             with pytest.raises(GatewayRpcError) as error:
                 await methods.dispatch('memory.get_context', params, set())
             assert error.value.code == -32602
+    asyncio.run(run())
+
+
+def test_gateway_session_delete使用应用接口():
+    runtime = RuntimeStub()
+    result = asyncio.run(GatewayMethods(runtime).dispatch("session.delete", {"workspace_path": "/workspace", "session_id": "conversation"}, set()))
+    assert result == {"workspace_key": "workspace", "session_id": "conversation", "status": "discarded"}
+    assert runtime.deleted == ("/workspace", "conversation")
+
+
+def test_gateway_session_create支持按需加载且默认保持兼容():
+    runtime = RuntimeStub()
+    methods = GatewayMethods(runtime)
+    asyncio.run(methods.dispatch("session.create", {"workspace_path": "/workspace", "session_id": "lazy", "load_runtime": False}, set()))
+    assert runtime.load_runtime is False
+    asyncio.run(methods.dispatch("session.create", {"workspace_path": "/workspace", "session_id": "eager"}, set()))
+    assert runtime.load_runtime is True
+
+def test_gateway_methods_generate_session_title():
+    async def run():
+        runtime = RuntimeStub()
+        methods = GatewayMethods(runtime)
+        result = await methods.dispatch('session.generate_title', {
+            'workspace_path': '/workspace', 'session_id': 'session'
+        }, set())
+        assert runtime.titled == ('/workspace', 'session')
+        assert result == {'title': '生成的标题'}
+        with pytest.raises(GatewayRpcError) as error:
+            await methods.dispatch('session.generate_title', {'workspace_path': '/workspace'}, set())
+        assert error.value.code == -32602
     asyncio.run(run())

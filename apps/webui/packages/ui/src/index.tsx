@@ -8,15 +8,18 @@ import {
   type ReactNode,
 } from 'react';
 import { ArrowDown, Search, X, SearchX } from 'lucide-react';
+import { flushSync } from 'react-dom';
 import {
   Button,
   Input,
   Tabs as SemiTabs,
   Modal as SemiModal,
   Select as SemiSelect,
+  Spin,
 } from '@douyinfe/semi-ui';
 
 export {
+  CodeHighlight,
   Button,
   Input,
   TextArea,
@@ -30,6 +33,38 @@ export {
   Dropdown,
 } from '@douyinfe/semi-ui';
 export { navigate, useHashLocation, useUnsavedChanges } from './navigation';
+
+let layoutTransition: ViewTransition | undefined;
+
+export function transitionLayout(update: () => void, animate = true) {
+  layoutTransition?.skipTransition();
+  layoutTransition = undefined;
+  if (
+    !animate ||
+    !document.startViewTransition ||
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
+    update();
+    return;
+  }
+  const transition = document.startViewTransition(() => flushSync(update));
+  layoutTransition = transition;
+  void transition.ready.catch(() => {});
+  const clear = () => {
+    if (layoutTransition === transition) {
+      layoutTransition = undefined;
+    }
+  };
+  void transition.finished.then(clear, clear);
+}
+
+export function LoadingIndicator({ label = '正在加载' }: { label?: string }) {
+  return (
+    <div className="loading-indicator" role="status" aria-label={label}>
+      <Spin />
+    </div>
+  );
+}
 
 export function Modal({
   okText = '确认',
@@ -95,7 +130,19 @@ export function Select({
 export function BrandMark({ size = 30 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 48 48" fill="currentColor" aria-hidden="true">
-      <path d="M24 4C10 4 7 14 16 22l8 2zM44 24c0-14-10-17-18-8l-2 8zM24 44c14 0 17-10 8-18l-8-2zM4 24c0 14 10 17 18 8l2-8z" />
+      <path
+        d="M24 10v14m-10-9 10 9 10-9"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={3}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx={24} cy={7} r={3.5} />
+      <circle cx={11} cy={13} r={3} />
+      <circle cx={37} cy={13} r={3} />
+      <path d="M6 23c6-1 12 1 16 5v13c-5-4-10-6-16-5V23Z" />
+      <path d="M42 23c-6-1-12 1-16 5v13c5-4 10-6 16-5V23Z" opacity={0.75} />
     </svg>
   );
 }

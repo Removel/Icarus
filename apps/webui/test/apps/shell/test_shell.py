@@ -30,7 +30,8 @@ def test_navigation_preserves_changes_and_theme(page, knowledge_service):
     page.get_by_role("link", name="知识库", exact=True).click()
     assert page.get_by_role("link", name="原始资料", exact=True).get_attribute("aria-current") == "page"
     assert page.get_by_role("link", name="设计规范", exact=True).count() == 0
-    assert page.locator("body").evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == "rgba(51,112,255,1)"
+    assert page.locator("body").evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == "#a45b70"
+    assert page.locator("body").evaluate("el => getComputedStyle(el).getPropertyValue('--canvas').trim()") == "#f7f7f8"
     assert page.locator(".app-dock").count() == 0
     assert page.locator(".app-layout.semi-layout").count() == 1
     assert page.get_by_role("banner").is_visible()
@@ -104,10 +105,13 @@ def test_design_reference_is_not_an_application_route(page):
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280])
-def test_knowledge_subnavigation_belongs_to_knowledge(page, knowledge_service, width):
+def test_knowledge_tree_and_compact_shortcuts(page, knowledge_service, width):
     page.set_viewport_size({"width": width, "height": 844})
-    page.get_by_role("link", name="知识库", exact=True).click()
     submenu = page.get_by_role("navigation", name="知识库分类")
+    assert submenu.is_visible()
+    assert submenu.locator('[aria-current="page"]').count() == 0
+    submenu.get_by_role('link', name='原始资料', exact=True).click()
+    assert submenu.locator('.nav-category-label').count() == 0
     assert page.locator(".nav-group-knowledge").get_by_role("navigation", name="知识库分类").is_visible()
     knowledge = page.get_by_role("link", name="知识库", exact=True).bounding_box()
     chat = page.get_by_role("link", name="对话", exact=True).bounding_box()
@@ -121,6 +125,24 @@ def test_knowledge_subnavigation_belongs_to_knowledge(page, knowledge_service, w
         assert box["y"] + box["height"] <= page.locator(".shell-main").bounding_box()["y"]
     for label in ["原始资料", "知识页面", "文档关联", "质量检查"]:
         assert submenu.get_by_role("link", name=label, exact=True).is_visible()
+    page.get_by_role('banner').hover()
+    page.wait_for_function("getComputedStyle(document.querySelector('.nav-link.is-parent-active')).backgroundColor === 'rgba(0, 0, 0, 0)'")
+    page.screenshot(path=f'test-results/navigation-tree-{width}.png', full_page=True)
+    parent = page.get_by_role('link', name='知识库', exact=True)
+    assert parent.get_attribute('aria-current') is None
+    assert parent.evaluate('el => getComputedStyle(el).backgroundColor') == 'rgba(0, 0, 0, 0)'
+    assert submenu.evaluate('el => getComputedStyle(el).borderLeftWidth') == ('1px' if width == 1280 else '0px')
+    assert page.get_by_role('button', name='收起知识库分类', exact=True).count() == (1 if width == 1280 else 0)
+    assert page.get_by_role('button', name='展开知识库分类', exact=True).count() == 0
+    if width == 1280:
+        parent_icon = parent.locator('svg').bounding_box()
+        for link in submenu.get_by_role('link').all():
+            box = link.bounding_box()
+            icon = link.locator('svg').bounding_box()
+            assert icon['width'] == icon['height'] == parent_icon['width'] == 18
+            assert box['height'] == 40
+            assert icon['x'] > parent_icon['x']
+            assert link.evaluate('el => getComputedStyle(el).fontSize') == '14px'
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     if width == 1280:
         page.get_by_role("button", name="收起侧边栏", exact=True).click()
@@ -128,6 +150,116 @@ def test_knowledge_subnavigation_belongs_to_knowledge(page, knowledge_service, w
         assert page.locator(".app-sidebar").bounding_box()["width"] == 64
         box = submenu.bounding_box()
         assert box["y"] + box["height"] <= page.get_by_role("link", name="对话", exact=True).bounding_box()["y"]
+    if width >= 768:
+        parent_icon = parent.locator('svg').bounding_box()
+        axis = parent_icon['x'] + parent_icon['width'] / 2
+        sidebar = page.locator('.app-sidebar').bounding_box()
+        assert abs(axis - (sidebar['x'] + sidebar['width'] / 2)) <= 1
+        memory = page.get_by_role('link', name='记忆', exact=True).bounding_box()
+        knowledge = parent.bounding_box()
+        first_child = submenu.get_by_role('link', name='原始资料', exact=True).bounding_box()
+        last_child = submenu.get_by_role('link', name='质量检查', exact=True).bounding_box()
+        chat = page.get_by_role('link', name='对话', exact=True).bounding_box()
+        group = page.locator('.nav-group-knowledge').bounding_box()
+        assert group['y'] - (memory['y'] + memory['height']) == 14
+        assert first_child['y'] - (knowledge['y'] + knowledge['height']) == 9
+        assert chat['y'] - (group['y'] + group['height']) == 14
+        assert last_child['y'] + last_child['height'] < group['y'] + group['height']
+        second_child = submenu.get_by_role('link', name='知识页面', exact=True).bounding_box()
+        assert second_child['y'] - (first_child['y'] + first_child['height']) == 2
+        assert page.locator('.nav-group-knowledge').evaluate('el => getComputedStyle(el).boxShadow') != 'none'
+        assert submenu.evaluate('el => getComputedStyle(el).boxShadow') != 'none'
+        links = page.locator('#app-navigation .nav-link')
+        for link in links.all():
+            box = link.bounding_box()
+            icon = link.locator('svg').bounding_box()
+            assert box['width'] == box['height'] == 40
+            size = 16 if 'nav-child' in link.get_attribute('class') else 18
+            assert icon['width'] == icon['height'] == size
+            assert abs(icon['x'] + icon['width'] / 2 - axis) <= 0.5
+            assert abs(box['x'] + box['width'] / 2 - axis) <= 0.5
+            assert abs(icon['y'] + icon['height'] / 2 - (box['y'] + box['height'] / 2)) <= 0.5
+        if width == 1280:
+            toggle = page.get_by_role('button', name='展开侧边栏', exact=True).bounding_box()
+            assert toggle['width'] == toggle['height'] == 40
+            assert abs(toggle['x'] + toggle['width'] / 2 - axis) <= 0.5
+        page.screenshot(path=f'test-results/navigation-compact-aligned-{width}.png', full_page=True)
     page.get_by_role("link", name="记忆", exact=True).click()
     assert submenu.is_visible()
-    assert submenu.locator('[aria-current=page]').count() == 0
+    assert submenu.locator('[aria-current="page"]').count() == 0
+    page.screenshot(path=f'test-results/navigation-{width}.png', full_page=True)
+    submenu.get_by_role('link', name='知识页面', exact=True).click()
+    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('aria-current') == 'page'
+    page.get_by_role('link', name='对话', exact=True).click()
+    assert submenu.is_visible()
+    assert submenu.locator('[aria-current="page"]').count() == 0
+    submenu.get_by_role('link', name='原始资料', exact=True).click()
+    assert submenu.get_by_role('link', name='原始资料', exact=True).is_visible()
+
+
+def test_tree_toggle_preserves_navigation_and_compact_shortcuts(page, knowledge_service):
+    initial_url = page.url
+    page.get_by_role('textbox', name='搜索记忆…').fill('Semi')
+    submenu = page.locator('#knowledge-navigation')
+    toggle = page.get_by_role('button', name='收起知识库分类', exact=True)
+    assert toggle.get_attribute('aria-expanded') == 'true'
+    toggle.focus()
+    page.keyboard.press('Enter')
+    assert not submenu.is_visible()
+    toggle = page.get_by_role('button', name='展开知识库分类', exact=True)
+    assert toggle.get_attribute('aria-expanded') == 'false'
+    assert toggle.evaluate('el => el === document.activeElement')
+    assert page.url == initial_url
+    assert page.get_by_role('textbox', name='搜索记忆…').input_value() == 'Semi'
+    page.screenshot(path='test-results/navigation-tree-closed.png', full_page=True)
+
+    page.get_by_role('button', name='收起侧边栏', exact=True).click()
+    wait_for_sidebar_width(page, 64)
+    assert submenu.is_visible()
+    assert page.get_by_role('button', name='展开知识库分类', exact=True).count() == 0
+    submenu.get_by_role('link', name='知识页面', exact=True).click()
+    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('aria-current') == 'page'
+    page.get_by_role('button', name='展开侧边栏', exact=True).click()
+    wait_for_sidebar_width(page, 208)
+    assert not submenu.is_visible()
+    toggle = page.get_by_role('button', name='展开知识库分类', exact=True)
+    toggle.focus()
+    page.keyboard.press('Space')
+    assert submenu.is_visible()
+    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('aria-current') == 'page'
+    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('title') == '知识库 › 知识页面'
+
+    page.get_by_role('button', name='收起知识库分类', exact=True).click()
+    for width in [768, 390]:
+        page.set_viewport_size({'width': width, 'height': 844})
+        assert submenu.is_visible()
+        assert submenu.get_by_role('link').count() == 4
+        assert page.get_by_role('button', name='展开知识库分类', exact=True).count() == 0
+    page.set_viewport_size({'width': 1280, 'height': 844})
+    assert not submenu.is_visible()
+    page.get_by_role('button', name='展开知识库分类', exact=True).click()
+    page.get_by_role('link', name='记忆', exact=True).click()
+    assert page.get_by_role('textbox', name='搜索记忆…').input_value() == 'Semi'
+
+def test_theme_follows_system_and_remembers_explicit_choice(page):
+    from playwright.sync_api import expect
+    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
+    page.emulate_media(color_scheme='dark')
+    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')
+    assert page.locator('body').evaluate("el => getComputedStyle(el).getPropertyValue('--canvas').trim()") == '#0c0c0e'
+    assert page.locator('body').evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == '#e0a8b6'
+    page.get_by_role('button', name='切换主题，当前跟随系统').click()
+    page.get_by_role('menuitem', name='浅色', exact=True).click()
+    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
+    page.reload()
+    expect(page.get_by_role('button', name='切换主题，当前浅色')).to_be_visible()
+    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
+    page.get_by_role('button', name='切换主题，当前浅色').click()
+    page.get_by_role('menuitem', name='深色', exact=True).click()
+    page.emulate_media(color_scheme='light')
+    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')
+    page.get_by_role('button', name='切换主题，当前深色').click()
+    page.get_by_role('menuitem', name='跟随系统', exact=True).click()
+    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
+    page.emulate_media(color_scheme='dark')
+    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')

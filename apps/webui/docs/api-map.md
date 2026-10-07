@@ -6,15 +6,17 @@
 
 依据 `apps/mem0/server/main.py`、`apps/mem0/tests/test_server_params.py` 及 Agent 的 `plugins/memory/mem0_http_adapter.py`。
 
+管理分页的服务职责、查询快照与字段归属见 [Mem0 分页架构](../../mem0/docs/spec/2026-10-05-memory-browser/arch.md)。
+
 | 页面操作 | 现有接口 | 接入要求 |
 | --- | --- | --- |
-| 列表、筛选、排序 | `GET /memories` | 已接入 `show_expired=true&top_k=1000`；无身份筛选的全列表需要管理 Key。排序和筛选仅覆盖已加载记录，服务当前无分页游标。 |
+| 列表、筛选、排序 | `GET /memories/page` | 管理接口；传 `page`、`page_size`、`state`、`query`、`category`、`user_id`、`run_id`、`descending`。服务先筛选、排序再分页，返回结果总数、实际页码、状态计数及筛选选项。前端固定传入每页 15 条，并用响应的 `page_size` 计算页数；接口默认 12 条、允许 1–100 条。查询快照沿用 1000 条上限，超出时返回 `truncated=true` 并在页面提示。 |
 | 详情 | `GET /memories/{id}` | 已接入服务 ID 和元数据，支持单独加载不在列表中的详情。 |
 | 手动添加 | `POST /memories` | `messages: [{role: "user", content: "…"}]`，所属身份与范围由 Gateway `memory.get_context` 读取配置和解析工作区，再附带 metadata；手动原文录入使用 `infer: false`。 |
 | 修正、有效期 | `PUT /memories/{id}` | 正文字段叫 `text`，支持 `metadata`、`expiration_date`；显式 `null` 清除有效期。此接口不能修改所属用户或范围。 |
 | 变更记录 | `GET /memories/{id}/history` | 读取全量后每页展示 10 条；`changes` 中的分类/有效期前后值映射为操作标签，正文差异默认展示变化区段、可展开全文。旧历史不反推缺失属性。 |
 | 删除 | `DELETE /memories/{id}` | 确认后执行，服务成功才更新列表。 |
-| 语义搜索（待接入） | `POST /search` | `query`、`filters`、`top_k`、`threshold`、`show_expired`；当前搜索框只有本地文本筛选。 |
+| 语义搜索（待接入） | `POST /search` | `query`、`filters`、`top_k`、`threshold`、`show_expired`；当前搜索框是服务端文本筛选。 |
 
 工作区约定来自现有 Agent 适配器：`run_id = global` 或 `workspace:<workspace_key>`。Mem0 没有单独的 enabled 字段；WebUI 用 `1970-01-01` 表示停用，恢复清空有效期并明确提示变为长期有效。批量操作逐项提交、跳过无需变更的条目并报告部分失败。更新保留现有 metadata；创建原文使用 `infer: false`。当前是服务授权范围内的单用户管理入口，不提供按登录用户隔离。
 
@@ -47,10 +49,13 @@
 | 操作 | 方法 | 行为 |
 | --- | --- | --- |
 | 记忆归属与范围 | `memory.get_context` | 可选绝对 `workspace_path`；仅返回 user_id、agent_id、run_id 和规范化路径，不创建会话、不返回凭据 |
-| 会话列表、新建、状态 | `session.list` / `session.create` / `session.get` | 传服务端 `workspace_path`，会话使用稳定 session ID |
+| 会话列表、新建、状态 | `session.list` / `session.create` / `session.get` | 传服务端 `workspace_path`，会话使用稳定 session ID；WebUI 新建传 `load_runtime: false`，首次提交再加载 Agent |
+| AI 会话标题 | `session.generate_title` | 传 workspace_path、session_id；从首条已保存的用户消息生成并保存标题，返回 title，失败时为 null。列表同时提供 title、created_at、updated_at |
 | 订阅 | `session.subscribe` | 传状态返回的 workspace_key 与 session_id |
 | 恢复历史 | `session.get_history` | 每页最多 500，使用 after_sequence 游标；先订阅并缓存通知，再加载历史 |
 | 提交 | `session.submit` | 文本 prompt 与 submission_id；明确失败保留草稿，未知结果不自动重发 |
+| 引导 | `session.steer` | 当前 task_id、prompt 与 submission_id；accepted 表示已接收，user.correction 表示已应用。已结束或正在取消时恢复草稿，不自动创建新任务 |
+| 排队 | 本页队列 + `session.submit` | 执行或等待确认时 Enter 入队；前一任务结束且历史同步成功后依次提交。停止、发送失败或未知结果暂停队列；编辑、删除与继续由用户操作 |
 | 取消 | `session.cancel` | 逐个取消当前会话的 active_task_ids，等待 finished 通知更新状态 |
 | 实时更新 | `runtime.update` 通知 | 支持 user、assistant text/thinking、tool started/completed、task error/finished；未知类型忽略 |
 
@@ -63,3 +68,5 @@
 资料与知识详情使用弹窗，地址栏保留对象及原始入口；关闭后恢复原列表或关联画布。画布拖动、缩放和布局重置均为前端状态，不新增写入接口。知识模块已具备真实加载、错误提示、非流式操作和安全 Markdown 阅读（代码块、表格、引用、列表、链接、知识双链与文章目录）。知识列表按服务索引中的标题／摘要匹配，资料列表按文件名匹配；正文加载不改变列表标题与搜索结果。后续处理知识操作的流式进度、大规模库分页和服务端检索。Shell 只管理导航与公共上下文；服务特有的请求、响应和错误解释留在知识模块。共用 UI 包承载视觉组件、路由、未保存修改保护与两个业务模块复用的 Gateway 传输客户端，不承担业务代理。
 
 报告管理复用 `POST /api/v1/list` 的 `reports` 与 `POST /api/v1/page` 的 `reports/<filename>`；新增 `POST /api/v1/report/delete`，参数 `kb`、`path`，带现有 Bearer 认证。只删除报告，不调用知识页面的链接清理。
+
+会话删除使用 `session.delete`，参数为 `workspace_path` 和 `session_id`。返回 `discarded`、`busy` 或 `not_found`；仅在成功或已不存在时移除前端列表项。服务拒绝执行中或正在加载/卸载的会话，空闲会话先停止运行时再软删除。

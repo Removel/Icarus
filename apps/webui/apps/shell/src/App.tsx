@@ -2,14 +2,30 @@ import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from 're
 import {
   Brain,
   BookOpen,
+  NotebookText,
   MessageSquare,
   FileText,
   Network,
   ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  Sun,
+  Moon,
+  Monitor,
+  Check,
+  ChevronRight,
 } from 'lucide-react';
-import { BrandMark, Button, Layout, navigate, useHashLocation } from '@icarus/ui';
+import {
+  BrandMark,
+  Button,
+  Dropdown,
+  Layout,
+  LoadingIndicator,
+  navigate,
+  transitionLayout,
+  useHashLocation,
+} from '@icarus/ui';
+import { useTheme, type Theme } from './theme';
 import MemoryApp from '@icarus/memory-app';
 import KnowledgeApp from '@icarus/knowledge-app';
 const ChatApp = lazy(() => import('@icarus/chat-app'));
@@ -21,6 +37,13 @@ const routes = [
 ];
 
 export default function App() {
+  const [theme, setTheme] = useTheme();
+  const themeOptions = [
+    { value: 'light', label: '浅色', icon: Sun },
+    { value: 'dark', label: '深色', icon: Moon },
+    { value: 'system', label: '跟随系统', icon: Monitor },
+  ] as const;
+  const currentTheme = themeOptions.find((item) => item.value === theme)!;
   const hash = useHashLocation();
   const route = hash.split('?')[0].split('/')[1] || 'memory';
   const lastPaths = useRef<Record<string, string>>({
@@ -39,19 +62,20 @@ export default function App() {
     (knowledgeParams.get('origin') ?? hash).split('?')[0].split('/')[2] || 'sources';
   const knowledgeLinks = [
     { id: 'sources', label: '原始资料', icon: FileText },
-    { id: 'pages', label: '知识页面', icon: BookOpen },
+    { id: 'pages', label: '知识页面', icon: NotebookText },
     { id: 'graph', label: '文档关联', icon: Network },
     { id: 'quality', label: '质量检查', icon: ShieldCheck },
   ];
   function knowledgePath(section: string) {
     const params = new URLSearchParams();
-    for (const key of ['base', 'preview']) {
+    for (const key of ['base']) {
       const value = knowledgeParams.get(key);
       if (value) params.set(key, value);
     }
     return '#/knowledge/' + section + (params.size ? '?' + params : '');
   }
   const [collapsed, setCollapsed] = useState(false);
+  const [knowledgeExpanded, setKnowledgeExpanded] = useState(true);
 
   useEffect(() => {
     if (!routes.some((item) => item.id === route)) {
@@ -102,32 +126,77 @@ export default function App() {
           <span aria-hidden="true">/</span>
           <strong>{routes.find((item) => item.id === route)?.label}</strong>
         </div>
+        <Dropdown
+          trigger="click"
+          position="bottomRight"
+          render={
+            <Dropdown.Menu>
+              {themeOptions.map((item) => (
+                <Dropdown.Item key={item.value} onClick={() => setTheme(item.value as Theme)}>
+                  <item.icon size={16} />
+                  <span>{item.label}</span>
+                  {theme === item.value && <Check size={14} aria-label="当前主题" />}
+                </Dropdown.Item>
+              ))}
+            </Dropdown.Menu>
+          }
+        >
+          <Button
+            className="theme-switch"
+            theme="borderless"
+            type="tertiary"
+            icon={<currentTheme.icon size={17} />}
+            aria-label={`切换主题，当前${currentTheme.label}`}
+            title={`主题：${currentTheme.label}`}
+          >
+            <span>{currentTheme.label}</span>
+          </Button>
+        </Dropdown>
       </Layout.Header>
       <Layout className="workspace-layout" hasSider>
         <Layout.Sider className="app-sidebar" role="complementary" aria-label="Icarus 导航">
           <nav id="app-navigation" aria-label="应用导航">
             {routes.map((item) => (
               <div key={item.id} className={`nav-group nav-group-${item.id}`}>
-                <a
-                  className={`nav-link ${route === item.id ? 'active' : ''}`}
-                  href={lastPaths.current[item.id]}
-                  onClick={followLink}
-                  aria-current={route === item.id ? 'page' : undefined}
-                  aria-label={item.label}
-                  title={item.label}
-                >
-                  <item.icon size={19} strokeWidth={1.7} />
-                  <span>{item.label}</span>
-                </a>
+                <div className="nav-group-heading">
+                  <a
+                    className={`nav-link ${route === item.id ? (item.id === 'knowledge' ? 'is-parent-active' : 'active') : ''}`}
+                    href={lastPaths.current[item.id]}
+                    onClick={followLink}
+                    aria-current={route === item.id && item.id !== 'knowledge' ? 'page' : undefined}
+                    aria-label={item.label}
+                    title={item.label}
+                  >
+                    <item.icon size={18} strokeWidth={1.5} />
+                    <span>{item.label}</span>
+                  </a>
+                  {item.id === 'knowledge' && (
+                    <button
+                      type="button"
+                      className="nav-toggle"
+                      onClick={() => setKnowledgeExpanded((value) => !value)}
+                      aria-label={knowledgeExpanded ? '收起知识库分类' : '展开知识库分类'}
+                      aria-expanded={knowledgeExpanded}
+                      aria-controls="knowledge-navigation"
+                      title={knowledgeExpanded ? '收起知识库分类' : '展开知识库分类'}
+                    >
+                      <ChevronRight size={16} strokeWidth={1.5} aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
                 {item.id === 'knowledge' && (
-                  <nav className="knowledge-subnav" aria-label="知识库分类">
+                  <nav
+                    id="knowledge-navigation"
+                    className={`knowledge-subnav${knowledgeExpanded ? '' : ' is-closed'}`}
+                    aria-label="知识库分类"
+                  >
                     {knowledgeLinks.map((child) => (
                       <a
                         key={child.id}
                         className={`nav-link nav-child ${route === 'knowledge' && knowledgeSection === child.id ? 'active' : ''}`}
                         href={knowledgePath(child.id)}
                         onClick={followLink}
-                        title={child.label}
+                        title={`知识库 › ${child.label}`}
                         aria-label={child.label}
                         aria-current={
                           route === 'knowledge' && knowledgeSection === child.id
@@ -135,7 +204,7 @@ export default function App() {
                             : undefined
                         }
                       >
-                        <child.icon size={18} />
+                        <child.icon size={18} strokeWidth={1.5} />
                         <span>{child.label}</span>
                       </a>
                     ))}
@@ -149,7 +218,7 @@ export default function App() {
               theme="borderless"
               type="tertiary"
               icon={collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-              onClick={() => setCollapsed((value) => !value)}
+              onClick={() => transitionLayout(() => setCollapsed((value) => !value), false)}
               aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
               aria-expanded={!collapsed}
               aria-controls="app-navigation"
@@ -181,7 +250,7 @@ export default function App() {
             </div>
             {chatOpened && (
               <div hidden={route !== 'chat'}>
-                <Suspense fallback={<p role="status">正在加载对话…</p>}>
+                <Suspense fallback={<LoadingIndicator label="正在加载对话" />}>
                   <ChatApp
                     active={route === 'chat'}
                     hash={route === 'chat' ? hash : lastPaths.current.chat}

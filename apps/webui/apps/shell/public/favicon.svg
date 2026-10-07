@@ -1,1 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#ffffff"/><g fill="#3370ff"><path d="M24 7c-11 0-15 8-8 15l8 2z"/><path d="M41 24c0-11-8-15-15-8l-2 8z"/><path d="M24 41c11 0 15-8 8-15l-8-2z"/><path d="M7 24c0 11 8 15 15 8l2-8z"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="currentColor">
+  <style>
+    :root {
+      color: #a45b70;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color: #e0a8b6;
+      }
+    }
+  </style>
+  <path
+    d="M24 10v14m-10-9 10 9 10-9"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="24" cy="7" r="3.5" />
+  <circle cx="11" cy="13" r="3" />
+  <circle cx="37" cy="13" r="3" />
+  <path d="M6 23c6-1 12 1 16 5v13c-5-4-10-6-16-5V23Z" />
+  <path d="M42 23c-6-1-12 1-16 5v13c5-4 10-6 16-5V23Z" opacity=".75" />
+</svg>

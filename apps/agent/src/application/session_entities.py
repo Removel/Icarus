@@ -60,6 +60,21 @@ class _SessionRow(_Base):
     delete_reason: Mapped[str | None] = mapped_column(String(64))
 
 
+class _SessionTitleRow(_Base):
+    __tablename__ = "session_titles"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("workspace_key", "session_id"),
+            ("sessions.workspace_key", "sessions.session_id"),
+            ondelete="CASCADE",
+        ),
+    )
+
+    workspace_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    title: Mapped[str] = mapped_column(String(80), nullable=False)
+
+
 class _ConversationUpdateRow(_Base):
     __tablename__ = "conversation_updates"
     __table_args__ = (

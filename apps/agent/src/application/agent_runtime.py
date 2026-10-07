@@ -33,6 +33,7 @@ from apps.agent.src.application.runtime_update_stream import (
     RuntimeUpdateSubscription,
 )
 from apps.agent.src.application.session_runtime import SessionRuntime
+from apps.agent.src.application.session_title import generate_title
 from apps.agent.src.application.session_store import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
@@ -75,6 +76,7 @@ class _SteerSubmissionRecord:
 class _SessionEntry:
     identity: SessionIdentity
     mutation_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    title_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     runtime: SessionRuntime | None = None
     load_task: asyncio.Task[SessionRuntime] | None = None
     unload_task: asyncio.Task[None] | None = None
@@ -192,6 +194,8 @@ class AgentRuntime:
         self,
         workspace_path: str | Path,
         session_id: str | None = None,
+        *,
+        load_runtime: bool = True,
     ) -> str:
         self._require_accepting()
         identity = SessionIdentity.create(workspace_path, session_id or uuid4().hex)
@@ -211,6 +215,8 @@ class AgentRuntime:
             }:
                 raise SessionAlreadyExistsError(identity.session_id)
             await self._store().create_session(identity)
+            if not load_runtime:
+                return identity.session_id
             task = self._begin_load_locked(entry)
         await asyncio.shield(task)
         return identity.session_id
@@ -471,8 +477,48 @@ class AgentRuntime:
             workspace_identity.workspace_key
         )
 
+    async def generate_session_title(
+        self, workspace_path: str | Path, session_id: str
+    ) -> str | None:
+        self._require_accepting()
+        identity = SessionIdentity.create(workspace_path, session_id)
+        entry = await self._entry(identity)
+        async with entry.title_lock:
+            store = self._store()
+            record = await store.get_session(identity)
+            if record is None:
+                raise SessionNotFoundError(session_id)
+            title = await store.get_title(identity)
+            if title is not None or record.first_user_input is None:
+                return title
+            records, _ = await store.read_updates(identity)
+            first = next(item for item in records if item.type == "user.message")
+            text = first.payload.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return None
+            try:
+                title = await generate_title(self._config_loader(), text)
+            except Exception:
+                self.logger.warning(
+                    "Session title generation unavailable", exc_info=True
+                )
+                return None
+            self._require_accepting()
+            return await store.save_title(identity, title)
+
     async def discard_empty_session(
         self, workspace_path: str | Path, session_id: str
+    ) -> DiscardSessionResult:
+        return await self._delete_session(workspace_path, session_id, only_empty=True)
+
+    async def delete_session(
+        self, workspace_path: str | Path, session_id: str
+    ) -> DiscardSessionResult:
+        """Hide a conversation after stopping its idle runtime; retain stored history."""
+        return await self._delete_session(workspace_path, session_id, only_empty=False)
+
+    async def _delete_session(
+        self, workspace_path: str | Path, session_id: str, *, only_empty: bool
     ) -> DiscardSessionResult:
         self._require_accepting()
         identity = SessionIdentity.create(workspace_path, session_id)
@@ -501,14 +547,19 @@ class AgentRuntime:
                     )
                 if entry.runtime is not None:
                     wait_for = self._begin_unload_locked(
-                        entry, "discard_empty"
+                        entry, "discard_empty" if only_empty else "user_delete"
                     )
                 else:
                     entry.discarding = True
                     try:
-                        status = await self._store().soft_delete_empty_session(
-                            identity, reason="empty_cleanup"
-                        )
+                        if only_empty:
+                            status = await self._store().soft_delete_empty_session(
+                                identity, reason="empty_cleanup"
+                            )
+                        else:
+                            status = await self._store().soft_delete_session(
+                                identity, reason="user_delete"
+                            )
                         if status != "discarded":
                             entry.discarding = False
                             return DiscardSessionResult(

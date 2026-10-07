@@ -1,6 +1,17 @@
 import { memoryDate, type MemoryEntry } from './types';
 
-export const listLimit = 1000;
+export const pageSize = 15;
+export type MemoryPage = {
+  results: MemoryEntry[];
+  page: number;
+  page_size: number;
+  total: number;
+  counts: { all: number; active: number; expired: number };
+  categories: string[];
+  users: string[];
+  scopes: string[];
+  truncated: boolean;
+};
 export const message = (error: unknown) =>
   error instanceof Error ? error.message : '记忆服务请求失败。';
 
@@ -59,20 +70,31 @@ function record(value: unknown): MemoryEntry {
     expiration_date: typeof row.expiration_date === 'string' ? row.expiration_date : null,
     created_at: String(row.created_at ?? ''),
     updated_at: String(row.updated_at ?? row.created_at ?? ''),
-    metadata: { ...metadata, category: String(metadata.category ?? '未分类') },
+    metadata: { ...metadata, category: String(metadata.category || '未分类') },
     history: [],
   };
 }
 
-export async function list(signal?: AbortSignal) {
-  const result = await request<{ results: unknown[] }>(
-    `/memories?show_expired=true&top_k=${listLimit}`,
+export async function list(query: string, signal?: AbortSignal): Promise<MemoryPage> {
+  const result = await request<Omit<MemoryPage, 'results'> & { results: unknown[] }>(
+    `/memories/page?${query}`,
     'GET',
     undefined,
     signal,
   );
-  if (!Array.isArray(result.results)) throw new Error('记忆服务返回了无效的列表。');
-  return result.results.map(record);
+  if (
+    !Array.isArray(result.results) ||
+    !result.counts ||
+    !Number.isInteger(result.total) ||
+    !Number.isInteger(result.page_size) ||
+    result.page_size < 1 ||
+    result.page_size > 100 ||
+    !Array.isArray(result.categories) ||
+    !Array.isArray(result.users) ||
+    !Array.isArray(result.scopes)
+  )
+    throw new Error('记忆服务返回了无效的分页列表，请更新记忆服务。');
+  return { ...result, results: result.results.map(record) };
 }
 
 export async function get(id: string, signal?: AbortSignal) {
