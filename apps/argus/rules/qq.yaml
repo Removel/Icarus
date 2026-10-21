@@ -1,0 +1,30 @@
+version: 1
+source: qq
+default:
+  decision: ignore
+  reason: "没有命中任何叫醒规则"
+rules:
+  - id: private_message
+    description: "私聊即为明确寻址"
+    priority: 200
+    when: {scope_kind: private}
+    decision: wake
+    reason: "有人私聊 Icarus"
+  - id: mention_bot
+    description: "有人 @ 或叫机器人名字"
+    priority: 100
+    when: {mentions_bot: true}
+    decision: wake
+    reason: "有人直接找 Icarus"
+  - id: genuine_question
+    description: "群里有人在问需要 Icarus 回答的问题，而不是闲聊或通知"
+    semantic: true
+    when: {scope_kind: group}
+    decision: wake
+    reason: "有人在等 Icarus 回答"
+  - id: casual_chat
+    description: "群友之间闲聊，不需要 Icarus 参与"
+    semantic: true
+    when: {scope_kind: group}
+    decision: ignore
+    reason: "普通闲聊"
