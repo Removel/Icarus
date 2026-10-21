@@ -100,9 +100,11 @@ App 再检查：
 - `_session_operation_worker` 不存在或已结束；
 - 当前不在历史恢复和 Fatal 状态。
 
-本地门禁通过后，App 调用当前 Client 的 `session.get`，用 Agent 返回的 lifecycle 和全部工作计数确认
-当前 Session 也处于空闲。`/resume` 的 Picker 可能停留任意时长，因此用户确认选择后、准备 Candidate
-前再检查一次当前 Session。`/clear` 在创建新 Session 前执行同一检查。
+本地门禁通过后，App 调用当前 Client 的 `session.get`，确认当前 Session 也处于空闲。空闲判定只在
+lifecycle 属于 `{ready, running, unloaded}`、无活动 Task、且排队与待处理 Event 计数均为零时成立；
+`background_work_count` 不参与判定——后台进程属于 Session 的业务工作，不代表用户正在对话，因此不应
+阻止切换或恢复。`/resume` 的 Picker 可能停留任意时长，因此用户确认选择后、准备 Candidate 前再检查
+一次当前 Session。`/clear` 在创建新 Session 前执行同一检查。
 
 命令不可执行时，通过现有 Notification 显示 `Session commands are only available while idle.`，然后把
 焦点交回 Composer。命令不进入等待队列。
@@ -228,8 +230,8 @@ Client Factory
 启动路径、`/resume` 和 `/clear` 共用该方法。区别仅由传入参数决定。
 
 对于 `/resume`（即 `create_if_missing=False`），最终状态检查出现活动 Task、排队、待处理 Event、
-待处理 Plugin Event、后台工作或 loading/unloading 时，关闭候选 Client 并报告 Busy。现有 `running`
-状态由工作计数推导，因此也会被拒绝。当前和目标检查都是时点检查；首期不增加 Session Lease，也
+待处理 Plugin Event 或 loading/unloading/failed 时，关闭候选 Client 并报告 Busy；仅由后台工作推导
+出的 `running` 不在拒绝范围内。当前和目标检查都是时点检查；首期不增加 Session Lease，也
 不支持多个客户端对同一 Session 并发提交。命令行 `--session-id` 使用同一准备和历史恢复代码，但保持
 现有启动兼容行为，不额外增加 Busy 拒绝。
 

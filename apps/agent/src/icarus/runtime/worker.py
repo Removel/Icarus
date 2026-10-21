@@ -1,0 +1,297 @@
+"""单个 Plugin 的异步运行时。"""
+
+import asyncio
+from datetime import UTC, datetime
+import logging
+from collections.abc import Iterable
+from collections.abc import Awaitable, Callable
+from uuid import uuid4
+
+from icarus.core.hooks.hook_context import hook_context
+from icarus.core.plugin import BasePlugin
+from icarus.core.recording import record
+from icarus.core.capabilities import CapabilityRequest, CapabilityResponse, CapabilityRequester, CapabilityStatus
+from icarus.runtime.registry import (
+    PluginRegistry,
+)
+from icarus.core.types import (
+    BackgroundWorkSnapshot,
+    PluginRuntimeSnapshot,
+    PluginStatus,
+    PublishedEvent,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+class PluginRuntime:
+    """为一个 Plugin 提供统一 inbox 和顺序消费 Worker。"""
+
+    def __init__(
+        self,
+        plugin: BasePlugin,
+        registry: PluginRegistry,
+        inbox_maxsize: int = 0,
+        consumed_event_types: Iterable[type] | None = None,
+    ) -> None:
+        self.plugin = plugin
+        self.registry = registry
+        self._inbox: asyncio.Queue[PublishedEvent] = asyncio.Queue(
+            maxsize=inbox_maxsize
+        )
+        self._worker: asyncio.Task[None] | None = None
+        self._accepting = False
+        self._accepted_count = 0
+        self._handled_count = 0
+        self._processed_count = 0
+        self._failed_count = 0
+        self._last_event_at: datetime | None = None
+        self._last_error: str | None = None
+        self._background_tasks: dict[str, asyncio.Task[None]] = {}
+        self._background_work: dict[str, BackgroundWorkSnapshot] = {}
+        self._accepting_background_work = False
+        self._last_background_work_at: datetime | None = None
+        self._background_failed_count = 0
+        self._last_background_error: str | None = None
+        self._consumed_event_types = (
+            None
+            if consumed_event_types is None
+            else frozenset(consumed_event_types)
+        )
+
+    @property
+    def plugin_id(self) -> str:
+        return self.plugin.plugin_id
+
+    @property
+    def status(self) -> PluginStatus:
+        return self.registry.get_status(self.plugin_id)
+
+    @property
+    def pending_count(self) -> int:
+        return self._accepted_count - self._handled_count
+
+    @property
+    def background_work_count(self) -> int:
+        return len(self._background_tasks)
+
+    @property
+    def last_background_work_at(self) -> datetime | None:
+        return self._last_background_work_at
+
+    async def start(self) -> None:
+        if self.status == PluginStatus.RUNNING:
+            return
+        if self.status not in {PluginStatus.CREATED, PluginStatus.STOPPED}:
+            raise RuntimeError(
+                f"Plugin cannot start from status: {self.plugin_id} {self.status.value}"
+            )
+
+        self.registry.set_status(self.plugin_id, PluginStatus.STARTING)
+        self._accepting_background_work = True
+        try:
+            record("plugin.lifecycle", "before", {"plugin_id": self.plugin_id, "action": "start"})
+            await self.plugin.start()
+            record("plugin.lifecycle", "after", {"plugin_id": self.plugin_id, "action": "start"})
+            self._accepting = True
+            self._worker = asyncio.create_task(
+                self._consume_loop(),
+                name=f"plugin-runtime:{self.plugin_id}",
+            )
+            self.registry.set_status(self.plugin_id, PluginStatus.RUNNING)
+        except Exception:
+            self._accepting_background_work = False
+            await self._cancel_background_work()
+            self.registry.set_status(self.plugin_id, PluginStatus.FAILED)
+            raise
+
+    def start_background_work(
+        self,
+        name: str,
+        operation: Callable[[], Awaitable[None]],
+    ) -> asyncio.Task[None]:
+        if not self._accepting_background_work:
+            raise RuntimeError(
+                f"Plugin is not accepting background work: {self.plugin_id}"
+            )
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("background work name cannot be empty")
+        work_id = uuid4().hex
+        started_at = datetime.now(UTC)
+        snapshot = BackgroundWorkSnapshot(
+            work_id=work_id,
+            name=normalized_name,
+            started_at=started_at,
+        )
+        self._background_work[work_id] = snapshot
+        self._last_background_work_at = started_at
+        task = asyncio.create_task(
+            self._run_background_work(work_id, normalized_name, operation),
+            name=f"plugin-background:{self.plugin_id}:{normalized_name}",
+        )
+        self._background_tasks[work_id] = task
+        return task
+
+    async def quiesce(self) -> None:
+        self._accepting_background_work = False
+        await self.plugin.quiesce()
+
+    async def enqueue(self, published_event: PublishedEvent) -> bool:
+        if not self._accepting or self.status != PluginStatus.RUNNING:
+            raise RuntimeError(f"Plugin is not accepting events: {self.plugin_id}")
+        if isinstance(published_event.event, CapabilityResponse):
+            requester = self.plugin._requester
+            if requester is not None:
+                requester.accept_response(published_event.source_plugin_id, published_event.event)
+            return True
+        capability_request = isinstance(published_event.event, CapabilityRequest)
+        if (
+            not capability_request
+            and self._consumed_event_types is not None
+            and type(published_event.event) not in self._consumed_event_types
+        ):
+            return False
+        if not capability_request and not self.plugin.accepts_event(
+            published_event.source_plugin_id,
+            published_event.event,
+        ):
+            return False
+        await self._inbox.put(published_event)
+        self._accepted_count += 1
+        return True
+
+    async def drain(self) -> None:
+        await self._inbox.join()
+        await self.plugin.drain()
+        tasks = tuple(self._background_tasks.values())
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def stop(self, drain: bool = True) -> None:
+        if self.status == PluginStatus.STOPPED:
+            return
+        if self.status == PluginStatus.CREATED:
+            try:
+                record("plugin.lifecycle", "before", {"plugin_id": self.plugin_id, "action": "stop"})
+                await self.plugin.stop()
+                record("plugin.lifecycle", "after", {"plugin_id": self.plugin_id, "action": "stop"})
+            finally:
+                self.registry.set_status(self.plugin_id, PluginStatus.STOPPED)
+            return
+        if self.status not in {
+            PluginStatus.RUNNING,
+            PluginStatus.FAILED,
+            PluginStatus.STOPPING,
+        }:
+            raise RuntimeError(
+                f"Plugin cannot stop from status: {self.plugin_id} {self.status.value}"
+            )
+
+        self.registry.set_status(self.plugin_id, PluginStatus.STOPPING)
+        self._accepting = False
+        self._accepting_background_work = False
+        if drain:
+            await self.drain()
+        if self._worker is not None:
+            self._worker.cancel()
+            await asyncio.gather(self._worker, return_exceptions=True)
+            self._worker = None
+        try:
+            record("plugin.lifecycle", "before", {"plugin_id": self.plugin_id, "action": "stop"})
+            await self.plugin.stop()
+            record("plugin.lifecycle", "after", {"plugin_id": self.plugin_id, "action": "stop"})
+        finally:
+            await self._cancel_background_work()
+            self.registry.set_status(self.plugin_id, PluginStatus.STOPPED)
+
+    def snapshot(self) -> PluginRuntimeSnapshot:
+        return PluginRuntimeSnapshot(
+            plugin_id=self.plugin_id,
+            status=self.status,
+            queue_size=self._inbox.qsize(),
+            queue_capacity=self._inbox.maxsize,
+            pending_count=self.pending_count,
+            processed_count=self._processed_count,
+            failed_count=self._failed_count,
+            last_event_at=self._last_event_at,
+            last_error=self._last_error,
+            background_work_count=self.background_work_count,
+            active_background_works=tuple(self._background_work.values()),
+            last_background_work_at=self._last_background_work_at,
+            background_failed_count=self._background_failed_count,
+            last_background_error=self._last_background_error,
+        )
+
+    async def _run_background_work(
+        self,
+        work_id: str,
+        name: str,
+        operation: Callable[[], Awaitable[None]],
+    ) -> None:
+        try:
+            await operation()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._background_failed_count += 1
+            self._last_background_error = str(error)
+            logger.exception(
+                "Plugin background work failed: plugin_id=%s work_id=%s name=%s",
+                self.plugin_id,
+                work_id,
+                name,
+            )
+        finally:
+            self._background_tasks.pop(work_id, None)
+            self._background_work.pop(work_id, None)
+            self._last_background_work_at = datetime.now(UTC)
+
+    async def _cancel_background_work(self) -> None:
+        tasks = tuple(self._background_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _consume_loop(self) -> None:
+        while True:
+            published_event = await self._inbox.get()
+            try:
+                with hook_context(
+                    published_event.hook_context,
+                    run_id=published_event.hook_run_id,
+                ):
+                    await self._consume(published_event)
+            except Exception as error:
+                self._failed_count += 1
+                self._last_error = str(error)
+                logger.exception(
+                    "Plugin event consumption failed: plugin_id=%s event_id=%s",
+                    self.plugin_id,
+                    published_event.event.event_id,
+                )
+            else:
+                self._processed_count += 1
+                self._last_error = None
+            finally:
+                self._handled_count += 1
+                self._last_event_at = datetime.now(UTC)
+                self._inbox.task_done()
+
+    async def _consume(self, published_event: PublishedEvent) -> None:
+        event = published_event.event
+        if isinstance(event, CapabilityRequest):
+            try:
+                await self.plugin.dispatch(published_event.source_plugin_id, event)
+            except Exception:
+                publisher = self.plugin._response_publisher
+                if publisher is not None:
+                    await publisher(published_event.source_plugin_id,
+                        CapabilityRequester.failure(event, CapabilityStatus.FAILED))
+            return
+        if self.plugin.handler_bindings():
+            await self.plugin.dispatch(published_event.source_plugin_id, event)
+        else:
+            await self.plugin.consume(published_event.source_plugin_id, event)

@@ -1,6 +1,9 @@
 # Session Store Design｜Session 数据存储设计
 
 > 状态：已实现。本文是 Session 与公共 Conversation 数据存储的当前实现说明。
+> 2026-10-17：源码已迁至 `agent_app.application.repositories`，通用SQLite连接生命周期下沉
+> `icarus.runtime.storage`；表、原子sequence、公共更新与模型消息分离、软删除语义不变。
+> 当前包结构见[框架业务解耦](../2026-10-16-framework-business-decoupling/arch.md)。
 
 ## 1. 文档定位
 

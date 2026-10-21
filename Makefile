@@ -3,7 +3,7 @@ ARGS ?=
 APP ?=
 REPO_ROOT := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
-.PHONY: install install-dev install-commands install-agent install-gateway install-tui start stop status gateway tui mem0-up mem0-down mem0-logs openkb-up openkb-down openkb-logs test test-agent test-gateway test-tui
+.PHONY: install install-dev install-commands install-agent install-gateway install-tui start stop status gateway tui mem0-up mem0-down mem0-logs openkb-up openkb-down openkb-logs webui-up webui-down webui-logs test test-agent test-gateway test-tui test-mem0 test-openkb test-mem0-full test-openkb-full typecheck-agent check-package-agent
 
 install:
 	PYTHON="$(PYTHON)" "$(REPO_ROOT)/bin/icarus" install $(APP)
@@ -56,14 +56,49 @@ openkb-down:
 openkb-logs:
 	bash "$(REPO_ROOT)/apps/openkb/scripts/icarus-compose.sh" logs -f
 
+webui-up:
+	"$(REPO_ROOT)/bin/icarus" start webui
+
+webui-down:
+	"$(REPO_ROOT)/bin/icarus" stop webui
+
+webui-logs:
+	tail -f "$${ICARUS_DATA_DIR}/logs/webui.log"
+
 test:
 	"$(REPO_ROOT)/scripts/test.sh"
 
 test-agent:
 	"$(REPO_ROOT)/apps/agent/scripts/test.sh"
 
+typecheck-agent:
+	bash "$(REPO_ROOT)/apps/agent/scripts/typecheck.sh"
+
+check-package-agent:
+	bash "$(REPO_ROOT)/apps/agent/scripts/check-package.sh"
+
 test-gateway:
 	"$(REPO_ROOT)/apps/gateway/scripts/test.sh"
 
 test-tui:
 	"$(REPO_ROOT)/apps/tui/scripts/test.sh"
+
+test-mem0:
+	bash "$(REPO_ROOT)/apps/mem0/scripts/test.sh"
+
+test-openkb:
+	bash "$(REPO_ROOT)/apps/openkb/scripts/test.sh"
+
+test-mem0-full:
+	bash "$(REPO_ROOT)/apps/mem0/scripts/test.sh" --full
+
+test-openkb-full:
+	bash "$(REPO_ROOT)/apps/openkb/scripts/test.sh" --full
+
+.PHONY: test-rela-mem test-rela-mem-integration
+
+test-rela-mem:
+	bash "$(REPO_ROOT)/apps/rela-mem/scripts/test.sh"
+
+test-rela-mem-integration:
+	bash "$(REPO_ROOT)/apps/rela-mem/scripts/test.sh" --integration

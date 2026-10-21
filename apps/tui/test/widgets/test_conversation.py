@@ -105,6 +105,394 @@ def dispatch_mouse_scroll(app, widget, event_type) -> None:
     )
 
 
+def test_conversation_windowed_jump_within_live_turn_retains_stream(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(AppendUserMessage("task", "question"))
+            await view.apply_action(AppendAssistantDelta("task", "first"))
+            assistant = view.query_one(AssistantMessage)
+            await view.jump_to_turn(0)
+            await view.apply_action(AppendAssistantDelta("task", " second"))
+            await pilot.pause()
+            return assistant.is_mounted, [item.markdown_text for item in view.query(AssistantMessage)]
+
+    assert asyncio.run(run()) == (True, ["first second"])
+
+
+def test_conversation_windowed_history_restore_never_mounts_old_assistant(tmp_path, monkeypatch):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        mounted = []
+        original = AssistantMessage.on_mount if hasattr(AssistantMessage, "on_mount") else None
+
+        async def record_mount(self):
+            mounted.append(self.markdown_text)
+            if original is not None:
+                await original(self)
+
+        monkeypatch.setattr(AssistantMessage, "on_mount", record_mount, raising=False)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            view.begin_history_restore()
+            for index in range(80):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+            view.finish_history_restore()
+            await pilot.pause()
+            return len(mounted)
+
+    assert asyncio.run(run()) == 24
+
+
+def test_conversation_windowed_keep_streaming_when_detached_within_latest_window(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(50, 10)) as pilot:
+            view = app.query_one(ConversationView)
+            for index in range(25):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+                await view.apply_action(FinishTurn(task, "completed"))
+            await view.apply_action(AppendUserMessage("active", "new task"))
+            await view.apply_action(AppendAssistantDelta("active", "begin"))
+            await pilot.pause()
+            view.page_up()
+            await pilot.pause()
+            before = view.scroll_y
+            await view.apply_action(AppendAssistantDelta("active", " + more"))
+            await pilot.pause()
+            assistant = list(view.query(AssistantMessage))[-1]
+            return view.scroll_y, before, assistant.markdown_text
+
+    after, before, text = asyncio.run(run())
+    assert after == before
+    assert text == "begin + more"
+
+
+def test_conversation_windowed_wheel_loads_older_history(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            view.begin_history_restore()
+            for index in range(40):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+            view.finish_history_restore()
+            await pilot.pause()
+            view.scroll_home(animate=False, immediate=True)
+            await pilot.pause()
+            dispatch_mouse_scroll(app, view, events.MouseScrollUp)
+            await pilot.pause()
+            return view.mounted_turn_range, view.query_one(UserMessage).message_text
+
+    assert asyncio.run(run()) == ((8, 32), "question 8")
+
+
+def test_conversation_windowed_scroll_into_older_history(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            view.begin_history_restore()
+            for index in range(80):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+            view.finish_history_restore()
+            await pilot.pause()
+            before = view.mounted_turn_range
+            view.scroll_home(animate=False, immediate=True)
+            await pilot.pause()
+            view.page_up()
+            await pilot.pause()
+            after = view.mounted_turn_range
+            return before, after, [msg.message_text for msg in view.query(UserMessage)]
+
+    before, after, visible = asyncio.run(run())
+    assert before == (56, 80)
+    assert after[0] < before[0]
+    assert visible[0] == f"question {after[0]}"
+    assert len(visible) <= 24
+
+
+def test_conversation_windowed_detached_output_keeps_reading_position(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            for index in range(30):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+                await view.apply_action(FinishTurn(task, "completed"))
+            await pilot.pause()
+            view.page_up()
+            await pilot.pause()
+            first = view.query_one(UserMessage).message_text
+            before = view.scroll_y
+            await view.apply_action(AppendUserMessage("task-30", "question 30"))
+            await view.apply_action(AppendAssistantDelta("task-30", "partial"))
+            await pilot.pause()
+            return first, before, view.query_one(UserMessage).message_text, view.scroll_y, len(view.query(UserMessage))
+
+    first, before, current, after, count = asyncio.run(run())
+    assert current == first
+    assert after == before
+    assert count <= 25
+
+
+def test_conversation_windowed_preserves_disclosure_after_eviction(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(AppendUserMessage("task-0", "question 0"))
+            await view.apply_action(CompleteThinking("task-0", 1, "thinking"))
+            thinking = view.query_one(ThinkingBlock)
+            thinking.set_expanded(True)
+            await pilot.pause()
+            for index in range(1, 30):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+                await view.apply_action(FinishTurn(task, "completed"))
+            await view.jump_to_turn(0)
+            await pilot.pause()
+            restored = view.query_one(ThinkingBlock)
+            return restored.expanded, restored.markdown_text
+
+    assert asyncio.run(run()) == (True, "thinking")
+
+
+def test_conversation_windowed_detached_tail_replaces_previous_completed_task(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            for index in range(30):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+                await view.apply_action(FinishTurn(task, "completed"))
+            await view.jump_to_turn(0)
+            for index in range(30, 50):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(AppendAssistantDelta(task, "response"))
+                await view.apply_action(CompleteAssistantMessage(task, "response"))
+                await view.apply_action(FinishTurn(task, "completed"))
+            await pilot.pause()
+            return [item.message_text for item in view.query(UserMessage)]
+
+    users = asyncio.run(run())
+    assert users[0] == "question 0"
+    assert users[-1] == "question 49"
+    assert len(users) == 25
+
+
+def test_conversation_windowed_detached_active_tail_is_mounted_and_bounded(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            for index in range(30):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+                await view.apply_action(FinishTurn(task, "completed"))
+            await view.jump_to_turn(0)
+            await view.apply_action(AppendUserMessage("active", "live question"))
+            await view.apply_action(AppendAssistantDelta("active", "live fragment"))
+            await pilot.pause()
+            return (
+                view.query_one(UserMessage).message_text,
+                len(view.query(UserMessage)),
+                [message.markdown_text for message in view.query(AssistantMessage)],
+                view.projection.snapshot_for_turn(30)[1].text,
+            )
+
+    first, count, assistants, projected = asyncio.run(run())
+    assert first == "question 0"
+    assert count <= 25
+    assert "live fragment" in assistants
+    assert projected == "live fragment"
+
+
+def test_conversation_windowed_live_output_stays_offscreen_until_latest(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            for index in range(30):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+                await view.apply_action(FinishTurn(task, "completed"))
+            await view.jump_to_turn(0)
+            await pilot.pause()
+            first = view.query_one(UserMessage).message_text
+            await view.apply_action(AppendUserMessage("task-30", "question 30"))
+            await view.apply_action(AppendAssistantDelta("task-30", "live"))
+            await view.apply_action(CompleteAssistantMessage("task-30", "live final"))
+            await pilot.pause()
+            detached = (
+                view.query_one(UserMessage).message_text,
+                len(view.query(UserMessage)),
+                view.projection.snapshot_for_turn(30)[1].text,
+            )
+            view.resume_follow()
+            await pilot.pause()
+            return first, detached, view.query(UserMessage)[-1].message_text
+
+    first, detached, latest = asyncio.run(run())
+    assert first == "question 0"
+    assert detached == ("question 0", 25, "live final")
+    assert latest == "question 30"
+
+
+def test_conversation_windowed_history_only_mounts_nearby_turns(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            view.begin_history_restore()
+            for index in range(300):
+                await view.apply_action(
+                    AppendUserMessage(f"task-{index}", f"question {index}")
+                )
+                await view.apply_action(
+                    CompleteAssistantMessage(f"task-{index}", f"answer {index}")
+                )
+            view.finish_history_restore()
+            await pilot.pause()
+            initial = (
+                view.turn_count,
+                len(view.query(UserMessage)),
+                view.mounted_turn_range,
+            )
+            await view.jump_to_turn(0)
+            await pilot.pause()
+            first = [message.message_text for message in view.query(UserMessage)]
+            await view.jump_to_turn(299)
+            await pilot.pause()
+            last = [message.message_text for message in view.query(UserMessage)]
+            return initial, first, last
+
+    initial, first, last = asyncio.run(run())
+    assert initial[0] == 300
+    assert initial[1] <= 24
+    assert initial[2][1] == 300
+    assert first[0] == "question 0"
+    assert len(first) <= 24
+    assert last[-1] == "question 299"
+    assert len(last) <= 24
+
+
+def test_conversation_windowed_history_does_not_mount_offscreen_markdown(tmp_path, monkeypatch):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        mounted = []
+        original = AssistantMessage.on_mount if hasattr(AssistantMessage, "on_mount") else None
+
+        async def count_mount(self):
+            mounted.append(self)
+            if original is not None:
+                await original(self)
+
+        monkeypatch.setattr(AssistantMessage, "on_mount", count_mount, raising=False)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            view.begin_history_restore()
+            for index in range(300):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+            view.finish_history_restore()
+            await pilot.pause()
+            return len(mounted)
+
+    assert asyncio.run(run()) <= 48
+
+
+def test_conversation_windowed_live_turns_evict_old_widgets(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            for index in range(30):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(CompleteAssistantMessage(task, f"answer {index}"))
+                await view.apply_action(FinishTurn(task, "completed"))
+            await pilot.pause()
+            return (
+                view.turn_count,
+                len(view.query(UserMessage)),
+                len(view.query(AssistantMessage)),
+                view.query_one(UserMessage).message_text,
+            )
+
+    assert asyncio.run(run()) == (30, 24, 24, "question 6")
+
+
+def test_conversation_windowed_reconstructs_thinking_and_tool(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            view.begin_history_restore()
+            for index in range(30):
+                task = f"task-{index}"
+                await view.apply_action(AppendUserMessage(task, f"question {index}"))
+                await view.apply_action(
+                    CompleteThinking(task, 1, f"thinking {index}")
+                )
+                await view.apply_action(
+                    AppendToolStarted(task, "call", "read", "{}")
+                )
+                await view.apply_action(
+                    UpdateToolCompleted(task, "call", "read", True)
+                )
+            view.finish_history_restore()
+            await pilot.pause()
+            await view.jump_to_turn(0)
+            await pilot.pause()
+            thinking = view.query_one(ThinkingBlock)
+            tool = view.query_one(ToolBlock)
+            return (
+                thinking.markdown_text,
+                thinking.expanded,
+                tool.state_text,
+                len(view.query(UserMessage)),
+            )
+
+    assert asyncio.run(run()) == ("thinking 0", False, "completed", 24)
+
+
+def test_conversation同步维护可重建语义投影(tmp_path):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(AppendUserMessage("task-1", "question"))
+            await view.apply_action(
+                CompleteAssistantMessage("task-1", "answer", step=1)
+            )
+            await view.apply_action(
+                AppendToolStarted("task-1", "call-1", "read", "{}", step=1)
+            )
+            await pilot.pause()
+            return [unit.kind for unit in view.projection.snapshot_for_turn(0)]
+
+    assert asyncio.run(run()) == ["user", "assistant", "run_card"]
+
+
 def test_conversation初始欢迎卡位于顶部且尚未启用底部anchor(tmp_path):
     async def run():
         app = ConversationTestApp(tmp_path)
@@ -414,7 +802,7 @@ def test_conversation纯最终回答完成时移除空run_card(tmp_path):
     assert asyncio.run(run()) == (0, "answer")
 
 
-def test_conversation思考流对账后始终默认展开并忽略迟到delta(tmp_path):
+def test_conversation思考流对账后默认折叠并忽略迟到delta(tmp_path):
     async def run():
         app = ConversationTestApp(tmp_path)
         async with app.run_test() as pilot:
@@ -447,11 +835,11 @@ def test_conversation思考流对账后始终默认展开并忽略迟到delta(tm
             )
 
     expanded, blocks = asyncio.run(run())
-    assert expanded is True
-    assert blocks == [("complete", True), ("next", True)]
+    assert expanded is False
+    assert blocks == [("complete", False), ("next", False)]
 
 
-def test_conversation历史thinking默认展开且可键盘折叠(tmp_path):
+def test_conversation历史thinking默认折叠且可键盘展开(tmp_path):
     async def run():
         app = ConversationTestApp(tmp_path)
         async with app.run_test() as pilot:
@@ -463,6 +851,7 @@ def test_conversation历史thinking默认展开且可键盘折叠(tmp_path):
                 )
             )
             view.finish_history_restore()
+            await pilot.pause()
             thinking = view.query_one(ThinkingBlock)
             initially_expanded = thinking.expanded
             thinking.query_one(".thinking-summary").focus()
@@ -474,10 +863,10 @@ def test_conversation历史thinking默认展开且可键盘折叠(tmp_path):
                 thinking.expanded,
             )
 
-    assert asyncio.run(run()) == ("restored", True, False)
+    assert asyncio.run(run()) == ("restored", False, True)
 
 
-def test_conversation完整thinking对账保留用户手动折叠状态(tmp_path):
+def test_conversation完整thinking对账保留用户手动展开状态(tmp_path):
     async def run():
         app = ConversationTestApp(tmp_path)
         async with app.run_test() as pilot:
@@ -486,14 +875,86 @@ def test_conversation完整thinking对账保留用户手动折叠状态(tmp_path
                 AppendThinkingDelta("task-1", 1, "partial")
             )
             thinking = view.query_one(ThinkingBlock)
-            thinking.set_expanded(False)
+            thinking.set_expanded(True)
             await view.apply_action(
                 CompleteThinking("task-1", 1, "complete", partial=False)
             )
             await pilot.pause()
             return thinking.markdown_text, thinking.expanded
 
-    assert asyncio.run(run()) == ("complete", False)
+    assert asyncio.run(run()) == ("complete", True)
+
+
+def test_conversation展开中的旧thinking渲染不能覆盖完整记录(tmp_path, monkeypatch):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(AppendThinkingDelta("task-1", 1, "old"))
+            thinking = view.query_one(ThinkingBlock)
+            started = asyncio.Event()
+            release = asyncio.Event()
+            original_update = StreamingMarkdown.update
+
+            async def delayed_update(self, text, *args, **kwargs):
+                if text == "old":
+                    started.set()
+                    await release.wait()
+                return await original_update(self, text, *args, **kwargs)
+
+            monkeypatch.setattr(StreamingMarkdown, "update", delayed_update)
+            thinking.set_expanded(True)
+            await asyncio.wait_for(started.wait(), timeout=2)
+            try:
+                completing = asyncio.create_task(
+                    view.apply_action(
+                        CompleteThinking("task-1", 1, "new", partial=False)
+                    )
+                )
+                await asyncio.sleep(0)
+                release.set()
+                await completing
+            finally:
+                release.set()
+            await pilot.pause()
+            return thinking.markdown_text, thinking.query_one(StreamingMarkdown).source
+
+    assert asyncio.run(run()) == ("new", "new")
+
+
+def test_conversation默认折叠thinking不解析正文直到展开(tmp_path, monkeypatch):
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test() as pilot:
+            view = app.query_one(ConversationView)
+            calls = []
+            original_update = StreamingMarkdown.update
+
+            async def record_update(self, text, *args, **kwargs):
+                calls.append(text)
+                return await original_update(self, text, *args, **kwargs)
+
+            monkeypatch.setattr(StreamingMarkdown, "update", record_update)
+            await view.apply_action(AppendThinkingDelta("task-1", 1, "part"))
+            await view.apply_action(
+                CompleteThinking("task-1", 1, "complete", partial=False)
+            )
+            thinking = view.query_one(ThinkingBlock)
+            assert thinking.expanded is False
+            assert thinking.markdown_text == "complete"
+            assert thinking.query_one(StreamingMarkdown).display is False
+            assert all(text == "" for text in calls)
+
+            thinking.set_expanded(True)
+            await pilot.pause()
+            assert thinking.query_one(StreamingMarkdown).source == "complete"
+            assert calls.count("complete") == 1
+            thinking.set_expanded(False)
+            thinking.set_expanded(True)
+            await pilot.pause()
+            assert thinking.query_one(StreamingMarkdown).source == "complete"
+
+    asyncio.run(run())
 
 
 def test_conversation工具预览和追加内容位于同一run_card(tmp_path):

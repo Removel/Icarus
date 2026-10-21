@@ -1,0 +1,97 @@
+name: Publish runtime images
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag/version for this manual run (for example v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    name: ${{ matrix.app.name }} / ${{ matrix.platform.arch }}
+    environment: DOCKER
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - name: webui
+            context: apps/webui
+            dockerfile: apps/webui/Dockerfile
+          - name: mem0
+            context: apps/mem0
+            dockerfile: apps/mem0/server/Dockerfile
+          - name: openkb
+            context: apps/openkb
+            dockerfile: apps/openkb/Dockerfile.icarus
+          - name: rela-mem
+            context: apps/rela-mem
+            dockerfile: apps/rela-mem/Dockerfile
+        platform:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push platform image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.app.context }}
+          file: ${{ matrix.app.dockerfile }}
+          platforms: linux/${{ matrix.platform.arch }}
+          push: true
+          tags: removel/icarus-${{ matrix.app.name }}:${{ github.sha }}-${{ matrix.platform.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+          cache-from: type=gha,scope=${{ matrix.app.name }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app.name }}-${{ matrix.platform.arch }}
+
+  merge:
+    name: Merge multi-arch manifests
+    needs: build
+    environment: DOCKER
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Merge platform images
+        run: |
+          set -euo pipefail
+          version="${{ env.VERSION }}"
+          version="${version#v}"
+          for app in webui mem0 openkb rela-mem; do
+            docker buildx imagetools create \
+              -t "removel/icarus-${app}:${version}" \
+              -t "removel/icarus-${app}:latest" \
+              "removel/icarus-${app}:${GITHUB_SHA}-amd64" \
+              "removel/icarus-${app}:${GITHUB_SHA}-arm64"
+          done

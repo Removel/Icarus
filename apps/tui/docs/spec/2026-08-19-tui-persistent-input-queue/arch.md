@@ -567,11 +567,12 @@ Composer Submitted(text)
 并发提交。成功后再 `popleft()`、挂载用户消息、设置 `active_task_id` 并刷新队列。失败不得
 静默丢消息。
 
-`submit()` 会先把 `InputQueuedEvent` 发布到 Runtime EventBus，再返回 `InputAccepted`。因此输出
-Worker 不直接修改 Widget 或按当时的 `active_task_id` 丢弃 Event；它只把原始 OutputEvent
-投递为 Textual Message。App 的提交处理器在 `await submit()` 返回后先设置 `active_task_id`，
-随后 Textual 才顺序处理已排队的 Runtime Event Message。这样无需创建第二套 Event 缓冲，
-也不会丢失当前任务最早的 queued / started Event。
+当前 Gateway 的 submit 响应前可能已经广播 `user.message` 和 task Update。派发 Worker 只执行 RPC，
+将接受结果封装成 `DispatchFinished` 投递回 Textual 主消息循环；主循环在确认结果后设置
+`active_task_id`，再顺序排空 early-update buffer。不能在派发 Worker 里直接回放缓存，否则
+异步挂载 Widget 时 live Update 可能越过尚未提交 cursor 的上一条，误报 sequence gap。
+重连、Session 激活和任务终态查询也通过主循环应用结果，详见
+[历史恢复的单一投影入口](../2026-08-29-tui-session-history-restoration/arch.md)。
 
 ### Event 消费
 

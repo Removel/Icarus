@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "plugin_id": "prompt",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.prompt.factory:create_plugin",
+  "contracts": "agent_app.contracts.prompt",
+  "tier": "base",
+  "required_config": [],
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [{"capability_id": "prompt.read", "version": "1.0.0"}],
+  "provided_tools": [],
+  "published_events": ["context.contribution", "task.context_input"],
+  "consumed_events": ["input.user_input", "input.finished", "prompt.contribution", "prompt.update", "task.context_input_result"],
+  "optional_consumed_events": ["prompt.contribution", "prompt.update"],
+  "state_scopes": []
+}

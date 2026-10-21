@@ -16,10 +16,8 @@
 Icarus 需要一个独立 Agent Gateway 应用，作为设备级 AgentRuntime 唯一的轻量网络入口。
 
 ```text
-WebUI / GUI
-      │
-      ▼
-   Backend ─────────────┐
+WebUI → Node 同源代理 ──┐
+未来 GUI / Backend ────┤
                         │
 TUI ────────────────────┤
                         ▼
@@ -213,11 +211,14 @@ Gateway 不随 WebUI 功能增加而增长大量产品接口。Backend 通过 Ga
 
 ## 8. 各交互面的访问路径
 
-WebUI 和 GUI 固定通过 Backend：
+当前单用户 WebUI 经应用自己的 Node 静态入口和同源代理访问 Gateway；开发环境由 Vite 代理。
+代理只处理入口认证、来源校验和 HTTP/WebSocket 转发，不实现 Agent 业务或复制 Runtime 状态：
 
 ```text
-WebUI / GUI → Backend → Agent Gateway → AgentRuntime
+WebUI → Node / Vite 同源代理 → Agent Gateway → AgentRuntime
 ```
+
+独立的多用户 Backend 和 GUI 尚未实现；产品 Backend 接入时同样通过 Gateway 使用 Agent。
 
 本地 TUI 默认连接已经运行的 Gateway：
 
@@ -375,12 +376,12 @@ sequence 交接：
 → 按 sequence 接续剩余实时 Update
 ```
 
-`session.get_history` 第一阶段接受 `after_sequence`，返回该 sequence 之后到一致读取边界的完整记录和
-边界 `history_cursor`，不增加分页、搜索或 Trace 回放。没有 journal 的旧 Session 返回空列表和 cursor
+`session.get_history` 接受 `after_sequence` 和可选 `limit`，返回有序记录、边界 `history_cursor`、
+`next_after_sequence` 与 `has_more`，支持分页读取。没有 journal 的旧 Session 返回空列表和 cursor
 `0`；不尝试迁移旧 Trace。Gateway 不缓存历史，也不成为第二份事实源。
 
 `session.get_history` 是新的显式 JSON-RPC 方法，参数保持扁平：`workspace_path`、`session_id` 和可选
-`after_sequence`；结果返回有序公共记录和 `history_cursor`。现有 `session.subscribe` 参数与响应保持
+`after_sequence`、`limit`；结果返回有序公共记录和分页游标。现有 `session.subscribe` 参数与响应保持
 不变。
 
 `session.submit` 增加可选的 `display_text`。`prompt` 仍是进入 Agent 的模型输入，`display_text` 是
@@ -390,6 +391,14 @@ sequence 交接：
 历史查询时，如果 AgentRuntime 判定某个没有终态的旧 Task 已不可能继续运行，会先持久化一个
 `task.finished(status="interrupted", recovered=true)`，再返回历史。仍在当前 AgentRuntime 内存中运行的
 Task 不得被误判为 interrupted。
+
+### 13.2 记忆归属查询
+
+`memory.get_context` 接受可选的绝对 `workspace_path`，由 Gateway 校验参数并调用
+`AgentRuntime.get_memory_context`。Runtime 从 Agent 配置读取用户和 Agent 身份，使用与会话相同的
+`SessionIdentity` 规范化工作区并生成作用范围。默认返回 `run_id=global`；指定工作区时返回
+`workspace:<workspace_key>` 及规范化路径。响应不包含服务地址或凭据，也不会创建 Session。
+记忆的持久化和检索仍属于 Mem0 与 Agent 的 MemoryPlugin，Gateway 不直接操作记忆数据库。
 
 ## 14. 生命周期
 
@@ -510,7 +519,7 @@ Task 状态查询恢复当前投影。
 - 每个 Task 创建一次无状态 Agent Run；
 - 原 AgentRuntimeService 的实现已迁移为 SessionRuntime，旧 Service 已删除且不保留兼容入口；
 - Gateway 直接调用 AgentRuntime，不长期保留重复的 RuntimeService 层；
-- WebUI/GUI 通过 Backend 访问 Gateway，TUI 默认连接已有 Gateway；
+- WebUI 经 Node/Vite 同源代理访问 Gateway，TUI 默认连接已有 Gateway；独立 Backend/GUI 尚未实现；
 - Gateway 使用 FastAPI、WebSocket、JSON-RPC 2.0 和 Pydantic；
 - 不引入第三方 JSON-RPC 框架；
 - Gateway 不负责 Backend 产品能力或文件数据面；

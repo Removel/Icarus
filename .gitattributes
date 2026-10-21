@@ -1,1 +1,11 @@
+* text=auto eol=lf
+*.png binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
 apps/tui/test/__snapshots__/** whitespace=-trailing-space

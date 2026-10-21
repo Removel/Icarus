@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from apps.agent.src.application.runtime_update_stream import RuntimeUpdateStream
-from apps.agent.src.runtime_update import RuntimeUpdate
+from agent_app.application.runtime_update_stream import RuntimeUpdateStream
+from icarus.core.runtime_update import RuntimeUpdate
 from apps.gateway.src.app import create_app
 
 

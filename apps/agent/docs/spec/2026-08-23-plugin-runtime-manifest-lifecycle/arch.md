@@ -1,5 +1,10 @@
 # Plugin Runtime Manifest and Lifecycle Design｜插件运行时声明与生命周期设计
 
+> 2026-10-17：本文中旧包路径、8插件、provider点名能力、类路径事件和观测Hook属于迁移前说明。
+> 当前manifest v2、11插件、声明handler、定向能力和独立记录机制见
+> [框架业务解耦当前架构](../2026-10-16-framework-business-decoupling/arch.md)。
+> 生命周期安全收束与不恢复运行栈的语义仍保留。
+
 ## 文档定位
 
 本文定义并记录 Icarus 当前 Manifest 驱动的 Plugin Runtime 架构。该实现已经替代

@@ -19,7 +19,8 @@ Gateway 协议与客户端库。
 - TUI 本地 FIFO 待发送队列，以及从队尾撤回的 LIFO 操作；
 - 当前 Workspace 的 Session 列表、恢复和开始新对话；
 - macOS 剪贴板图片粘贴，Composer 使用 `[#imageN]` 表示随消息提交的图片；
-- RunCard 内的流式 thinking、Assistant 中间进展、Tool 安全预览和已应用的追加内容；
+- RunCard 内的流式 thinking（默认折叠，展开时按需解析 Markdown）、Assistant 中间进展、Tool 安全预览和已应用的追加内容；
+- 长对话保留完整历史数据，但只挂载当前附近的部分消息 Widget；右侧以不超过十个圆点浏览用户输入轮次，悬停展开紧凑摘要列表，点击后跳到对应消息；
 - RunCard 外独立呈现最终 Assistant Markdown；
 - 按公共 RuntimeUpdate.type 投影任务、文本、thinking、Tool、错误、Usage 和 Compact 状态。
 
@@ -86,6 +87,7 @@ icarus --session-id demo-session
 - Composer 聚焦时，左右键、上下键和 `Home` / `End` 在 TextArea 中移动光标；
 - 鼠标位于 Conversation 时，滚轮和右侧 ScrollBar 始终用于浏览对话，不要求先切换键盘焦点；
   用户上滚后流式输出不会把阅读位置拉回底部；
+- 鼠标位于右侧用户输入圆点轨道时，滚轮只翻阅轨道所列轮次，不滚动正文；悬停圆点展开对应的输入摘要列表，点击圆点或摘要跳转到该轮。轨道聚焦时，`↑`/`↓`、`PageUp`/`PageDown`、`Home`/`End` 选择轮次，`Enter` 跳转；
 - Conversation 聚焦时，上下键和 `Home` / `End` 浏览对话；
 - `PageUp` / `PageDown`：无论当前焦点在哪，都按页浏览 Conversation，同时保留 Composer
   草稿、光标和焦点；

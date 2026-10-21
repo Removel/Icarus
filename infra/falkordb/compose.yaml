@@ -1,0 +1,23 @@
+services:
+  falkordb:
+    image: falkordb/falkordb:v4.22.1
+    environment:
+      BROWSER: "0"
+      RELA_MEM_FALKORDB_PASSWORD: ${RELA_MEM_FALKORDB_PASSWORD:?Set RELA_MEM_FALKORDB_PASSWORD}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'exec redis-server --requirepass "$$RELA_MEM_FALKORDB_PASSWORD" --dir /var/lib/falkordb/data --appendonly yes --loadmodule /var/lib/falkordb/bin/falkordb.so'
+    ports:
+      - "${ICARUS_FALKORDB_BIND_HOST:-127.0.0.1}:${ICARUS_FALKORDB_PORT:?Set ICARUS_FALKORDB_PORT}:6379"
+    volumes:
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/rela-mem/falkordb:/var/lib/falkordb/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$RELA_MEM_FALKORDB_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [icarus]
+networks:
+  icarus:
+    name: ${ICARUS_NETWORK:-icarus}
+    external: true

@@ -15,6 +15,13 @@
   "runtime": {
     "plugin_dirs": [],
     "plugin_config": {
+      "prompt": {
+        "required_contributors": ["persona"]
+      },
+      "persona": {
+        "jev_enabled": true,
+        "relationship_enabled": true
+      },
       "memory": {
         "user_id": "removel",
         "agent_id": "icarus"
@@ -34,7 +41,8 @@
       "mcp",
       "memory",
       "knowledge",
-      "process"
+      "process",
+      "persona"
     ]
   },
   "mcpServers": {
@@ -50,21 +58,29 @@
       ]
     }
   },
-  "model_settings": {
-    "thinking": {
-      "model_name": "deepseek-v4-flash-vision-exp",
+  "model_settings": [
+    {
+      "model_name": "deepseek-flash",
       "context_window": 1000000,
       "max_tokens": 9192,
       "temperature": 0.9,
-      "default_think_level": "high"
+      "default_think_level": "high",
+      "name": "thinking"
     },
-    "perception": {
+    {
       "model_name": "deepseek-v4-flash",
       "context_window": 1000000,
       "max_tokens": 9192,
       "temperature": 0.6,
-      "default_think_level": "high"
+      "default_think_level": "high",
+      "name": "perception"
     }
-  },
-  "use_protocol": "openai"
+  ],
+  "use_protocol": "openai",
+  "model_roles": {
+    "agent": "thinking",
+    "compaction": "thinking",
+    "skill_generation": "thinking",
+    "title": "perception"
+  }
 }

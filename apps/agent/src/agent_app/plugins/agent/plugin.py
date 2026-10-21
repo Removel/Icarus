@@ -1,0 +1,733 @@
+"""ReActAgent 的 Plugin 系统适配层。"""
+
+
+from agent_app.plugins.agent.config import PluginConfig
+
+from icarus.core.capabilities.catalog import TaskControlAccess
+from icarus.core.plugin import handles
+from icarus.core.contracts.context import BlackboardContextReadyEvent
+from icarus.core.run_control.events import TaskContextInputEvent
+from icarus.core.run_control.events import TaskCancelRequestedEvent
+
+
+import asyncio
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
+from functools import partial
+import logging
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from agent_app.assembly import AgentFactory
+from icarus.core.agents import (
+    AgentCancelledEvent,
+    AgentCompletedEvent,
+    AgentMessageCompletedEvent,
+    AgentTextDeltaEvent,
+    AgentThinkingCompletedEvent,
+    AgentThinkingDeltaEvent,
+    AgentToolCompletedEvent,
+    AgentToolStartedEvent,
+)
+from icarus.core.events import Event, TaskErrorEvent
+from icarus.core.hooks import HookDispatcher, hook_context
+from icarus.core.llm import InvalidToolCallArgumentsError
+from icarus.core.plugin import BasePlugin
+from icarus.core.contracts.context import (
+    BlackboardContextReadyEvent,
+)
+from icarus.core.run_control import (
+    TaskCancelRequestedEvent,
+    TaskCancelResultEvent,
+    TaskChannel,
+    TaskChannelRegistry,
+    TaskChannelStatus,
+    TaskContextInputEvent,
+    TaskContextInputResultEvent,
+    TaskSteerAppliedEvent,
+    TaskSteerRequestedEvent,
+    TaskOperationResult,
+    MaxStepsExceededError,
+)
+from icarus.core.tools import (
+    ToolContextBudgetExceededError,
+)
+from icarus.core.models.messages import (
+    ImageAssetUnavailableError,
+    ImagePart,
+    Message,
+    TextPart,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ActiveAgentRun:
+    channel: TaskChannel
+    execution_task: asyncio.Task[None]
+    execution_started: asyncio.Event
+
+
+@dataclass
+class _ThinkingBuffer:
+    step: int | None = None
+    parts: list[str] = field(default_factory=list)
+    completed_steps: set[int] = field(default_factory=set)
+    closed_steps: set[int] = field(default_factory=set)
+    highest_step: int = 0
+
+
+class AgentPlugin(BasePlugin):
+    config_schema = PluginConfig
+    provided_capabilities = (TaskControlAccess,)
+    """消费 Blackboard Context，并发布 ReActAgent Stream Event。"""
+
+    def __init__(
+        self,
+        plugin_id: str,
+        agent_factory: AgentFactory,
+        task_channels: TaskChannelRegistry | None = None,
+        hook_dispatcher: HookDispatcher | None = None,
+    ) -> None:
+        super().__init__(plugin_id)
+        self.agent_factory = agent_factory
+        self.task_channels = task_channels or TaskChannelRegistry()
+        self.hook_dispatcher = hook_dispatcher
+        self._active_runs: dict[str, ActiveAgentRun] = {}
+
+    def accepts_event(self, source_plugin_id: str, event: Event) -> bool:
+        del source_plugin_id
+        return isinstance(
+            event,
+            (
+                BlackboardContextReadyEvent,
+                TaskContextInputEvent,
+                TaskCancelRequestedEvent,
+            ),
+        )
+
+    @handles(BlackboardContextReadyEvent, TaskContextInputEvent, TaskCancelRequestedEvent)
+    async def on_event(
+        self,
+        source_plugin_id: str,
+        event: Event,
+    ) -> None:
+        if isinstance(event, (TaskContextInputEvent, TaskCancelRequestedEvent)):
+            result = self.handle_task_operation(source_plugin_id, event)
+            await self.publish(self._operation_result_event(event, result))
+            return
+        if not isinstance(event, BlackboardContextReadyEvent):
+            return
+        task_id = event.task_id
+        if task_id is None:
+            return
+        channel = self.task_channels.get(task_id)
+        if channel is None:
+            return
+        run_id = uuid4().hex
+        if not channel.start_run(run_id):
+            return
+        execution_started = asyncio.Event()
+        task = asyncio.create_task(
+            self._run_agent(event, channel, execution_started),
+            name=f"agent-plugin:{self.plugin_id}:{event.task_id}",
+        )
+        self._active_runs[task_id] = ActiveAgentRun(
+            channel,
+            task,
+            execution_started,
+        )
+        task.add_done_callback(partial(self._task_completed, task_id))
+
+    async def drain(self) -> None:
+        if self._active_runs:
+            await asyncio.gather(
+                *(run.execution_task for run in self._active_runs.values()),
+                return_exceptions=True,
+            )
+
+    async def quiesce(self) -> None:
+        for task_id in self.task_channels.active_task_ids:
+            self.handle_task_operation(
+                "runtime",
+                TaskCancelRequestedEvent(
+                    task_id=task_id,
+                    reason="runtime_stopping",
+                ),
+            )
+
+    async def stop(self) -> None:
+        tasks = [run.execution_task for run in self._active_runs.values()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._active_runs.clear()
+        await self.agent_factory.aclose()
+
+    def handle_task_operation(
+        self,
+        source_id: str,
+        event: (
+            TaskContextInputEvent
+            | TaskSteerRequestedEvent
+            | TaskCancelRequestedEvent
+        ),
+    ) -> TaskOperationResult:
+        operation = (
+            "add_context"
+            if isinstance(event, TaskContextInputEvent)
+            else "steer"
+            if isinstance(event, TaskSteerRequestedEvent)
+            else "cancel"
+        )
+        channel = self.task_channels.get(event.task_id) if event.task_id else None
+        self._trace_operation(
+            "before",
+            event,
+            operation=operation,
+            source_id=source_id,
+            run_id=channel.run_id if channel is not None else None,
+        )
+        if isinstance(event, TaskContextInputEvent):
+            if event.expires_at is not None and datetime.now(UTC) >= event.expires_at:
+                result = TaskOperationResult(
+                    task_id=event.task_id,
+                    status="expired",
+                    run_id=channel.run_id if channel is not None else None,
+                )
+            else:
+                result = self._add_task_context(
+                    event.task_id,
+                    event.content,
+                    source_id=source_id,
+                    event_id=event.event_id,
+                )
+        elif isinstance(event, TaskSteerRequestedEvent):
+            result = self._steer_task(
+                event.task_id,
+                event.content,
+                input_images=event.input_images,
+                display_text=event.display_text,
+                source_id=source_id,
+                event_id=event.event_id,
+            )
+        else:
+            result = self._cancel_task(event.task_id, event.reason)
+            if result.status == "accepted":
+                self._trace_discarded_steers(event.task_id)
+        self._trace_operation(
+            "after",
+            event,
+            operation=operation,
+            source_id=source_id,
+            run_id=result.run_id,
+            status=result.status,
+        )
+        return result
+
+    @staticmethod
+    def _operation_result_event(
+        event: TaskContextInputEvent | TaskCancelRequestedEvent,
+        result: TaskOperationResult,
+    ) -> TaskContextInputResultEvent | TaskCancelResultEvent:
+        result_type = (
+            TaskContextInputResultEvent
+            if isinstance(event, TaskContextInputEvent)
+            else TaskCancelResultEvent
+        )
+        return result_type(
+            task_id=event.task_id,
+            request_event_id=event.event_id,
+            status=result.status,
+            run_id=result.run_id,
+        )
+
+    def _add_task_context(
+        self,
+        task_id: str | None,
+        content: str,
+        *,
+        input_images: tuple[ImagePart, ...] = (),
+        display_text: str | None = None,
+        source_id: str,
+        event_id: str | None = None,
+    ) -> TaskOperationResult:
+        if not task_id:
+            return TaskOperationResult(task_id=task_id, status="not_found")
+        return self.task_channels.add_context(
+            task_id,
+            content,
+            source_id=source_id,
+            event_id=event_id,
+        )
+
+    def _cancel_task(
+        self,
+        task_id: str | None,
+        reason: str | None = None,
+    ) -> TaskOperationResult:
+        if not task_id:
+            return TaskOperationResult(task_id=task_id, status="not_found")
+        result = self.task_channels.request_cancel(task_id, reason)
+        if result.status == "accepted":
+            active = self._active_runs.get(task_id)
+            if active is not None and active.execution_started.is_set():
+                active.execution_task.cancel()
+        return result
+
+    def _steer_task(
+        self,
+        task_id: str | None,
+        content: str,
+        *,
+        input_images: tuple[ImagePart, ...] = (),
+        display_text: str | None = None,
+        source_id: str,
+        event_id: str | None = None,
+    ) -> TaskOperationResult:
+        if not task_id:
+            return TaskOperationResult(task_id=task_id, status="not_found")
+        return self.task_channels.add_steer(
+            task_id,
+            content,
+            input_images=input_images,
+            display_text=display_text,
+            source_id=source_id,
+            event_id=event_id,
+        )
+
+    async def _run_agent(
+        self,
+        event: BlackboardContextReadyEvent,
+        channel: TaskChannel,
+        execution_started: asyncio.Event,
+    ) -> None:
+        assert event.task_id is not None
+        task_id = event.task_id
+        partial_step = 0
+        partial_text: list[str] = []
+        completed_message_steps: set[int] = set()
+        published_steers: set[str] = set()
+        thinking = _ThinkingBuffer()
+        try:
+            execution_started.set()
+            channel.raise_if_cancelled()
+            agent = self.agent_factory.get_agent(event.model_role)
+            async for stream_event in agent.astream(
+                system_prompt=event.system_prompt,
+                history_messages=list(event.history_messages),
+                input_prompt=event.input_prompt,
+                input_images=list(event.input_images),
+                tools=None if event.tools is None else list(event.tools),
+                run_control=channel,
+            ):
+                if isinstance(stream_event, AgentThinkingDeltaEvent):
+                    await self._advance_thinking_step(
+                        task_id, channel, thinking, getattr(stream_event, "step", partial_step)
+                    )
+                    if stream_event.step in thinking.closed_steps:
+                        raise RuntimeError(
+                            "Agent thinking delta arrived after its step boundary: "
+                            f"step={stream_event.step}"
+                        )
+                    if stream_event.text:
+                        thinking.parts.append(stream_event.text)
+                channel.raise_if_cancelled()
+                await self._publish_applied_steers(
+                    task_id, channel, published_steers
+                )
+                if not isinstance(stream_event, AgentThinkingDeltaEvent):
+                    await self._advance_thinking_step(
+                        task_id, channel, thinking, getattr(stream_event, "step", partial_step)
+                    )
+                if isinstance(stream_event, AgentMessageCompletedEvent):
+                    await self._publish_completed_thinking(
+                        task_id,
+                        channel,
+                        thinking,
+                        stream_event.step,
+                        partial=False,
+                    )
+                    thinking.closed_steps.add(stream_event.step)
+                elif isinstance(
+                    stream_event, (AgentToolStartedEvent, AgentCompletedEvent)
+                ):
+                    await self._publish_completed_thinking(
+                        task_id,
+                        channel,
+                        thinking,
+                        stream_event.step,
+                        partial=(
+                            stream_event.step not in completed_message_steps
+                        ),
+                    )
+                    thinking.closed_steps.add(stream_event.step)
+                if isinstance(stream_event, AgentTextDeltaEvent):
+                    if partial_step != stream_event.step:
+                        await self._publish_partial_message(
+                            task_id,
+                            channel,
+                            partial_step,
+                            partial_text,
+                        )
+                        partial_step = stream_event.step
+                    partial_text.append(stream_event.text)
+                elif isinstance(stream_event, AgentToolStartedEvent):
+                    await self._publish_partial_message(
+                        task_id, channel, partial_step, partial_text
+                    )
+                if isinstance(stream_event, AgentCompletedEvent):
+                    if partial_step != stream_event.step:
+                        await self._publish_partial_message(
+                            task_id,
+                            channel,
+                            partial_step,
+                            partial_text,
+                        )
+                    if stream_event.step not in completed_message_steps:
+                        await self._publish_run_event(
+                            task_id,
+                            channel,
+                            AgentMessageCompletedEvent(
+                                task_id=task_id,
+                                step=stream_event.step,
+                                message=deepcopy(
+                                    stream_event.response.message
+                                ),
+                            ),
+                        )
+                        completed_message_steps.add(stream_event.step)
+                        partial_text.clear()
+                    if not channel.mark_completed():
+                        channel.raise_if_cancelled()
+                        return
+                await self._publish_run_event(
+                    task_id,
+                    channel,
+                    replace(stream_event, task_id=event.task_id),
+                )
+                if isinstance(stream_event, AgentMessageCompletedEvent):
+                    completed_message_steps.add(stream_event.step)
+                    partial_text.clear()
+                if isinstance(stream_event, AgentToolCompletedEvent):
+                    if not stream_event.result.success:
+                        await self._publish_run_event(
+                            task_id,
+                            channel,
+                            TaskErrorEvent(
+                                task_id=task_id,
+                                fatal=False,
+                                code="tool_execution_failed",
+                                error_type="ToolExecutionError",
+                                error_message=(
+                                    stream_event.result.error
+                                    or "tool execution failed"
+                                ),
+                                step=stream_event.step,
+                                run_id=channel.run_id,
+                            ),
+                        )
+                if isinstance(stream_event, AgentCompletedEvent):
+                    return
+            raise RuntimeError("Agent stream ended without a terminal event")
+        except asyncio.CancelledError:
+            if channel.status == TaskChannelStatus.CANCELLING:
+                if channel.mark_cancelled():
+                    await self._publish_applied_steers(
+                        task_id, channel, published_steers
+                    )
+                    await self._publish_completed_thinking(
+                        task_id,
+                        channel,
+                        thinking,
+                        partial=True,
+                    )
+                    await self._publish_partial_message(
+                        task_id, channel, partial_step, partial_text
+                    )
+                    await self._publish_run_event(
+                        task_id,
+                        channel,
+                        AgentCancelledEvent(
+                            task_id=task_id,
+                            step=channel.current_step,
+                            reason=channel.cancel_reason,
+                            task_messages=channel.history_checkpoint,
+                            last_usage=channel.history_checkpoint_usage,
+                        )
+                    )
+                return
+            raise
+        except Exception as error:
+            if channel.mark_failed():
+                code, message = self._error_details(error)
+                await self._publish_applied_steers(
+                    task_id, channel, published_steers
+                )
+                await self._publish_completed_thinking(
+                    task_id,
+                    channel,
+                    thinking,
+                    partial=True,
+                )
+                await self._publish_partial_message(
+                    task_id, channel, partial_step, partial_text
+                )
+                await self._publish_run_event(
+                    task_id,
+                    channel,
+                    TaskErrorEvent(
+                        task_id=task_id,
+                        fatal=True,
+                        code=code,
+                        step=channel.current_step,
+                        run_id=channel.run_id,
+                        error_type=type(error).__name__,
+                        error_message=message,
+                        task_messages=channel.history_checkpoint,
+                        last_usage=channel.history_checkpoint_usage,
+                    )
+                )
+                return
+            if channel.status == TaskChannelStatus.CANCELLING:
+                if channel.mark_cancelled():
+                    await self._publish_applied_steers(
+                        task_id, channel, published_steers
+                    )
+                    await self._publish_completed_thinking(
+                        task_id,
+                        channel,
+                        thinking,
+                        partial=True,
+                    )
+                    await self._publish_partial_message(
+                        task_id, channel, partial_step, partial_text
+                    )
+                    await self._publish_run_event(
+                        task_id,
+                        channel,
+                        AgentCancelledEvent(
+                            task_id=task_id,
+                            step=channel.current_step,
+                            reason=channel.cancel_reason,
+                            task_messages=channel.history_checkpoint,
+                            last_usage=channel.history_checkpoint_usage,
+                        )
+                    )
+                return
+            raise
+        finally:
+            await self._publish_applied_steers(
+                task_id, channel, published_steers
+            )
+            self._trace_applied_context(task_id, channel)
+
+    async def _publish_applied_steers(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        published: set[str],
+    ) -> None:
+        for batch in channel.applied_batches:
+            for record in batch.records:
+                if record.kind != "user_correction" or record.event_id in published:
+                    continue
+                await self._publish_run_event(
+                    task_id,
+                    channel,
+                    TaskSteerAppliedEvent(
+                        task_id=task_id,
+                        request_event_id=record.event_id,
+                        content=record.content,
+                        input_images=record.input_images,
+                        display_text=record.display_text,
+                        applied_before_step=batch.applied_before_step,
+                    ),
+                )
+                published.add(record.event_id)
+
+    async def _publish_partial_message(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        step: int,
+        parts: list[str],
+    ) -> None:
+        text = "".join(parts)
+        if not text:
+            return
+        parts.clear()
+        await self._publish_run_event(
+            task_id,
+            channel,
+            AgentMessageCompletedEvent(
+                task_id=task_id,
+                step=step,
+                message=Message("assistant", [TextPart(text)]),
+            ),
+        )
+
+    async def _advance_thinking_step(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        thinking: _ThinkingBuffer,
+        step: int,
+    ) -> None:
+        if step < thinking.highest_step:
+            raise RuntimeError(
+                "Agent stream step moved backwards: "
+                f"previous={thinking.highest_step}, current={step}"
+            )
+        if thinking.step is not None and step > thinking.step:
+            await self._publish_completed_thinking(
+                task_id, channel, thinking, partial=True
+            )
+            thinking.closed_steps.add(thinking.step)
+        if thinking.step != step:
+            thinking.step = step
+        thinking.highest_step = max(thinking.highest_step, step)
+
+    async def _publish_completed_thinking(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        thinking: _ThinkingBuffer,
+        step: int | None = None,
+        *,
+        partial: bool,
+    ) -> None:
+        target_step = thinking.step if step is None else step
+        if (
+            target_step is None
+            or target_step in thinking.completed_steps
+            or thinking.step != target_step
+        ):
+            return
+        text = "".join(thinking.parts)
+        if not text:
+            return
+        thinking.parts.clear()
+        thinking.completed_steps.add(target_step)
+        await self._publish_run_event(
+            task_id,
+            channel,
+            AgentThinkingCompletedEvent(
+                task_id=task_id,
+                step=target_step,
+                text=text,
+                partial=partial,
+            ),
+        )
+
+    @staticmethod
+    def _error_details(error: Exception) -> tuple[str, str]:
+        if isinstance(error, InvalidToolCallArgumentsError):
+            return "llm_invalid_tool_arguments", str(error)
+        if isinstance(error, ToolContextBudgetExceededError):
+            return "context_budget_exhausted", str(error)
+        if isinstance(error, MaxStepsExceededError):
+            return "max_steps_exceeded", str(error)
+        if isinstance(error, ImageAssetUnavailableError):
+            return "image_asset_unavailable", str(error)
+        return "agent_run_failed", str(error)
+
+    def _trace_operation(
+        self,
+        phase: str,
+        event: (
+            TaskContextInputEvent
+            | TaskSteerRequestedEvent
+            | TaskCancelRequestedEvent
+        ),
+        *,
+        operation: str,
+        source_id: str,
+        run_id: str | None,
+        status: str | None = None,
+    ) -> None:
+        if self.hook_dispatcher is None:
+            return
+        data = {
+            "operation": operation,
+            "request_event_id": event.event_id,
+            "source_id": source_id,
+        }
+        if status is not None:
+            data["status"] = status
+        with hook_context({"task_id": event.task_id}, run_id=run_id):
+            self.hook_dispatcher.record("task.operation", phase, data)
+
+    def _trace_applied_context(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+    ) -> None:
+        if self.hook_dispatcher is None:
+            return
+        with hook_context({"task_id": task_id}, run_id=channel.run_id):
+            for batch in channel.applied_batches:
+                for record in batch.records:
+                    name = (
+                        "task.steer"
+                        if record.kind == "user_correction"
+                        else "task.context"
+                    )
+                    self.hook_dispatcher.record(
+                        name,
+                        "applied",
+                        {
+                            "request_event_id": record.event_id,
+                            "source_id": record.source_id,
+                            "applied_before_step": batch.applied_before_step,
+                        },
+                    )
+
+    def _trace_discarded_steers(self, task_id: str | None) -> None:
+        if self.hook_dispatcher is None or not task_id:
+            return
+        channel = self.task_channels.get(task_id)
+        if channel is None:
+            return
+        with hook_context({"task_id": task_id}, run_id=channel.run_id):
+            for record in channel.discarded_records:
+                if record.kind != "user_correction":
+                    continue
+                self.hook_dispatcher.record(
+                    "task.steer",
+                    "discarded_by_stop",
+                    {
+                        "request_event_id": record.event_id,
+                        "source_id": record.source_id,
+                    },
+                )
+
+    async def _publish_run_event(
+        self,
+        task_id: str,
+        channel: TaskChannel,
+        event: Event,
+    ) -> None:
+        with hook_context({"task_id": task_id}, run_id=channel.run_id):
+            await self.publish(event)
+
+    def _task_completed(
+        self,
+        task_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        active = self._active_runs.get(task_id)
+        if active is not None and active.execution_task is task:
+            del self._active_runs[task_id]
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "AgentPlugin task failed: plugin_id=%s",
+                self.plugin_id,
+                exc_info=(type(error), error, error.__traceback__),
+            )

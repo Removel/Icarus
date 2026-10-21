@@ -180,3 +180,12 @@ Gateway 不需要知道哪个连接是“当前 TUI”。连接断开不取消 T
 - TUI 可以通过正式 RPC 请求安全丢弃空 Session；
 - Gateway 不承担 Session 切换状态机或持久化逻辑；
 - 现有任务、历史和订阅 RPC 行为保持一致。
+
+
+## WebUI 按需创建与会话删除
+
+`session.create` 支持可选布尔参数 `load_runtime`，默认 `true` 保持原创建语义。传 `false` 时调用 `AgentRuntime.create_session(..., load_runtime=False)`，持久化空会话后立即返回状态，不初始化插件；`session.submit` 继续负责 single-flight 加载。
+
+`session.delete` 使用与 `session.get` 相同的 `workspace_path`、`session_id` 参数，调用 `AgentRuntime.delete_session`。复用 `DiscardSessionResult` 与 `DiscardEmptySessionResultModel`，返回 `discarded`、`busy` 或 `not_found`。它允许删除非空会话；`session.discard_empty` 仍拒绝非空会话。Gateway 不直接操作数据库或运行时注册表。
+
+`session.generate_title` 使用 SessionParams 调用 AgentRuntime.generate_session_title，返回 title 字符串或 null。模型失败由应用层回退，不把供应商异常传给浏览器；会话不存在和停止中的错误复用既有映射。公共 SessionSummaryModel 增加可选 title、created_at、updated_at，保留 first_user_input 字段与旧参数。当前 TUI 客户端通过同一公共模型解析新增字段，原摘要展示保持兼容。

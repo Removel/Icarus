@@ -1264,3 +1264,30 @@ class TestAddPipelineEntityEmbeddingCountGuard:
         assert any("padding/truncating" in r.message for r in caplog.records), (
             "expected count-mismatch warning was not emitted"
         )
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_attribute_history_records_before_and_after(mocker, async_mode):
+    import asyncio
+    from mem0.memory.storage import SQLiteManager
+
+    memory = _build_memory_instance(mocker, AsyncMemory if async_mode else Memory)
+    memory.db = SQLiteManager()
+    memory.vector_store.get.return_value = MagicMock(payload={
+        "data": "unchanged", "category": "old", "expiration_date": None,
+    })
+    args = ("m1", None, {"unchanged": [0.1, 0.2, 0.3]})
+    metadata = {"expiration_date": "1970-01-01", "category": "new"}
+    if async_mode:
+        asyncio.run(memory._update_memory(*args, metadata=metadata))
+    else:
+        memory._update_memory(*args, metadata=metadata)
+    history = memory.db.get_history("m1")
+    assert len(history) == 1
+    assert history[0]["old_memory"] == history[0]["new_memory"] == "unchanged"
+    assert history[0]["event"] == "UPDATE"
+    assert history[0]["changes"] == {
+        "category": {"before": "old", "after": "new"},
+        "expiration_date": {"before": None, "after": "1970-01-01"},
+    }
+    memory.db.close()

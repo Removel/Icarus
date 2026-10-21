@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile.icarus
     ports:
-      - "7566:7566"
+      - "${ICARUS_OPENKB_BIND_HOST:-127.0.0.1}:${ICARUS_OPENKB_PORT:-7566}:7566"
     environment:
       OPENKB_API_TOKEN: ${ICARUS_OPENKB_API_TOKEN:?Set ICARUS_OPENKB_API_TOKEN}
       OPENKB_CONFIG_DIR: /data/config

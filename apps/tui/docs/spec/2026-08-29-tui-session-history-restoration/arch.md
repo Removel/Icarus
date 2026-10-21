@@ -79,6 +79,27 @@ TUI 启动已有 Session 时按以下顺序执行：
 断线重连使用同一交接方式，但以客户端最后已应用的 sequence 作为 `after_sequence`，只补齐缺失
 记录，再接续实时流。Session 生命周期 Update 不参与 sequence 去重。
 
+### 投影的单一执行入口（2026-10-20）
+
+实时 Update、提交响应后的 early-update 排空、重连历史补齐和切换 Session 的历史恢复，都由
+Textual App 主消息循环执行。网络 Worker 只获取结果并投递 App Message，不直接调用投影器或
+修改 `_last_sequence`：
+
+- 提交 Worker 投递 `DispatchFinished`；处理器确认仍是当前 service/reservation 后接受提交，排空
+  early-update buffer，再处理后续实时 Message。渲染期间到达的实时 Update 留在消息队列等待。
+- 重连 Worker 投递 `RuntimeReconnected`；处理器检查 service 与连接 epoch，依次应用历史、安装
+  cursor、替换订阅并恢复消费。旧连接迟到的结果不能覆盖当前 Session。
+- 任务终态查询在独立 Worker 中进行，`TaskStatusReceived` 在主循环核对 service/epoch/task 后投影，
+  避免网络请求阻塞输入，也避免后台直接完成任务 UI。
+- Session 命令 Worker 将准备好的 Session 投递为 `SessionActivationRequested`，等待激活完成确认；
+  历史恢复与新旧实时消息的交接不与其它投影并发。旧 client 关闭、空 Session 清理 RPC、过期候选
+  client 的关闭仍由等待确认的 Worker 执行，不占用主消息循环，慢连接不会阻塞键盘和实时输出。
+
+只有一条 Update 的全部 UI Action 成功完成，才提交该条 sequence；不能为了绕过竞争而提前推进
+cursor。live sequence 真正缺口仍进入 FAILED，重复 Update 仍忽略；历史聚合允许跳号的语义不变。
+此约束修复了 early 146 尚在 await UI 时 live 147 读取旧 cursor=145、误报 expected=146/actual=147
+的竞争，也覆盖重连及切换 Session 的同类交错，不改变 Gateway/Agent 的公共协议或持久化格式。
+
 ## 展示规则
 
 历史渲染复用现有 Widget 和 RuntimeUpdate Projector 的语义，不复制一套内部 Event 转换：

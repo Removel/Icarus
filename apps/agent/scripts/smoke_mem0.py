@@ -10,12 +10,10 @@ from time import perf_counter
 from uuid import uuid4
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from dotenv import dotenv_values
 
-from apps.agent.src.agent_orchestration.plugins.memory import Mem0HttpAdapter
+from agent_app.plugins.memory import Mem0HttpAdapter
 
 
 def main() -> None:

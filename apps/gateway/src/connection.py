@@ -9,11 +9,12 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from apps.agent.src.application import (
+from agent_app.application import (
     RuntimeUpdateOverflowError,
     RuntimeUpdateSubscription,
 )
-from apps.agent.src.runtime_update import RuntimeUpdate
+from icarus.core.runtime_update import RuntimeUpdate
+from icarus.runtime.fanout import BoundedMailbox, DEFAULT_QUEUE_CAPACITY
 from apps.gateway.src.protocol.errors import GatewayRpcError, INTERNAL_ERROR
 from apps.gateway.src.protocol.jsonrpc import (
     error_response,
@@ -36,14 +37,12 @@ class GatewayConnection:
         websocket: WebSocket,
         methods: GatewayMethods,
         *,
-        send_capacity: int = 4096,
+        send_capacity: int = DEFAULT_QUEUE_CAPACITY,
     ) -> None:
         self.websocket = websocket
         self.methods = methods
         self.subscriptions: set[tuple[str, str]] = set()
-        self._send_queue: asyncio.Queue[dict[str, Any] | object] = (
-            asyncio.Queue(maxsize=send_capacity)
-        )
+        self._send_queue: BoundedMailbox[dict[str, Any]] = BoundedMailbox(send_capacity)
         self._requests: set[asyncio.Task[None]] = set()
         self._closed = False
 
@@ -111,17 +110,16 @@ class GatewayConnection:
     def _offer(self, payload: dict[str, Any]) -> bool:
         if self._closed:
             return False
-        try:
-            self._send_queue.put_nowait(payload)
+        if self._send_queue.offer(payload):
             return True
-        except asyncio.QueueFull:
-            asyncio.create_task(self.close())
-            return False
+        asyncio.create_task(self.close())
+        return False
 
     async def _send_loop(self) -> None:
         while True:
-            payload = await self._send_queue.get()
-            if payload is _CLOSE:
+            try:
+                payload = await self._send_queue.next()
+            except RuntimeError:
                 return
             await self.websocket.send_text(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

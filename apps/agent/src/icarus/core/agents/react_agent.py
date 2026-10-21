@@ -1,0 +1,779 @@
+"""无状态 ReAct Agent。"""
+
+from collections.abc import AsyncIterator, Iterator
+from copy import deepcopy
+from dataclasses import dataclass, field
+
+from icarus.core.agents.base_agent import BaseAgent
+from icarus.core.agents.types import (
+    AgentCompletedEvent,
+    AgentMessageCompletedEvent,
+    AgentResponse,
+    AgentTextDeltaEvent,
+    AgentThinkingDeltaEvent,
+    AgentToolCompletedEvent,
+    AgentToolStartedEvent,
+)
+from icarus.core.events import Event
+from icarus.core.run_control.types import (
+    AgentRunControl,
+    AppliedContextBatch,
+)
+from icarus.core.tools.tool_executor import BaseToolExecutor
+from icarus.core.tools.result_budget import (
+    serialize_tool_result,
+)
+from icarus.core.tools.types import ToolExecutionResult
+from icarus.core.model_types import LLMRole
+from icarus.core.llm import BaseLLM, InvalidToolCallArgumentsError
+from icarus.core.models.messages import (
+    ContentPart,
+    ImagePart,
+    LLMResponse,
+    LLMStreamChunk,
+    Message,
+    TextPart,
+    ToolCall,
+    ToolDefinition,
+    Usage,
+)
+
+
+INVALID_TOOL_ARGUMENT_RETRIES = 2
+
+
+@dataclass
+class _RunState:
+    messages: list[Message]
+    task_message_start: int
+    tool_executor: BaseToolExecutor
+    tool_definitions: list[ToolDefinition]
+    usage: Usage = field(default_factory=lambda: Usage(0, 0))
+    has_usage: bool = False
+    last_usage: Usage | None = None
+    reasoning_parts: list[str] = field(default_factory=list)
+    steps: int = 0
+
+
+class ReActAgent(BaseAgent):
+    """执行 LLM、工具与上下文回填的通用 ReAct 循环。"""
+
+    def __init__(
+        self,
+        model_role: LLMRole,
+        llm: BaseLLM,
+        tool_executor: BaseToolExecutor,
+    ) -> None:
+        self._model_role = model_role
+        self._llm = llm
+        self._tool_executor = tool_executor
+
+    @property
+    def model_role(self) -> LLMRole:
+        return self._model_role
+
+    def invoke(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None = None,
+        tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
+    ) -> AgentResponse:
+        state = self._create_run_state(
+            system_prompt,
+            history_messages,
+            input_prompt,
+            input_images,
+            tools,
+        )
+
+        while True:
+            self._begin_step(state, run_control)
+            response = self._invoke_response(state)
+            self._accept_response(state, response)
+
+            if not response.message.tool_calls:
+                if not self._close_or_continue(
+                    state.messages, run_control, state.steps + 1
+                ):
+                    self._checkpoint_state(state, run_control)
+                    continue
+                self._checkpoint_state(state, run_control)
+                return self._build_response(response, state)
+
+            self._execute_tool_group(
+                state, response.message.tool_calls, run_control
+            )
+            self._checkpoint_state(state, run_control)
+
+    async def ainvoke(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None = None,
+        tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
+    ) -> AgentResponse:
+        state = self._create_run_state(
+            system_prompt,
+            history_messages,
+            input_prompt,
+            input_images,
+            tools,
+        )
+
+        while True:
+            self._begin_step(state, run_control)
+            response = await self._ainvoke_response(state)
+            self._accept_response(state, response)
+
+            if not response.message.tool_calls:
+                if not self._close_or_continue(
+                    state.messages, run_control, state.steps + 1
+                ):
+                    self._checkpoint_state(state, run_control)
+                    continue
+                self._checkpoint_state(state, run_control)
+                return self._build_response(response, state)
+
+            await self._aexecute_tool_group(
+                state, response.message.tool_calls, run_control
+            )
+            self._checkpoint_state(state, run_control)
+
+    def stream(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None = None,
+        tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
+    ) -> Iterator[Event]:
+        state = self._create_run_state(
+            system_prompt,
+            history_messages,
+            input_prompt,
+            input_images,
+            tools,
+        )
+
+        while True:
+            self._begin_step(state, run_control)
+            chunks: list[LLMStreamChunk] = []
+            for attempt in range(INVALID_TOOL_ARGUMENT_RETRIES + 1):
+                chunks = []
+                try:
+                    for chunk in self._llm.stream(
+                        state.messages,
+                        state.tool_definitions or None,
+                    ):
+                        if chunk.reasoning_delta:
+                            yield AgentThinkingDeltaEvent(
+                                step=state.steps,
+                                text=chunk.reasoning_delta,
+                            )
+                        if chunk.text_delta:
+                            yield AgentTextDeltaEvent(
+                                step=state.steps,
+                                text=chunk.text_delta,
+                            )
+                        chunks.append(chunk)
+                    break
+                except InvalidToolCallArgumentsError:
+                    if attempt == INVALID_TOOL_ARGUMENT_RETRIES:
+                        raise
+
+            response = self._aggregate_stream_chunks(chunks)
+            self._accept_response(state, response)
+            yield AgentMessageCompletedEvent(
+                step=state.steps,
+                message=deepcopy(response.message),
+            )
+
+            if not response.message.tool_calls:
+                if not self._close_or_continue(
+                    state.messages,
+                    run_control,
+                    state.steps + 1,
+                ):
+                    self._checkpoint_state(state, run_control)
+                    continue
+                self._checkpoint_state(state, run_control)
+                agent_response = self._build_response(response, state)
+                yield AgentCompletedEvent(
+                    step=state.steps,
+                    response=agent_response,
+                )
+                return
+
+            self._raise_if_cancelled(run_control)
+            tool_calls = response.message.tool_calls
+            executable, results_by_id = state.tool_executor.prepare_group(
+                tool_calls
+            )
+            execution_messages = list(state.messages)
+            for batch in state.tool_executor.build_batches(executable):
+                self._raise_if_cancelled(run_control)
+                for tool_call in batch:
+                    yield AgentToolStartedEvent(
+                        step=state.steps,
+                        tool_call=tool_call,
+                    )
+
+                execution = self._tool_execution(
+                    execution_messages,
+                    run_control,
+                    state.steps,
+                    state.task_message_start,
+                )
+                for tool_call, result in state.tool_executor.iter_completed(
+                    batch, **execution
+                ):
+                    results_by_id[tool_call.id] = result
+                self._append_tool_results(
+                    execution_messages, batch, results_by_id
+                )
+            execution = self._tool_execution(
+                state.messages,
+                run_control,
+                state.steps,
+                state.task_message_start,
+            )
+            finalized = state.tool_executor.finalize_group(
+                tool_calls, results_by_id, **execution
+            )
+            self._append_tool_results(state.messages, tool_calls, finalized)
+            self._checkpoint_state(state, run_control)
+            for tool_call in tool_calls:
+                yield AgentToolCompletedEvent(
+                    step=state.steps,
+                    tool_call=tool_call,
+                    result=finalized[tool_call.id],
+                )
+
+    async def astream(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None = None,
+        tools: list[str] | None = None,
+        run_control: AgentRunControl | None = None,
+    ) -> AsyncIterator[Event]:
+        state = self._create_run_state(
+            system_prompt,
+            history_messages,
+            input_prompt,
+            input_images,
+            tools,
+        )
+
+        while True:
+            self._begin_step(state, run_control)
+            chunks: list[LLMStreamChunk] = []
+            for attempt in range(INVALID_TOOL_ARGUMENT_RETRIES + 1):
+                chunks = []
+                try:
+                    async for chunk in self._llm.astream(
+                        state.messages,
+                        state.tool_definitions or None,
+                    ):
+                        if chunk.reasoning_delta:
+                            yield AgentThinkingDeltaEvent(
+                                step=state.steps,
+                                text=chunk.reasoning_delta,
+                            )
+                        if chunk.text_delta:
+                            yield AgentTextDeltaEvent(
+                                step=state.steps,
+                                text=chunk.text_delta,
+                            )
+                        chunks.append(chunk)
+                    break
+                except InvalidToolCallArgumentsError:
+                    if attempt == INVALID_TOOL_ARGUMENT_RETRIES:
+                        raise
+
+            response = self._aggregate_stream_chunks(chunks)
+            self._accept_response(state, response)
+            yield AgentMessageCompletedEvent(
+                step=state.steps,
+                message=deepcopy(response.message),
+            )
+
+            if not response.message.tool_calls:
+                if not self._close_or_continue(
+                    state.messages,
+                    run_control,
+                    state.steps + 1,
+                ):
+                    self._checkpoint_state(state, run_control)
+                    continue
+                self._checkpoint_state(state, run_control)
+                agent_response = self._build_response(response, state)
+                yield AgentCompletedEvent(
+                    step=state.steps,
+                    response=agent_response,
+                )
+                return
+
+            self._raise_if_cancelled(run_control)
+            tool_calls = response.message.tool_calls
+            executable, results_by_id = await state.tool_executor.aprepare_group(
+                tool_calls
+            )
+            execution_messages = list(state.messages)
+            for batch in state.tool_executor.build_batches(executable):
+                self._raise_if_cancelled(run_control)
+                for tool_call in batch:
+                    yield AgentToolStartedEvent(
+                        step=state.steps,
+                        tool_call=tool_call,
+                    )
+
+                execution = self._tool_execution(
+                    execution_messages,
+                    run_control,
+                    state.steps,
+                    state.task_message_start,
+                )
+                async for tool_call, result in state.tool_executor.aiter_completed(
+                    batch, **execution
+                ):
+                    results_by_id[tool_call.id] = result
+                self._append_tool_results(
+                    execution_messages, batch, results_by_id
+                )
+            execution = self._tool_execution(
+                state.messages,
+                run_control,
+                state.steps,
+                state.task_message_start,
+            )
+            finalized = state.tool_executor.finalize_group(
+                tool_calls, results_by_id, **execution
+            )
+            self._append_tool_results(state.messages, tool_calls, finalized)
+            self._checkpoint_state(state, run_control)
+            for tool_call in tool_calls:
+                yield AgentToolCompletedEvent(
+                    step=state.steps,
+                    tool_call=tool_call,
+                    result=finalized[tool_call.id],
+                )
+
+    def _execute_tool_group(
+        self,
+        state: _RunState,
+        tool_calls: list[ToolCall],
+        run_control: AgentRunControl | None,
+    ) -> dict[str, ToolExecutionResult]:
+        self._raise_if_cancelled(run_control)
+        executable, results_by_id = state.tool_executor.prepare_group(tool_calls)
+        execution_messages = list(state.messages)
+        for batch in state.tool_executor.build_batches(executable):
+            self._raise_if_cancelled(run_control)
+            execution = self._tool_execution(
+                execution_messages,
+                run_control,
+                state.steps,
+                state.task_message_start,
+            )
+            batch_results = {
+                tool_call.id: result
+                for tool_call, result in state.tool_executor.iter_completed(
+                    batch, **execution
+                )
+            }
+            results_by_id.update(batch_results)
+            self._append_tool_results(
+                execution_messages, batch, batch_results
+            )
+        execution = self._tool_execution(
+            state.messages,
+            run_control,
+            state.steps,
+            state.task_message_start,
+        )
+        finalized = state.tool_executor.finalize_group(
+            tool_calls, results_by_id, **execution
+        )
+        self._append_tool_results(state.messages, tool_calls, finalized)
+        return finalized
+
+    async def _aexecute_tool_group(
+        self,
+        state: _RunState,
+        tool_calls: list[ToolCall],
+        run_control: AgentRunControl | None,
+    ) -> dict[str, ToolExecutionResult]:
+        self._raise_if_cancelled(run_control)
+        executable, results_by_id = await state.tool_executor.aprepare_group(tool_calls)
+        execution_messages = list(state.messages)
+        for batch in state.tool_executor.build_batches(executable):
+            self._raise_if_cancelled(run_control)
+            execution = self._tool_execution(
+                execution_messages,
+                run_control,
+                state.steps,
+                state.task_message_start,
+            )
+            batch_results: dict[str, ToolExecutionResult] = {}
+            async for tool_call, result in state.tool_executor.aiter_completed(
+                batch, **execution
+            ):
+                batch_results[tool_call.id] = result
+            results_by_id.update(batch_results)
+            self._append_tool_results(
+                execution_messages, batch, batch_results
+            )
+        execution = self._tool_execution(
+            state.messages,
+            run_control,
+            state.steps,
+            state.task_message_start,
+        )
+        finalized = state.tool_executor.finalize_group(
+            tool_calls, results_by_id, **execution
+        )
+        self._append_tool_results(state.messages, tool_calls, finalized)
+        return finalized
+
+    @staticmethod
+    def _build_messages(
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None,
+    ) -> list[Message]:
+        messages: list[Message] = []
+        if system_prompt:
+            messages.append(Message("system", [TextPart(system_prompt)]))
+        messages.extend(history_messages)
+        content: list[ContentPart] = [TextPart(input_prompt), *(input_images or [])]
+        messages.append(Message("user", content))
+        return messages
+
+    def _create_run_state(
+        self,
+        system_prompt: str,
+        history_messages: list[Message],
+        input_prompt: str,
+        input_images: list[ImagePart] | None,
+        tools: list[str] | None,
+    ) -> _RunState:
+        messages = self._build_messages(
+            system_prompt,
+            history_messages,
+            input_prompt,
+            input_images,
+        )
+        tool_executor = self._tool_executor.snapshot(tools)
+        return _RunState(
+            messages=messages,
+            task_message_start=len(messages) - 1,
+            tool_executor=tool_executor,
+            tool_definitions=tool_executor.definitions(),
+        )
+
+    def _invoke_response(self, state: _RunState) -> LLMResponse:
+        for attempt in range(INVALID_TOOL_ARGUMENT_RETRIES + 1):
+            try:
+                return self._llm.invoke(
+                    state.messages, state.tool_definitions or None
+                )
+            except InvalidToolCallArgumentsError:
+                if attempt == INVALID_TOOL_ARGUMENT_RETRIES:
+                    raise
+        raise AssertionError("unreachable")
+
+    async def _ainvoke_response(self, state: _RunState) -> LLMResponse:
+        for attempt in range(INVALID_TOOL_ARGUMENT_RETRIES + 1):
+            try:
+                return await self._llm.ainvoke(
+                    state.messages, state.tool_definitions or None
+                )
+            except InvalidToolCallArgumentsError:
+                if attempt == INVALID_TOOL_ARGUMENT_RETRIES:
+                    raise
+        raise AssertionError("unreachable")
+
+    @classmethod
+    def _begin_step(
+        cls,
+        state: _RunState,
+        run_control: AgentRunControl | None,
+    ) -> None:
+        cls._prepare_step(
+            state.messages,
+            run_control,
+            state.steps + 1,
+            state.task_message_start,
+            state.last_usage,
+        )
+        state.steps += 1
+        cls._mark_step(run_control, state.steps)
+
+    @staticmethod
+    def _accept_response(state: _RunState, response: LLMResponse) -> None:
+        state.messages.append(response.message)
+        state.usage, state.has_usage = ReActAgent._add_usage(
+            state.usage,
+            state.has_usage,
+            response,
+        )
+        state.last_usage = response.usage
+        if response.reasoning:
+            state.reasoning_parts.append(response.reasoning)
+
+    @classmethod
+    def _checkpoint_state(
+        cls,
+        state: _RunState,
+        run_control: AgentRunControl | None,
+    ) -> None:
+        cls._checkpoint_history(
+            state.messages,
+            run_control,
+            state.task_message_start,
+            state.last_usage,
+        )
+
+    @staticmethod
+    def _tool_execution(
+        messages: list[Message],
+        run_control: AgentRunControl | None,
+        step: int,
+        task_message_start: int,
+    ) -> dict[str, object]:
+        return {
+            "task_id": (
+                run_control.task_id if run_control is not None else None
+            ),
+            "run_id": (
+                run_control.run_id if run_control is not None else None
+            ),
+            "step": step,
+            "task_messages": tuple(
+                deepcopy(messages[task_message_start:])
+            ),
+        }
+
+    @staticmethod
+    def _tool_result_message(
+        tool_call_id: str,
+        result: ToolExecutionResult,
+    ) -> Message:
+        return Message(
+            role="tool",
+            content=[
+                TextPart(
+                    serialize_tool_result(result)
+                ),
+                *result.images,
+            ],
+            tool_call_id=tool_call_id,
+        )
+
+    @classmethod
+    def _append_tool_results(
+        cls,
+        messages: list[Message],
+        tool_calls: list[ToolCall],
+        results_by_id: dict[str, ToolExecutionResult],
+    ) -> None:
+        for tool_call in tool_calls:
+            messages.append(
+                cls._tool_result_message(
+                    tool_call.id,
+                    results_by_id[tool_call.id],
+                )
+            )
+
+    @staticmethod
+    def _add_usage(
+        current: Usage,
+        has_usage: bool,
+        response: LLMResponse,
+    ) -> tuple[Usage, bool]:
+        if response.usage is None:
+            return current, has_usage
+        return (
+            Usage(
+                input_tokens=current.input_tokens + response.usage.input_tokens,
+                output_tokens=current.output_tokens + response.usage.output_tokens,
+            ),
+            True,
+        )
+
+    @staticmethod
+    def _build_response(
+        response: LLMResponse,
+        state: _RunState,
+    ) -> AgentResponse:
+        return AgentResponse(
+            message=response.message,
+            reasoning="\n".join(state.reasoning_parts) or None,
+            usage=state.usage if state.has_usage else None,
+            last_usage=state.last_usage,
+            finish_reason=response.finish_reason,
+            steps=state.steps,
+            messages=list(state.messages),
+            task_message_start=state.task_message_start,
+        )
+
+    @staticmethod
+    def _prepare_step(
+        messages: list[Message],
+        run_control: AgentRunControl | None,
+        step: int,
+        task_message_start: int,
+        last_usage: Usage | None,
+    ) -> None:
+        if run_control is None:
+            return
+        run_control.raise_if_cancelled()
+        run_control.raise_if_step_exceeded(step)
+        batch = run_control.drain_context(applied_before_step=step)
+        if batch is not None:
+            if step == 1 or messages[-1].role == "user":
+                target_index = task_message_start if step == 1 else len(messages) - 1
+                messages[target_index] = ReActAgent._merge_runtime_input(
+                    messages[target_index], batch
+                )
+            else:
+                messages.append(batch.message)
+        run_control.checkpoint_history(
+            messages[task_message_start:],
+            last_usage,
+        )
+
+    @staticmethod
+    def _close_or_continue(
+        messages: list[Message],
+        run_control: AgentRunControl | None,
+        next_step: int,
+    ) -> bool:
+        if run_control is None:
+            return True
+        batch = run_control.close_or_drain(applied_before_step=next_step)
+        if batch is None:
+            return True
+        messages.append(batch.message)
+        return False
+
+    @staticmethod
+    def _merge_runtime_input(
+        user_message: Message, batch: AppliedContextBatch
+    ) -> Message:
+        if user_message.role != "user":
+            raise ValueError("initial runtime input requires a user message")
+        contexts = [
+            record.content for record in batch.records if record.kind == "context"
+        ]
+        corrections = [
+            record.content
+            for record in batch.records
+            if record.kind == "user_correction" and record.content.strip()
+        ]
+        existing_text = "".join(
+            part.text for part in user_message.content if isinstance(part, TextPart)
+        )
+        sections = []
+        if contexts:
+            sections.append(
+                "\n".join(
+                    ["<runtime_context>"]
+                    + [f"{index}. {value}" for index, value in enumerate(contexts, 1)]
+                    + ["</runtime_context>"]
+                )
+            )
+        if existing_text:
+            sections.append(existing_text)
+        if corrections:
+            sections.append(
+                "\n".join(
+                    ["<user_correction>"]
+                    + [
+                        f"{index}. {value}"
+                        for index, value in enumerate(corrections, 1)
+                    ]
+                    + ["</user_correction>"]
+                )
+            )
+        images = [
+            part for part in user_message.content if isinstance(part, ImagePart)
+        ]
+        runtime_images = [
+            image for record in batch.records for image in record.input_images
+        ]
+        return Message(
+            "user",
+            [TextPart("\n\n".join(sections)), *images, *runtime_images],
+        )
+
+    @staticmethod
+    def _mark_step(run_control: AgentRunControl | None, step: int) -> None:
+        if run_control is not None:
+            run_control.mark_step(step)
+
+    @staticmethod
+    def _checkpoint_history(
+        messages: list[Message],
+        run_control: AgentRunControl | None,
+        task_message_start: int,
+        last_usage: Usage | None,
+    ) -> None:
+        if run_control is not None:
+            run_control.checkpoint_history(
+                messages[task_message_start:],
+                last_usage,
+            )
+
+    @staticmethod
+    def _raise_if_cancelled(run_control: AgentRunControl | None) -> None:
+        if run_control is not None:
+            run_control.raise_if_cancelled()
+
+    @classmethod
+    def _aggregate_stream_chunks(
+        cls,
+        chunks: list[LLMStreamChunk],
+    ) -> LLMResponse:
+        if not chunks:
+            raise ValueError("LLM stream did not produce any chunks")
+
+        text = "".join(chunk.text_delta for chunk in chunks)
+        reasoning = "".join(chunk.reasoning_delta for chunk in chunks)
+        return LLMResponse(
+            message=Message(
+                role="assistant",
+                content=[TextPart(text)] if text else [],
+                tool_calls=[
+                    tool_call
+                    for chunk in chunks
+                    for tool_call in chunk.tool_calls
+                ],
+            ),
+            reasoning=reasoning or None,
+            usage=next(
+                (
+                    chunk.usage
+                    for chunk in reversed(chunks)
+                    if chunk.usage is not None
+                ),
+                None,
+            ),
+            finish_reason=next(
+                (
+                    chunk.finish_reason
+                    for chunk in reversed(chunks)
+                    if chunk.finish_reason is not None
+                ),
+                None,
+            ),
+        )

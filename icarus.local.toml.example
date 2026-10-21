@@ -1,0 +1,17 @@
+# Copy to icarus.local.toml (ignored). Only override machine-specific topology.
+# Example loopback tunnel destinations; substitute your own host, never commit it.
+[components.postgres]
+mode = "remote"
+host = "localhost"
+port = 25432
+
+[components.falkordb]
+mode = "remote"
+host = "localhost"
+port = 26379
+
+# To use a whole remote application, override mode + endpoint together.
+# Its local databases/secrets will not be started or required.
+# [components.rela-mem]
+# mode = "remote"
+# endpoint = "https://relationship.example.invalid"

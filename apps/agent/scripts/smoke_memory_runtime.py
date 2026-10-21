@@ -11,19 +11,17 @@ from time import perf_counter
 from uuid import uuid4
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from dotenv import dotenv_values
 
-from apps.agent.src.agent_orchestration.capability import (
+from icarus.core.agents import (
     AgentCompletedEvent, AgentResponse,
 )
-from apps.agent.src.agent_orchestration.plugins.memory import Mem0HttpAdapter
-from apps.agent.src.agent_orchestration.plugins.persistence import SessionIdentity
-from apps.agent.src.application.session_runtime import SessionRuntime
-from apps.agent.src.model_config import ConfigModel, LLMConfig, ModelSettings, ThinkMode
-from apps.agent.src.model_provider.types import Message, TextPart, Usage
+from agent_app.plugins.memory import Mem0HttpAdapter
+from agent_app.plugins.persistence import SessionIdentity
+from agent_app.application.session_runtime import SessionRuntime
+from agent_app.config import ConfigModel, LLMConfig, ModelSettings, ThinkMode
+from icarus.core.models.messages import Message, TextPart, Usage
 
 
 class CapturingAgent:

@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "plugin_id": "process",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.process.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [],
+  "provided_tools": [
+    "background_process"
+  ],
+  "published_events": [
+    "process.updated"
+  ],
+  "consumed_events": [],
+  "state_scopes": [],
+  "tier": "core",
+  "required_config": []
+}

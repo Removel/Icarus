@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "icarus-agent"
+version = "0.1.0"
+description = "Icarus agent framework and application"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["icarus", "icarus.*", "agent_app", "agent_app.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"agent_app.plugins" = ["*/manifest.json"]
+"agent_app.resources" = ["*.json", "personas/*/*.md"]
+
+[tool.mypy]
+mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
+explicit_package_bases = true
+namespace_packages = true
+python_version = "3.11"
+check_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["yaml", "jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
