@@ -4,5 +4,7 @@ pydantic
 python-dotenv
 SQLAlchemy[asyncio]>=2,<3
 aiosqlite>=0.20,<1
+asyncpg>=0.29,<1
+PyYAML>=6,<7
 typesafe-sdk==0.7.2
 websockets>=13,<17
