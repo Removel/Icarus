@@ -1,62 +1,131 @@
 # Argus
 
-Argus 是 Icarus 的 QQ 观察与触发应用。签名上报通过 `connector → handler → service` 直接接收，service 持久化成功后返回 204，不经过入站消息队列。按会话成批后，由 service 内部的后台消费者运行决策图：节点判断、选中的边收集证据。代码能确定时不调用模型，有歧义时才通过 Jev 判断；最终由 service 执行 submit 或 steer。Argus 自身**不向 QQ 发送消息**。
+Argus 是常驻观测入口。第一阶段持续接收 QQ 消息，经规则和必要的 Jev 选择后递交给本地 mock，
+记录接收与显式解决结果。**mock 不调用真实 agent、不创建会话、不发 QQ 消息；resolved 只代表
+模拟流程结束，不代表外部问题真的解决。** 新链路不使用决策图，不提供历史回放。
 
-## 安装与生命周期
+## 本地安装与数据库
 
 ```bash
 ./bin/icarus install argus --dev
+export ARGUS_DEV_POSTGRES_PASSWORD='your-local-development-password'
+docker compose -f apps/argus/compose.dev.yaml up -d
+```
+
+开发 Compose 使用 `pgvector/pgvector:pg17`，独立项目 `argus-dev`、数据库/账号 `argus`，默认仅
+绑定 `127.0.0.1:55433`。不复用或修改 mem0、rela-mem 的真实数据库；不要删除它们的数据卷。
+正式 PG 的建库、账号、授权和部署在本地功能确认后由用户手动完成，不由 Argus 自动执行。
+
+在仓库根 `.env` 或进程环境提供 `ARGUS_DATABASE_URL`，格式为：
+
+```text
+postgresql+asyncpg://argus:<URL编码后的密码>@127.0.0.1:55433/argus
+```
+
+连接串必填，QQ 关闭时也需要数据库；密码含特殊字符时必须 URL 编码，不把真实连接串提交到 Git。
+SQLite 不再使用，不迁移、不自动删除旧数据库文件。未知 schema 版本拒绝启动，不自动清库。
+
+## 应用级生命周期
+
+```bash
 ./bin/icarus start argus
 ./bin/icarus status argus
 ./bin/icarus stop argus
-make test-argus
 ```
 
-默认健康端点 `http://127.0.0.1:8766/health`，仅绑定本机。默认 QQ connector **禁用**：此时不提供 `/onebot/events`，也不需要 SnowLuma、Jev 或 Gateway。进程使用自己的 `.venv`；`ICARUS_DATA_DIR/argus.db` 保存观察记录和 session 关联，`ICARUS_DATA_DIR/runtime/argus.json` 与 `logs/argus.log` 分别是进程记录和日志。
+继续使用 `apps.argus.src.main` 和现有 Icarus 应用管理器。地址来自应用配置，管理器可通过
+host/port 参数覆盖；只允许 `127.0.0.1`。健康探针为 `/health`，统一接口别名为
+`/api/argus/health`，共同检查数据库和已启用的后台任务。
 
-## 启用 QQ
+## QQ 与规则
 
-在 `apps/argus/settings.json` 设置 `qq.enabled=true`、机器人的正整数 `bot_id`、绝对 `workspace_path` 与 `gateway_url`（默认本机 `ws://127.0.0.1:8765/rpc`）；在仓库根 `.env` 配置 `ARGUS_QQ_REPORT_SECRET` 与 `ARGUS_JEV_API_KEY`。SnowLuma `httpClients` 的上报 URL 指向 `http://127.0.0.1:8766/onebot/events`，`accessToken` 必须与 `ARGUS_QQ_REPORT_SECRET` 相同，`messageFormat` 使用 `array`。凭据勿写入 JSON、日志或版本库。
+`apps/argus/settings.json` 设置 `qq.enabled=true`、合法 `bot_id` 和机器人别名。
+提供 `ARGUS_QQ_REPORT_SECRET`，OneBot 上报到：
 
-SnowLuma 上报签名为 `X-Signature: sha1=<原始 body 的 HMAC-SHA1>`，同时提供与 bot ID 一致的 `X-Self-ID`。有效聊天消息必须包含非零 `message_id` 与 Unix 秒 `time`；聊天消息缺少这些字段或格式错误时返回 422。验签和账号核对通过的 `meta_event`（心跳/生命周期）、`notice`（通知）、`request`（好友/群请求）返回空的 204，表示已收到但本应用不处理，不落库、不调用模型，也不自动同意请求。正常聊天消息成功返回无 JSON 响应体的 **204**，表示观察已提交数据库；之后判定不回应或等待仍属于正常业务，不影响这个成功回执。204 不表示 Icarus 已回复。来源 ID 重投不会生成第二条记录。后台批次队列满时已提交记录会在运行期补入；重启也会恢复可安全重试的记录。
+```text
+http://127.0.0.1:8766/api/argus/qq/onebot/events
+```
 
-## 测试数据库版本
+上报使用原始 body 的 HMAC-SHA1，header 为 `X-Signature: sha1=<40位hex>`、
+`X-Self-ID: <bot_id>`。建议 messageFormat=array，也接受没有 CQ 的普通文本。
+签名不合法401、账号不匹配403、超长413、结构非法422、停止接收503。成功204只表示已保存观测，
+不表示 agent 已处理。心跳等非聊天事件确认后204但不落库；消息撤回会保存新的删除版本。
 
-当前使用 schema v3，仍为 observations、decision_batches、session_links 三张表。新增等待、判断完成时间、交付时间、固定接收顺序和强信号依据。测试阶段不兼容旧试验库，也不提供旧迁移入口；版本不符会明确拒绝启动，不自动改库或删除数据。需要重建时应先停止 Argus、确认目标与保留范围，再单独执行；本轮实现未操作实际用户数据库。
+- 普通私聊直接触发，群聊 @/别名强信号尽快判断；自消息、敏感内容等门槛仍生效。
+- 普通群聊安静5秒后判断，持续来消息最长等30秒。
+- 同一个群正在处理时继续保存新消息，不打断、不追加当前请求；结束后重新判断积累内容。
+- 不同聊天对象独立，默认最多8个并发工作。
+- 默认每批20条、20000字符；单条过长使用短摘录，完整原文保留。预算外消息仍待处理。
+- 判断规则在 `rules/qq.yaml`。只有机械规则无法决定时才使用已启用的 Jev；Jev 仅选择 rule_id/none。
+- Jev 默认关闭，开启需配置 `jev.enabled=true` 与 `ARGUS_JEV_API_KEY`。失败或 none 默认沉默。
+- `sensitive_keywords` 默认为空，需要操作者配置关键词；不是完整的语义内容审核机制。
+- QQ 关闭时不挂上报路由、不扫描来源、不调用 Jev/mock，但只读接口和健康检查仍可用。
 
-## 收集、退避与判断
+## 规则配置与生效
 
-普通群消息和私聊默认从最后一条人类消息起等待 6 秒，收集连续发言；期间有新消息就重新计算安静期限。单批最多 20 条、连续收集最长 60 秒，达到上限仍可关批。私聊不再因私聊身份、称呼或积压 6 条而跳过收集；普通群聊的明确 @、称呼命中与积压 6 条人类消息仍可提前判断。普通群聊的收集上限不能绕过退避。提前判断不保证一定回应，机器人自己的消息只作上下文，不单独唤醒模型。
+规则文件为 [`rules/qq.yaml`](rules/qq.yaml)，完整字段、可用 facts、条件操作符、语义规则与
+离线校验方法见 [规则配置指南](docs/rules.md)。
 
-连续两次正常判断“不需要回应”后，从 15 秒开始指数退避，最多 300 秒。近期 300 秒内每次成功新提交，还会增加 15 秒的普通判断间隔；追加到同一任务不当作新启动。两项取较晚期限，不相乘。新的普通消息不会使已算出的退避期限不断延后。没有待处理消息或明确等待的请求时，不主动找话。
+- 默认机械规则：私聊叫醒（优先级200）；群 @/叫名字叫醒（优先级100），不调用 Jev。
+- 机械规则按优先级从高到低，第一条命中即结束；同优先级按文件顺序。
+- 只有机械规则未命中时，才把满足 `when` 的语义规则交给已启用的 Jev，选一个 rule_id 或 none。
+- `wake` 表示递交请求，`ignore` 表示忽略；尽快判断不等于保证叫醒，基本检查不能被规则绕过。
 
-配置默认值由 `config/config_model.py` 定义；用户 settings 中显式设置的值继续生效：
+例如，向 `rules` 列表加入下面一条，可让某个群只记录、不叫醒，即使 @ 也不递交：
 
-| 配置 | 默认 |
+```yaml
+- id: mute_specific_group
+  description: "这个群只观测，不递交"
+  priority: 1000
+  when:
+    chat_id: "qq:123:group:456"
+  decision: ignore
+  reason: "该群配置为只观测"
+```
+
+请替换机器人账号和群号；ID 保持字符串。规则作用于本轮预算内的一批消息，不是逐条独立执行。
+可组合 `all` / `any` / `not`，比较支持 `eq`、`ne`、`in`、`contains_any`、`contains_all`、
+`gte`、`lte`、`exists`；不支持正则或任意 Python 表达式。
+
+**当前没有热重载。** 修改后建议递增 `version`，按指南离线检查，再等当前工作结束后使用
+`./bin/icarus stop argus`、`./bin/icarus start argus` 生效。重启不恢复旧待办，改规则也不会重新
+处理旧的 ignored 记录；操作前请留意尚未处理的积压。
+
+## 重启、状态与模拟结果
+
+每次启动有新 boot_id。**重启后不恢复旧待办、不重投旧请求、不以旧消息作判断上文**；旧记录
+仍可查询，但不占本次启动的处理名额。跨启动重复上报仍按全库消息身份去重，不会重新处理。
+这意味着停机前尚未完成的工作不会自动补做。
+
+请求活跃状态：waiting→sent→accepted；终态：resolved/no_action/failed。
+只有接收确认才将观测记为 delivered，显式结果才记为 processed；mock 不会写 verified。
+发送不确定时保留相同 wake_id，默认最多3次尝试，间隔1秒、2秒；accepted 最多等60秒。
+最终失败释放聊天对象，但该失败批次不无限自动重做。
+
+## 仅本机读接口
+
+| 路由 | 内容 |
 |---|---|
-| `batch_quiet_seconds` / `batch_max_messages` / `batch_max_seconds` | 6 秒 / 20 条 / 60 秒 |
-| `no_action_backoff_base_seconds` / `no_action_backoff_start_count` / `no_action_backoff_cap_seconds` | 15 秒 / 2 次 / 300 秒 |
-| `submission_window_seconds` / `submission_spacing_seconds` | 300 秒 / 15 秒 |
-| `pacing_bypass_messages` / `waiting_check_seconds` | 6 条 / 5 秒 |
+| `GET /api/argus/observed-items/{id}` | 完整观测与版本身份 |
+| `GET /api/argus/wake-requests/{id}` | 请求、关联消息、模拟解决结果 |
+| `GET /api/argus/wake-requests?status=&chat_id=&limit=50&offset=0` | 有限分页，active区分当前启动与历史 |
+| `GET /api/argus/chats/{chat_id}/unhandled?limit=50` | 本次启动尚未关联请求的最新消息 |
 
-证据包读取聊天前文、后到背景、Icarus 的实际任务状态与近期交付记录。策略判断是否需要回应，以及是否适合追加当前任务。运行器只执行图，service 才实际提交或追加。任务 ID 列表可能包含排队任务，不能直接当作“同时运行”的任务。
+limit 范围1–100。读接口不鉴权，因此不能开放外网；其中包含聊天原文，不用于公开页面。
 
-## 等待与发送安全
+## 测试
 
-需要回应但不适合打断当前任务时，批次进入 `waiting`，不当作“已沉默结束”。默认每 5 秒检查工作证据；同一原因下证据不变就不反复问模型，新人类消息可以提前检查。任务结束后即使用户没有再说话，也会重新判断旧请求是否仍需处理。后来收到的消息只作背景，不冒充本批已经处理的成员。
+```bash
+make test-argus
+# 或只跑指定路径
+apps/argus/scripts/test.sh apps/argus/test/common -q
+```
 
-同会话最早未结束批次优先，后续批次不能越过 waiting 或发送未知状态。发送前重新核实任务和消息是否变化；追加目标已结束或明确拒绝时回到等待，不自动变成另一份提交。网络中断、超时、不可信回执记为 `submission_unknown`，不自动重发，该会话后续等待人工核实。
+没有 `ARGUS_TEST_DATABASE_URL` 时脚本创建自己的临时 PG17 容器，随机本机端口、独立 `argus_test`
+库，退出只清理该容器。也可显式提供专用测试 DSN；库名必须以 `_test` 结尾，fixture 只创建和
+删除自身唯一 schema。**绝不能将生产数据库当测试库。** Docker不可用时明确失败，不以skip假绿。
+测试屏蔽真实配置和密钥，使用 typed Jev fixture、本地 mock 和隔离 PG，不启动真实 QQ/Gateway。
 
-请求被 Icarus 接收、任务完成、QQ 中观察到发言是不同事实，不能互相代替。不能用历史相似文本猜测提交是否成功。
-
-## 查看判断过程
-
-通过仅绑定本机的 `GET /observations/<observation_id>/status?after_run=0&limit=20` 查看批次状态、最终决定、等待原因和下次检查时间，以及逐轮安全执行摘要。`limit` 范围 1–100，`next_after_run` 和 `has_more` 用于继续读取。摘要包含节点状态、选边、耗时、错误类型和证据完整性，不包含聊天全文、完整模型输入或工具输出。端点无单独认证，只能保持 loopback。
-
-Jev 支持 typed Noul/Choice/Score，一次可以带多个问题；最多三次请求，故障记录为 failed，与正常“不需要回应”区分。图默认总预算 30 秒 / 32 步，不在图内跨时间等待。
-
-## 验证范围
-
-`make test-argus` 使用临时配置、临时库、可控时钟和假 Jev/Gateway，不读取真实密钥或发送 QQ 消息。新等待/退避/证据流程已用隔离测试验证；本轮未启动真实服务、未做付费模型或真实 QQ 冒烟。测试能证明流程按规则执行，不能替代真实模型的判断质量评价。
-
-当前源码架构见 [证据层与触发节奏](docs/spec/2026-10-01-evidence-and-pacing/arch.md)，设计和实施计划位于同目录；命名规则见 `docs/spec/2026-09-30-module-naming/`。
+设计与逐文件实施任务见 [第一阶段设计](docs/spec/2026-10-21-argus-positioning/design.md) 和
+[实施计划](docs/spec/2026-10-21-argus-positioning/plan.md)。旧 feature 目录记录历史方案，
+不再作为新链路的当前架构说明。
