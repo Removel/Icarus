@@ -1,6 +1,7 @@
 # QQ 观测闭环现状
 
-> 当前完整架构见 [证据与等待架构](../2026-10-01-evidence-and-pacing/arch.md)。本目录design/plan保留最初实施目标；本文不再描述已删除的qq_strategy/JevClient.decide接口。
+> 历史架构记录：下文旧 connector/handler/service 和 SQLite 链路已被替换。
+> 当前架构见 [第一阶段源码架构](../2026-10-21-argus-positioning/arch.md)。本目录 design/plan 保留历史目标。
 
 ## 接入
 
