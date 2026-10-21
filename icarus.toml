@@ -74,6 +74,20 @@ endpoint_env = "ICARUS_OPENKB_ENDPOINT"
 required = false
 endpoint_env = "ICARUS_RELATIONSHIP_ENDPOINT"
 
+# QQ observation process; PostgreSQL URL comes from ARGUS_DATABASE_URL.
+# Phase one uses a local mock processor and does not require Gateway.
+[components.argus]
+kind = "app"
+provisioning = "process"
+default_stack = true
+endpoint = "http://127.0.0.1:8766"
+workdir = "."
+start_command = ["bash", "{repo_root}/apps/argus/scripts/start.sh", "--host", "{host}", "--port", "{port}"]
+install_command = ["bash", "{repo_root}/apps/argus/scripts/install.sh"]
+dev_install_command = ["bash", "{repo_root}/apps/argus/scripts/install.sh", "--dev"]
+process_markers = ["apps.argus.src.main", "apps.argus/scripts/start.sh"]
+probe = { type = "http", path = "/health", expect_body = { status = "ready" } }
+
 [components.mem0]
 kind = "app"
 provisioning = "compose"

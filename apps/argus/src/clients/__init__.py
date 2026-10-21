@@ -1,2 +1,0 @@
-"""Outbound integrations for Argus.
-"""

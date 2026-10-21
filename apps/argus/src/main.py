@@ -1,138 +1,118 @@
-"""Local service entrypoint for Argus."""
-
-from __future__ import annotations
+"""Argus process composition; external handling is explicitly simulated."""
 
 import argparse
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 import logging
 import os
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI
 import uvicorn
 
-from packages.runtime_environment import get_icarus_data_dir
-from .config.config_loader import load_config
-from .config.config_model import ArgusConfig
-from .connector.qq_connector import QQConnector
-from .dao.observation_store import ObservationStore
-from .dao.database import Database
-from .service.observation_status import ObservationStatusService
-from .service.batch_state import reset_interrupted
-from .handler.qq_handler import QQHandler
-from .clients.icarus_client import IcarusClient
-from .clients.jev_client import JevClient
-from .service.qq_service import QQService
-from .dao.batch_store import BatchStore
-from .service.batch_scheduler import BatchScheduler
-from .service.batch_runtime import BatchRuntime
-
-logger = logging.getLogger("argus.main")
+from .core.config import ArgusConfig, load_config
+from .core.database import Database
+from .common.api.router import create_router
+from .common.clients.jev_client import JevClient
+from .common.clients.mock_agent_client import MockAgentClient
+from .common.repositories.observation_repository import ObservationRepository
+from .common.services.rule_service import load_rule_set
+from .common.services.judgement_service import JudgementService
+from .common.services.wake_service import WakeService
+from .common.tasks.observation_scheduler import ObservationScheduler
+from .surfaces.qq.services.parser_service import QQParser
+from .surfaces.qq.services.fact_service import QQFactService
+from .surfaces.qq.services.observation_service import QQObservationService
+from .surfaces.qq.api.onebot import create_qq_router
 
 
-def create_app(
-    config: ArgusConfig | None = None, *, database: Database | None = None,
-    judge=None, gateway=None, qq_secret: str | None = None,
-) -> FastAPI:
+def create_app(config: ArgusConfig | None = None, *, database=None, jev=None, agent=None, qq_secret=None):
     config = config or load_config()
     if config.qq.enabled:
-        qq_secret = qq_secret if qq_secret is not None else os.getenv("ARGUS_QQ_REPORT_SECRET")
+        qq_secret = qq_secret if qq_secret is not None else os.getenv('ARGUS_QQ_REPORT_SECRET')
         if not qq_secret:
-            raise ValueError("ARGUS_QQ_REPORT_SECRET is required when QQ is enabled")
-    elif qq_secret is None:
-        qq_secret = ""
-    database = database or Database(get_icarus_data_dir())
-    store = ObservationStore(database)
-    batches = BatchStore(database)
-    status_service = ObservationStatusService(store,batches)
-    owned_jev_client = None
-    if config.qq.enabled and judge is None:
-        api_key = os.getenv("ARGUS_JEV_API_KEY")
-        if not api_key:
-            raise ValueError("ARGUS_JEV_API_KEY is required when QQ is enabled")
-        owned_jev_client = JevClient(
-            api_key=api_key, base_url=config.jev_base_url,
-            model=config.jev_model, timeout_seconds=config.judge_timeout_seconds,
-        )
-        judge = owned_jev_client
-    if config.qq.enabled and gateway is None:
-        gateway = IcarusClient(config.qq.gateway_url)
-
-    scheduler = BatchScheduler(database,store,batches,quiet_seconds=config.batch_quiet_seconds,
-        max_messages=config.batch_max_messages,max_seconds=config.batch_max_seconds,
-        bot_names=config.qq.bot_names,capacity=config.queue_capacity,
-        base_seconds=config.no_action_backoff_base_seconds,start_count=config.no_action_backoff_start_count,
-        cap_seconds=config.no_action_backoff_cap_seconds,spacing_seconds=config.submission_spacing_seconds,
-        bypass_messages=config.pacing_bypass_messages,submission_window_seconds=config.submission_window_seconds)
-    service = None
-    if config.qq.enabled:
-        service = QQService(database,store,batches,judge,gateway,workspace_path=config.qq.workspace_path,
-            bot_names=config.qq.bot_names,max_steps=config.graph_max_steps,
-            graph_timeout_seconds=config.graph_timeout_seconds,waiting_check_seconds=config.waiting_check_seconds,
-            submission_window_seconds=config.submission_window_seconds)
-        service.notify = scheduler.notify
-        scheduler.waiting_changed = service.waiting_changed
+            raise ValueError('ARGUS_QQ_REPORT_SECRET is required when QQ is enabled')
+    owns_database = database is None
+    if database is None:
+        if config.database_url is None:
+            raise ValueError('ARGUS_DATABASE_URL is required')
+        database = Database(config.database_url.get_secret_value())
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        app.state.store, app.state.batches, app.state.scheduler = store,batches,scheduler
+    async def lifespan(app):
+        owned_clients, scheduler, task = [], None, None
         app.state.ready = app.state.accepting = False
-        app.state.execution_tasks = []
-        await database.start()
+        app.state.scheduler_task = None
         try:
+            await database.start()
+            repository = ObservationRepository(database, boot_id=uuid4())
+            app.state.repository = repository
             if config.qq.enabled:
-                await reset_interrupted(database,batches)
-                await gateway.connect()
-                runtime = BatchRuntime(scheduler,service,recovery_interval_seconds=config.recovery_interval_seconds)
-                app.state.execution_tasks = [
-                    asyncio.create_task(runtime.run_checks(),name='argus:recovery'),
-                    asyncio.create_task(runtime.run_batches(),name='argus:batches')]
+                surface = QQFactService()
+                rules = load_rule_set(Path(__file__).resolve().parents[1] / 'rules/qq.yaml',
+                                      known_facts=set(surface.known_facts))
+                current_jev = jev
+                if current_jev is None and config.jev.enabled:
+                    api_key = os.getenv('ARGUS_JEV_API_KEY')
+                    if not api_key:
+                        raise ValueError('ARGUS_JEV_API_KEY is required when Jev is enabled')
+                    current_jev = JevClient(api_key=api_key, base_url=config.jev.base_url, model=config.jev.model,
+                        timeout_seconds=config.jev.timeout_seconds, attempts=config.jev.attempts)
+                    owned_clients.append(current_jev)
+                current_agent = agent
+                if current_agent is None:
+                    current_agent = MockAgentClient(completion_delay_seconds=config.mock.completion_delay_seconds)
+                    owned_clients.append(current_agent)
+                judgement = JudgementService(rules, surface, current_jev,
+                    sensitive_keywords=config.sensitive_keywords, max_items=config.max_items_per_wake,
+                    max_chars=config.max_chars_per_wake, recent_chars=config.recent_context_chars)
+                wakes = WakeService(repository, current_agent, submit_timeout_seconds=config.submit_timeout_seconds,
+                    max_submit_attempts=config.max_submit_attempts, retry_delays_seconds=config.retry_delays_seconds,
+                    outcome_timeout_seconds=config.outcome_timeout_seconds)
+                scheduler = ObservationScheduler(repository, judgement, wakes,
+                    permission_for=lambda chat: config.permission_overrides.get(chat, config.default_permission_level),
+                    quiet_seconds=config.quiet_seconds, max_debounce_seconds=config.max_debounce_seconds,
+                    scan_interval_seconds=config.scan_interval_seconds, max_concurrent_chats=config.max_concurrent_chats,
+                    max_items=config.max_items_per_wake, recent_items=config.recent_context_items)
+                service = QQObservationService(repository, QQParser(config.qq.bot_id, config.qq.bot_names),
+                                               notify=scheduler.notify)
+                app.state.qq_service = service
+                task = asyncio.create_task(scheduler.run(), name='argus:observations')
+                app.state.scheduler_task = task
             app.state.ready = app.state.accepting = True
             yield
         finally:
-            app.state.accepting = app.state.ready = False
-            for task in app.state.execution_tasks:
+            app.state.ready = app.state.accepting = False
+            if task is not None:
                 task.cancel()
-            await asyncio.gather(*app.state.execution_tasks,return_exceptions=True)
-            if config.qq.enabled:
-                await gateway.close()
-            if owned_jev_client is not None:
-                await owned_jev_client.aclose()
-            await database.close()
+                await asyncio.gather(task, return_exceptions=True)
+            async with AsyncExitStack() as cleanup:
+                if owns_database:
+                    cleanup.push_async_callback(database.close)
+                for client in owned_clients:
+                    cleanup.push_async_callback(client.aclose)
+                if scheduler is not None:
+                    cleanup.push_async_callback(scheduler.aclose)
 
     app = FastAPI(lifespan=lifespan)
+    app.include_router(create_router(database=database))
     if config.qq.enabled:
-        handler = QQHandler(config.qq.bot_id,receive=service.receive)
-        app.include_router(QQConnector(config.qq,qq_secret,handler).router)
-
-    @app.get("/health")
-    async def health():
-        if (not getattr(app.state,'ready',False) or not database.is_running
-                or any(t.done() for t in getattr(app.state,'execution_tasks',()))
-                or (config.qq.enabled and not gateway.connected)):
-            raise HTTPException(status_code=503, detail="Argus is not ready")
-        if not await database.is_available():
-            raise HTTPException(status_code=503, detail="Argus database is unavailable")
-        return {"status": "ready"}
-
-    @app.get("/observations/{observation_id}/status")
-    async def observation_status(observation_id: str, after_run: int = Query(default=0,ge=0),
-                                 limit: int = Query(default=20,ge=1,le=100)):
-        try:
-            return await status_service.get(observation_id,after_run=after_run,limit=limit)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Observation not found") from error
-
+        app.include_router(create_qq_router(config.qq, secret=qq_secret))
     return app
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Icarus Argus")
-    parser.parse_args(argv)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Icarus Argus')
+    parser.add_argument('--host')
+    parser.add_argument('--port', type=int)
+    args = parser.parse_args(argv)
     config = load_config()
+    changes = {key: value for key, value in vars(args).items() if value is not None}
+    config = ArgusConfig.model_validate({**config.model_dump(), 'database_url': config.database_url, **changes})
     logging.basicConfig(level=config.log_level)
     uvicorn.run(create_app(config), host=config.host, port=config.port)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

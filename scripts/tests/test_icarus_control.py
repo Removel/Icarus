@@ -532,6 +532,26 @@ class EnvironmentTest(unittest.TestCase):
         )
 
 
+def test_argus_registry_keeps_process_contract():
+    import tomllib
+    values = tomllib.loads((ROOT / 'icarus.toml').read_text())['components']['argus']
+    assert 'apps.argus.src.main' in values['process_markers']
+    assert values['probe']['path'] == '/health'
+    assert values['probe']['expect_body'] == {'status': 'ready'}
+    assert values['start_command'][-4:] == ['--host', '{host}', '--port', '{port}']
+    assert 'gateway' not in values.get('requires', {})
+
+
+def test_default_repository_root_and_default_stack_required_closure():
+    assert REPO_ROOT == ROOT
+    registry = load_configuration(ROOT)
+    order = required_closure(registry, registry.default_stack())
+    assert {"rela-mem", "postgres", "falkordb", "mem0", "openkb", "gateway", "webui", "argus", "tui", "agent"} <= set(order)
+    assert "mem0-postgres" not in order
+    for dependency in ("mem0", "openkb", "agent"):
+        assert order.index(dependency) < order.index("gateway")
+
+
 class CommandInstallerTest(unittest.TestCase):
     def test_installer_creates_idempotent_links_for_public_commands(self):
         repo_root = Path(__file__).resolve().parents[2]

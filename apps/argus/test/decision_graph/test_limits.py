@@ -4,7 +4,8 @@ from apps.argus.src.decision_graph.node import NodeBinding
 from apps.argus.src.decision_graph.edge import Edge
 from apps.argus.src.decision_graph.runner import GraphRunner
 from apps.argus.src.decision_graph.compiler import GraphCompiler
-from apps.argus.src.entity.decision import RouteDecision
+from collections import namedtuple
+RouteDecision = namedtuple("RouteDecision", "action reason")
 
 
 async def identity(value):

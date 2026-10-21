@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from uuid import uuid4
 
 from apps.argus.src.core import config
-from apps.argus.src.config import config_loader
 from apps.argus.src.core.database import Database
 from packages import runtime_environment
 
@@ -19,14 +18,6 @@ from packages import runtime_environment
 def isolated_argus_environment(tmp_path, monkeypatch):
     settings = tmp_path / 'settings.json'
     settings.write_text(json.dumps({'qq': {'enabled': False}}))
-    legacy_dir = tmp_path / 'legacy_config'
-    legacy_dir.mkdir()
-    (legacy_dir / 'settings.json').write_text(json.dumps({
-        'host': '127.0.0.1', 'port': 8766, 'log_level': 'INFO',
-        'queue_capacity': 1000, 'worker_count': 1, 'qq': {'enabled': False},
-    }))
-    monkeypatch.setattr(config_loader, 'files', lambda _: legacy_dir)
-    monkeypatch.setattr(config_loader, 'load_icarus_environment', lambda: None)
     monkeypatch.setenv('ICARUS_DATA_DIR', str(tmp_path / 'runtime_data'))
     for variable in ('ARGUS_JEV_API_KEY', 'ARGUS_QQ_REPORT_SECRET', 'ARGUS_DATABASE_URL'):
         monkeypatch.delenv(variable, raising=False)
