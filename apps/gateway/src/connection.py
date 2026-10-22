@@ -15,7 +15,7 @@ from agent_app.application import (
 )
 from icarus.core.runtime_update import RuntimeUpdate
 from icarus.runtime.fanout import BoundedMailbox, DEFAULT_QUEUE_CAPACITY
-from apps.gateway.src.protocol.errors import GatewayRpcError, INTERNAL_ERROR
+from apps.gateway.src.protocol.errors import GatewayRpcError, INTERNAL_ERROR, INVALID_REQUEST
 from apps.gateway.src.protocol.jsonrpc import (
     error_response,
     parse_request,
@@ -87,6 +87,8 @@ class GatewayConnection:
         request_id = None
         has_id = True
         try:
+            if len(text.encode('utf-8')) > getattr(self.methods, 'max_request_bytes', 16 * 1024 * 1024):
+                raise GatewayRpcError(INVALID_REQUEST, 'Request exceeds size limit')
             request = parse_request(text)
             has_id = "id" in request.model_fields_set
             request_id = request.id if has_id else None

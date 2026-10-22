@@ -1,0 +1,14 @@
+{
+  "request": {
+    "protocol_version": 1,
+    "wake_id": "10000000-0000-4000-8000-000000000001",
+    "origin_boot_id": "20000000-0000-4000-8000-000000000001",
+    "scope": {"source": "qq", "account_id": "7", "chat_kind": "group", "external_id": "42"},
+    "reason": "question",
+    "rule_id": null,
+    "items": [{"observation_id": "60000000-0000-4000-8000-000000000001", "source": "qq", "chat_id": "qq:7:group:42", "message_id": "88", "revision": 1, "locator": {"account_id": "7", "chat_kind": "group", "external_id": "42", "message_id": "88", "time": 10}, "excerpt": "question", "truncated": false}]
+  },
+  "fingerprint": "b2f5d3023915621ffc1c1210c46b671e33991cfc40b11159dab93b450853dd4f",
+  "not_found": {"protocol_version": 1, "found": false, "execution": null},
+  "rejected_report": {"protocol_version": 1, "report_id": "report", "disposition": "rejected", "code": "item_not_reportable", "report_cursor": 0}
+}

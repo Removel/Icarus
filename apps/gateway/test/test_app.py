@@ -24,6 +24,9 @@ class RuntimeStub:
         self.is_running = False
         self.stream.close()
 
+    async def ensure_public_session(self, *, workspace_key, session_id):
+        pass
+
     def subscribe_updates(self):
         return self.stream.subscribe()
 

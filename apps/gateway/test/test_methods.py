@@ -18,6 +18,9 @@ from icarus.core.runtime_update import RuntimeUpdate
 class RuntimeStub:
     is_running = True
 
+    async def ensure_public_session(self, *, workspace_key, session_id):
+        pass
+
     def validate_session_instructions(self, instructions):
         from agent_app.plugins.prompt.composer import validate_instructions
         validate_instructions(instructions, max_tokens=8192)

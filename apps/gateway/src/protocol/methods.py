@@ -156,6 +156,10 @@ class GatewayMethods:
         }
         if method == "session.subscribe":
             value = self._validate(SubscriptionParams, params)
+            try:
+                await self.runtime.ensure_public_session(workspace_key=value.workspace_key, session_id=value.session_id)
+            except SessionNotFoundError:
+                raise _business("session_not_found", "Session is not found") from None
             subscriptions.add((value.workspace_key, value.session_id))
             return {"subscribed": True}
         if method == "session.unsubscribe":
