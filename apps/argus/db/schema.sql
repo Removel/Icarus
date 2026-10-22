@@ -13,6 +13,7 @@ CREATE TABLE wake_requests (
     payload jsonb NOT NULL,
     decision_detail jsonb NOT NULL DEFAULT '{}'::jsonb,
     outcome jsonb,
+    handoff jsonb NOT NULL DEFAULT '{"mode":"mock"}'::jsonb,
     attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     next_attempt_at timestamptz,
     accepted_at timestamptz,
@@ -24,6 +25,9 @@ CREATE TABLE wake_requests (
 CREATE UNIQUE INDEX uq_wake_active ON wake_requests(boot_id,chat_id)
     WHERE status IN ('waiting','sent','accepted');
 CREATE INDEX ix_wake_due ON wake_requests(boot_id,status,next_attempt_at);
+CREATE UNIQUE INDEX uq_wake_real_scope ON wake_requests(chat_id)
+    WHERE handoff->>'mode'='gateway' AND COALESCE(handoff->>'local_terminal','false')!='true'
+    AND COALESCE(handoff->>'release_complete','false')!='true';
 
 CREATE TABLE observed_items (
     id uuid PRIMARY KEY,
@@ -48,6 +52,7 @@ CREATE TABLE observed_items (
     status_reason text,
     decision_detail jsonb,
     wake_id uuid REFERENCES wake_requests(id),
+    exposed_wake_id uuid,
     UNIQUE(source,chat_id,message_id,revision),
     UNIQUE(source,chat_id,message_id,fingerprint)
 );
@@ -55,3 +60,4 @@ CREATE INDEX ix_observed_pending ON observed_items(boot_id,chat_id,observed_at,i
     WHERE status='new' AND wake_id IS NULL;
 CREATE INDEX ix_observed_latest ON observed_items(source,chat_id,message_id,revision DESC);
 CREATE INDEX ix_observed_wake ON observed_items(wake_id);
+CREATE INDEX ix_observed_scope_watermark ON observed_items(source,chat_id,observed_at,id);

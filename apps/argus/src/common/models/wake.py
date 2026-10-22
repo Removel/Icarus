@@ -22,6 +22,7 @@ class WakeRow(Base):
     payload: Mapped[dict] = mapped_column(JSONB)
     decision_detail: Mapped[dict] = mapped_column(JSONB)
     outcome: Mapped[dict | None] = mapped_column(JSONB)
+    handoff: Mapped[dict] = mapped_column(JSONB, default=lambda: {'mode': 'mock'})
     attempt_count: Mapped[int] = mapped_column(Integer)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

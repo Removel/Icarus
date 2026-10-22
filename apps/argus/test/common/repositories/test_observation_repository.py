@@ -18,6 +18,21 @@ def draft(text='hello', *, message_id='789', deleted=False):
                             locator={'chat_kind': 'group'})
 
 
+async def test_scope_watermark_is_monotonic_despite_old_draft_time_and_clock_rollback(database):
+    frozen = datetime(2026, 10, 22, tzinfo=UTC)
+    current = [frozen]
+    repo = ObservationRepository(database, boot_id=uuid4(), clock=lambda: current[0])
+    first, _ = await repo.upsert_revision(draft(message_id='watermark-1').model_copy(
+        update={'observed_at': frozen + timedelta(days=3)}))
+    current[0] = frozen - timedelta(days=1)
+    second, _ = await repo.upsert_revision(draft(message_id='watermark-2').model_copy(
+        update={'observed_at': frozen - timedelta(days=3)}))
+    assert first.observed_at == frozen
+    assert second.observed_at == first.observed_at + timedelta(microseconds=1)
+    replayed, inserted = await repo.upsert_revision(draft(message_id='watermark-2'))
+    assert not inserted and replayed.observed_at == second.observed_at
+
+
 async def test_concurrent_same_message_inserts_once(database):
     repo = ObservationRepository(database, boot_id=uuid4())
     results = await asyncio.gather(*(repo.upsert_revision(draft()) for _ in range(20)))

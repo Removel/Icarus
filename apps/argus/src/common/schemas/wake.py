@@ -1,6 +1,8 @@
 """External processing seam; acceptance is separate from completion."""
 
 from datetime import datetime
+from hashlib import sha256
+import json
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -63,6 +65,7 @@ class WakeView(FrozenSchema):
     payload: WakePayload
     decision_detail: dict
     outcome: WakeOutcome | None
+    handoff: dict = Field(default_factory=lambda: {'mode': 'mock'})
     attempt_count: int
     next_attempt_at: datetime | None
     accepted_at: datetime | None
@@ -70,6 +73,26 @@ class WakeView(FrozenSchema):
     error_type: str | None
     created_at: datetime
     updated_at: datetime
+
+
+def wake_wire(payload):
+    source, account, kind, target = payload.chat_id.split(':', 3)
+    scope = {'source': source, 'account_id': account, 'chat_kind': kind, 'external_id': target}
+    return {'protocol_version': 1, 'wake_id': str(payload.wake_id), 'origin_boot_id': str(payload.boot_id),
+            'scope': scope, 'reason': payload.reason, 'rule_id': payload.rule_id,
+            'items': [{'observation_id': str(item.item_id), 'source': item.source, 'chat_id': item.chat_id,
+                'message_id': item.message_id, 'revision': item.revision, 'locator': dict(item.locator),
+                'excerpt': item.excerpt, 'truncated': item.truncated} for item in payload.items]}
+
+
+def request_fingerprint(payload):
+    value = wake_wire(payload)
+    value['items'].sort(key=lambda item: item['observation_id'])
+    for item in value['items']:
+        stamp = item['locator'].get('time')
+        if isinstance(stamp, float) and stamp.is_integer():
+            item['locator']['time'] = int(stamp)
+    return sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
 class AgentClient(Protocol):

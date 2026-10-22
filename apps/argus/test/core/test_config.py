@@ -21,6 +21,9 @@ def test_config_uses_explicit_fixture_not_real_settings(tmp_path, monkeypatch):
     {'host': '0.0.0.0'}, {'max_items_per_wake': 0},
     {'quiet_seconds': float('nan')}, {'default_permission_level': 6},
     {'max_submit_attempts': 2, 'retry_delays_seconds': [1, 2]},
+    {'service_host': '0.0.0.0', 'service_port': 9000},
+    {'service_host': '8.8.8.8', 'service_port': 9000},
+    {'service_host': '100.70.8.2'},
 ])
 def test_invalid_config_is_rejected(values):
     from apps.argus.src.core.config import ArgusConfig

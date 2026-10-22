@@ -14,7 +14,7 @@ from apps.argus.src.surfaces.qq.services.fact_service import QQFactService
 async def make_flow(database):
     from apps.argus.src.common.tasks.observation_scheduler import ObservationScheduler
     clock = Clock()
-    repo = ObservationRepository(database, boot_id=uuid4())
+    repo = ObservationRepository(database, boot_id=uuid4(), clock=clock.now)
     surface = QQFactService()
     rules = load_rule_set(Path(__file__).resolve().parents[3] / 'rules/qq.yaml', known_facts=set(surface.known_facts))
     judgement = JudgementService(rules, surface, None)

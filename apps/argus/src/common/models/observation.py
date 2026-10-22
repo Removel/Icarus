@@ -36,3 +36,4 @@ class ObservationRow(Base):
     status_reason: Mapped[str | None] = mapped_column(Text)
     decision_detail: Mapped[dict | None] = mapped_column(JSONB)
     wake_id: Mapped[UUID | None] = mapped_column(PGUUID, ForeignKey('wake_requests.id'))
+    exposed_wake_id: Mapped[UUID | None] = mapped_column(PGUUID)

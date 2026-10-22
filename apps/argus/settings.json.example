@@ -30,5 +30,8 @@
     "max_body_bytes": 1048576,
     "bot_names": ["icarus", "伊卡洛斯"]
   },
-  "mock": {"completion_delay_seconds": 0.05}
+  "mock": {"completion_delay_seconds": 0.05},
+  "execution": {"mode": "mock", "gateway_url": "ws://127.0.0.1:8765/argus/rpc"},
+  "service_host": null,
+  "service_port": null
 }

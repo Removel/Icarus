@@ -49,6 +49,39 @@ async def test_self_item_cannot_trigger_valid_group():
     assert result.ignored[0].reason == 'self_message'
 
 
+async def test_semantic_wire_includes_required_instructions_for_openrouter(monkeypatch):
+    import httpx2
+    import json
+    from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
+    from apps.argus.src.common.clients.jev_client import JevClient
+    from apps.argus.src.common.services.judgement_service import JudgementService
+    from apps.argus.src.surfaces.qq.services.fact_service import QQFactService
+
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        question = body['questions']['intent']
+        if not isinstance(question.get('instructions'), str) or not question['instructions'].strip():
+            return httpx2.Response(400, json={'error': {'message': 'instructions required'}})
+        return httpx2.Response(200, json={'model': 'typesafe/jev-1.13', 'usage': {'input_tokens': 10, 'output_tokens': 1},
+            'answers': {'intent': {'type': 'choice', 'choice': 'genuine_question', 'confidence': .9,
+                'probabilities': {'genuine_question': .9, 'casual_chat': .05, 'none': .05}}}})
+
+    client = AsyncTypeSafeClient(api_key='fixture', base_url='https://openrouter.example/api',
+        transport=httpx2.MockTransport(handler), retry=RetryPolicy(max_retries=0))
+    monkeypatch.setattr('apps.argus.src.common.clients.jev_client.AsyncTypeSafeClient', lambda **kwargs: client)
+    jev = JevClient(api_key='fixture', base_url='https://openrouter.example/api', model='typesafe/jev-1.13', attempts=1)
+    try:
+        outcome = await JudgementService(rules(), QQFactService(), jev).judge([item_factory('怎么做')], permission_level=2)
+        assert outcome.decision == 'wake' and outcome.rule_id == 'genuine_question'
+        assert len(calls) == 1
+        assert 'instructions' in calls[0]['questions']['intent']
+    finally:
+        await jev.aclose()
+
+
 async def test_semantic_input_removes_sensitive_history_and_accounts():
     from typesafe_sdk import ChoiceAnswer, SystemOneResponse, Usage
     from apps.argus.src.common.clients.jev_client import JevClient
@@ -81,8 +114,12 @@ async def test_display_names_cannot_bypass_filter_or_total_text_budget():
             choice='none', confidence=1, probabilities={'none': 1})})
     judge = JudgementService(rules(), QQFactService(), JevClient(answer=answer),
         sensitive_keywords=('secret',), max_chars=20, recent_chars=10)
-    await judge.judge([item_factory('hello', sender_name='secret' + 'n' * 100000)],
+    restricted = await judge.judge([item_factory('hello', sender_name='secret' + 'n' * 100000)],
         permission_level=2, recent_context=[item_factory('old', sender_name='n' * 100000)])
+    assert states == []
+    assert restricted.ignored[0].reason == 'sensitive_content'
+    await judge.judge([item_factory('hello', sender_name='n' * 100000)], permission_level=2,
+        recent_context=[item_factory('old', sender_name='n' * 100000)])
     assert states and 'secret' not in str(states[0])
     assert sum(len(value['text']) + len(value.get('sender_name') or '') for value in states[0]['items']) <= 20
     assert sum(len(value['text']) + len(value.get('sender_name') or '') for value in states[0]['recent']) <= 10

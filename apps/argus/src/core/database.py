@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class SchemaVersionError(RuntimeError):
@@ -38,6 +38,8 @@ class Database:
                                      connect_args={'server_settings': {'search_path': self.schema}})
         try:
             async with engine.begin() as connection:
+                await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+                                         {'key': f'argus-schema:{self.schema}'})
                 exists = await connection.scalar(text("SELECT to_regclass('schema_version')"))
                 if exists is None:
                     ddl = (Path(__file__).resolve().parents[2] / 'db/schema.sql').read_text()
@@ -47,6 +49,13 @@ class Database:
                     await connection.execute(text('INSERT INTO schema_version(version) VALUES (:version)'),
                                              {'version': SCHEMA_VERSION})
                 versions = (await connection.execute(text('SELECT version FROM schema_version'))).scalars().all()
+                if versions == [1]:
+                    migration = Path(__file__).resolve().parents[2] / 'db/migrations/002_agent_handoff.sql'
+                    for statement in migration.read_text().split(';'):
+                        if statement.strip():
+                            await connection.execute(text(statement))
+                    await connection.execute(text('UPDATE schema_version SET version=2, applied_at=now()'))
+                    versions = [2]
                 if versions != [SCHEMA_VERSION]:
                     raise SchemaVersionError('Unsupported Argus schema version')
         except BaseException:

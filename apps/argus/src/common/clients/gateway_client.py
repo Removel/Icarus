@@ -13,9 +13,11 @@ class GatewayTransportError(ConnectionError):
 
 
 class GatewayBusinessError(RuntimeError):
-    def __init__(self, code, message):
+    def __init__(self, code, message, *, data=None):
         super().__init__(message)
         self.code = code
+        self.data = data or {}
+        self.retryable = self.data.get('retryable', False) is True
 
 
 class IcarusClient:
@@ -53,7 +55,7 @@ class IcarusClient:
                     error = response['error']
                     future.set_exception(GatewayBusinessError(
                         str((error.get('data') or {}).get('code', error.get('code'))),
-                        str(error.get('message', 'Gateway error'))))
+                        str(error.get('message', 'Gateway error')), data=error.get('data')))
                 else:
                     future.set_result(response.get('result'))
         except asyncio.CancelledError:

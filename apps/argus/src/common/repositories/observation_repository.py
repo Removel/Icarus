@@ -1,6 +1,6 @@
 """Atomic observation revisions, judgement reservation and processing states."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import json
 from uuid import UUID, uuid4
@@ -40,9 +40,15 @@ def wake_view(row):
 
 
 class ObservationRepository:
-    def __init__(self, database: Database, *, boot_id: UUID):
+    def __init__(self, database: Database, *, boot_id: UUID, clock=lambda: datetime.now(UTC)):
         self.database = database
         self.boot_id = boot_id
+        self.clock = clock
+
+    @staticmethod
+    async def lock_scope(session, source, chat_id):
+        await session.execute(text('SELECT pg_advisory_xact_lock(hashtextextended(:identity,0))'),
+                              {'identity': json.dumps(['scope', source, chat_id], separators=(',', ':'))})
 
     @staticmethod
     def _identity(value):
@@ -69,6 +75,7 @@ class ObservationRepository:
         fingerprint = sha256(json.dumps([value['content'], draft.deleted], sort_keys=True,
                                        separators=(',', ':')).encode()).hexdigest()
         async with self.database.begin() as session:
+            await self.lock_scope(session, draft.source, draft.chat_id)
             await self._lock_message(session, draft)
             identity = (ObservationRow.source == draft.source, ObservationRow.chat_id == draft.chat_id,
                         ObservationRow.message_id == draft.message_id)
@@ -81,6 +88,10 @@ class ObservationRepository:
             if latest is not None and latest.deleted and not draft.deleted:
                 return observed(latest), False
             values = draft.model_dump()
+            maximum = await session.scalar(select(func.max(ObservationRow.observed_at)).where(
+                ObservationRow.source == draft.source, ObservationRow.chat_id == draft.chat_id))
+            now = self.clock()
+            values['observed_at'] = max(now, maximum + timedelta(microseconds=1)) if maximum is not None else now
             values['content'] = value['content']
             row = ObservationRow(**values, id=uuid4(), boot_id=self.boot_id,
                                  revision=1 if latest is None else latest.revision + 1,
@@ -121,17 +132,36 @@ class ObservationRepository:
             return None if row[0] is None else PendingWindow(first_observed_at=row[0],
                 last_observed_at=row[1], has_strong_signal=bool(row[2]))
 
+    @staticmethod
+    def _real_active():
+        return and_(WakeRow.handoff['mode'].astext == 'gateway',
+                    func.coalesce(WakeRow.handoff['local_terminal'].astext, 'false') != 'true',
+                    func.coalesce(WakeRow.handoff['release_complete'].astext, 'false') != 'true')
+
+    async def update_handoff(self, wake_id, changes, *, status=None):
+        async with self.database.begin() as session:
+            row = await session.get(WakeRow, UUID(str(wake_id)), with_for_update=True)
+            if row is None:
+                raise NotFound('Wake not found')
+            row.handoff = {**(row.handoff or {}), **changes}
+            if status is not None:
+                row.status = status
+            row.updated_at = datetime.now(UTC)
+            await session.flush()
+            return wake_view(row)
+
     async def chats_to_scan(self):
         async with self.database.session() as session:
             pending = select(ObservationRow.chat_id).where(*self._pending())
-            active = select(WakeRow.chat_id).where(WakeRow.boot_id == self.boot_id,
-                                                 WakeRow.status.in_(ACTIVE_STATUSES))
+            active = select(WakeRow.chat_id).where(or_(self._real_active(), and_(
+                WakeRow.boot_id == self.boot_id, WakeRow.status.in_(ACTIVE_STATUSES))))
             return tuple(sorted((await session.scalars(pending.union(active))).all()))
 
     async def active_wake(self, chat_id):
         async with self.database.session() as session:
-            row = await session.scalar(select(WakeRow).where(WakeRow.boot_id == self.boot_id,
-                WakeRow.chat_id == chat_id, WakeRow.status.in_(ACTIVE_STATUSES)))
+            row = await session.scalar(select(WakeRow).where(WakeRow.chat_id == chat_id, or_(
+                self._real_active(), and_(WakeRow.boot_id == self.boot_id, WakeRow.status.in_(ACTIVE_STATUSES),
+                    func.coalesce(WakeRow.handoff['mode'].astext, 'mock') != 'gateway'))))
             return None if row is None else wake_view(row)
 
     async def commit_judgement(self, chat_id: str, outcome: JudgementOutcome):
@@ -144,6 +174,7 @@ class ObservationRepository:
             return None
         try:
             async with self.database.begin() as session:
+                await self.lock_scope(session, 'qq', chat_id)
                 rows = (await session.scalars(select(ObservationRow).where(
                     ObservationRow.id.in_(identifiers)))).all()
                 for row in sorted(rows, key=self._identity):
@@ -216,6 +247,9 @@ class ObservationRepository:
             return tuple(observed(row) for row in rows)
 
     async def _request(self, session, wake_id):
+        existing = await session.get(WakeRow, wake_id)
+        if existing is not None:
+            await self.lock_scope(session, 'qq', existing.chat_id)
         row = await session.scalar(select(WakeRow).where(WakeRow.id == wake_id,
             WakeRow.boot_id == self.boot_id).with_for_update())
         if row is None:

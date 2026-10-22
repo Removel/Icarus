@@ -2,6 +2,7 @@
 
 import json
 import os
+import ipaddress
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -43,6 +44,17 @@ class MockConfig(SettingsModel):
     completion_delay_seconds: float = Field(default=0.05, ge=0, allow_inf_nan=False)
 
 
+class ExecutionConfig(SettingsModel):
+    mode: Literal['mock', 'gateway'] = 'mock'
+    gateway_url: str = 'ws://127.0.0.1:8765/argus/rpc'
+
+    @model_validator(mode='after')
+    def service_url(self):
+        if not self.gateway_url.startswith(('ws://', 'wss://')) or not self.gateway_url.rstrip('/').endswith('/argus/rpc'):
+            raise ValueError('Gateway URL must point to the Argus service endpoint')
+        return self
+
+
 class ArgusConfig(SettingsModel):
     host: Literal['127.0.0.1'] = '127.0.0.1'
     port: int = Field(default=8766, ge=1, le=65535)
@@ -66,11 +78,21 @@ class ArgusConfig(SettingsModel):
     jev: JevConfig = Field(default_factory=JevConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
     mock: MockConfig = Field(default_factory=MockConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    service_host: str | None = None
+    service_port: int | None = Field(default=None, ge=1, le=65535)
 
     @model_validator(mode='after')
     def retry_budget(self):
         if len(self.retry_delays_seconds) != self.max_submit_attempts - 1:
             raise ValueError('retry delays must match max_submit_attempts - 1')
+        if (self.service_host is None) != (self.service_port is None):
+            raise ValueError('Service host and port must be provided together')
+        if self.service_host is not None:
+            address = ipaddress.ip_address(self.service_host)
+            if address.is_unspecified or not (address.is_loopback or address.is_private
+                    or address in ipaddress.ip_network('100.64.0.0/10')):
+                raise ValueError('Service listener requires a private LAN/VPN address')
         return self
 
 

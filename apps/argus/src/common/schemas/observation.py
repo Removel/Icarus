@@ -48,6 +48,7 @@ class ObservedItem(ObservedItemDraft):
     status_reason: str | None = None
     decision_detail: dict | None = None
     wake_id: UUID | None = None
+    exposed_wake_id: UUID | None = None
 
 
 class SelectedItem(FrozenSchema):
