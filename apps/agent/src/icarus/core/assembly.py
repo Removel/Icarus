@@ -8,6 +8,7 @@ from icarus.core.hooks.wrappers import ObservableAgent, ObservableLLM, Observabl
 from icarus.core.llm import BaseLLM, LLMFactory
 from icarus.core.tools import ToolExecutionPolicy, ToolExecutor, ToolRegistry
 from icarus.core.tools.result_store import ToolResultStore
+from icarus.core.tools.execution_tracker import ToolExecutionTracker
 
 
 class AgentAssembly:
@@ -19,7 +20,9 @@ class AgentAssembly:
         hook_registry: HookRegistry,
         policy_for_role: Callable[[str], ToolExecutionPolicy],
         tool_result_store: ToolResultStore | None = None,
+        tool_execution_tracker: ToolExecutionTracker | None = None,
     ) -> None:
+        self.tool_execution_tracker = tool_execution_tracker
         self.llm_factory = llm_factory
         self.tool_registry = tool_registry
         self.hook_registry = hook_registry
@@ -39,6 +42,7 @@ class AgentAssembly:
                 self.tool_registry,
                 policy=self.policy_for_role(model_role),
                 result_store=self.tool_result_store,
+                tracker=self.tool_execution_tracker,
             )
             agent = ReActAgent(
                 model_role=model_role,

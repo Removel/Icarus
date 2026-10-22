@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from copy import deepcopy
 import logging
@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from icarus.core.tools.base_tool import BaseTool
+from icarus.core.tools.execution_tracker import ToolExecutionTracker
 from icarus.core.tools.execution_policy import (
     PreparedToolArguments,
     ToolExecutionControlError,
@@ -200,7 +201,9 @@ class ToolExecutor(BaseToolExecutor):
         policy: ToolExecutionPolicy | None = None,
         result_store: ToolResultStore | None = None,
         token_counter: TokenCounter = conservative_token_count,
+        tracker: ToolExecutionTracker | None = None,
     ) -> None:
+        self.tracker = tracker if tracker is not None else ToolExecutionTracker()
         self.registry = registry
         self.policy = policy or ToolExecutionPolicy()
         self.result_store = result_store
@@ -234,6 +237,7 @@ class ToolExecutor(BaseToolExecutor):
             policy=self.policy,
             result_store=self.result_store,
             token_counter=self.token_counter,
+            tracker=self.tracker,
         )
 
     def prepare_group(
@@ -404,19 +408,25 @@ class ToolExecutor(BaseToolExecutor):
             execution = _supported_execution_arguments(
                 tool.invoke,
                 task_id=task_id,
+                tool_call_id=tool_call.id,
                 run_id=run_id,
                 step=step,
                 task_messages=_copy_messages(task_messages),
                 timeout_seconds=prepared.budget.timeout_seconds,
             )
-            if isinstance(tool, ToolExecuteTool):
-                execution.update(
-                    loaded_tools=loaded_tools,
-                    tool_executor=tool_executor,
-                    tool_call_id=tool_call.id,
-                    execution_control=tool_call.arguments.get("_execution"),
-                )
-            result = tool.invoke(prepared.arguments, **execution)
+            completion: Future[None] = Future()
+            self.tracker.track(completion)
+            try:
+                if isinstance(tool, ToolExecuteTool):
+                    execution.update(
+                        loaded_tools=loaded_tools,
+                        tool_executor=tool_executor,
+                        tool_call_id=tool_call.id,
+                        execution_control=tool_call.arguments.get("_execution"),
+                    )
+                result = tool.invoke(prepared.arguments, **execution)
+            finally:
+                completion.set_result(None)
         except Exception as error:
             logger.exception(
                 "Tool execution failed: name=%s call_id=%s",
@@ -472,6 +482,7 @@ class ToolExecutor(BaseToolExecutor):
             execution = _supported_execution_arguments(
                 target,
                 task_id=task_id,
+                tool_call_id=tool_call.id,
                 run_id=run_id,
                 step=step,
                 task_messages=_copy_messages(task_messages),
@@ -485,13 +496,14 @@ class ToolExecutor(BaseToolExecutor):
                     execution_control=tool_call.arguments.get("_execution"),
                 )
             if use_sync_implementation:
-                result = await asyncio.to_thread(
-                    tool.invoke, prepared.arguments, **execution
-                )
+                task = asyncio.create_task(asyncio.to_thread(tool.invoke, prepared.arguments, **execution))
+                self.tracker.track(task)
+                result = await asyncio.shield(task)
             else:
                 task = asyncio.create_task(
                     tool.ainvoke(prepared.arguments, **execution)
                 )
+                self.tracker.track(task)
                 try:
                     done, _ = await asyncio.wait(
                         {task}, timeout=prepared.budget.timeout_seconds
