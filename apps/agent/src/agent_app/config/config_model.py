@@ -92,6 +92,23 @@ LLMProtocol = Literal["openai", "anthropic"]
 from icarus.core.model_types import LLMRole
 
 
+class ArgusSettings(pydantic.BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool = False
+    workspace: Path | None = None
+    base_url: str = "http://127.0.0.1:8766"
+    max_active_executions: StrictInt = pydantic.Field(default=8, ge=1, le=100)
+    timeout_seconds: float = pydantic.Field(default=900, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def trusted_workspace(self):
+        if self.enabled and (self.workspace is None or not self.workspace.is_absolute()):
+            raise ValueError("Argus requires an absolute background workspace")
+        if not self.base_url.startswith(("http://", "https://")):
+            raise ValueError("Argus service URL must be HTTP")
+        return self
+
+
 class ConfigModel(pydantic.BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -102,6 +119,7 @@ class ConfigModel(pydantic.BaseModel):
     icarus_data_dir: Path | None = None
     skill: SkillSettings = pydantic.Field(default_factory=SkillSettings)
     agent: AgentSettings = pydantic.Field(default_factory=AgentSettings)
+    argus: ArgusSettings = pydantic.Field(default_factory=ArgusSettings)
     runtime: RuntimeSettings = pydantic.Field(default_factory=RuntimeSettings)
     mcp_servers: dict[str, dict[str, Any]] = pydantic.Field(
         default_factory=dict,

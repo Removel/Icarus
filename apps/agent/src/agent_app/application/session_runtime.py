@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import asyncio
 import logging
 
 from icarus.core.hooks import HookDispatcher, HookRegistry
@@ -14,10 +15,12 @@ from icarus.runtime.session import SessionHost
 from icarus.core.run_control import TaskChannelRegistry
 from icarus.runtime.assets import PersistenceRuntime
 from icarus.core.identity import SessionIdentity
+from icarus.core.session import SessionContext
 from icarus.core.tools import ToolRegistry
 from icarus.core.tools.tool_execute import ToolExecuteTool
 from icarus.core.tools.tool_search import ToolSearchTool
 from icarus.core.tools.tool_surface import ToolSurfaceCatalog
+from icarus.core.tools.execution_tracker import ToolExecutionTracker
 from agent_app.config import ConfigModel
 from icarus.core.models.messages import Message
 from icarus.core.runtime_update import RuntimeUpdate
@@ -26,9 +29,9 @@ from icarus.core.runtime_update import RuntimeUpdate
 UpdatePublisher = Callable[[RuntimeUpdate], Awaitable[None]]
 
 
-from agent_app.contracts.prompt import PromptContributor, PromptError
+from agent_app.contracts.prompt import PromptContributor, PromptError, PromptSection
 from agent_app.plugins.prompt.base_prompt import DEFAULT_SYSTEM_PROMPT
-from agent_app.plugins.prompt.composer import prompt_context_block
+from agent_app.plugins.prompt.composer import prompt_context_block, compose_prompt
 from icarus.core.tools.result_budget import conservative_token_count
 
 
@@ -45,12 +48,31 @@ class SessionRuntime(SessionHost):
         tools: list[str] | None = None,
         initial_messages: list[Message] | None = None,
         instructions: str | None = None,
+        context: SessionContext | None = None,
+        argus_facilities: dict | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
+        self.context = context or SessionContext()
+        if self.context.kind == "argus_background":
+            prompt_config = dict(config.runtime.plugin_config.get("prompt", {}))
+            prompt_config["required_contributors"] = sorted(set(prompt_config.get("required_contributors", ())) | {"argus"})
+            runtime_config = config.runtime.model_copy(update={
+                "plugin_config": {**config.runtime.plugin_config, "prompt": prompt_config},
+            })
+            config = config.model_copy(update={"runtime": runtime_config})
         self.identity = identity
         self.workspace_path = identity.workspace_path
         self.config = config
         self.logger = logger or logging.getLogger("icarus.agent.session")
+        self._execution_exits: dict[str, str] = {}
+        downstream_publisher = publish_update
+
+        async def record_exit(update):
+            if update.type == 'task.finished' and update.task_id is not None:
+                self._execution_exits[update.task_id] = update.payload.get('status', 'failed')
+            await downstream_publisher(update)
+
+        publish_update = record_exit
         if config.icarus_data_dir is None:
             raise RuntimeError("ICARUS_DATA_DIR is required")
 
@@ -64,10 +86,15 @@ class SessionRuntime(SessionHost):
         self.tool_search = ToolSearchTool()
         self.tool_execute = ToolExecuteTool()
         self.tool_registry.register_many([self.tool_search, self.tool_execute])
+        self.argus_facilities = argus_facilities or {}
+        self.tool_execution_tracker = ToolExecutionTracker()
+        self._execution_drain_task: asyncio.Task | None = None
         self.plugin_manager = PluginManager(
             hook_dispatcher=HookDispatcher(self.hook_registry),
         )
         required = set(config.runtime.required_plugin_ids)
+        if self.context.kind == "argus_background":
+            required.add("argus")
         self.runtime_host = PluginRuntimeHost(
             identity.workspace_path,
             identity.session_id,
@@ -76,6 +103,7 @@ class SessionRuntime(SessionHost):
             required_plugin_ids=frozenset(required),
             plugin_configs=self._with_facilities({
                 **config.runtime.plugin_config,
+                "argus": {**(argus_facilities or {})},
                 "prompt": {
                     **config.runtime.plugin_config.get("prompt", {}),
                     "instructions": instructions,
@@ -99,6 +127,7 @@ class SessionRuntime(SessionHost):
                     "tool_registry": self.tool_registry,
                     "task_channels": self.task_channels,
                     "hook_registry": self.hook_registry,
+                    "tool_execution_tracker": self.tool_execution_tracker,
                 },
                 "user-input": {
                     **config.runtime.plugin_config.get("user-input", {}),
@@ -177,6 +206,18 @@ class SessionRuntime(SessionHost):
             assets=self.persistence, task_channels=self.task_channels, logger=self.logger,
             checkpoint_plugin_ids=("blackboard",))
 
+    def execution_exit_kind(self, task_id):
+        return self._execution_exits.get(task_id, 'failed')
+
+    async def drain_execution(self) -> None:
+        if self._execution_drain_task is None or self._execution_drain_task.done():
+            self._execution_drain_task = asyncio.create_task(self._drain_execution())
+        await asyncio.shield(self._execution_drain_task)
+
+    async def _drain_execution(self) -> None:
+        await self.plugin_manager.drain()
+        await self.tool_execution_tracker.drain()
+
     def _with_facilities(self, configs):
         user_configs = {key: dict(value) for key, value in self.config.runtime.plugin_config.items()}
         for key in configs:
@@ -186,6 +227,7 @@ class SessionRuntime(SessionHost):
         user_configs["knowledge"] = {k: v for k, v in configs["knowledge"].items()}
         user_configs["process"] = {k: v for k, v in configs["process"].items()}
         return {key: {**value, "runtime": self.persistence, "identity": self.identity,
+                      **({"session_context": self.context} if key == "argus" else {}),
                       "task_channels": self.task_channels, "_user_config": user_configs[key]}
                 for key, value in configs.items()}
 
@@ -246,6 +288,17 @@ class SessionRuntime(SessionHost):
                 dynamic.add(plugin_id)
             if "prompt.update" in manifest.published_events:
                 updates.add(plugin_id)
+        argus = host.graph.registrations.get('argus')
+        if argus is not None:
+            def argus_prompt_fits(content):
+                try:
+                    rendered = compose_prompt({'argus': (PromptSection('observations', 'contributor', content),)},
+                        layers=('contributor',), required_sources=frozenset({'argus'}),
+                        max_tokens=prompt.config.max_prompt_tokens, max_section_tokens=prompt.config.max_section_tokens)
+                    return measure(prompt._system_prompt, rendered) <= prompt.config.max_prompt_tokens
+                except PromptError:
+                    return False
+            argus.plugin.prompt_fits = argus_prompt_fits
         prompt.prepare(static, dynamic_sources=frozenset(dynamic), update_sources=frozenset(updates),
                        required_sources=required, measure_dynamic=measure)
         for board in boards:

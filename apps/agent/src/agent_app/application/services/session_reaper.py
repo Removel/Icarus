@@ -137,6 +137,8 @@ class SessionReaper:
         now = self._clock()
         unloads: list[asyncio.Task[None]] = []
         for entry in tuple(self._entries.values()):
+            if entry.context.kind != 'interactive':
+                continue
             status = self._status(entry)
             if status.lifecycle != "ready" or status.last_activity_at is None:
                 continue

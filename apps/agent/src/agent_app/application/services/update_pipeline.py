@@ -34,6 +34,9 @@ class UpdatePipeline:
         self._updates = updates
         self.logger = logger
 
+    async def flush(self) -> None:
+        await self._update_queue.join()
+
     async def _handle_update(self, update: RuntimeUpdate) -> None:
         await self._update_queue.put(update)
 

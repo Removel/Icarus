@@ -11,6 +11,7 @@ from icarus.core.llm import LLMFactory
 from icarus.core.models.messages import ImagePart
 from icarus.core.tools import ToolExecutionPolicy, ToolRegistry
 from icarus.core.tools.result_store import ToolResultStore
+from icarus.core.tools.execution_tracker import ToolExecutionTracker
 
 
 class AgentFactory(AgentAssembly):
@@ -25,6 +26,7 @@ class AgentFactory(AgentAssembly):
         register_builtin_tools: bool = False,
         image_resolver: Callable[[ImagePart], Path] | None = None,
         tool_result_store: ToolResultStore | None = None,
+        tool_execution_tracker: ToolExecutionTracker | None = None,
     ) -> None:
         if register_builtin_tools:
             raise ValueError("Built-in tools must be registered by their plugin")
@@ -41,4 +43,5 @@ class AgentFactory(AgentAssembly):
             hook_registry=hook_registry or HookRegistry(),
             policy_for_role=policy_for_role,
             tool_result_store=tool_result_store,
+            tool_execution_tracker=tool_execution_tracker,
         )

@@ -8,9 +8,10 @@ from agent_app.application.errors import SessionNotFoundError, SessionAlreadyExi
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast, get_args
+from typing import Any, Literal, cast, get_args
+from collections.abc import Mapping
 
-from sqlalchemy import exists, func, select, update as update_row
+from sqlalchemy import exists, func, select, text, update as update_row
 from icarus.runtime.storage import SqliteDatabase
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -20,6 +21,9 @@ from icarus.core.identity import (
     SessionIdentity,
 )
 from agent_app.application.models.status import SessionSummary
+from agent_app.application.models.scoped_execution import ExecutionView, ScopedExecutionError, ScopedWakeRequest
+from agent_app.argus_protocol import Scope
+from icarus.core.session import SessionContext
 from agent_app.application.repositories.session_entities import (
     _Base,
     _ConversationUpdateRow,
@@ -32,6 +36,15 @@ from icarus.core.runtime_update import RuntimeUpdate, RuntimeUpdateType
 
 _SUMMARY_MAX_LENGTH = 256
 _UPDATE_TYPES = frozenset(get_args(RuntimeUpdateType))
+_INTERNAL_TYPES = frozenset({"argus_report", "argus_report_synced", "argus_report_rejected", "argus_wait_cursor"})
+
+
+@dataclass(frozen=True)
+class InternalRecord:
+    sequence: int
+    task_id: str | None
+    update_type: str
+    payload: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -44,6 +57,17 @@ class SessionRecord:
     last_sequence: int
     deleted_at: datetime | None
     delete_reason: str | None
+    scope_key: str | None = None
+    properties: dict[str, object] | None = None
+
+    @property
+    def context(self) -> SessionContext:
+        properties = self.properties or {}
+        return SessionContext(
+            kind=str(properties.get("kind", "interactive")),
+            scope=cast(Mapping[str, Any] | None, properties.get("scope")),
+            metadata=properties,
+        )
 
 
 SoftDeleteStatus = Literal["discarded", "not_empty", "not_found"]
@@ -82,6 +106,19 @@ class SessionStore:
         try:
             async with engine.begin() as connection:
                 await connection.run_sync(_Base.metadata.create_all)
+                columns = {row[1] for row in (await connection.execute(text("PRAGMA table_info(sessions)")))}
+                if "scope_key" not in columns:
+                    await connection.execute(text("ALTER TABLE sessions ADD COLUMN scope_key TEXT"))
+                if "properties" not in columns:
+                    await connection.execute(text("ALTER TABLE sessions ADD COLUMN properties JSON"))
+                await connection.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_scope ON sessions(scope_key) "
+                    "WHERE scope_key IS NOT NULL"
+                ))
+                await connection.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_wake ON sessions(json_extract(properties, '$.wake_id')) "
+                    "WHERE json_extract(properties, '$.kind') = 'argus_background'"
+                ))
             try:
                 self.database_path.chmod(0o600)
             except OSError:
@@ -209,6 +246,7 @@ class SessionStore:
                 .where(
                     _SessionRow.workspace_key == workspace_key,
                     _SessionRow.deleted_at.is_(None),
+                    func.coalesce(_SessionRow.properties["kind"].as_string(), "interactive") == "interactive",
                 )
                 .order_by(_SessionRow.session_id.asc())
             )
@@ -229,6 +267,7 @@ class SessionStore:
                 .where(
                     _SessionRow.workspace_key == workspace_key,
                     _SessionRow.deleted_at.is_(None),
+                    func.coalesce(_SessionRow.properties["kind"].as_string(), "interactive") == "interactive",
                     _SessionRow.first_user_input.is_not(None),
                 )
                 .order_by(
@@ -337,6 +376,42 @@ class SessionStore:
             )
             return recorded
 
+    async def append_internal(self, identity: SessionIdentity, *, task_id: str | None,
+                              update_type: str, payload: dict[str, object]) -> int:
+        if update_type not in _INTERNAL_TYPES:
+            raise ValueError("Unsupported internal update type")
+        sessions = self._require_started()
+        async with sessions.begin() as db:
+            now = datetime.now(UTC)
+            sequence = await db.scalar(update_row(_SessionRow).where(
+                _SessionRow.workspace_key == identity.workspace_key,
+                _SessionRow.session_id == identity.session_id, _SessionRow.deleted_at.is_(None),
+            ).values(last_sequence=_SessionRow.last_sequence + 1, updated_at=now).returning(_SessionRow.last_sequence))
+            if sequence is None:
+                raise SessionNotFoundError(identity.session_id)
+            db.add(_ConversationUpdateRow(
+                workspace_key=identity.workspace_key, session_id=identity.session_id, sequence=sequence,
+                task_id=task_id, update_type=update_type, payload=payload, occurred_at=now,
+            ))
+            return sequence
+
+    async def read_internal(self, identity: SessionIdentity, *, update_types: set[str],
+                            after_sequence: int = 0) -> tuple[InternalRecord, ...]:
+        if not update_types <= _INTERNAL_TYPES or after_sequence < 0:
+            raise ValueError("Invalid internal update selector")
+        sessions = self._require_started()
+        async with sessions() as db:
+            row = await db.get(_SessionRow, (identity.workspace_key, identity.session_id))
+            if row is None:
+                raise SessionNotFoundError(identity.session_id)
+            rows = await db.scalars(select(_ConversationUpdateRow).where(
+                _ConversationUpdateRow.workspace_key == identity.workspace_key,
+                _ConversationUpdateRow.session_id == identity.session_id,
+                _ConversationUpdateRow.sequence > after_sequence,
+                _ConversationUpdateRow.update_type.in_(update_types),
+            ).order_by(_ConversationUpdateRow.sequence))
+            return tuple(InternalRecord(row.sequence, row.task_id, row.update_type, dict(row.payload)) for row in rows)
+
     async def read_updates(
         self,
         identity: SessionIdentity,
@@ -365,7 +440,10 @@ class SessionStore:
                 )
             )
             try:
-                records = tuple(_runtime_update(row) for row in rows)
+                records = tuple(_runtime_update(row) for row in rows if row.update_type not in _INTERNAL_TYPES)
+                sequences = tuple(row.sequence for row in rows)
+                if any(not isinstance(row.payload, dict) for row in rows):
+                    raise TypeError("Internal update payload must be an object")
                 count, minimum, maximum = (
                     await db.execute(
                         select(
@@ -388,6 +466,7 @@ class SessionStore:
                     count=int(count),
                     minimum=minimum,
                     maximum=maximum,
+                    sequences=sequences,
                 )
             except (KeyError, TypeError, ValueError) as error:
                 raise ConversationHistoryCorruptError(
@@ -437,6 +516,134 @@ class SessionStore:
             row.updated_at = now
             return "discarded"
 
+    async def session_kind(self, *, workspace_key: str, session_id: str) -> str | None:
+        sessions = self._require_started()
+        async with sessions() as db:
+            row = await db.get(_SessionRow, (workspace_key, session_id))
+            if row is None or row.deleted_at is not None:
+                return None
+            return str((row.properties or {}).get("kind", "interactive"))
+
+    async def scoped_record(self, wake_id: str) -> SessionRecord | None:
+        sessions = self._require_started()
+        async with sessions() as db:
+            row = await db.scalar(select(_SessionRow).where(
+                _SessionRow.properties["wake_id"].as_string() == wake_id,
+                _SessionRow.properties["kind"].as_string() == "argus_background",
+            ))
+            if row is None:
+                return None
+            workspace = await db.get(_WorkspaceRow, row.workspace_key)
+            if workspace is None:
+                raise RuntimeError('Stored workspace is unavailable')
+            identity = SessionIdentity.create(workspace.workspace_path, row.session_id)
+            return _session_record(identity, row)
+
+    async def active_scoped(self) -> tuple[ExecutionView, ...]:
+        sessions = self._require_started()
+        async with sessions() as db:
+            rows = await db.scalars(select(_SessionRow).where(
+                _SessionRow.properties["kind"].as_string() == "argus_background", _SessionRow.scope_key.is_not(None),
+            ))
+            return tuple(_execution_view(row) for row in rows)
+
+    async def reserve_scoped(
+        self, request: ScopedWakeRequest, *, identity: SessionIdentity,
+        execution_id: str, task_id: str, max_active_executions: int = 8,
+    ) -> ExecutionView:
+        if not 1 <= max_active_executions <= 100:
+            raise ValueError("Invalid execution capacity")
+        sessions = self._require_started()
+        now = datetime.now(UTC)
+        async with sessions() as db:
+            async with db.begin():
+                await db.execute(text("BEGIN IMMEDIATE"))
+                existing = await db.scalar(select(_SessionRow).where(
+                    _SessionRow.properties["wake_id"].as_string() == request.wake_id,
+                    _SessionRow.properties["kind"].as_string() == "argus_background",
+                ))
+                if existing is not None:
+                    if (existing.properties or {})["fingerprint"] != request.fingerprint:
+                        raise ScopedExecutionError("submission_conflict")
+                    return _execution_view(existing)
+                owner = await db.scalar(select(_SessionRow).where(_SessionRow.scope_key == request.scope.key))
+                if owner is not None:
+                    raise ScopedExecutionError("scope_busy", owner=_execution_view(owner))
+                count = await db.scalar(select(func.count()).select_from(_SessionRow).where(
+                    _SessionRow.scope_key.is_not(None),
+                    _SessionRow.properties["kind"].as_string() == "argus_background",
+                ))
+                if (count or 0) >= max_active_executions:
+                    raise ScopedExecutionError("capacity_busy")
+                await db.execute(sqlite_insert(_WorkspaceRow).values(
+                    workspace_key=identity.workspace_key, workspace_path=str(identity.workspace_path),
+                    created_at=now, last_seen_at=now,
+                ).on_conflict_do_update(index_elements=(_WorkspaceRow.workspace_key,), set_={"last_seen_at": now}))
+                view = ExecutionView(
+                    wake_id=request.wake_id, origin_boot_id=request.origin_boot_id,
+                    execution_id=execution_id, session_id=identity.session_id,
+                    task_id=task_id, scope=request.scope,
+                )
+                properties = {**view.model_dump(mode="json"), "kind": "argus_background", "owner": "argus",
+                              "fingerprint": request.fingerprint, "request": request.model_dump(mode="json")}
+                db.add(_SessionRow(
+                    workspace_key=identity.workspace_key, session_id=identity.session_id,
+                    created_at=now, updated_at=now, last_sequence=0,
+                    scope_key=request.scope.key, properties=properties,
+                ))
+                await db.flush()
+                return view
+
+    async def get_scoped(self, *, wake_id: str | None = None, scope: Scope | None = None) -> ExecutionView | None:
+        if (wake_id is None) == (scope is None):
+            raise ValueError("Specify exactly one execution selector")
+        sessions = self._require_started()
+        async with sessions() as db:
+            query = select(_SessionRow).where(_SessionRow.properties["kind"].as_string() == "argus_background")
+            query = query.where(_SessionRow.scope_key == scope.key) if scope is not None else query.where(
+                _SessionRow.properties["wake_id"].as_string() == wake_id)
+            row = await db.scalar(query)
+            return _execution_view(row) if row is not None else None
+
+    async def update_scoped(self, wake_id: str, changes: dict[str, object]) -> ExecutionView:
+        sessions = self._require_started()
+        async with sessions() as db:
+            async with db.begin():
+                await db.execute(text("BEGIN IMMEDIATE"))
+                row = await db.scalar(select(_SessionRow).where(
+                    _SessionRow.properties["wake_id"].as_string() == wake_id,
+                    _SessionRow.properties["kind"].as_string() == "argus_background",
+                ))
+                if row is None:
+                    raise ScopedExecutionError("not_found")
+                immutable = {"wake_id", "origin_boot_id", "execution_id", "session_id", "task_id", "scope", "fingerprint", "kind", "owner", "request", "release_complete"}
+                if immutable.intersection(changes):
+                    raise ValueError("Execution identity cannot be changed")
+                if changes.get('phase') == 'cancelling' and (row.properties or {}).get('execution_stopped'):
+                    return _execution_view(row)
+                row.properties = {**(row.properties or {}), **changes}
+                row.updated_at = datetime.now(UTC)
+                return _execution_view(row)
+
+    async def complete_scoped_release(self, wake_id: str) -> ExecutionView:
+        sessions = self._require_started()
+        async with sessions() as db:
+            async with db.begin():
+                await db.execute(text("BEGIN IMMEDIATE"))
+                row = await db.scalar(select(_SessionRow).where(
+                    _SessionRow.properties["wake_id"].as_string() == wake_id,
+                    _SessionRow.properties["kind"].as_string() == "argus_background",
+                ))
+                if row is None:
+                    raise ScopedExecutionError("not_found")
+                view = _execution_view(row)
+                if not view.execution_stopped or view.phase != "stopped" or view.sync_state != "finalized":
+                    raise ScopedExecutionError("busy", owner=view)
+                row.scope_key = None
+                row.properties = {**(row.properties or {}), "release_complete": True}
+                row.updated_at = datetime.now(UTC)
+                return _execution_view(row)
+
     def _require_started(self) -> async_sessionmaker[AsyncSession]:
         if not self._started or self._sessions is None:
             raise RuntimeError("SessionStore is not running")
@@ -454,6 +661,13 @@ class SessionStore:
             if sessions.is_dir()
             for child in sessions.iterdir()
         )
+
+
+def _execution_view(row: _SessionRow) -> ExecutionView:
+    properties = row.properties or {}
+    return ExecutionView.model_validate({
+        name: properties[name] for name in ExecutionView.model_fields if name in properties
+    })
 
 
 def _session_record(
@@ -474,6 +688,8 @@ def _session_record(
             _as_utc(row.deleted_at) if row.deleted_at is not None else None
         ),
         delete_reason=row.delete_reason,
+        scope_key=row.scope_key,
+        properties=row.properties,
     )
 
 
@@ -501,6 +717,7 @@ def _validate_history(
     count: int,
     minimum: int | None,
     maximum: int | None,
+    sequences: tuple[int, ...] | None = None,
 ) -> None:
     if cursor == 0:
         if count != 0 or minimum is not None or maximum is not None:
@@ -512,8 +729,8 @@ def _validate_history(
             raise ValueError("Conversation history exceeds its cursor")
         return
     expected = after_sequence + 1
-    for record in records:
-        if record.sequence != expected:
+    for sequence in sequences if sequences is not None else tuple(record.sequence for record in records):
+        if sequence != expected:
             raise ValueError("Conversation history sequence is not contiguous")
         expected += 1
     if expected - 1 != cursor:

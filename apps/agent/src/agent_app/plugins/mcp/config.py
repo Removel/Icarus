@@ -103,5 +103,6 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 class PluginConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     servers: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    server_instructions: dict[str, str] = Field(default_factory=dict)
     default_page_size: StrictInt = Field(default=50, ge=1)
     max_page_size: StrictInt = Field(default=200, ge=1)

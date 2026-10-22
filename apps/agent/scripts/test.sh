@@ -10,5 +10,9 @@ if [ ! -x "$python_bin" ]; then
 fi
 
 cd "$repo_root"
-"$python_bin" -m pytest apps/agent/test -q
+if [ "$#" -gt 0 ]; then
+  "$python_bin" -m pytest "$@"
+else
+  "$python_bin" -m pytest apps/agent/test -q
+fi
 "$python_bin" -m compileall -q apps/agent/src apps/agent/test packages

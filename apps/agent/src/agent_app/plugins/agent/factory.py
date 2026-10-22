@@ -50,6 +50,7 @@ def create_plugin(
         register_builtin_tools=False,
         image_resolver=session.resolve_image,
         tool_result_store=tool_result_store,
+        tool_execution_tracker=config.get("tool_execution_tracker"),
     )
     task_channels = config.get("task_channels") or TaskChannelRegistry(
         max_steps=config_model.agent.max_steps

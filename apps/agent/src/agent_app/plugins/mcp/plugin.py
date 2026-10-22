@@ -7,6 +7,7 @@ from agent_app.plugins.mcp.prompts import MCP_GUIDANCE
 from agent_app.plugins.mcp.config import PluginConfig
 
 import asyncio
+from collections.abc import Mapping
 
 from icarus.core.events import Event
 from icarus.core.plugin import BasePlugin
@@ -31,18 +32,26 @@ class MCPPlugin(BasePlugin):
         bridge: MCPAsyncBridge | None = None,
         result_converter: MCPResultConverter | None = None,
         redactor: Redactor | None = None,
+        server_instructions: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(plugin_id)
         self.manager = manager
         self.bridge = bridge or MCPAsyncBridge()
         self.result_converter = result_converter or MCPResultConverter()
         self.redactor = redactor or Redactor()
+        self.server_instructions = dict(server_instructions or {})
         self._accepting = False
 
     def static_prompt_sections(self):
         if not self.manager.server_names:
             return ()
-        return (PromptSection("mcp-use", "session", MCP_GUIDANCE),)
+        names = tuple(sorted(self.manager.server_names))
+        content = [MCP_GUIDANCE, '已配置的 MCP 服务器名：' + '、'.join(names) + '。server 参数必须使用这些名字。']
+        for name in names:
+            instruction = self.server_instructions.get(name, '').strip()
+            if instruction:
+                content.append(f'服务器 {name} 使用说明：\n{instruction}')
+        return (PromptSection("mcp-use", "session", '\n\n'.join(content)),)
 
     async def start(self) -> None:
         self._accepting = True

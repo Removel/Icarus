@@ -5,6 +5,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from icarus.core.identity import SessionIdentity
+from icarus.core.session import SessionContext
 from icarus.core.contracts.input import InputAccepted
 from icarus.core.run_control import TaskOperationResult
 from agent_app.application.models.status import SessionLifecycle, TaskStatus
@@ -25,6 +26,8 @@ class _SteerSubmissionRecord:
 @dataclass
 class _SessionEntry:
     identity: SessionIdentity
+    context: SessionContext = field(default_factory=SessionContext)
+    context_loaded: bool = False
     mutation_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     title_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     runtime: SessionRuntime | None = None

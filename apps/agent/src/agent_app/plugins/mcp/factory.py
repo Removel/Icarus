@@ -45,6 +45,7 @@ def create_plugin(
             redactor,
         ),
         redactor=redactor,
+        server_instructions=config.get('server_instructions', {}),
     )
     plugin._tools = tuple(create_mcp_tools(
             plugin,

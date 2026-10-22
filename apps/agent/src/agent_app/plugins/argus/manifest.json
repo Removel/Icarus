@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "plugin_id": "argus",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.argus.factory:create_plugin",
+  "tier": "external",
+  "required_config": [],
+  "python_requires": ["httpx>=0.28,<1", "jsonschema>=4,<5"],
+  "required_capabilities": [],
+  "provided_capabilities": [],
+  "provided_tools": ["argus_read", "argus_history", "argus_wait", "argus_report"],
+  "published_events": ["prompt.contribution"],
+  "consumed_events": ["input.user_input", "agent.tool_completed"],
+  "state_scopes": []
+}

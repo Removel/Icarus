@@ -14,6 +14,20 @@ class ManagerStub:
         pass
 
 
+def test_factory_passes_configured_mcp_instructions_to_static_prompt(tmp_path):
+    workspace = tmp_path / 'workspace'
+    persistence = PersistenceRuntime(tmp_path / 'data', workspace)
+    identity = SessionIdentity.create(workspace, 'instructions')
+    registration = create_plugin('mcp', workspace, identity.session_id, {
+        'runtime': persistence, 'identity': identity,
+        'servers': {'snowluma': {'command': 'offline-fixture'}},
+        'server_instructions': {'snowluma': 'QQ actions use the configured SnowLuma server.'},
+    }, {}, None)
+    content = registration.plugin.static_prompt_sections()[0].content
+    assert 'QQ actions use the configured SnowLuma server.' in content
+    assert registration.plugin.bridge.is_running is False
+
+
 def test_factory注册内容与manifest一致(tmp_path):
     workspace = tmp_path / "workspace"
     persistence = PersistenceRuntime(tmp_path / "data", workspace)

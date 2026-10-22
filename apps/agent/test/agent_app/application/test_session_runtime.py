@@ -183,9 +183,13 @@ def test_session_static_guidance_is_in_system_not_each_user_prompt(tmp_path, mon
         async def publish(update):
             updates.append(update)
 
+        config = make_config(tmp_path / "data")
+        config.mcp_servers = {'snowluma': {'command': 'must-not-connect-during-static-assembly'}}
+        config.runtime.plugin_config['mcp'] = {'server_instructions': {
+            'snowluma': 'Known SnowLuma usage: get_action(name), then invoke_action(action, params).'}}
         runtime = SessionRuntime(
             SessionIdentity.create(tmp_path, "static-guidance"),
-            config=make_config(tmp_path / "data"),
+            config=config,
             publish_update=publish,
         )
         await runtime.start()
@@ -213,7 +217,9 @@ def test_session_static_guidance_is_in_system_not_each_user_prompt(tmp_path, mon
     assert len(captured) == 2
     assert captured[0][0] == captured[1][0]
     for system, user in captured:
-        assert "## session/" in system
+        assert system.count('Known SnowLuma usage: get_action(name), then invoke_action(action, params).') == 1
+        assert 'Known SnowLuma usage' not in user
+        assert '## session/' in system
         for section in (
             "builtin-tool-use", "knowledge-use", "memory-use",
             "process-use", "skill-discovery",

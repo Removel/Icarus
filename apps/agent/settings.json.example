@@ -12,6 +12,13 @@
       "default_output_tokens": 3000
     }
   },
+  "argus": {
+    "enabled": false,
+    "workspace": null,
+    "base_url": "http://127.0.0.1:8766",
+    "max_active_executions": 8,
+    "timeout_seconds": 900
+  },
   "runtime": {
     "plugin_dirs": [],
     "plugin_config": {

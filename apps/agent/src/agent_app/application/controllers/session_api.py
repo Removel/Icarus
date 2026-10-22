@@ -10,6 +10,7 @@ from agent_app.plugins.prompt.config import PluginConfig as PromptConfig
 from agent_app.application.errors import SubmissionConflictError, AgentRuntimeStoppingError
 
 import asyncio
+import os
 from typing import Any, cast
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -57,6 +58,7 @@ TRANSIENT_UPDATE_TYPES = frozenset(
 from agent_app.application.models.session_entry import _SessionEntry
 from agent_app.application.services.common import _key, _submission_fingerprint, _steer_fingerprint, _safe_error
 
+from agent_app.application.controllers.scoped_execution import ScopedExecutionController
 from agent_app.application.services.session_registry import SessionRegistry
 from agent_app.application.services.submission_guard import SubmissionGuard
 from agent_app.application.services.resource_importer import ResourceImporter
@@ -78,6 +80,7 @@ class SessionApi:
         clock: Callable[[], datetime] | None = None,
         session_factory=SessionRuntime,
         session_store: SessionStore | None = None,
+        handoff_client=None,
         logger: logging.Logger | None = None,
     ) -> None:
         if idle_timeout.total_seconds() <= 0:
@@ -94,6 +97,8 @@ class SessionApi:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._session_factory = session_factory
         self._session_store = session_store
+        self._handoff_client = handoff_client
+        self.scoped_executions: ScopedExecutionController | None = None
         self._data_dir = (
             Path(data_dir).expanduser().resolve()
             if data_dir is not None
@@ -111,7 +116,7 @@ class SessionApi:
         self._started = False
         self._stopping = False
         self._closed = False
-        self.sessions = SessionRegistry(clock=self._clock, config_loader=self._config_loader, entries=self._entries, entries_lock=self._entries_lock, handle_update=self._handle_update, publish_lifecycle=self._publish_lifecycle, load_instructions=lambda identity: self._store().get_session_instructions(identity), session_factory=lambda *args, **kwargs: self._session_factory(*args, **kwargs), logger=self.logger)
+        self.sessions = SessionRegistry(clock=self._clock, config_loader=self._config_loader, entries=self._entries, entries_lock=self._entries_lock, handle_update=self._handle_update, publish_lifecycle=self._publish_lifecycle, load_instructions=lambda identity: self._store().get_session_instructions(identity), session_factory=lambda *args, **kwargs: self._session_factory(*args, **kwargs), logger=self.logger, background_facilities=self._background_facilities)
         self.submissions = SubmissionGuard(submission_history_limit=self.submission_history_limit, task_history_limit=self.task_history_limit)
         self.resources = ResourceImporter(path_resolver_getter=lambda: self._path_resolver)
         self.updates = UpdatePipeline(begin_unload_locked=self._begin_unload_locked, clock=self._clock, entries=self._entries, has_nonterminal_tasks=self._has_nonterminal_tasks, lifecycle_update=self._lifecycle_update, remember_task=self._remember_task, store=self._store, update_queue=self._update_queue, updates=self._updates, logger=self.logger)
@@ -150,6 +155,28 @@ class SessionApi:
         self._cleanup_task = asyncio.create_task(
             self._cleanup_loop(), name="agent-runtime:idle-cleanup"
         )
+        config = self._config_loader()
+        try:
+            if config.argus.enabled:
+                self._initialize_scoped_controller(config)
+                assert self.scoped_executions is not None
+                await self.scoped_executions.recover()
+        except BaseException:
+            await self.stop()
+            raise
+
+    def _initialize_scoped_controller(self, config):
+        from agent_app.application.services.argus_handoff_client import ArgusHandoffClient
+        client = self._handoff_client or ArgusHandoffClient(
+            config.argus.base_url, os.getenv("ARGUS_AGENT_API_TOKEN", ""))
+        self._handoff_client = client
+        assert config.argus.workspace is not None
+        self.scoped_executions = ScopedExecutionController(
+            self._store(), client, workspace=config.argus.workspace,
+            submit_reserved=self._submit_reserved_task, flush_updates=self.updates.flush,
+            max_active_executions=config.argus.max_active_executions, timeout_seconds=config.argus.timeout_seconds,
+            stop_evidence=self._scoped_stop_evidence, unload_session=self._unload_scoped_session,
+        )
 
     def subscribe_updates(self) -> RuntimeUpdateSubscription:
         return self._updates.subscribe()
@@ -175,6 +202,94 @@ class SessionApi:
     def validate_session_instructions(self, instructions: str | None) -> None:
         config = PromptConfig.model_validate(self._config_loader().runtime.plugin_config.get("prompt", {}))
         validate_instructions(instructions, max_tokens=config.max_section_tokens)
+
+    async def _scoped_stop_evidence(self, identity, task_id):
+        await self.updates.flush()
+        entry = self._entries.get(_key(identity))
+        if entry is not None and entry.persistence_failed:
+            raise RuntimeError('Session persistence failed')
+        records, _ = await self._store().read_updates(identity)
+        terminal = next((record for record in reversed(records) if record.type == 'task.finished' and record.task_id == task_id), None)
+        if terminal is None or terminal.payload.get('status') not in {'completed', 'failed', 'cancelled'}:
+            raise RuntimeError('Durable terminal evidence unavailable')
+        return terminal.payload['status']
+
+    async def _unload_scoped_session(self, identity):
+        entry = self._entries.get(_key(identity))
+        if entry is None or entry.runtime is None:
+            return
+        async with entry.mutation_lock:
+            task = entry.unload_task or self._begin_unload_locked(entry, 'argus_release')
+        await asyncio.shield(task)
+
+    def _background_facilities(self, identity):
+        async def append_record(**values):
+            return await self._store().append_internal(identity, **values)
+        return {'client': self._handoff_client, 'append_record': append_record}
+
+    async def scoped_submit(self, request):
+        self._require_accepting()
+        if self.scoped_executions is None:
+            from agent_app.application.models.scoped_execution import ScopedExecutionError
+            raise ScopedExecutionError("unavailable")
+        return await self.scoped_executions.submit(request)
+
+    async def scoped_status(self, *, wake_id=None, scope=None):
+        self._require_accepting()
+        if self.scoped_executions is None:
+            return await self._store().get_scoped(wake_id=wake_id, scope=scope)
+        return await self.scoped_executions.status(wake_id=wake_id, scope=scope)
+
+    async def scoped_cancel(self, wake_id, reason):
+        self._require_accepting()
+        if self.scoped_executions is None:
+            from agent_app.application.models.scoped_execution import ScopedExecutionError
+            raise ScopedExecutionError("unavailable")
+        return await self.scoped_executions.cancel(wake_id, reason)
+
+    async def scoped_release(self, wake_id):
+        self._require_accepting()
+        if self.scoped_executions is None:
+            from agent_app.application.models.scoped_execution import ScopedExecutionError
+            raise ScopedExecutionError("unavailable")
+        return await self.scoped_executions.release(wake_id)
+
+    async def _submit_reserved_task(self, identity, task_id, prompt, *, execution_id):
+        entry = await self._entry(identity)
+        if entry.context.metadata.get("execution_id") != execution_id:
+            raise ValueError("Reserved execution identity does not match")
+        async with entry.mutation_lock:
+            load = self._begin_load_locked(entry) if entry.runtime is None else None
+        if load is not None:
+            await asyncio.shield(load)
+        async with entry.mutation_lock:
+            assert entry.runtime is not None
+            await entry.runtime.submit(prompt, task_id=task_id)
+            now = self._clock()
+            self._remember_task(entry, TaskStatus(
+                workspace_key=identity.workspace_key, session_id=identity.session_id,
+                task_id=task_id, lifecycle="accepted", queue_position=0, updated_at=now,
+            ))
+            await self._store().append_update(identity, RuntimeUpdate(
+                workspace_key=identity.workspace_key, session_id=identity.session_id, task_id=task_id,
+                type="user.message", payload={"text": prompt, "resources": []}, occurred_at=now,
+            ))
+            return entry.runtime
+
+    async def ensure_public_session(self, *, workspace_key: str, session_id: str) -> None:
+        kind = await self._store().session_kind(workspace_key=workspace_key, session_id=session_id)
+        if kind != "interactive":
+            raise SessionNotFoundError(session_id)
+
+    async def _reject_background(self, identity: SessionIdentity) -> None:
+        kind: str | None
+        entry = self._entries.get(_key(identity))
+        if entry is not None and entry.context_loaded:
+            kind = entry.context.kind
+        else:
+            kind = await self._store().session_kind(workspace_key=identity.workspace_key, session_id=identity.session_id)
+        if kind not in {None, "interactive"}:
+            raise SessionNotFoundError(identity.session_id)
 
     async def create_session(
         self,
@@ -225,6 +340,7 @@ class SessionApi:
             raise ValueError("submission_id cannot be empty")
         request_options = dict(UserInputEvent(prompt=prompt, request_options=request_options or {}).request_options)
         identity = SessionIdentity.create(workspace_path, session_id)
+        await self._reject_background(identity)
         entry = await self._entry(identity)
         fingerprint = _submission_fingerprint(
             prompt, resources, display_text, request_options
@@ -329,6 +445,7 @@ class SessionApi:
     ) -> TaskOperationResult:
         self._require_accepting()
         identity = SessionIdentity.create(workspace_path, session_id)
+        await self._reject_background(identity)
         entry = self._entries.get(_key(identity))
         if entry is None:
             return TaskOperationResult(task_id=task_id, status="not_running")
@@ -360,6 +477,7 @@ class SessionApi:
         if submission_id is not None and not submission_id.strip():
             raise ValueError("submission_id cannot be empty")
         identity = SessionIdentity.create(workspace_path, session_id)
+        await self._reject_background(identity)
         entry = self._entries.get(_key(identity))
         if entry is None:
             return TaskOperationResult(task_id=task_id, status="not_running")
@@ -401,12 +519,14 @@ class SessionApi:
     async def unload_session(
         self, workspace_path: str | Path, session_id: str
     ) -> UnloadResult:
+        await self._reject_background(SessionIdentity.create(workspace_path, session_id))
         return await self.reaper.unload_session(workspace_path, session_id)
 
     async def get_session_status(
         self, workspace_path: str | Path, session_id: str
     ) -> SessionStatus:
         identity = SessionIdentity.create(workspace_path, session_id)
+        await self._reject_background(identity)
         entry = self._entries.get(_key(identity))
         if entry is None:
             if not await self._store().session_exists(identity):
@@ -427,10 +547,13 @@ class SessionApi:
             for entry in self._entries.values()
             if entry.identity.workspace_key == workspace_identity.workspace_key
         )
-        return tuple([
-            await self.get_session_status(workspace_path, session_id)
-            for session_id in sorted(session_ids)
-        ])
+        visible = []
+        for session_id in sorted(session_ids):
+            kind = await self._store().session_kind(workspace_key=workspace_identity.workspace_key, session_id=session_id)
+            if kind not in {None, "interactive"}:
+                continue
+            visible.append(await self.get_session_status(workspace_path, session_id))
+        return tuple(visible)
 
     async def list_session_summaries(
         self, workspace_path: str | Path
@@ -445,6 +568,7 @@ class SessionApi:
     ) -> str | None:
         self._require_accepting()
         identity = SessionIdentity.create(workspace_path, session_id)
+        await self._reject_background(identity)
         entry = await self._entry(identity)
         async with entry.title_lock:
             store = self._store()
@@ -484,11 +608,13 @@ class SessionApi:
     async def discard_empty_session(
         self, workspace_path: str | Path, session_id: str
     ) -> DiscardSessionResult:
+        await self._reject_background(SessionIdentity.create(workspace_path, session_id))
         return await self.reaper.discard_empty_session(workspace_path, session_id)
 
     async def delete_session(
         self, workspace_path: str | Path, session_id: str
     ) -> DiscardSessionResult:
+        await self._reject_background(SessionIdentity.create(workspace_path, session_id))
         return await self.reaper.delete_session(workspace_path, session_id)
 
     async def _delete_session(
@@ -501,7 +627,7 @@ class SessionApi:
     ) -> TaskStatus:
         identity = SessionIdentity.create(workspace_path, session_id)
         entry = self._entries.get(_key(identity))
-        if entry is None or task_id not in entry.tasks:
+        if entry is None or entry.context.kind != "interactive" or task_id not in entry.tasks:
             raise KeyError("Task status is unavailable")
         return entry.tasks[task_id]
 
@@ -512,16 +638,20 @@ class SessionApi:
         *,
         after_sequence: int = 0,
     ) -> tuple[tuple[RuntimeUpdate, ...], int]:
+        await self._reject_background(SessionIdentity.create(workspace_path, session_id))
         return await self.history.get_session_history(workspace_path, session_id, after_sequence=after_sequence)
 
     async def get_session_history_page(self, workspace_path: str | Path, session_id: str, *,
                                        after_sequence: int = 0, limit: int = 200):
+        await self._reject_background(SessionIdentity.create(workspace_path, session_id))
         return await self.history.page(workspace_path, session_id, after_sequence=after_sequence, limit=limit)
 
     async def stop(self) -> None:
         if not self._started:
             return
         self._stopping = True
+        if self.scoped_executions is not None:
+            await self.scoped_executions.close()
         cleanup = self._cleanup_task
         self._cleanup_task = None
         if cleanup is not None:
@@ -569,6 +699,8 @@ class SessionApi:
                 await store.close()
             except BaseException as error:
                 errors.append(error)
+        if self._handoff_client is not None:
+            await self._handoff_client.aclose()
         self._started = False
         self._closed = True
         if errors:
@@ -584,7 +716,13 @@ class SessionApi:
         return await self.reaper._cleanup_loop()
 
     async def _entry(self, identity: SessionIdentity) -> _SessionEntry:
-        return await self.sessions._entry(identity)
+        entry = await self.sessions._entry(identity)
+        if not entry.context_loaded:
+            record = await self._store().get_session(identity)
+            if record is not None:
+                entry.context = record.context
+            entry.context_loaded = True
+        return entry
 
     def _begin_load_locked(
         self, entry: _SessionEntry

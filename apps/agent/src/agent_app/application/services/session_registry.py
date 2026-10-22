@@ -15,7 +15,7 @@ from agent_app.application.services.common import _key, _max_datetime, _safe_err
 
 
 class SessionRegistry:
-    def __init__(self, *, clock, config_loader, entries, entries_lock, handle_update, publish_lifecycle, load_instructions, session_factory, logger):
+    def __init__(self, *, clock, config_loader, entries, entries_lock, handle_update, publish_lifecycle, load_instructions, session_factory, logger, background_facilities=None):
         self._clock = clock
         self._config_loader = config_loader
         self._entries = entries
@@ -24,6 +24,7 @@ class SessionRegistry:
         self._publish_lifecycle = publish_lifecycle
         self._load_instructions = load_instructions
         self._session_factory = session_factory
+        self._background_facilities = background_facilities
         self.logger = logger
 
     @property
@@ -53,12 +54,16 @@ class SessionRegistry:
         try:
             config = self._config_loader()
             instructions = await self._load_instructions(entry.identity)
+            options = {"context": entry.context} if entry.context.kind != "interactive" else {}
+            if options and self._background_facilities is not None:
+                options['argus_facilities'] = self._background_facilities(entry.identity)
             runtime = self._session_factory(
                 entry.identity,
                 config=config,
                 publish_update=self._handle_update,
                 instructions=instructions,
                 logger=self.logger.getChild(entry.identity.session_id),
+                **options,
             )
             assert runtime is not None
             await runtime.start()

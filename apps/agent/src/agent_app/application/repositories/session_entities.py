@@ -58,6 +58,8 @@ class _SessionRow(_Base):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delete_reason: Mapped[str | None] = mapped_column(String(64))
+    scope_key: Mapped[str | None] = mapped_column(String)
+    properties: Mapped[dict[str, object] | None] = mapped_column(JSON)
 
 
 class _SessionTitleRow(_Base):

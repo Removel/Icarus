@@ -58,6 +58,23 @@ class PartialManagerStub:
         return (), {"offline": "ConnectionError: unavailable"}
 
 
+def test_static_prompt_names_servers_and_includes_only_their_configured_instructions():
+    class ConfiguredManager:
+        server_names = ('playwright', 'snowluma')
+
+    instructions = {'snowluma': 'Use snowluma/get_action with name before invoke_action.',
+                    'disabled': 'This server is not enabled.'}
+    plugin = MCPPlugin('mcp', manager=ConfiguredManager(), server_instructions=instructions)
+    instructions['snowluma'] = 'changed after construction'
+    sections = plugin.static_prompt_sections()
+    assert len(sections) == 1 and sections[0].layer == 'session'
+    assert 'playwright' in sections[0].content and 'snowluma' in sections[0].content
+    assert 'Use snowluma/get_action with name before invoke_action.' in sections[0].content
+    assert 'This server is not enabled.' not in sections[0].content
+    assert 'changed after construction' not in sections[0].content
+    assert plugin.bridge.is_running is False
+
+
 def test_plugin生命周期不启动bridge且首次工具调用才启动():
     manager = ManagerStub()
     bridge = BridgeStub()
