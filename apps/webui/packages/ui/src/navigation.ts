@@ -23,6 +23,8 @@ export function useHashLocation() {
   const [hash, setHash] = useState(window.location.hash);
   useEffect(() => {
     let currentHash = window.location.hash;
+    // A lazy initial render may finish after the browser has changed its hash.
+    setHash(currentHash);
     let currentIndex = window.history.state?.[indexKey] ?? 0;
     window.history.replaceState({ ...window.history.state, [indexKey]: currentIndex }, '');
     const sync = () => {
