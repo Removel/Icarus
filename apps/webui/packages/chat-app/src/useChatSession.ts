@@ -46,6 +46,14 @@ export default function useChatSession(hash: string) {
   const working = useRef(false);
   const listedWorkspace = useRef('');
   const createdSession = useRef<Session | undefined>(undefined);
+  const firstCreate = useRef<{ workspace: string; id: string; verify: boolean } | undefined>(
+    undefined,
+  );
+  const transfer = useRef<
+    { workspace: string; sessionId: string; submission?: Submission } | undefined
+  >(undefined);
+  const autoFirst = useRef<Submission | undefined>(undefined);
+  const readySelection = useRef('');
   const titleRequests = useRef(new Set<string>());
   const guard = useUnsavedChanges(Boolean(draft) || queue.length > 0);
   const requestTitle = useCallback(
@@ -80,6 +88,14 @@ export default function useChatSession(hash: string) {
   }
   useEffect(() => {
     setPath(workspace);
+    const moving = transfer.current;
+    transfer.current = undefined;
+    if (moving?.workspace === workspace && moving.sessionId === sessionId) {
+      autoFirst.current = moving.submission;
+      return;
+    }
+    firstCreate.current = undefined;
+    autoFirst.current = undefined;
     setDraft('');
     setUnknown(false);
     setQueue([]);
@@ -87,6 +103,7 @@ export default function useChatSession(hash: string) {
     pending.current = undefined;
   }, [workspace, sessionId]);
   useEffect(() => {
+    readySelection.current = '';
     setConnected(false);
     setError('');
     setGateway(undefined);
@@ -190,10 +207,11 @@ export default function useChatSession(hash: string) {
         }
       if (stale) return;
       createdStatus.current = undefined;
-      state.tasks = status.active_task_ids.filter((id) => !state.finished.has(id));
+      state = { ...state, tasks: status.active_task_ids.filter((id) => !state.finished.has(id)) };
       for (const update of buffered)
         if (update.workspace_key === key) state = applyUpdate(state, update);
       ready = true;
+      readySelection.current = workspace + '\u0000' + sessionId;
       setTranscript(state);
       setLoading(false);
       setError('');
@@ -216,34 +234,76 @@ export default function useChatSession(hash: string) {
     };
   }, [gateway, workspace, sessionId, version, requestTitle]);
 
-  async function createSession() {
+  async function createSession(firstText?: string) {
     if (!client.current || working.current) return;
     working.current = true;
     setBusy(true);
     setError('');
     const gateway = client.current;
+    const attempt =
+      firstCreate.current?.workspace === workspace
+        ? firstCreate.current
+        : { workspace, id: crypto.randomUUID(), verify: false };
+    firstCreate.current = attempt;
     try {
-      const session = await gateway.request<SessionStatus>('session.create', {
-        workspace_path: workspace,
-        session_id: crypto.randomUUID(),
-        load_runtime: false,
-      });
-      if (client.current !== gateway) return;
-      createdStatus.current = session;
+      let session: SessionStatus | undefined;
+      if (attempt.verify) {
+        const list = await gateway.request<{ sessions: Session[] }>('session.list', {
+          workspace_path: workspace,
+        });
+        if (list.sessions.some((item) => item.session_id === attempt.id))
+          session = await gateway.request<SessionStatus>('session.get', {
+            workspace_path: workspace,
+            session_id: attempt.id,
+          });
+      }
+      if (!session) {
+        // A lost reply is reconciled against this ID on an explicit retry.
+        attempt.verify = true;
+        session = await gateway.request<SessionStatus>('session.create', {
+          workspace_path: workspace,
+          session_id: attempt.id,
+          load_runtime: false,
+        });
+        createdStatus.current = session;
+      }
+      if (
+        client.current !== gateway ||
+        selection.current.workspace !== workspace ||
+        selection.current.sessionId !== sessionId
+      )
+        return;
       const fresh = {
         session_id: session.session_id,
         first_user_input: '',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       };
       createdSession.current = fresh;
       setSessions((previous) => [
         fresh,
         ...previous.filter((item) => item.session_id !== session.session_id),
       ]);
+      transfer.current = {
+        workspace,
+        sessionId: session.session_id,
+        submission: firstText
+          ? {
+              id: crypto.randomUUID(),
+              text: firstText,
+              workspace,
+              session: session.session_id,
+            }
+          : undefined,
+      };
+      firstCreate.current = undefined;
+      guard.markSaved();
       go({ workspace, session: session.session_id });
     } catch (error) {
-      setError(error instanceof Error ? error.message : '创建失败');
+      if (selection.current.workspace === workspace && selection.current.sessionId === sessionId)
+        setError(
+          error instanceof RpcError
+            ? error.message
+            : '创建结果尚未确认。重连后点击发送，将核对同一会话，不会自动发送或另建会话。',
+        );
     } finally {
       working.current = false;
       setBusy(false);
@@ -445,6 +505,25 @@ export default function useChatSession(hash: string) {
   );
 
   useEffect(() => {
+    const first = autoFirst.current;
+    if (
+      !first ||
+      !connected ||
+      loading ||
+      busy ||
+      submitting ||
+      error ||
+      working.current ||
+      readySelection.current !== workspace + '\u0000' + sessionId ||
+      first.workspace !== workspace ||
+      first.session !== sessionId
+    )
+      return;
+    autoFirst.current = undefined;
+    void dispatch(first);
+  }, [connected, loading, busy, submitting, error, workspace, sessionId, dispatch]);
+
+  useEffect(() => {
     if (
       queue.length &&
       !queuePaused &&
@@ -474,7 +553,11 @@ export default function useChatSession(hash: string) {
   ]);
 
   async function send(steer = false) {
-    if (!client.current || !connected || loading || busy || !sessionId || !draft.trim()) return;
+    if (!client.current || !connected || loading || busy || !draft.trim()) return;
+    if (!sessionId) {
+      if (!working.current && !steer) await createSession(draft.trim());
+      return;
+    }
     if (unknown) {
       if (pending.current && !working.current) await dispatch(pending.current);
       return;
@@ -562,18 +645,32 @@ export default function useChatSession(hash: string) {
     },
     guard,
     go,
+    connectWorkspace: () => {
+      const destination = path.trim();
+      if (!destination || busy || submitting) return;
+      if (!workspace && !sessionId) {
+        transfer.current = { workspace: destination, sessionId: '' };
+        guard.markSaved();
+      }
+      go({ workspace: destination });
+    },
     createSession,
     deleteSession,
+    gateway,
     send,
     cancel,
     reconnect: () => setVersion((value) => value + 1),
     clearDraft: () => {
+      firstCreate.current = undefined;
+      autoFirst.current = undefined;
       pending.current = undefined;
       setUnknown(false);
       guard.markSaved();
       setDraft('');
     },
     discardDraft: () => {
+      firstCreate.current = undefined;
+      autoFirst.current = undefined;
       pending.current = undefined;
       setUnknown(false);
       setDraft('');
