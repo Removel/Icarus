@@ -466,6 +466,18 @@ class SessionApi:
             self._require_accepting()
             return await store.save_title(identity, title)
 
+    async def rename_session(
+        self, workspace_path: str | Path, session_id: str, title: str
+    ) -> str:
+        self._require_accepting()
+        title = " ".join(title.split())
+        if not title or len(title) > 80:
+            raise ValueError("Session title must contain 1 to 80 characters")
+        identity = SessionIdentity.create(workspace_path, session_id)
+        entry = await self._entry(identity)
+        async with entry.title_lock:
+            return await self._store().save_title(identity, title, overwrite=True)
+
     async def discard_empty_session(
         self, workspace_path: str | Path, session_id: str
     ) -> DiscardSessionResult:

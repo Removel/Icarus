@@ -1278,14 +1278,20 @@ def test_session_title_generated_once_and_persisted_without_changing_conversatio
         assert generated == [text]
         after, after_cursor = await runtime.get_session_history(tmp_path, 'title')
         assert before == after and cursor == after_cursor
+        assert await runtime.rename_session(tmp_path, 'title', '  手动\n标题  ') == '手动 标题'
+        assert await runtime.generate_session_title(tmp_path, 'title') == '手动 标题'
+        renamed, renamed_cursor = await runtime.get_session_history(tmp_path, 'title')
+        assert renamed == before and renamed_cursor == cursor
+        with pytest.raises(ValueError):
+            await runtime.rename_session(tmp_path, 'title', ' ')
         await runtime.stop()
         reopened = AgentRuntime(config_loader=lambda: config, session_factory=factory)
         await reopened.start()
         summary = (await reopened.list_session_summaries(tmp_path))[0]
-        assert summary.title == '项目文档整理'
+        assert summary.title == '手动 标题'
         assert summary.first_user_input == '请整理项目文档 并说明使用方法'
         assert summary.created_at <= summary.updated_at
-        assert await reopened.generate_session_title(tmp_path, 'title') == '项目文档整理'
+        assert await reopened.generate_session_title(tmp_path, 'title') == '手动 标题'
         assert generated == [text]
         await reopened.stop()
     asyncio.run(run())
