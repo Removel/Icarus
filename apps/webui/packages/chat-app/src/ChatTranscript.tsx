@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, List, MessageSquare } from 'lucide-react';
-import { Button, LoadingIndicator, SearchField } from '@icarus/ui';
 import ChatContent from './ChatContent';
-import ChatCopyButton from './ChatCopyButton';
+import ChatMessageActions from './ChatMessageActions';
 import ChatProcess from './ChatProcess';
-import ThinkingWave from './ThinkingWave';
+import { IconChevronDown, IconThinking } from './dswui/Icons';
+import { ScrollNav } from './dswui/ScrollNav';
 import { emptyTranscript } from './updates';
 
 export default function ChatTranscript({
@@ -13,23 +12,23 @@ export default function ChatTranscript({
   sessionId,
   loading,
   submitting,
+  onCompose,
 }: {
   transcript: ReturnType<typeof emptyTranscript>;
   active: boolean;
   sessionId: string;
   loading: boolean;
   submitting: boolean;
+  onCompose: (text: string) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const followedTop = useRef(0);
   const anchors = useRef(new Map<string, HTMLElement>());
   const [away, setAway] = useState(false);
-  const [outline, setOutline] = useState(false);
-  const [query, setQuery] = useState('');
-  const [position, setPosition] = useState(-1);
-  const responseKinds = ['assistant', 'thinking', 'tool', 'error'];
+  const [position, setPosition] = useState<string | null>(null);
   const lastUser = transcript.items.map((item) => item.kind).lastIndexOf('user');
+  const responseKinds = ['assistant', 'thinking', 'tool', 'error'];
   const waiting =
     !loading &&
     (submitting
@@ -42,9 +41,7 @@ export default function ChatTranscript({
         ));
   const onGrowth = useCallback(() => {
     const node = scroll.current;
-    if (!follow.current || !node) return;
-    // A scroll event can arrive after the next presentation frame. Respect an
-    // upward move immediately instead of overwriting it with that frame.
+    if (!follow.current || !node || !node.clientHeight) return;
     if (node.scrollTop < followedTop.current - 2) {
       follow.current = false;
       setAway(true);
@@ -53,19 +50,11 @@ export default function ChatTranscript({
     node.scrollTop = node.scrollHeight;
     followedTop.current = node.scrollTop;
   }, []);
-  const messages = transcript.items.filter((item) =>
-    ['user', 'assistant', 'error'].includes(item.kind),
-  );
-  const matches = messages.filter((item) =>
-    item.text.toLowerCase().includes(query.trim().toLowerCase()),
-  );
   useEffect(() => {
     follow.current = true;
     followedTop.current = 0;
     setAway(false);
-    setOutline(false);
-    setQuery('');
-    setPosition(-1);
+    setPosition(null);
   }, [sessionId]);
   useEffect(() => {
     if (active) onGrowth();
@@ -78,7 +67,7 @@ export default function ChatTranscript({
     container.scrollTop +=
       node.getBoundingClientRect().top - container.getBoundingClientRect().top - 20;
     node.focus({ preventScroll: true });
-    setPosition(messages.findIndex((item) => item.id === id));
+    setPosition(id);
     setAway(container.scrollHeight - container.scrollTop - container.clientHeight >= 64);
   }
   const processes = new Map<string, typeof transcript.items>();
@@ -88,62 +77,15 @@ export default function ChatTranscript({
       processes.set(key, [...(processes.get(key) ?? []), item]);
     }
   const rendered = new Set<string>();
+  const outline = transcript.items
+    .filter((item) => item.kind === 'user')
+    .map((item) => ({ id: item.id, title: item.text }));
   return (
     <div className="chat-transcript-frame">
-      {messages.length > 0 && (
-        <div className="chat-navigation">
-          <Button
-            theme="borderless"
-            icon={<ArrowUp size={14} />}
-            aria-label="上一条消息"
-            disabled={position === 0}
-            onClick={() =>
-              jump(messages[Math.max(0, (position < 0 ? messages.length : position) - 1)].id)
-            }
-          />
-          <Button
-            theme="borderless"
-            icon={<List size={15} />}
-            aria-label="定位消息"
-            aria-expanded={outline}
-            onClick={() => setOutline((value) => !value)}
-          />
-          <Button
-            theme="borderless"
-            icon={<ArrowDown size={14} />}
-            aria-label="下一条消息"
-            disabled={position >= messages.length - 1}
-            onClick={() => jump(messages[Math.min(messages.length - 1, position + 1)].id)}
-          />
-          {outline && (
-            <nav className="chat-message-outline" aria-label="消息定位">
-              <SearchField value={query} onChange={setQuery} placeholder="搜索本段对话…" />
-              <div className="chat-outline-items">
-                {matches.map((item) => (
-                  <button
-                    key={item.id}
-                    aria-current={messages[position]?.id === item.id ? 'location' : undefined}
-                    onClick={() => {
-                      jump(item.id);
-                      setOutline(false);
-                    }}
-                  >
-                    <small>
-                      {messages.indexOf(item) + 1} ·{' '}
-                      {item.kind === 'user' ? '你' : item.kind === 'error' ? '错误' : 'Icarus'}
-                    </small>
-                    <span>{item.text.replace(/[#*`]/g, '').slice(0, 100) || '…'}</span>
-                  </button>
-                ))}
-                {!matches.length && <p>没有匹配的消息</p>}
-              </div>
-            </nav>
-          )}
-        </div>
-      )}
+      <ScrollNav items={outline} active={position} onJump={jump} />
       <div
         ref={scroll}
-        className="chat-transcript"
+        className="scroll-area chat-transcript"
         role="log"
         aria-label="对话记录"
         aria-live="polite"
@@ -155,74 +97,82 @@ export default function ChatTranscript({
           setAway(!follow.current);
         }}
       >
-        {loading ? (
-          <LoadingIndicator label="正在加载对话" />
-        ) : (
-          !transcript.items.length && (
-            <div className="chat-welcome">
-              <MessageSquare size={28} aria-hidden="true" />
-              <p>{sessionId ? '有什么可以帮你？' : '选择或新建对话'}</p>
-            </div>
-          )
-        )}
-        {transcript.items.map((item) => {
-          if (item.kind === 'thinking' || item.kind === 'tool') {
-            const key = item.taskId ?? item.id;
-            if (rendered.has(key)) return null;
-            rendered.add(key);
-            const entries = processes.get(key)!;
+        <div className="chat-inner">
+          {loading && !transcript.items.length && <div role="status">正在加载对话</div>}
+          {transcript.items.map((item, index) => {
+            if (item.kind === 'thinking' || item.kind === 'tool') {
+              const key = item.taskId ?? item.id;
+              if (rendered.has(key)) return null;
+              rendered.add(key);
+              return (
+                <ChatProcess
+                  key={key}
+                  entries={processes.get(key)!}
+                  running={transcript.tasks.includes(key)}
+                  active={active}
+                  loading={loading}
+                  onGrowth={onGrowth}
+                />
+              );
+            }
             return (
-              <ChatProcess
-                key={key}
-                entries={entries}
-                running={transcript.tasks.includes(key)}
-                active={active}
-                loading={loading}
-                onGrowth={onGrowth}
-              />
+              <article
+                key={item.id}
+                ref={(node) => {
+                  if (node) anchors.current.set(item.id, node);
+                  else anchors.current.delete(item.id);
+                }}
+                tabIndex={-1}
+                className={`msg ${item.kind === 'user' ? 'msg-user' : 'msg-ai'} chat-message chat-${item.kind}`}
+                data-live={(item.kind === 'assistant' && item.live) || undefined}
+              >
+                <strong className="dsw-sr-only">
+                  {item.kind === 'user' ? '你' : item.kind === 'error' ? '执行失败' : 'Icarus'}
+                </strong>
+                {item.kind === 'user' ? (
+                  <div className="bubble">{item.text}</div>
+                ) : (
+                  <div className={item.kind === 'error' ? 'error-card' : 'body'}>
+                    <ChatContent
+                      text={item.text}
+                      live={Boolean(item.kind === 'assistant' && item.live && active && !loading)}
+                      onGrowth={onGrowth}
+                    />
+                  </div>
+                )}
+                {item.label && <small className="chat-message-state">{item.label}</small>}
+                {(item.kind === 'user' || (item.kind === 'assistant' && item.final)) &&
+                  item.text && (
+                    <ChatMessageActions
+                      text={item.text}
+                      user={item.kind === 'user'}
+                      onCompose={onCompose}
+                      disabled={submitting || loading || transcript.tasks.length > 0}
+                      prompt={
+                        transcript.items
+                          .slice(0, index)
+                          .reverse()
+                          .find((entry) => entry.kind === 'user')?.text
+                      }
+                    />
+                  )}
+              </article>
             );
-          }
-          return (
-            <article
-              ref={(node) => {
-                if (node) anchors.current.set(item.id, node);
-                else anchors.current.delete(item.id);
-              }}
-              tabIndex={-1}
-              className={`chat-message chat-${item.kind}`}
-              data-live={(item.kind === 'assistant' && item.live) || undefined}
-              key={item.id}
-            >
-              <strong>
-                {item.kind === 'user' ? '你' : item.kind === 'error' ? '执行失败' : 'Icarus'}
-              </strong>
-              {item.kind === 'user' && item.label && (
-                <small className="chat-message-state">{item.label}</small>
-              )}
-              <ChatContent
-                text={item.text}
-                live={Boolean(item.kind === 'assistant' && item.live && active && !loading)}
-                onGrowth={onGrowth}
-              />
-              {item.kind === 'assistant' && item.final && item.text && (
-                <div className="chat-message-actions">
-                  <ChatCopyButton text={item.text} label="复制回答" />
-                </div>
-              )}
-            </article>
-          );
-        })}
-        {waiting && (
-          <div className="chat-response-pending" role="status">
-            <ThinkingWave active={active} />
-            <span>正在思考中</span>
-          </div>
-        )}
+          })}
+          {waiting && (
+            <div className="think thinking chat-response-pending" role="status">
+              <IconThinking className="think-icon" />
+              <span className="think-label">正在思考中</span>
+            </div>
+          )}
+          <div style={{ height: 8 }} />
+        </div>
       </div>
       {away && (
-        <Button
-          className="chat-latest"
-          icon={<ArrowDown size={14} />}
+        <button
+          className="scroll-bottom chat-latest"
+          title="回到底部"
+          aria-label="回到最新消息"
           onClick={() => {
             follow.current = true;
             setAway(false);
@@ -232,8 +182,8 @@ export default function ChatTranscript({
             }
           }}
         >
-          回到最新消息
-        </Button>
+          <IconChevronDown width={14} height={14} />
+        </button>
       )}
     </div>
   );

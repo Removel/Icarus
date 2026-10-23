@@ -152,7 +152,7 @@ def test_pending_send_is_immediate_editable_and_reconciles_once(page, event_befo
     expect(page.locator('.chat-user')).to_have_text('你立即显示的问题')
     expect(page.get_by_text('正在执行', exact=True)).to_be_visible()
     expect(page.get_by_text('正在思考中', exact=True)).to_be_visible()
-    expect(page.get_by_role('button', name='排队发送', exact=True)).to_be_disabled()
+    expect(page.get_by_role('button', name='排队发送', exact=True)).not_to_be_visible()
     expect(page.get_by_role('button', name='停止执行', exact=True)).to_be_enabled()
     expect(page.get_by_text('正在发送…', exact=True)).to_have_count(0)
     expect(editor).to_have_value('')
@@ -245,7 +245,8 @@ def test_first_prompt_title_updates_before_acceptance_and_reverts_on_rejection(p
     socket, request_id = state['pending_submit']
     socket.send(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': -32000, 'message': '暂时不可用'}}))
     expect(page.get_by_role('alert')).to_contain_text('暂时不可用')
-    expect(page.locator('.chat-conversation-heading h2')).to_have_text('新会话')
+    expect(page.locator('.chat-conversation-heading h2')).to_have_text('')
+    expect(page.locator('.chat-conversation-heading h2')).to_have_attribute('title', '新会话')
     expect(editor).to_have_value('即时会话标题')
 
 
@@ -330,7 +331,7 @@ def test_new_session_and_switching_clears_previous_transcript(page):
     page.get_by_role('button', name='新建会话').click()
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
     expect(page.locator('.chat-assistant')).to_have_count(0)
-    assert any(call['method'] == 'session.create' for call in state['calls'])
+    assert not any(call['method'] == 'session.create' for call in state['calls'])
 
 
 def test_paginated_history_and_duplicate_notifications(page):
@@ -457,7 +458,7 @@ def test_created_session_is_listed_and_first_prompt_updates_title(page):
     page.wait_for_function("new URLSearchParams(location.hash.split('?')[1]).get('session') !== 'session-1'")
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
     selected = page.locator('.chat-session-list [aria-current=page]')
-    expect(selected).to_contain_text('新会话')
+    expect(selected).to_have_count(0)
     page.get_by_role('textbox', name='发送消息').fill('新会话的首条问题')
     page.get_by_role('button', name='发送', exact=True).click()
     expect(selected).to_contain_text('新会话的首条问题')
@@ -499,18 +500,20 @@ def test_switch_and_creation_reuse_socket_and_do_not_reload_list(page):
 def test_delete_current_conversation_updates_list_and_survives_reload(page, width):
     page.set_viewport_size({'width': width, 'height': 900})
     state, _ = gateway(page, sessions=[{'session_id': 'session-1', 'first_user_input': '第一段'}, {'session_id': 'session-2', 'first_user_input': '第二段'}])
+    open_sessions(page)
     page.get_by_role('button', name='第一段', exact=True).hover()
-    page.get_by_role('button', name='删除会话：第一段').click()
+    delete_session(page, '第一段')
     dialog = page.get_by_role('dialog', name='删除这段对话？', exact=True)
     expect(dialog).to_be_visible()
     expect(dialog.locator('.semi-modal-body')).not_to_be_visible()
-    assert dialog.bounding_box()['height'] < 160
+    assert dialog.locator('.confirm-modal').bounding_box()['height'] < 160
     page.screenshot(path=f'test-results/chat-delete-simple-{width}.png')
     dialog.get_by_role('button', name='删除', exact=True).click()
-    expect(dialog).to_have_count(0)
+    expect(dialog).not_to_be_visible()
     expect(page.get_by_role('button', name='第一段', exact=True)).to_have_count(0)
     page.wait_for_function("new URLSearchParams(location.hash.split('?')[1]).get('session') === 'session-2'")
     page.reload()
+    open_sessions(page)
     expect(page.get_by_role('button', name='第二段', exact=True)).to_be_visible()
     expect(page.get_by_role('button', name='第一段', exact=True)).to_have_count(0)
     assert any(call['method'] == 'session.delete' for call in state['calls'])
@@ -533,7 +536,6 @@ def test_process_is_grouped_and_message_navigation_preserves_reading_position(pa
     expect(first).to_be_in_viewport()
     page.get_by_role('button', name='回到最新消息', exact=True).click()
 
-
 def test_draft_confirmation_happens_before_creating_a_session(page):
     state, _ = gateway(page)
     editor = page.get_by_role('textbox', name='发送消息')
@@ -544,10 +546,10 @@ def test_draft_confirmation_happens_before_creating_a_session(page):
     expect(dialog).to_be_visible()
     assert not any(call['method'] == 'session.create' for call in state['calls'])
     dialog.get_by_role('button', name='放弃', exact=True).click()
-    expect(dialog).to_have_count(0)
+    expect(dialog).not_to_be_visible()
     page.wait_for_function("new URLSearchParams(location.hash.split('?')[1]).get('session') !== 'session-1'")
     expect(editor).to_be_enabled()
-    assert len([call for call in state['calls'] if call['method'] == 'session.create']) == 1
+    assert not any(call['method'] == 'session.create' for call in state['calls'])
 
 
 @pytest.mark.parametrize('width', [390, 1440])
@@ -556,21 +558,21 @@ def test_discard_draft_on_module_change_really_clears_it(page, width):
     gateway(page)
     editor = page.get_by_role('textbox', name='发送消息')
     editor.fill('未发送的草稿')
-    page.get_by_role('link', name='记忆', exact=True).click()
+    follow_link(page, '记忆')
     dialog = page.get_by_role('dialog', name='放弃未发送的消息？')
     expect(dialog).to_be_visible()
     expect(dialog.locator('.semi-modal-body')).not_to_be_visible()
-    assert dialog.bounding_box()['height'] < 160
+    assert dialog.locator('.confirm-modal').bounding_box()['height'] < 160
     page.screenshot(path=f'test-results/chat-discard-simple-{width}.png')
     dialog.get_by_role('button', name='继续编辑').click()
     expect(editor).to_have_value('未发送的草稿')
-    page.get_by_role('link', name='记忆', exact=True).click()
+    follow_link(page, '记忆')
     dialog.get_by_role('button', name='放弃', exact=True).click()
     expect(page.get_by_role('heading', name='记忆', exact=True)).to_be_visible()
-    page.get_by_role('link', name='对话', exact=True).click()
+    follow_link(page, '对话')
     expect(editor).to_have_value('')
-    page.get_by_role('link', name='记忆', exact=True).click()
-    expect(dialog).to_have_count(0)
+    follow_link(page, '记忆')
+    expect(dialog).not_to_be_visible()
     expect(page.get_by_role('heading', name='记忆', exact=True)).to_be_visible()
 
 
@@ -685,20 +687,20 @@ def test_queue_is_protected_on_navigation_and_can_be_discarded(page):
     editor = page.get_by_role('textbox', name='发送消息')
     editor.fill('不要丢失的排队消息')
     editor.press('Enter')
-    page.get_by_role('link', name='记忆', exact=True).click()
+    follow_link(page, '记忆')
     dialog = page.get_by_role('dialog', name='放弃未发送的消息？')
     expect(dialog).to_be_visible()
     expect(dialog.locator('.semi-modal-body')).not_to_be_visible()
     dialog.get_by_role('button', name='继续编辑').click()
     expect(page.locator('.chat-queue li')).to_have_count(1)
-    page.get_by_role('link', name='记忆', exact=True).click()
+    follow_link(page, '记忆')
     expect(dialog).to_be_visible()
     emit('task.finished', {'status': 'completed'})
     expect(page.get_by_role('button', name='停止执行')).to_have_count(0)
     expect(page.locator('.chat-queue li')).to_have_count(1)
     assert not any(call['method'] == 'session.submit' for call in state['calls'])
     dialog.get_by_role('button', name='放弃', exact=True).click()
-    page.get_by_role('link', name='对话', exact=True).click()
+    follow_link(page, '对话')
     expect(editor).to_have_value('')
     expect(page.locator('.chat-queue')).to_have_count(0)
     emit('task.finished', {'status': 'completed'})
@@ -822,7 +824,6 @@ def test_ai_title_is_background_and_full_title_time_are_available_on_hover(page)
     page.get_by_role('textbox', name='搜索会话…').fill('项目文档')
     expect(page.get_by_role('dialog', name='搜索对话').get_by_role('button', name=title, exact=True)).to_be_visible()
 
-
 @pytest.mark.parametrize('theme', ['light', 'dark'])
 def test_long_session_title_wraps_and_can_be_edited(page, theme):
     page.emulate_media(color_scheme=theme)
@@ -836,7 +837,6 @@ def test_long_session_title_wraps_and_can_be_edited(page, theme):
     assert row.evaluate('el => getComputedStyle(el).whiteSpace') == 'normal'
     page.get_by_role('button', name='修改对话标题', exact=True).click()
     expect(page.get_by_role('textbox', name='修改对话标题', exact=True)).to_have_value(title)
-
 
 @pytest.mark.parametrize('theme', ['light', 'dark'])
 @pytest.mark.parametrize('width', [390, 1440])
@@ -929,7 +929,6 @@ def test_reasoning_loads_on_demand_without_blocking_message_copy(page):
     expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
     assert page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n') == answer
 
-
 @pytest.mark.parametrize('motion', ['reduce', 'no-preference'])
 def test_semi_reasoning_preserves_manual_collapse_and_history(page, motion):
     page.emulate_media(reduced_motion=motion)
@@ -956,3 +955,88 @@ def test_semi_reasoning_preserves_manual_collapse_and_history(page, motion):
     header.click()
     expect(panel).to_have_text('第一段思考，第二段思考')
     expect(thought).not_to_have_attribute('data-streaming', 'true')
+
+@pytest.mark.parametrize('width', [390, 1440])
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_connected_layout_keeps_workspace_editing_out_of_transcript(page, width, theme):
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.emulate_media(color_scheme=theme)
+    records = [
+        {'sequence': 1, 'type': 'user.message', 'task_id': 'task-1', 'payload': {'text': '帮我整理一下这个项目的布局优化方向。'}},
+        {'sequence': 2, 'type': 'assistant.message', 'task_id': 'task-1', 'payload': {'step': 1, 'text': '可以从三个方面入手：\n\n1. **导航层级**：全局入口与会话列表各自负责清晰的导航。\n2. **阅读体验**：控制正文行宽，保留充足的留白。\n3. **输入区域**：将常用操作放在输入卡片内，兼顾手机与桌面。\n\n现有 Semi 组件和主题可以继续保留。'}},
+    ]
+    state, _ = gateway(page, records=records)
+    editor = page.get_by_role('textbox', name='发送消息')
+    expect(page.locator('.chat-assistant')).to_contain_text('现有 Semi')
+    expect(page.get_by_role('textbox', name='工作区路径')).not_to_be_visible()
+    editor.fill('继续优化间距')
+    calls = len(state['calls'])
+    sockets = len(state['sockets'])
+    page.get_by_role('button', name='切换工作区', exact=True).click()
+    modal = page.get_by_role('dialog', name='切换工作区', exact=True)
+    expect(modal).to_be_visible()
+    expect(modal.get_by_role('textbox', name='工作区路径')).to_have_value('/tmp/webui-test')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    modal.get_by_role('button', name='关闭工作区', exact=True).click()
+    expect(modal).not_to_be_visible()
+    expect(editor).to_have_value('继续优化间距')
+    assert len(state['calls']) == calls
+    assert len(state['sockets']) == sockets
+    assert page.locator('.shell-main').evaluate('el => el.scrollWidth <= el.clientWidth')
+    if width < 768:
+        toolbar = page.locator('.conversation-topbar').bounding_box()
+        first_message = page.locator('.chat-message').first.bounding_box()
+        assert toolbar['y'] + toolbar['height'] <= first_message['y']
+    page.screenshot(path=f'test-results/layout-chat-{theme}-{width}.png')
+
+
+def test_mobile_session_drawer_search_focus_and_draft_guard(page):
+    page.set_viewport_size({'width': 390, 'height': 900})
+    state, _ = gateway(page, sessions=[{'session_id': 'session-1', 'first_user_input': '第一段'}, {'session_id': 'session-2', 'first_user_input': '第二段'}])
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('保留这段草稿')
+    open_sessions(page)
+    sidebar = page.get_by_role('complementary', name='会话管理', exact=True)
+    page.keyboard.press('Escape')
+    expect(sidebar).not_to_be_visible()
+    expect(page.get_by_role('button', name='打开会话列表', exact=True)).to_be_focused()
+    expect(editor).to_have_value('保留这段草稿')
+    open_sessions(page)
+    sidebar.get_by_role('button', name='第二段', exact=True).click()
+    guard = page.get_by_role('dialog', name='放弃未发送的消息？', exact=True)
+    expect(sidebar).not_to_be_visible()
+    expect(guard).to_be_visible()
+    guard.get_by_role('button', name='继续编辑', exact=True).click()
+    expect(editor).to_have_value('保留这段草稿')
+    open_sessions(page)
+    sidebar.get_by_role('button', name='第二段', exact=True).click()
+    guard.get_by_role('button', name='放弃', exact=True).click()
+    page.wait_for_url('**/*session=session-2')
+    expect(editor).to_have_value('')
+    assert sum(call['method'] == 'session.list' for call in state['calls']) == 1
+    assert len(state['sockets']) == 1
+
+def test_workspace_switch_keeps_draft_until_confirmation(page):
+    page.set_viewport_size({'width': 390, 'height': 900})
+    state, _ = gateway(page)
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('工作区切换前的草稿')
+    modal = page.get_by_role('dialog', name='切换工作区', exact=True)
+    guard = page.get_by_role('dialog', name='放弃未发送的消息？', exact=True)
+    for discard in [False, True]:
+        page.get_by_role('button', name='切换工作区', exact=True).click()
+        modal.get_by_role('textbox', name='工作区路径').fill('/tmp/next-workspace')
+        modal.get_by_role('button', name='连接工作区', exact=True).click()
+        expect(modal).not_to_be_visible()
+        expect(guard).to_be_visible()
+        assert len(state['sockets']) == 1
+        assert '/tmp/webui-test' in page.url.replace('%2F', '/')
+        if discard:
+            guard.get_by_role('button', name='放弃', exact=True).click()
+        else:
+            guard.get_by_role('button', name='继续编辑', exact=True).click()
+            expect(editor).to_have_value('工作区切换前的草稿')
+    page.wait_for_url('**/*next-workspace*')
+    expect(page.get_by_text('已连接', exact=True)).to_be_visible()
+    expect(editor).to_have_value('')
+    assert len(state['sockets']) == 2
