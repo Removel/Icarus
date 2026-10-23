@@ -39,6 +39,28 @@ def test_session_rename_pin_export_and_click_title(page):
     assert len([call for call in state['calls'] if call['method'] == 'session.rename']) == 2
 
 
+def test_markdown_math_line_breaks_and_message_actions(page):
+    page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
+    state, emit = gateway(page)
+    emit('user.message', {'text': '最初的问题'})
+    expect(page.locator('.chat-title-edit')).to_have_text('测试会话')
+    assert page.locator('.chat-title-edit').evaluate('el => el.getBoundingClientRect().height') <= 22
+    emit('assistant.message', {'step': 1, 'text': '第一行\n第二行\n\n公式 $x^2$\n\n| 列 |\n| --- |\n| 内容 |'})
+    expect(page.locator('.chat-assistant br')).to_have_count(1)
+    expect(page.locator('.chat-assistant .katex')).to_be_visible()
+    expect(page.locator('.md-table-wrap table')).to_be_visible()
+    expect(page.locator('.assistant-actions button')).to_have_count(6)
+    page.screenshot(path='test-results/refinement-messages.png', full_page=True)
+    page.get_by_role('button', name='有帮助', exact=True).click()
+    expect(page.get_by_role('button', name='有帮助', exact=True)).to_have_attribute('aria-pressed', 'true')
+    page.locator('.msg-user').hover()
+    page.get_by_role('button', name='复制消息', exact=True).click()
+    assert page.evaluate('navigator.clipboard.readText()') == '最初的问题'
+    page.get_by_role('button', name='编辑为新消息', exact=True).click()
+    expect(page.get_by_role('textbox', name='发送消息')).to_have_value('最初的问题')
+    assert not any(call['method'] == 'session.submit' for call in state['calls'])
+
+
 def test_session_switch_reuses_cache_and_requests_only_updates(page):
     records = [
         {'workspace_key': 'workspace-key', 'session_id': 'session-1', 'task_id': 'task-1',
