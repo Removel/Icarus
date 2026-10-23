@@ -806,73 +806,36 @@ def test_stop_works_while_steer_confirmation_is_pending(page):
     assert any(call['method'] == 'session.cancel' for call in state['calls'])
 
 def test_ai_title_is_background_and_full_title_time_are_available_on_hover(page):
-    from datetime import UTC, datetime, timedelta
-    page.emulate_media(reduced_motion='no-preference')
-    date = (datetime.now(UTC) - timedelta(days=3, hours=1)).isoformat()
     title = '根据服务端首条消息生成的完整会话标题，用于确认截断后仍能查看全文'
-    state, _ = gateway(page, hold_title=True, sessions=[{
-        'session_id': 'session-1', 'first_user_input': '', 'created_at': date, 'updated_at': date
-    }])
-    row = page.locator('.chat-session')
-    expect(row.locator('small')).to_have_count(0)
-    expect(row.locator('svg')).to_have_count(0)
-    page.get_by_role('textbox', name='发送消息').fill('整理项目文档')
-    page.get_by_role('textbox', name='发送消息').press('Enter')
+    state, _ = gateway(page, hold_title=True, sessions=[{'session_id': 'session-1', 'first_user_input': ''}])
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('整理项目文档')
+    editor.press('Enter')
     expect(page.get_by_role('button', name='停止执行')).to_be_visible()
-    expect(page.get_by_role('textbox', name='发送消息')).to_have_value('')
+    expect(editor).to_have_value('')
     expect(page.locator('.chat-conversation-heading h2')).to_have_text('整理项目文档')
-    assert len([call for call in state['calls'] if call['method'] == 'session.generate_title']) == 1
     socket, request_id = state['pending_title']
     socket.send(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'result': {'title': title}}))
     expect(page.locator('.chat-conversation-heading h2')).to_have_text(title)
-    assert page.locator('.chat-conversation-heading .chat-title-change').evaluate('el => getComputedStyle(el).animationName') == 'chat-title-appear'
-    row.hover()
-    expect(page.locator('.chat-session-tooltip')).to_contain_text(title)
-    expect(page.locator('.chat-session-tooltip')).to_contain_text('最近对话')
-    expect(page.locator('.chat-session-tooltip')).to_contain_text('创建于')
+    expect(page.locator('.session-item')).to_have_attribute('title', title)
+    page.get_by_role('button', name='搜索对话', exact=True).click()
     page.get_by_role('textbox', name='搜索会话…').fill('项目文档')
-    expect(row).to_have_count(1)
+    expect(page.get_by_role('dialog', name='搜索对话').get_by_role('button', name=title, exact=True)).to_be_visible()
 
 
 @pytest.mark.parametrize('theme', ['light', 'dark'])
-def test_long_session_title_scrolls_on_hover_and_tooltip_is_readable(page, theme):
-    page.emulate_media(color_scheme=theme, reduced_motion='no-preference')
-    title = '检查长会话标题悬浮时能够完整滚动阅读，以及提示中的时间在浅色和深色主题下保持清晰可见'
-    gateway(page, sessions=[{
-        'session_id': 'session-1', 'title': title, 'first_user_input': '原始问题',
-        'created_at': '2026-10-01T08:00:00Z', 'updated_at': '2026-10-03T08:00:00Z',
-    }, {'session_id': 'session-2', 'title': '短标题', 'first_user_input': ''}])
+def test_long_session_title_wraps_and_can_be_edited(page, theme):
+    page.emulate_media(color_scheme=theme)
+    title = '检查长会话标题悬浮时能够完整阅读，以及在浅色和深色主题下保持清晰可见' * 2
+    gateway(page, sessions=[{'session_id': 'session-1', 'title': title, 'first_user_input': '原始问题'}], records=[
+        {'sequence': 1, 'type': 'user.message', 'task_id': 'task-1', 'payload': {'text': '原始问题'}},
+    ])
     row = page.get_by_role('button', name=title, exact=True)
-    text = row.locator('.chat-session-title-text')
-    expect(row.locator('.chat-session-title')).to_have_class('chat-session-title is-overflowing')
-    assert text.evaluate('el => getComputedStyle(el).animationName') == 'none'
-    row.hover()
-    expect(page.locator('.chat-session-tooltip')).to_contain_text(title)
-    assert text.evaluate('el => getComputedStyle(el).animationName') == 'chat-title-scroll'
-    text.evaluate('el => { const animation = el.getAnimations()[0]; animation.pause(); animation.currentTime = animation.effect.getTiming().duration * .5; }')
-    assert text.evaluate('el => new DOMMatrix(getComputedStyle(el).transform).m41') < 0
-    tooltip = page.locator('.chat-session-tooltip')
-    contrast = tooltip.evaluate('''el => {
-        const rgb = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
-        const background = rgb(getComputedStyle(el.closest('.semi-tooltip-wrapper')).backgroundColor);
-        const label = el.querySelector('span');
-        const style = getComputedStyle(label);
-        const foreground = rgb(style.color).map((v, i) => v * Number(style.opacity) + background[i] * (1 - Number(style.opacity)));
-        const luminance = color => color.map(v => { v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }).reduce((s, v, i) => s + v * [.2126, .7152, .0722][i], 0);
-        const values = [luminance(background), luminance(foreground)].sort((a, b) => a - b);
-        return (values[1] + .05) / (values[0] + .05);
-    }''')
-    assert contrast >= 4.5
-    page.screenshot(path=f'test-results/chat-hover-{theme}.png', full_page=True)
-    page.get_by_role('heading', name='会话', exact=True).hover()
-    assert text.evaluate('el => getComputedStyle(el).animationName') == 'none'
-    page.emulate_media(reduced_motion='reduce')
-    row.hover()
-    assert text.evaluate('el => getComputedStyle(el).animationName') == 'none'
-    expect(tooltip).to_contain_text(title)
-    short = page.get_by_role('button', name='短标题', exact=True)
-    short.hover()
-    assert short.locator('.chat-session-title-text').evaluate('el => getComputedStyle(el).animationName') == 'none'
+    expect(page.locator('.session-item')).to_have_attribute('title', title)
+    assert row.bounding_box()['height'] <= 40
+    assert row.evaluate('el => getComputedStyle(el).whiteSpace') == 'normal'
+    page.get_by_role('button', name='修改对话标题', exact=True).click()
+    expect(page.get_by_role('textbox', name='修改对话标题', exact=True)).to_have_value(title)
 
 
 @pytest.mark.parametrize('theme', ['light', 'dark'])

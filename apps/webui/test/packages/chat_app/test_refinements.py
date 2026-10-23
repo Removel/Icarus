@@ -7,6 +7,38 @@ from test.navigation import open_settings
 from test.packages.chat_app.test_chat import gateway
 
 
+def test_session_rename_pin_export_and_click_title(page):
+    state, emit = gateway(page, sessions=[
+        {'session_id': 'session-1', 'title': '原始标题', 'first_user_input': '问题'},
+        {'session_id': 'session-2', 'title': '另一段对话', 'first_user_input': ''},
+    ])
+    emit('user.message', {'text': '问题'})
+    emit('assistant.message', {'step': 1, 'text': '回答'})
+    page.get_by_role('button', name='会话操作：原始标题', exact=True).click()
+    page.get_by_role('menuitem', name='重命名', exact=True).click()
+    title = page.get_by_role('textbox', name='会话标题', exact=True)
+    title.fill('手动修改后的标题')
+    title.press('Enter')
+    expect(page.get_by_role('button', name='手动修改后的标题', exact=True)).to_be_visible()
+    page.get_by_role('button', name='修改对话标题', exact=True).click()
+    title = page.get_by_role('textbox', name='修改对话标题', exact=True)
+    title.fill('点击标题修改')
+    title.press('Enter')
+    expect(page.get_by_role('button', name='点击标题修改', exact=True)).to_be_visible()
+    page.get_by_role('button', name='会话操作：点击标题修改', exact=True).click()
+    page.get_by_role('menuitem', name='置顶', exact=True).click()
+    expect(page.locator('.session-group-title').first).to_have_text('置顶')
+    page.get_by_role('button', name='会话操作：点击标题修改', exact=True).click()
+    with page.expect_download() as download:
+        page.get_by_role('menuitem', name='导出 Markdown', exact=True).click()
+    assert download.value.suggested_filename == '点击标题修改.md'
+    assert '## 你' in open(download.value.path(), encoding='utf-8').read()
+    page.reload()
+    expect(page.get_by_role('button', name='点击标题修改', exact=True)).to_be_visible()
+    expect(page.locator('.session-group-title').first).to_have_text('置顶')
+    assert len([call for call in state['calls'] if call['method'] == 'session.rename']) == 2
+
+
 def test_session_switch_reuses_cache_and_requests_only_updates(page):
     records = [
         {'workspace_key': 'workspace-key', 'session_id': 'session-1', 'task_id': 'task-1',

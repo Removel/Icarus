@@ -361,6 +361,27 @@ export default function useChatSession(hash: string) {
     }
   }
 
+  async function renameSession(id: string, title: string) {
+    const connection = client.current;
+    if (!connection || !title.trim()) return false;
+    try {
+      const result = await connection.request<{ title: string }>('session.rename', {
+        workspace_path: workspace,
+        session_id: id,
+        title: title.trim(),
+      });
+      if (client.current !== connection) return false;
+      setSessions((items) =>
+        items.map((item) => (item.session_id === id ? { ...item, title: result.title } : item)),
+      );
+      setError('');
+      return true;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '重命名失败');
+      return false;
+    }
+  }
+
   const dispatch = useCallback(
     async (submission: Submission, fromQueue = false) => {
       if (
@@ -677,6 +698,7 @@ export default function useChatSession(hash: string) {
     },
     createSession,
     deleteSession,
+    renameSession,
     gateway,
     send,
     cancel,
