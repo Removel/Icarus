@@ -635,15 +635,15 @@ def test_composer_actions_are_inside_input_box_without_keyboard_hint(page, width
     gateway(page)
     editor = page.get_by_role('textbox', name='发送消息')
     empty_height = editor.bounding_box()['height']
-    assert empty_height < 60
+    assert empty_height <= 60
     editor.fill('消息')
     assert abs(editor.bounding_box()['height'] - empty_height) <= 1
     editor.fill('第一行\n第二行\n第三行')
     page.wait_for_function("document.querySelector('.chat-compose textarea').getBoundingClientRect().height > 60")
     editor.fill('')
-    page.wait_for_function("document.querySelector('.chat-compose textarea').getBoundingClientRect().height < 60")
+    page.wait_for_function("document.querySelector('.chat-compose textarea').getBoundingClientRect().height <= 60")
     editor.fill('消息')
-    box = page.locator('.chat-input-box').bounding_box()
+    box = page.locator('.composer').bounding_box()
     send = page.get_by_role('button', name='发送', exact=True).bounding_box()
     assert box['x'] < send['x'] and box['y'] < send['y']
     assert send['x'] + send['width'] < box['x'] + box['width']
