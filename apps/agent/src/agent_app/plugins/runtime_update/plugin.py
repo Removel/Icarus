@@ -108,6 +108,7 @@ class RuntimeUpdatePlugin(BasePlugin):
         elif isinstance(event, TaskSteerAppliedEvent):
             update_type = "user.correction"
             payload = {
+                "submission_id": event.request_event_id,
                 "text": (
                     event.content
                     if event.display_text is None
