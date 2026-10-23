@@ -29,6 +29,8 @@ export default function ChatSettings({
   wide,
   setWide,
   gateway,
+  deepSearch,
+  setDeepSearch,
 }: ChatSettingsProps & {
   open: boolean;
   onClose: () => void;
@@ -40,6 +42,8 @@ export default function ChatSettings({
   wide: boolean;
   setWide: (value: boolean) => void;
   gateway?: Gateway;
+  deepSearch: boolean;
+  setDeepSearch: (value: boolean) => void;
 }) {
   const [tab, setTab] = useState('general');
   const items = [
@@ -125,6 +129,20 @@ export default function ChatSettings({
                       }))}
                     />
                   </label>
+                  <label className="setting-row">
+                    <span className="txt">深度检索（多页）</span>
+                    <input
+                      type="checkbox"
+                      aria-label="深度检索（多页）"
+                      checked={deepSearch}
+                      onChange={(event) => setDeepSearch(event.target.checked)}
+                    />
+                  </label>
+                  <p className="search-cost">
+                    仅在开启联网搜索时生效。默认 2 条查询、最多 3 页；深度模式最多 5 条查询、6
+                    页。按 $0.75/1000 次成功请求估算，约 $0.00375/轮或
+                    $0.006–0.00825/轮，另计模型费用。失败、空结果与超时不计检索费。
+                  </p>
                   <label className="setting-row">
                     <span className="txt">宽版对话</span>
                     <input

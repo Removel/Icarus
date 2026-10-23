@@ -9,6 +9,8 @@ import {
   type RuntimeUpdate,
 } from './gateway';
 import { applyUpdate, emptyTranscript } from './updates';
+import useChatPreference from './useChatPreference';
+import { localClock, type RequestOptions } from './webSearch';
 
 type Submission = {
   id: string;
@@ -17,6 +19,7 @@ type Submission = {
   session: string;
   taskId?: string;
   cancelRequested?: boolean;
+  requestOptions?: RequestOptions;
 };
 
 export default function useChatSession(hash: string) {
@@ -47,6 +50,8 @@ export default function useChatSession(hash: string) {
   const [unknown, setUnknown] = useState(false);
   const [queue, setQueue] = useState<Submission[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
+  const [webSearch, setWebSearch] = useChatPreference('icarus.chat.webSearch', false);
+  const [deepSearch, setDeepSearch] = useChatPreference('icarus.chat.deepSearch', false);
   const client = useRef<Gateway | undefined>(undefined);
   const pending = useRef<Submission | undefined>(undefined);
   const working = useRef(false);
@@ -313,6 +318,7 @@ export default function useChatSession(hash: string) {
               text: firstText,
               workspace,
               session: session.session_id,
+              requestOptions: { web_search: webSearch, deep_search: deepSearch },
             }
           : undefined,
       };
@@ -447,6 +453,11 @@ export default function useChatSession(hash: string) {
       }));
       const gateway = client.current;
       try {
+        if (!submission.taskId) {
+          submission.requestOptions ??= { web_search: false, deep_search: false };
+          if (!submission.requestOptions.local_time)
+            Object.assign(submission.requestOptions, localClock());
+        }
         const result = await gateway.request<{ task_id: string; status?: string }>(
           submission.taskId ? 'session.steer' : 'session.submit',
           {
@@ -455,6 +466,7 @@ export default function useChatSession(hash: string) {
             prompt: submission.text,
             submission_id: submission.id,
             ...(submission.taskId ? { task_id: submission.taskId } : {}),
+            ...(!submission.taskId ? { request_options: submission.requestOptions } : {}),
           },
         );
         if (
@@ -631,6 +643,7 @@ export default function useChatSession(hash: string) {
       text: draft.trim(),
       workspace,
       session: sessionId,
+      requestOptions: { web_search: webSearch, deep_search: deepSearch },
       ...(steer ? { taskId: transcript.tasks[0] } : {}),
     };
     if (!steer && (submitting || transcript.tasks.length || queue.length)) {
@@ -697,6 +710,10 @@ export default function useChatSession(hash: string) {
     unknown,
     queue,
     queuePaused,
+    webSearch,
+    setWebSearch,
+    deepSearch,
+    setDeepSearch,
     resumeQueue: () => setQueuePaused(false),
     removeQueued: (id: string) => setQueue((items) => items.filter((item) => item.id !== id)),
     editQueued: (id: string) => {

@@ -7,12 +7,14 @@ export default function ChatDialog({
   onClose,
   children,
   search = false,
+  side = false,
 }: {
   open: boolean;
   label: string;
   onClose: () => void;
   children: ReactNode;
   search?: boolean;
+  side?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -35,7 +37,7 @@ export default function ChatDialog({
     >
       {open && (
         <div
-          className={search ? 'search-overlay' : 'overlay'}
+          className={search ? 'search-overlay' : side ? 'overlay web-sources-overlay' : 'overlay'}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) onClose();
           }}

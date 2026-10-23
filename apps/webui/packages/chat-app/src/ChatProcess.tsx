@@ -3,6 +3,7 @@ import ChatReasoning from './ChatReasoning';
 import ThinkingWave from './ThinkingWave';
 import { IconThinking, IconChevronDown } from './dswui/Icons';
 import type { ChatItem } from './updates';
+import ChatSearch from './ChatSearch';
 
 export default function ChatProcess({
   entries,
@@ -76,7 +77,13 @@ export default function ChatProcess({
         }}
       >
         {entries.map((entry) =>
-          entry.kind === 'thinking' ? (
+          entry.kind === 'search' && entry.search ? (
+            <ChatSearch
+              key={entry.id}
+              search={entry.search}
+              active={active && running && !loading}
+            />
+          ) : entry.kind === 'thinking' ? (
             <ChatReasoning
               key={entry.id}
               entry={entry}

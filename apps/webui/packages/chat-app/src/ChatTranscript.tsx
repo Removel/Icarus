@@ -28,7 +28,7 @@ export default function ChatTranscript({
   const [away, setAway] = useState(false);
   const [position, setPosition] = useState<string | null>(null);
   const lastUser = transcript.items.map((item) => item.kind).lastIndexOf('user');
-  const responseKinds = ['assistant', 'thinking', 'tool', 'error'];
+  const responseKinds = ['assistant', 'thinking', 'tool', 'error', 'search'];
   const waiting =
     !loading &&
     (submitting
@@ -72,7 +72,7 @@ export default function ChatTranscript({
   }
   const processes = new Map<string, typeof transcript.items>();
   for (const item of transcript.items)
-    if (item.kind === 'thinking' || item.kind === 'tool') {
+    if (item.kind === 'thinking' || item.kind === 'tool' || item.kind === 'search') {
       const key = item.taskId ?? item.id;
       processes.set(key, [...(processes.get(key) ?? []), item]);
     }
@@ -100,7 +100,7 @@ export default function ChatTranscript({
         <div className="chat-inner">
           {loading && !transcript.items.length && <div role="status">正在加载对话</div>}
           {transcript.items.map((item, index) => {
-            if (item.kind === 'thinking' || item.kind === 'tool') {
+            if (item.kind === 'thinking' || item.kind === 'tool' || item.kind === 'search') {
               const key = item.taskId ?? item.id;
               if (rendered.has(key)) return null;
               rendered.add(key);
@@ -137,6 +137,11 @@ export default function ChatTranscript({
                       text={item.text}
                       live={Boolean(item.kind === 'assistant' && item.live && active && !loading)}
                       onGrowth={onGrowth}
+                      sources={
+                        transcript.items.find(
+                          (entry) => entry.taskId === item.taskId && entry.search,
+                        )?.search?.sources
+                      }
                     />
                   </div>
                 )}

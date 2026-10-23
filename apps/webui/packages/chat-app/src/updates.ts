@@ -1,10 +1,12 @@
 import type { RuntimeUpdate } from './gateway';
+import { parseSearchState, type WebSearchState } from './webSearch';
 
 export type ChatItem = {
   id: string;
   taskId?: string;
   submissionId?: string;
-  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error';
+  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'search';
+  search?: WebSearchState;
   text: string;
   label?: string;
   detail?: string;
@@ -42,9 +44,22 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
     return {
       ...state,
       items: state.items.map((item) =>
-        item.taskId === task && item.pending && item.label
-          ? { ...item, pending: false, label: '引导未应用' }
-          : item,
+        item.taskId === task &&
+        item.search &&
+        (item.search.status === 'searching' || item.search.browsing)
+          ? {
+              ...item,
+              final: true,
+              search: {
+                ...item.search,
+                status:
+                  p.status === 'cancelled' ? 'stopped' : item.search.total ? 'complete' : 'error',
+                browsing: false,
+              },
+            }
+          : item.taskId === task && item.pending && item.label
+            ? { ...item, pending: false, label: '引导未应用' }
+            : item,
       ),
       tasks: state.tasks.filter((id) => id !== task),
       finished: new Set([...state.finished, task]),
@@ -52,7 +67,17 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
   let item: ChatItem;
   const step = typeof p.step === 'number' && p.step >= 1 ? p.step : 1;
   const key = `${task}:${step}`;
-  if (update.type === 'user.message' || update.type === 'user.correction') {
+  if (update.type === 'web_search.updated') {
+    const search = parseSearchState(p);
+    if (!search || state.finished.has(task)) return state;
+    item = {
+      id: `search:${task}`,
+      kind: 'search',
+      text: '',
+      search,
+      final: search.status !== 'searching' && !search.browsing,
+    };
+  } else if (update.type === 'user.message' || update.type === 'user.correction') {
     item = {
       id: `user:${task}:${update.type}:${update.sequence ?? ''}`,
       kind: 'user',

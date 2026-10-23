@@ -332,6 +332,8 @@ export default function ChatApp({
           wide={wide}
           setWide={setWide}
           gateway={chat.gateway}
+          deepSearch={chat.deepSearch}
+          setDeepSearch={chat.setDeepSearch}
         />
         <ChatDialog
           open={connectionOpen}

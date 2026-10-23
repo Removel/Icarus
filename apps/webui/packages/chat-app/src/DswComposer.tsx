@@ -121,11 +121,13 @@ export default function DswComposer({
             <button
               type="button"
               className="pill"
-              disabled
-              title="搜索工具由 Icarus 服务端配置，当前接口不提供前端开关"
+              aria-pressed={chat.webSearch}
+              disabled={unknown}
+              onClick={() => chat.setWebSearch(!chat.webSearch)}
+              title="联网搜索，发送时生效；检索失败仍继续回答"
             >
-              <AnimatedToggleIcon kind="search" enabled={false} />
-              智能搜索
+              <AnimatedToggleIcon kind="search" enabled={chat.webSearch} />
+              联网搜索
             </button>
             <div className="composer-actions">
               {unknown ? (
