@@ -34,18 +34,55 @@ def test_narrow_layout_and_dialog(page, knowledge_service, width):
         follow_link(page, name)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), name
         assert page.locator('.management-body:visible').evaluate('el => el.scrollWidth <= el.clientWidth'), name
+        header = page.locator('.management-header').bounding_box()
+        navigation = page.get_by_role('tablist', name='记忆状态') if name == '记忆' else page.get_by_role('navigation', name='知识库分类')
+        box = navigation.bounding_box()
+        assert abs((box['x'] + box['width'] / 2) - (header['x'] + header['width'] / 2)) <= 1
+        assert page.locator('.management-title').bounding_box()['height'] <= 24
+        if width > 1100:
+            back = page.get_by_role('link', name='返回对话', exact=True).bounding_box()
+            assert box['y'] + box['height'] / 2 > back['y'] + back['height'] / 2
+        page.screenshot(path=f'test-results/dswui-management-{name}-{width}.png')
     follow_link(page, '记忆')
     page.get_by_role('button', name='添加记忆', exact=True).click()
     page.get_by_role('textbox', name='记忆内容', exact=True).wait_for()
     expect(page.get_by_role('button', name='保存记忆', exact=True)).to_be_visible()
 
 
-def test_shared_control_heights_and_optional_descriptions(page, knowledge_service):
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_shared_control_heights_and_optional_descriptions(page, knowledge_service, theme):
+    page.emulate_media(color_scheme=theme)
     assert page.locator('.page-heading-main > p:visible').count() == 0
     assert page.locator('.memory-page .search-field').bounding_box()['height'] == 36
     assert page.get_by_role('button', name='添加记忆', exact=True).bounding_box()['height'] == 36
+    filters = [page.locator('.memory-filters .search-field'), *[
+        page.get_by_role('combobox', name=label) for label in ['筛选记忆分类', '筛选用户', '筛选作用范围']
+    ]]
+    boxes = [control.bounding_box() for control in filters]
+    assert len({box['y'] for box in boxes}) == 1
+    assert all(left['x'] + left['width'] <= right['x'] for left, right in zip(boxes, boxes[1:]))
+    page.screenshot(path=f'test-results/dswui-memory-{theme}.png')
+    active = page.get_by_role('tab', name='全部 8', exact=True)
+    active.focus()
+    page.keyboard.press('ArrowRight')
+    expect(page.get_by_role('tab', name='生效中 6', exact=True)).to_have_attribute('aria-selected', 'true')
     follow_link(page, '知识库')
     assert page.get_by_role('combobox', name='筛选内容类型').bounding_box()['height'] == 36
+    page.screenshot(path=f'test-results/dswui-knowledge-{theme}.png')
+    follow_link(page, '记忆')
+    page.get_by_role('button', name='添加记忆', exact=True).click()
+    modal = page.get_by_role('dialog', name='添加记忆', exact=True)
+    scope = modal.get_by_role('combobox', name='记忆作用范围', exact=True)
+    scope.press('ArrowDown')
+    page.keyboard.press('End')
+    page.keyboard.press('Enter')
+    expect(modal.get_by_role('textbox', name='记忆工作区路径', exact=True)).to_be_visible()
+    scope.click()
+    page.screenshot(path=f'test-results/dswui-memory-select-{theme}.png')
+    page.keyboard.press('Escape')
+    expect(page.get_by_role('listbox')).to_have_count(0)
+    expect(modal).to_be_visible()
+    expect(scope).to_be_focused()
 
 
 def test_sidebar_collapse_preserves_page_state(page):

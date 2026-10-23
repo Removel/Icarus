@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, FileText, NotebookText, Network, ShieldCheck } from 'lucide-react';
 import { LoadingIndicator, navigate, useHashLocation } from '@icarus/ui';
 import { useTheme } from './theme';
@@ -9,6 +9,7 @@ const ChatApp = lazy(() => import('@icarus/chat-app'));
 export default function App() {
   const [theme, setTheme] = useTheme();
   const hash = useHashLocation();
+  const [memoryHeader, setMemoryHeader] = useState<HTMLDivElement | null>(null);
   const requested = hash.split('?')[0].split('/')[1];
   const route = requested === 'memory' || requested === 'knowledge' ? requested : 'chat';
   const paths = useRef({
@@ -34,18 +35,22 @@ export default function App() {
   const management = (
     <>
       <header className="management-header">
-        <a
-          href={paths.current.chat}
-          aria-label="返回对话"
-          onClick={(event) => {
-            if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-            event.preventDefault();
-            navigate(paths.current.chat);
-          }}
-        >
-          <ArrowLeft size={16} />
-          <span>返回对话</span>
-        </a>
+        <div className="management-heading">
+          <a
+            href={paths.current.chat}
+            aria-label="返回对话"
+            title="返回对话"
+            onClick={(event) => {
+              if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+              event.preventDefault();
+              navigate(paths.current.chat);
+            }}
+          >
+            <ArrowLeft size={16} />
+          </a>
+          <span className="management-title">{route === 'memory' ? '记忆' : '知识库'}</span>
+        </div>
+        <div className="management-header-slot" ref={setMemoryHeader} hidden={route !== 'memory'} />
         <nav aria-label="知识库分类" hidden={route !== 'knowledge'}>
           {sections.map((item) => {
             const params = new URLSearchParams();
@@ -72,6 +77,7 @@ export default function App() {
       </header>
       <div className="management-body" hidden={route !== 'memory'}>
         <MemoryApp
+          headerContainer={memoryHeader}
           workspace={new URLSearchParams(paths.current.chat.split('?')[1]).get('workspace') ?? ''}
           active={route === 'memory'}
           hash={route === 'memory' ? hash : paths.current.memory}

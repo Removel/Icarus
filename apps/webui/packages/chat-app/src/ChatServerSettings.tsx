@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Gateway } from './gateway';
-import { Select } from './dswui/Select';
+import { Select } from '@icarus/ui';
 
 type Model = {
   name: string;
@@ -195,7 +195,7 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
                   }[role] ?? role}
                 </span>
                 <Select
-                  label={`模型角色 ${role}`}
+                  aria-label={`模型角色 ${role}`}
                   value={name}
                   onChange={(value) =>
                     setDraft({
@@ -203,7 +203,7 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
                       model_roles: { ...draft.model_roles, [role]: String(value) },
                     })
                   }
-                  options={draft.model_settings.map((model) => ({
+                  optionList={draft.model_settings.map((model) => ({
                     value: model.name,
                     label: model.name,
                   }))}
@@ -249,10 +249,10 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
               <label className="setting-row">
                 <span className="txt">思考强度</span>
                 <Select
-                  label={`模型 ${index + 1} 思考强度`}
+                  aria-label={`模型 ${index + 1} 思考强度`}
                   value={model.default_think_level}
                   onChange={(value) => patchModel(index, { default_think_level: String(value) })}
-                  options={['low', 'medium', 'high', 'max'].map((level) => ({
+                  optionList={['low', 'medium', 'high', 'max'].map((level) => ({
                     value: level,
                     label: level,
                   }))}

@@ -2,21 +2,13 @@ import '@douyinfe/semi-ui/react19-adapter';
 import {
   cloneElement,
   isValidElement,
-  useId,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
 } from 'react';
 import { ArrowDown, Search, X, SearchX } from 'lucide-react';
 import { flushSync } from 'react-dom';
-import {
-  Button,
-  Input,
-  Tabs as SemiTabs,
-  Modal as SemiModal,
-  Select as SemiSelect,
-  Spin,
-} from '@douyinfe/semi-ui';
+import { Button, Input, Modal as SemiModal, Spin } from '@douyinfe/semi-ui';
 
 export {
   CodeHighlight,
@@ -34,6 +26,7 @@ export {
 } from '@douyinfe/semi-ui';
 export { navigate, useHashLocation, useUnsavedChanges } from './navigation';
 export { NavigationDrawer, useNarrowLayout } from './navigation-drawer';
+export { Select } from './Select';
 
 let layoutTransition: ViewTransition | undefined;
 
@@ -79,6 +72,7 @@ export function Modal({
 }: ComponentProps<typeof SemiModal>) {
   return (
     <SemiModal
+      motion={false}
       {...props}
       centered={centered}
       className={['icarus-modal', className].filter(Boolean).join(' ')}
@@ -105,37 +99,6 @@ export function Modal({
         ...cancelButtonProps,
       }}
     />
-  );
-}
-
-export function Select({
-  'aria-label': label,
-  className,
-  dropdownClassName,
-  getPopupContainer,
-  ...props
-}: ComponentProps<typeof SemiSelect> & { 'aria-label'?: string }) {
-  const labelId = useId();
-  return (
-    <>
-      {label && (
-        <span id={labelId} className="visually-hidden">
-          {label}
-        </span>
-      )}
-      <SemiSelect
-        // Semi commits a single selection after closing; CSS-disabled animations skip that callback.
-        motion={false}
-        {...props}
-        className={['icarus-select', className].filter(Boolean).join(' ')}
-        dropdownClassName={['icarus-select-dropdown', dropdownClassName].filter(Boolean).join(' ')}
-        getPopupContainer={
-          getPopupContainer ??
-          (() => document.querySelector<HTMLDialogElement>('dialog[open]') ?? document.body)
-        }
-        aria-labelledby={props['aria-labelledby'] ?? (label ? labelId : undefined)}
-      />
-    </>
   );
 }
 
@@ -204,20 +167,36 @@ export function Tabs({
   onChange: (id: string) => void;
 }) {
   return (
-    <SemiTabs className="content-tabs" type="line" activeKey={value} onChange={onChange}>
-      {items.map((item) => (
-        <SemiTabs.TabPane
-          itemKey={item.id}
+    <div className="content-tabs" role="tablist" aria-label="记忆状态">
+      {items.map((item, index) => (
+        <button
+          type="button"
+          role="tab"
+          className="content-tab"
           key={item.id}
-          tab={
-            <span>
-              {item.label}
-              {item.count !== undefined && <span className="tab-count">{item.count}</span>}
-            </span>
-          }
-        />
+          aria-selected={value === item.id}
+          tabIndex={value === item.id ? 0 : -1}
+          onClick={() => onChange(item.id)}
+          onKeyDown={(event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const next =
+              event.key === 'Home'
+                ? 0
+                : event.key === 'End'
+                  ? items.length - 1
+                  : (index + (event.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length;
+            const buttons =
+              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button');
+            buttons?.[next]?.focus();
+            onChange(items[next].id);
+          }}
+        >
+          {item.label}
+          {item.count !== undefined && <span className="tab-count">{item.count}</span>}
+        </button>
       ))}
-    </SemiTabs>
+    </div>
   );
 }
 

@@ -1,26 +1,28 @@
+@import './fonts.css';
+
 :root,
 html body,
 html body[theme-mode='light'],
 html body[theme-mode='dark'] {
   --semi-font-family-regular:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC',
-    Arial, sans-serif;
+    'IcarusDswInter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
   color-scheme: light;
-  --canvas: #f7f7f8;
+  --canvas: #ffffff;
   --surface: #ffffff;
-  --subtle: #f0f0f2;
-  --raised: #fafafa;
-  --selected: #e8e8ec;
-  --ink: #232327;
-  --muted: #71717a;
-  --line: #dedee3;
-  --strong-line: #b8b8bf;
+  --subtle: #f1f3f5;
+  --raised: #faf8f9;
+  --selected: rgba(38, 49, 72, 0.06);
+  --ink: #0f1115;
+  --muted: #61666b;
+  --line: rgba(0, 0, 0, 0.1);
+  --strong-line: #81858c;
   --accent: #a45b70;
   --success: #287447;
   --danger: #b64657;
-  --user: #55555f;
+  --user: #61666b;
   --tool: #85858e;
-  --faint: #8b8b94;
+  --faint: #adb2b8;
   --graph-source: #458868;
   --graph-summary: #9370a8;
   --graph-concept: #b86783;
@@ -69,26 +71,26 @@ html body[theme-mode='dark'] {
   --semi-color-warning-light-default: var(--subtle);
   --semi-color-info: var(--user);
   --semi-color-info-light-default: var(--subtle);
-  --semi-color-focus-border: var(--accent);
-  --radius: 10px;
+  --semi-color-focus-border: var(--strong-line);
+  --radius: 12px;
 }
 html[data-theme='dark'] body {
   color-scheme: dark;
-  --canvas: #0c0c0e;
-  --surface: #131315;
-  --subtle: #1c1c1f;
-  --raised: #18181b;
-  --selected: #29292e;
-  --ink: #f1f1f2;
-  --muted: #97979e;
-  --line: #35353b;
-  --strong-line: #4b4b51;
+  --canvas: #151517;
+  --surface: #1b1b1c;
+  --subtle: #2c2c2e;
+  --raised: #232324;
+  --selected: rgba(255, 255, 255, 0.08);
+  --ink: #faf8f9;
+  --muted: #adb2b8;
+  --line: rgba(255, 255, 255, 0.12);
+  --strong-line: #9599a0;
   --accent: #e0a8b6;
   --success: #75bd92;
   --danger: #db737f;
-  --user: #b8b8bf;
+  --user: #adb2b8;
   --tool: #626269;
-  --faint: #73737b;
+  --faint: #61666b;
   --graph-source: #83bea3;
   --graph-summary: #bd99d2;
   --graph-concept: #e0a8b6;
@@ -179,9 +181,29 @@ svg {
 .semi-button {
   min-height: 36px;
   height: 36px;
-  border-radius: 8px;
-  font-weight: 500;
-  padding: 7px 12px;
+  border-radius: 4096px;
+  font-weight: 400;
+  font-size: 14px;
+  line-height: 22px;
+  padding: 0 14px;
+}
+.semi-button:disabled {
+  opacity: 0.5;
+}
+.semi-button.semi-button-light {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+}
+.semi-button.semi-button-light:hover {
+  background: var(--selected);
+}
+.semi-button.semi-button-borderless {
+  color: var(--muted);
+}
+.semi-button.semi-button-borderless:hover {
+  background: var(--selected);
+  color: var(--ink);
 }
 .semi-button-primary.semi-button-solid,
 .semi-button-primary.semi-button-solid:hover {
@@ -198,50 +220,12 @@ html[data-theme='dark'] .semi-button-primary.semi-button-solid {
   padding: 0;
   flex: 0 0 36px;
 }
-.semi-input-wrapper,
-.semi-select {
+.semi-input-wrapper {
   height: 36px;
   min-height: 36px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-}
-.semi-select-selection {
-  min-height: 34px;
-}
-.icarus-select.semi-select:hover,
-.icarus-select.semi-select:focus,
-.icarus-select.semi-select.semi-select-focus {
-  outline: none;
-  box-shadow: none;
-}
-.icarus-select.semi-select {
-  border: 0;
-  border-radius: 18px;
-  background: var(--subtle);
-  font-weight: 400;
-}
-.icarus-select.semi-select:hover {
-  background: var(--selected);
-}
-.icarus-select-dropdown {
-  padding: 4px;
-  border: 0;
   border-radius: 12px;
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow:
-    0 0 1px rgb(0 0 0 / 20%),
-    0 0 4px rgb(0 0 0 / 2%),
-    0 12px 32px rgb(0 0 0 / 8%);
-}
-.icarus-select-dropdown .semi-select-option {
-  min-height: 40px;
-  border-radius: 10px;
-}
-.icarus-select-dropdown .semi-select-option-selected {
-  color: var(--ink);
-  background: var(--selected);
+  background: var(--subtle);
 }
 .icarus-brand-mark {
   display: block;
@@ -257,16 +241,163 @@ html[data-theme='dark'] .icarus-brand-mark {
 }
 .semi-input-textarea-wrapper {
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: 12px;
+  background: var(--subtle);
+}
+.semi-input-wrapper:hover,
+.semi-input-textarea-wrapper:hover {
+  background: var(--subtle);
 }
 .semi-input-wrapper-focus,
 .semi-input-textarea-wrapper-focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--semi-color-primary-light-default);
+  border-color: var(--strong-line);
+  box-shadow: none;
 }
 .semi-input-wrapper .semi-input:focus-visible {
   outline: none;
+}
+.search-field.semi-input-wrapper {
+  border-color: transparent;
+  border-radius: 18px;
+}
+.search-field.semi-input-wrapper-focus {
+  border-color: var(--strong-line);
+}
+/* DSWUI Select: one trigger and popup implementation for settings and management pages. */
+.icarus-select,
+.dswui .icarus-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 36px;
+  min-width: 0;
+  max-width: 220px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--subtle);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  text-align: left;
+}
+.icarus-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.icarus-select > svg {
+  flex: none;
+  color: var(--muted);
+}
+.icarus-select:hover,
+.dswui .icarus-select:hover {
+  background: var(--selected);
+}
+.icarus-select.open,
+.dswui .icarus-select.open {
+  color: var(--muted);
+}
+.icarus-select:focus-visible {
+  outline: 2px solid var(--strong-line);
+  outline-offset: 2px;
+}
+.icarus-select:disabled {
+  opacity: 0.5;
+}
+.icarus-select-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+}
+.icarus-select-popup {
+  position: fixed;
+  z-index: 1101;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow:
+    0 0 1px rgb(0 0 0 / 20%),
+    0 0 4px rgb(0 0 0 / 2%),
+    0 12px 32px rgb(0 0 0 / 8%);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-family: var(--semi-font-family-regular);
+}
+.icarus-select-popup button,
+.dswui .icarus-select-popup button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  text-align: left;
+}
+.icarus-select-popup button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.icarus-select-popup button:is(:hover, :focus-visible),
+.dswui .icarus-select-popup button:is(:hover, :focus-visible) {
+  outline: none;
+  background: var(--selected);
+}
+.semi-dropdown {
+  padding: 4px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow:
+    0 0 1px rgb(0 0 0 / 20%),
+    0 0 4px rgb(0 0 0 / 2%),
+    0 12px 32px rgb(0 0 0 / 8%);
+}
+.semi-dropdown-menu {
+  padding: 0;
+}
+.semi-dropdown-item {
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 24px;
+}
+.semi-dropdown-item:hover {
+  background: var(--selected);
+}
+:is(.management-body, .icarus-modal, .icarus-select-popup)::-webkit-scrollbar,
+:is(.management-body, .icarus-modal) ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+:is(.management-body, .icarus-modal, .icarus-select-popup)::-webkit-scrollbar-thumb,
+:is(.management-body, .icarus-modal) ::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  background: var(--line);
+}
+.semi-modal-mask {
+  background: rgb(0 0 0 / 40%);
+}
+html[data-theme='dark'] .semi-modal-mask {
+  background: rgb(0 0 0 / 60%);
 }
 .semi-input-textarea {
   line-height: 1.8;
@@ -284,7 +415,8 @@ html[data-theme='dark'] .icarus-brand-mark {
   flex-direction: column;
   max-height: calc(100dvh - 48px);
   padding: 0;
-  border-radius: 16px;
+  border-radius: 24px;
+  background: var(--surface);
   overflow: hidden;
 }
 .icarus-modal .semi-modal-header {
@@ -292,34 +424,34 @@ html[data-theme='dark'] .icarus-brand-mark {
   align-items: center;
   gap: 16px;
   margin: 0;
-  padding: 20px 24px 16px;
-  border-bottom: 1px solid var(--line);
+  padding: 22px 24px 0;
+  border-bottom: 0;
 }
 .icarus-modal .semi-modal-title {
   min-width: 0;
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 .icarus-modal .semi-modal-close {
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
-  margin: 0 -6px 0 auto;
-  padding: 8px;
-  border-radius: 8px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  margin: 0 -3px 0 auto;
+  padding: 3px;
+  border-radius: 50%;
   color: var(--muted);
 }
 .icarus-modal .semi-modal-body {
   min-height: 0;
   margin: 0;
-  padding: 20px 24px 24px;
+  padding: 24px;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+  scrollbar-width: auto;
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -331,9 +463,9 @@ html[data-theme='dark'] .icarus-brand-mark {
   align-items: center;
   gap: 8px;
   margin: 0;
-  padding: 16px 24px;
-  border-top: 1px solid var(--line);
-  background: var(--subtle);
+  padding: 0 24px 24px;
+  border-top: 0;
+  background: var(--surface);
 }
 .icarus-modal .semi-modal-footer > .semi-button {
   min-width: 80px;
@@ -431,34 +563,42 @@ h1 {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
-.content-tabs .semi-tabs-bar {
+.content-tabs {
   display: flex;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
-  border-bottom: 1px solid var(--line);
-}
-.content-tabs .semi-tabs-tab {
-  flex: 0 0 auto;
-  padding: 12px 4px 14px;
-  margin-right: 26px;
-  font-size: 14px;
-}
-.content-tabs .semi-tabs-tab:last-child {
-  margin-right: 0;
-}
-.content-tabs .semi-tabs-tab > span {
-  display: inline-flex;
-  gap: 7px;
   align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 4096px;
+  background: var(--subtle);
+}
+.content-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4096px;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+.content-tab[aria-selected='true'] {
+  background: var(--canvas);
+  color: var(--ink);
+}
+.content-tab:hover {
+  color: var(--ink);
 }
 .content-tabs .tab-count {
   color: var(--muted);
   font-size: 11px;
   font-weight: 400;
   padding: 1px 5px;
-  border-radius: 5px;
-  background: var(--semi-color-fill-0);
+  border-radius: 8px;
 }
 .toolbar {
   display: flex;
@@ -481,7 +621,7 @@ h1 {
 .toolbar-spacer {
   flex: 1;
 }
-.toolbar .semi-select {
+.toolbar .icarus-select {
   min-width: 136px;
 }
 .filter-panel {
@@ -504,7 +644,7 @@ h1 {
   font-size: 12px;
   color: var(--muted);
 }
-.filter-panel .semi-select {
+.filter-panel .icarus-select {
   width: 100%;
 }
 .filter-summary {
@@ -599,8 +739,9 @@ h1 {
   font-weight: 500;
   margin-bottom: 8px;
 }
-.form-field .semi-select {
+.form-field .icarus-select {
   width: 100%;
+  max-width: none;
 }
 .form-row {
   display: grid;
@@ -711,8 +852,8 @@ kbd {
   .toolbar .toolbar-spacer {
     display: none;
   }
-  .content-tabs .semi-tabs-tab {
-    margin-right: 20px;
+  .content-tab {
+    padding-inline: 10px;
   }
   .filter-panel {
     padding: 12px;
@@ -728,7 +869,7 @@ kbd {
   }
   .icarus-modal .semi-modal-content {
     max-height: calc(100dvh - 24px);
-    border-radius: 12px;
+    border-radius: 24px;
   }
   .icarus-modal .semi-modal-header {
     padding: 16px;

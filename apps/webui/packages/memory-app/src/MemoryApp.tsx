@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Pause, Play, X, ChevronRight, Info } from 'lucide-react';
 import {
   Button,
@@ -6,11 +7,9 @@ import {
   Select,
   Modal,
   Toast,
-  PageHeading,
   Status,
   Tabs,
   SearchField,
-  Field,
   EmptyState,
   LoadingIndicator,
   SortButton,
@@ -31,10 +30,12 @@ export default function MemoryApp({
   active,
   hash,
   workspace = '',
+  headerContainer,
 }: {
   active: boolean;
   hash: string;
   workspace?: string;
+  headerContainer: HTMLElement | null;
 }) {
   const section = hash.split('?')[0].split('/')[2];
   const tab = ['all', 'active', 'expired'].includes(section) ? section : 'all';
@@ -264,64 +265,92 @@ export default function MemoryApp({
       {data.truncated && (
         <p role="status">当前查询最多覆盖 1000 条记忆，搜索、排序和筛选仅作用于这个范围。</p>
       )}
-      <PageHeading
-        title="记忆"
-        hideTitle
-        context={
-          <div className="memory-context">
-            <Field label="所属用户">
-              <Select
-                aria-label="筛选用户"
-                value={user}
-                onChange={(value) => setUser(String(value))}
-                optionList={[
-                  { value: 'all', label: '所有用户' },
-                  ...users.map((name) => ({ value: name, label: name })),
-                ]}
-              />
-            </Field>
-            <Field label="作用范围">
-              <Select
-                aria-label="筛选作用范围"
-                value={scope}
-                onChange={(value) => setScope(String(value))}
-                optionList={[
-                  { value: 'all', label: '所有范围' },
-                  ...[...new Set(['global', ...data.scopes])].map((value) => ({
-                    value,
-                    label: scopeName(value),
-                  })),
-                ]}
-              />
-            </Field>
-          </div>
-        }
-      >
-        <Button theme="solid" icon={<Plus size={16} />} onClick={() => openCreate()}>
-          添加记忆
-        </Button>
-      </PageHeading>
-      <div className="memory-state-nav">
-        <Tabs
-          value={tab}
-          onChange={(id) => go(id)}
-          items={[
-            { id: 'all', label: '全部', count: data.counts.all },
-            { id: 'active', label: '生效中', count: activeCount },
-            { id: 'expired', label: '已失效', count: data.counts.expired },
+      <h1 className="visually-hidden">记忆</h1>
+      {headerContainer &&
+        createPortal(
+          <>
+            <Tabs
+              value={tab}
+              onChange={(id) => go(id)}
+              items={[
+                { id: 'all', label: '全部', count: data.counts.all },
+                { id: 'active', label: '生效中', count: activeCount },
+                { id: 'expired', label: '已失效', count: data.counts.expired },
+              ]}
+            />
+            <div className="memory-header-actions">
+              <Button
+                theme="solid"
+                icon={<Plus size={16} />}
+                aria-label="添加记忆"
+                onClick={() => openCreate()}
+              >
+                <span className="memory-create-label">添加记忆</span>
+              </Button>
+            </div>
+          </>,
+          headerContainer,
+        )}
+      <div className="toolbar memory-filters">
+        <SearchField value={search} onChange={setSearch} placeholder="搜索记忆…" />
+        <Select
+          aria-label="筛选记忆分类"
+          value={category}
+          onChange={setCategory}
+          optionList={[
+            { value: 'all', label: '全部分类' },
+            ...categories.map((name) => ({ value: name, label: name })),
           ]}
         />
-        <Button
-          className="icon-button"
-          type="tertiary"
-          theme="borderless"
-          icon={<Info size={17} />}
-          aria-label="记忆规则"
-          title="记忆规则"
-          onClick={() => setAbout(true)}
+        <Select
+          aria-label="筛选用户"
+          value={user}
+          onChange={setUser}
+          optionList={[
+            { value: 'all', label: '所有用户' },
+            ...users.map((name) => ({ value: name, label: name })),
+          ]}
         />
+        <Select
+          aria-label="筛选作用范围"
+          value={scope}
+          onChange={setScope}
+          optionList={[
+            { value: 'all', label: '所有范围' },
+            ...[...new Set(['global', ...data.scopes])].map((value) => ({
+              value,
+              label: scopeName(value),
+            })),
+          ]}
+        />
+        <div className="memory-filter-actions">
+          <SortButton descending={descending} onClick={() => setDescending((value) => !value)} />
+          {!selecting && (
+            <Button
+              className="memory-bulk-trigger"
+              type="tertiary"
+              theme="borderless"
+              disabled={busy || data.loading || data.page_size !== pageSize || !filtered.length}
+              onClick={() => {
+                setChecked([]);
+                setSelecting(true);
+              }}
+            >
+              多选
+            </Button>
+          )}
+          <Button
+            className="icon-button"
+            type="tertiary"
+            theme="borderless"
+            icon={<Info size={17} />}
+            aria-label="记忆规则"
+            title="记忆规则"
+            onClick={() => setAbout(true)}
+          />
+        </div>
       </div>
-      {selecting ? (
+      {selecting && (
         <div className="selection-toolbar" role="region" aria-label="批量操作">
           <Checkbox
             checked={filtered.length > 0 && checkedItems.length === filtered.length}
@@ -368,33 +397,6 @@ export default function MemoryApp({
             onClick={() => exitSelection(true)}
           >
             取消多选
-          </Button>
-        </div>
-      ) : (
-        <div className="toolbar">
-          <SearchField value={search} onChange={setSearch} placeholder="搜索记忆…" />
-          <Select
-            aria-label="筛选记忆分类"
-            value={category}
-            onChange={(value) => setCategory(String(value))}
-            optionList={[
-              { value: 'all', label: '全部分类' },
-              ...categories.map((name) => ({ value: name, label: name })),
-            ]}
-          />
-          <span className="toolbar-spacer" />
-          <SortButton descending={descending} onClick={() => setDescending((value) => !value)} />
-          <Button
-            className="memory-bulk-trigger"
-            type="tertiary"
-            theme="borderless"
-            disabled={busy || data.loading || data.page_size !== pageSize || !filtered.length}
-            onClick={() => {
-              setChecked([]);
-              setSelecting(true);
-            }}
-          >
-            多选
           </Button>
         </div>
       )}

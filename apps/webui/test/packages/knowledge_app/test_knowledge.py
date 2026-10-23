@@ -324,7 +324,7 @@ def test_search_is_stable_after_reading_and_filters_persist_per_list(page):
     expect(page.get_by_role('heading', name='没有匹配的知识页面')).to_be_visible()
     search.fill('Agent')
     page.get_by_role('combobox', name='筛选内容类型').click()
-    page.locator('.semi-select-option').filter(has_text=re.compile('^概念$')).click()
+    page.get_by_role('option', name='概念', exact=True).click()
     follow_link(page, '原始资料')
     source_search = page.get_by_role('textbox', name='搜索资料名称…')
     expect(source_search).to_have_value('')
@@ -537,7 +537,10 @@ def test_quality_reports_survive_reload_export_and_delete(page):
     assert sum(path == 'lint' for path, _ in calls) == 2
 
 
-def test_quality_actions_and_empty_state_have_separate_areas(page):
+@pytest.mark.parametrize('width,theme', [(390, 'light'), (1280, 'dark')])
+def test_quality_actions_and_empty_state_have_separate_areas(page, width, theme):
+    page.set_viewport_size({'width': width, 'height': 844})
+    page.emulate_media(color_scheme=theme)
     fake_openkb(page)
     follow_link(page, '知识库')
     follow_link(page, '质量检查')
@@ -545,9 +548,13 @@ def test_quality_actions_and_empty_state_have_separate_areas(page):
     context = page.locator('.knowledge-context').bounding_box()
     actions = page.locator('.quality-start').bounding_box()
     reports = page.locator('.quality-empty').bounding_box()
-    assert context['y'] + context['height'] <= actions['y']
+    assert context['y'] + context['height'] + 20 <= actions['y']
     assert actions['y'] + actions['height'] <= reports['y']
-    assert page.get_by_role('combobox', name='选择知识库').bounding_box()['width'] <= 200
+    if width >= 768:
+        assert page.get_by_role('combobox', name='选择知识库').bounding_box()['width'] <= 200
+    expect(page.get_by_role('button', name='开始检查', exact=True)).to_be_visible()
+    assert page.locator('.management-body:visible').evaluate('el => el.scrollWidth <= el.clientWidth')
+    page.screenshot(path=f'test-results/dswui-quality-{theme}-{width}.png')
 
 @pytest.mark.parametrize('motion', ['reduce', 'no-preference'])
 def test_quality_export_preserves_page_and_report_dialog(page, motion):

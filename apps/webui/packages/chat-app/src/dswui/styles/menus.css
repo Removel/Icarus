@@ -31,10 +31,6 @@
 .dswui .popup-menu svg { width: 16px; height: 16px; flex: none; }
 html[data-theme="dark"] .dswui .popup-menu { background: #2c2c2e; }
 html[data-theme="dark"] .dswui .popup-menu button.danger { color: #ff6666; }
-.dswui .select-menu { max-width: min(280px, calc(100vw - 16px)); width: max-content; overflow-y: auto; overscroll-behavior: contain; }
-.dswui .select-menu button { min-height: 40px; padding: 0 10px; border-radius: 10px; line-height: 22px; justify-content: space-between; gap: 24px; }
-.dswui .select-menu button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.dswui .select-menu button[aria-selected="true"] { color: var(--label-primary); }
 .dswui .menu {
   position: fixed;
   z-index: 60;

@@ -127,7 +127,7 @@ def test_agent_and_model_settings_share_server_configuration(page):
     page.screenshot(path='test-results/refinement-agent-settings.png', full_page=True)
     settings.get_by_role('button', name='模型配置', exact=True).click()
     settings.get_by_role('textbox', name='模型 1 ID', exact=True).fill('new-model')
-    settings.get_by_role('button', name='模型 1 思考强度', exact=True).click()
+    settings.get_by_role('combobox', name='模型 1 思考强度', exact=True).click()
     settings.get_by_role('option', name='high', exact=True).click()
     settings.get_by_role('button', name='保存配置', exact=True).click()
     expect(settings.get_by_role('status')).to_contain_text('已保存')

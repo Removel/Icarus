@@ -408,7 +408,7 @@ def test_real_manual_memory_is_recalled_after_browser_creation(live, tmp_path, s
         page.get_by_role('textbox', name='记忆内容', exact=True).fill(text)
         if scope == 'workspace':
             page.get_by_role('combobox', name='记忆作用范围').click()
-            page.locator('.semi-select-option').filter(has_text='指定工作区').click()
+            page.get_by_role('option', name='指定工作区', exact=True).click()
             page.get_by_role('textbox', name='记忆工作区路径').fill(str(tmp_path.resolve()))
         with page.expect_response('**/api/mem0/memories', timeout=60000) as creation:
             page.get_by_role('button', name='保存记忆', exact=True).click()

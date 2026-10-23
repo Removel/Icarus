@@ -42,11 +42,10 @@ def test_filter_empty_and_reset(page):
 def pick_option(page, combobox_label, option_text):
     combobox = page.get_by_role("combobox", name=combobox_label)
     combobox.click()
-    option = page.locator(".semi-select-option").filter(has_text=re.compile(f"^{re.escape(option_text)}$"))
+    option = page.get_by_role("option", name=option_text, exact=True)
     option.wait_for(state="visible")
     option.click()
-    # 面板关闭与列表重渲染有一拍延迟，先等所选值落到控件上再返回。
-    page.locator(".semi-select-option:visible").first.wait_for(state="detached")
+    expect(page.get_by_role("listbox")).to_have_count(0)
     expect(combobox).to_contain_text(option_text)
 
 

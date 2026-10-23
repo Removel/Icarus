@@ -163,35 +163,6 @@ html[data-theme="dark"] .dswui .seg button.on {
   background: rgba(255, 255, 255, 0.1);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
-.dswui .setting-select {
-  height: 36px;
-  min-width: 0;
-  max-width: 220px;
-  padding: 0 14px;
-  border: none;
-  border-radius: 18px;
-  background: var(--bg-layer-3);
-  color: var(--label-primary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 22px;
-  text-align: left;
-}
-.dswui .setting-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dswui .setting-select svg { width: 14px; height: 14px; flex: none; color: var(--label-secondary); transition: transform .15s; }
-.dswui .setting-select.open { color: var(--label-tertiary); }
-.dswui .setting-select:hover { background: var(--hover-strong); }
-.dswui .setting-select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.dswui .model-input { position: relative; }
-.dswui .model-input:has(.model-input-select) input { padding-right: 40px; }
-.dswui .model-input .model-input-select { position: absolute; right: 4px; top: 3px; width: 32px; height: 32px; padding: 0; justify-content: center; background: transparent; }
-.dswui .model-input-select span { display: none; }
-.dswui .model-input .model-input-select:hover { background: var(--hover); }
 .dswui .provider-capabilities { margin: 8px 0 18px; }
 .dswui .capability-note { color: var(--label-tertiary); font-size: 12px; line-height: 20px; margin: 6px 0 12px; overflow-wrap: anywhere; }
 .dswui .capability-preview { font-size: 12px; color: var(--label-secondary); margin: 12px 0; }
@@ -377,7 +348,6 @@ html[data-theme="dark"] .dswui .seg button.on {
   .dswui .settings-content { padding: 24px 24px 0 0; }
   .dswui .setting-row { flex-wrap: wrap; gap: 8px; }
   .dswui .setting-row .ctrl { max-width: 100%; }
-  .dswui .setting-select { max-width: min(220px, 55vw); }
   .dswui .row-2 { grid-template-columns: 1fr; gap: 0; }
   .dswui .settings-dialog .seg { flex-wrap: wrap; }
 }

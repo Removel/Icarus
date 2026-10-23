@@ -127,7 +127,7 @@ def test_dswui_fields_navigation_and_settings_dropdown(page, theme):
     heading.press('Escape')
     open_settings(page)
     settings = page.get_by_role('dialog', name='设置', exact=True)
-    select = settings.get_by_role('button', name='对话字号', exact=True)
+    select = settings.get_by_role('combobox', name='对话字号', exact=True)
     assert select.evaluate('el => getComputedStyle(el).borderRadius') == '18px'
     select.click()
     option = settings.get_by_role('option', name='18 px', exact=True)

@@ -5,7 +5,7 @@ import ChatDialog from './ChatDialog';
 import ChatServerSettings from './ChatServerSettings';
 import type { Gateway } from './gateway';
 import { Bot, SlidersHorizontal } from 'lucide-react';
-import { Select } from './dswui/Select';
+import { Select } from '@icarus/ui';
 
 export type ChatTheme = 'light' | 'dark' | 'system';
 export type ManagementPage = 'memory' | 'knowledge';
@@ -116,10 +116,10 @@ export default function ChatSettings({
                   <label className="setting-row">
                     <span className="txt">对话字号</span>
                     <Select
-                      label="对话字号"
+                      aria-label="对话字号"
                       value={String(fontSize)}
                       onChange={(value) => setFontSize(Number(value))}
-                      options={[14, 16, 18, 20].map((size) => ({
+                      optionList={[14, 16, 18, 20].map((size) => ({
                         value: String(size),
                         label: `${size} px`,
                       }))}
