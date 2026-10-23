@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, StrictStr, ValidationError
+from pydantic import Field, StrictStr, StrictBool, ValidationError
 from agent_app.config.settings_service import EditableSettings, SettingsConflictError, SettingsService
 
 from agent_app.application import (
@@ -73,11 +73,19 @@ class UpdateSettingsParams(StrictModel):
     settings: EditableSettings
 
 
+class RequestOptions(StrictModel):
+    web_search: StrictBool = False
+    deep_search: StrictBool = False
+    local_time: str = Field(default="", max_length=100)
+    time_zone: str = Field(default="", max_length=100)
+
+
 class SubmitParams(SessionParams):
     prompt: str
     display_text: str | None = None
     submission_id: str = Field(min_length=1, pattern=r".*\S.*")
     resources: tuple[ResourceRefModel, ...] = ()
+    request_options: RequestOptions | None = None
 
 
 class SteerParams(SessionParams):
@@ -287,6 +295,7 @@ class GatewayMethods:
                 submission_id=value.submission_id,
                 resources=resources,
                 display_text=value.display_text,
+                **({"request_options": value.request_options.model_dump()} if value.request_options else {}),
             )
         except ResourceUnavailableError as error:
             raise _business(
