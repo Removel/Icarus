@@ -7,8 +7,8 @@
 <style>
 
 
-:root { color-scheme:light; --accent:#a45b70; --ink:#232327; --muted:#71717a; --canvas:#f7f7f8; --surface:#fff; --line:#dedee3; --subtle:#f0f0f2; --semi-color-text-1:#55555f; --success:#287447; --danger:#b64657; }
-:root[data-theme=dark] { color-scheme:dark; --accent:#e0a8b6; --ink:#f1f1f2; --muted:#97979e; --canvas:#0c0c0e; --surface:#131315; --line:#35353b; --subtle:#1c1c1f; --semi-color-text-1:#b8b8bf; --success:#75bd92; --danger:#db737f; }
+:root { color-scheme:light; --accent:#a45b70; --ink:#0f1115; --muted:#61666b; --canvas:#fff; --surface:#fff; --line:rgba(0,0,0,.1); --strong-line:#81858c; --subtle:#f1f3f5; --semi-color-text-1:#61666b; --success:#287447; --danger:#b64657; }
+:root[data-theme=dark] { color-scheme:dark; --accent:#e0a8b6; --ink:#faf8f9; --muted:#adb2b8; --canvas:#151517; --surface:#1b1b1c; --line:rgba(255,255,255,.12); --strong-line:#9599a0; --subtle:#2c2c2e; --semi-color-text-1:#adb2b8; --success:#75bd92; --danger:#db737f; }
 :root[data-theme=dark] .demo-button.primary { color:var(--canvas); }
 #design-theme { margin-left:auto; padding:6px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); }
 
@@ -16,10 +16,10 @@
 h1,h2,h3,p { margin:0; } button,input,select { font:inherit; } button,a,input,select { -webkit-tap-highlight-color:transparent; } button { cursor:pointer; } button:disabled { cursor:not-allowed; opacity:.45; }
 a { color:inherit; text-decoration:none; } button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .page { width:100%; margin:0 auto; padding:40px 32px 64px; } .page-heading { margin-bottom:12px; } .page-title-row { display:flex; align-items:center; flex-wrap:wrap; gap:16px; } h1 { font-size:30px; line-height:1.3; font-weight:650; } .heading-count { color:var(--muted); font-size:13px; }
-.demo-button { display:inline-flex; justify-content:center; align-items:center; min-height:36px; padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font-weight:500; } .demo-button:hover:not(:disabled) { background:var(--subtle); } .demo-button.primary { color:white; background:var(--accent); border-color:var(--accent); } .demo-button.primary:hover { filter:brightness(1.08); } .demo-button.borderless { border-color:transparent; } .icon-button { width:36px; padding:0; }
-.component-samples input:not([type=checkbox]),.component-samples select { max-width:100%; height:36px; border:1px solid var(--line); border-radius:8px; padding:6px 10px; background:var(--surface); color:var(--ink); } .component-samples input:not([type=checkbox]) { width:200px; } .component-samples select { min-width:120px; } .demo-toggle { display:flex; align-items:center; gap:8px; } .demo-toggle input { accent-color:var(--accent); width:18px; height:18px; }
+.demo-button { display:inline-flex; justify-content:center; align-items:center; min-height:36px; padding:6px 14px; border:1px solid var(--line); border-radius:4096px; background:var(--surface); color:var(--ink); font-weight:400; } .demo-button:hover:not(:disabled) { background:var(--subtle); } .demo-button.primary { color:white; background:var(--accent); border-color:var(--accent); } .demo-button.primary:hover { filter:brightness(1.08); } .demo-button.borderless { border-color:transparent; } .icon-button { width:36px; padding:0; }
+.component-samples input:not([type=checkbox]),.component-samples select { max-width:100%; height:36px; border:1px solid var(--line); border-radius:12px; padding:6px 14px; background:var(--subtle); color:var(--ink); } .component-samples input:not([type=checkbox]) { width:200px; } .component-samples select { min-width:120px; border-color:transparent; border-radius:18px; } .component-samples input:focus-visible,.component-samples select:focus-visible { outline:none; border-color:var(--strong-line); } .demo-toggle { display:flex; align-items:center; gap:8px; } .demo-toggle input { accent-color:var(--accent); width:18px; height:18px; }
 .status { display:inline-flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap; } .status-dot { width:5px; height:5px; border-radius:50%; background:currentColor; } .status-green { color:var(--success); } .status-blue { color:var(--accent); } .status-amber { color:var(--semi-color-text-1); } .status-gray { color:var(--muted); }
-dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:16px; color:var(--ink); background:var(--surface); } dialog::backdrop { background:#14192366; } .demo-dialog-header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:20px 24px 16px; border-bottom:1px solid var(--line); } .demo-dialog-header h2 { font-size:18px; } .demo-dialog-body { padding:20px 24px 24px; overflow:auto; max-height:calc(100dvh - 130px); }
+dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:24px; color:var(--ink); background:var(--surface); } dialog::backdrop { background:#0006; } :root[data-theme=dark] dialog::backdrop { background:#0009; } .demo-dialog-header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:22px 24px 0; } .demo-dialog-header h2 { font-size:16px; } .demo-dialog-body { padding:24px; overflow:auto; max-height:calc(100dvh - 130px); }
 #demo-toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); padding:10px 18px; background:var(--ink); color:white; border-radius:8px; box-shadow:0 4px 18px #0002; } #demo-toast:empty { display:none; } .document-context { margin:0 0 18px; color:var(--muted); font-size:12px; }
 @media(max-width:700px) { .page { padding:24px 18px 40px; } h1 { font-size:25px; } }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; animation:none!important; } }
@@ -90,7 +90,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </div>
 </div>
 </header>
-<p class="design-intro">基于当前实现的界面规范，供设计、开发与验收共同使用。优先呈现内容，通过明确的层级与直接操作减少阅读和操作成本。</p>
+<p class="design-intro">基于当前实现的界面规范，供设计、开发与验收共同使用。对话、知识库和记忆统一遵循 DSWUI 的布局与控件风格，品牌色使用 Icarus 粉灰主题。优先呈现内容，通过明确的层级与直接操作减少阅读和操作成本。</p>
 <nav class="design-toc" aria-label="设计规范目录">
 <a href="#design-foundation"><span>01</span>颜色与层级</a>
 <a href="#design-layout"><span>02</span>布局与响应式</a>
@@ -103,17 +103,17 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </nav>
 <section class="design-section" aria-labelledby="design-foundation">
 <h2 id="design-foundation" tabindex="-1">颜色与层级</h2>
-<p class="design-note">提供浅色、深色、跟随系统三种模式，默认跟随系统。选择保存在当前浏览器，系统主题变化会即时应用；手动选择后不受系统变化影响。所有模块、弹窗、菜单和关系画布使用同一组主题变量。深色模式与 TUI 色板一致；浅色模式保持中性灰与粉色的颜色职责。</p>
+<p class="design-note">提供浅色、深色、跟随系统三种模式，默认跟随系统。选择保存在当前浏览器，系统主题变化会即时应用；手动选择后不受系统变化影响。各模块共用 DSWUI 灰阶，品牌保持 Icarus 粉色，弹窗、菜单和关系画布使用共享主题变量。</p>
 <div class="design-table-wrap"><table class="design-table"><thead><tr><th>职责</th><th>浅色</th><th>深色</th></tr></thead><tbody>
-<tr><th>外壳 / 画布</th><td>#f7f7f8</td><td>#0c0c0e</td></tr>
-<tr><th>内容表面</th><td>#ffffff</td><td>#131315</td></tr>
-<tr><th>输入 / 执行表面</th><td>#f0f0f2</td><td>#1c1c1f</td></tr>
-<tr><th>正文</th><td>#232327</td><td>#f1f1f2</td></tr>
-<tr><th>辅助文字</th><td>#71717a</td><td>#97979e</td></tr>
-<tr><th>品牌与焦点</th><td>#a45b70</td><td>#e0a8b6</td></tr>
+<tr><th>外壳 / 画布</th><td>#ffffff</td><td>#151517</td></tr>
+<tr><th>内容表面</th><td>#ffffff</td><td>#1b1b1c</td></tr>
+<tr><th>输入 / 执行表面</th><td>#f1f3f5</td><td>#2c2c2e</td></tr>
+<tr><th>正文</th><td>#0f1115</td><td>#faf8f9</td></tr>
+<tr><th>辅助文字</th><td>#61666b</td><td>#adb2b8</td></tr>
+<tr><th>品牌 / 主要操作</th><td>#a45b70</td><td>#e0a8b6</td></tr>
 <tr><th>成功</th><td>#287447</td><td>#75bd92</td></tr>
 <tr><th>失败 / 危险</th><td>#b64657</td><td>#db737f</td></tr>
-<tr><th>分隔 / 强边界</th><td>#dedee3 / #b8b8bf</td><td>#35353b / #4b4b51</td></tr>
+<tr><th>分隔 / 强边界</th><td>rgba(0,0,0,.1) / #81858c</td><td>rgba(255,255,255,.12) / #9599a0</td></tr>
 <tr><th>图谱：资料 / 来源线</th><td>#458868</td><td>#83bea3</td></tr>
 <tr><th>图谱：摘要</th><td>#9370a8</td><td>#bd99d2</td></tr>
 <tr><th>图谱：概念</th><td>#b86783</td><td>#e0a8b6</td></tr>
@@ -172,13 +172,13 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <tbody>
 <tr>
 <th scope="row">字体</th>
-<td>系统无衬线字体；代码使用 Cascadia Code / Consolas</td>
-<td>中文与英文共用字体栈，代码保留等宽排版。</td>
+<td>DSWUI Inter 与系统无衬线字体栈；代码使用 Cascadia Code / Consolas</td>
+<td>应用各模块共用 Inter 字体资源；此离线文档使用系统字体，不请求外部资源。</td>
 </tr>
 <tr>
 <th scope="row">字号</th>
-<td>页面标题 30 px；知识卡片标题 15 px；阅读正文 14 px</td>
-<td>手机页面标题 25 px；知识阅读标题桌面 26 px、手机 22 px。</td>
+<td>管理页顶栏标题 14 px；知识卡片标题 15 px；阅读正文 14 px</td>
+<td>不重复展示管理页大标题；知识阅读标题桌面 26 px、手机 22 px。</td>
 </tr>
 <tr>
 <th scope="row">行高</th>
@@ -197,8 +197,8 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tr>
 <tr>
 <th scope="row">圆角与边界</th>
-<td>控件 8 px；记忆列表 10 px；知识卡片 14 px；通用弹窗 16 px</td>
-<td>边界以细线为主，阴影仅用于悬浮反馈和必要的层级区分。</td>
+<td>按钮、搜索与选择器为胶囊形；普通输入、知识卡片、记忆卡片 12 px；弹窗 24 px</td>
+<td>输入聚焦使用中性强边界，不加粉色外环；阴影用于悬浮层。</td>
 </tr>
 </tbody>
 </table>
@@ -206,7 +206,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </section>
 <section class="design-section" aria-labelledby="design-layout">
 <h2 id="design-layout" tabindex="-1">布局与响应式</h2>
-<p class="design-note">品牌图标采用展开书页与三个汇聚节点：书页表示知识沉淀，节点和分支表示资料、记忆与知识的关联。使用主题玫瑰色，顶栏以 28 px 展示；浏览器图标使用同一轮廓，跟随系统明暗配色。</p>
+<p class="design-note">品牌使用 public/icarus.svg 图标与 public/icarus-wordmark.svg 字标，放在会话侧栏左上角；图标和字标保持紧凑间距，跟随主题明暗配色。</p>
 <div class="design-table-wrap">
 <table class="design-table">
 <thead>
@@ -219,22 +219,22 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <tbody>
 <tr>
 <th scope="row">≥ 992 px</th>
-<td>顶栏高 64 px；侧栏宽 208 px，可收起至 64 px</td>
-<td>页面内边距 28 / 32 / 40 px；内容区独立纵向滚动，导航保持原位。</td>
+<td>会话侧栏宽 261 px，可收起；宽屏管理页顶栏高 96 px，空间不足时导航独占下一行</td>
+<td>页面内边距 24 / 32 / 40 px；内容区独立纵向滚动，导航保持原位。</td>
 </tr>
 <tr>
 <th scope="row">768–991 px</th>
-<td>顶栏高 64 px；侧栏自动切换为 64 px 图标导航</td>
-<td>页面内边距 24 px；图标保留可访问名称。</td>
+<td>保留同一会话侧栏，可手动收起</td>
+<td>管理页使用同一内容容器；收起时顶栏为侧栏入口预留空间。</td>
 </tr>
 <tr>
 <th scope="row">≤ 767 px</th>
-<td>顶栏高 56 px；模块导航置于顶栏下；知识库子导航为四列</td>
-<td>页面内边距 24 / 18 / 32 px；筛选允许换行，弹窗接近全屏。</td>
+<td>会话侧栏改为抽屉；知识库分类在管理页顶栏第二行排列</td>
+<td>页面内边距 20 / 16 px；筛选允许换行，弹窗接近全屏。</td>
 </tr>
 <tr>
 <th scope="row">内容宽度</th>
-<td>通用页面最大 1440 px；知识列表最大 1200 px</td>
+<td>记忆与知识列表居中，最大 1200 px</td>
 <td>文档关联取消页面最大宽度限制，画布使用可用空间。</td>
 </tr>
 <tr>
@@ -245,7 +245,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 </tbody>
 </table>
 </div>
-<p class="design-note">导航采用树形结构，主行和子行均为 40 px，字号 14 px，图标 18 px。展开侧栏通过子项缩进与浅色竖线表达层级，父级没有常驻背景或描边，仅当前页面高亮。知识库分类默认展开；父项文字进入上次访问页面，右侧箭头展开或收起分类，支持键盘 Enter / Space。图标描边统一 1.5 px；侧栏收起与窄屏图标栏保留四个分类快捷入口，取消缩进与层级线，父级图标 18 px、子级图标 16 px，点击区域仍为 40×40 px 并水平居中；整个知识库使用浅灰外层容器，四个子项再使用稍深的灰色内层容器，两层仅保留微弱灰色阴影，组内间隔 2 px、组间间隔 14 px，提示显示「知识库 › 分类名称」；手机常驻四列分类。桌面分类状态在当前页面会话中保留，切换到图标栏或手机仍显示全部分类入口，回到展开侧栏后恢复原状态。顶栏提供主题菜单。文档关联直接显示当前知识库画布，不重复知识库选择与搜索。</p>
+<p class="design-note">全应用保留同一会话侧栏。「知识库」「记忆」入口紧邻「开启新对话」，各占一半宽度，使用相同的胶囊按钮风格。管理页顶栏左侧为返回对话与模块标题；知识库分类、记忆状态在内容区水平居中，宽屏下比返回按钮低 32 px，窄屏独占下一行并与上一行间隔 16–20 px。记忆筛选按搜索、分类、所属用户、作用范围排列，空间不足时换行，添加记忆位于顶栏右侧。质量检查使用独立的标题与操作行，和知识库选择区留出间距。模块切换保留各自筛选、会话和已加载内容，返回知识库恢复上次分类。主题与工作区在账户菜单的系统设置中管理。文档关联直接显示当前知识库画布，不重复知识库选择与搜索。</p>
 </section>
 <section class="design-section" aria-labelledby="design-content">
 <h2 id="design-content" tabindex="-1">内容呈现</h2>
@@ -422,7 +422,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <select aria-label="规范示例范围"><option>工作区</option><option>全局</option>
 </select>
 </div>
-<p class="spec-note">输入焦点使用品牌色边界和弱化外环；检索范围通过名称或占位文字明确。</p>
+<p class="spec-note">输入焦点使用中性强边界，不加外环；搜索与选择器为胶囊形。应用统一使用共享 DSWUI 下拉框，支持方向键、Home / End、Esc 关闭并恢复焦点；此离线示例使用原生选择器。</p>
 </div>
 <div class="component-spec">
 <h3>设置与不可用</h3>
@@ -520,7 +520,7 @@ dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); pa
 <tbody>
 <tr>
 <th scope="row">共用组件</th>
-<td>packages/ui 提供主题、基础控件封装、弹窗、导航与草稿保护；外壳负责模块导航和滚动容器。</td>
+<td>packages/ui 提供共享 Inter 字体、DSWUI 下拉框与胶囊选项卡，以及主题、导航和草稿保护。Semi 仍提供按钮、输入框、弹窗、复选框等基础实现，统一应用 DSWUI 外观；外壳负责模块导航和滚动容器。</td>
 </tr>
 <tr>
 <th scope="row">业务组件</th>
