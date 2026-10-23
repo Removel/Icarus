@@ -95,11 +95,46 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
   const patchModel = (index: number, fields: Partial<Model>) =>
     setDraft({
       ...draft,
+      model_roles:
+        fields.name !== undefined
+          ? Object.fromEntries(
+              Object.entries(draft.model_roles).map(([role, name]) => [
+                role,
+                name === draft.model_settings[index].name ? fields.name! : name,
+              ]),
+            )
+          : draft.model_roles,
       model_settings: draft.model_settings.map((model, i) =>
         i === index ? { ...model, ...fields } : model,
       ),
     });
   const dirty = JSON.stringify(draft) !== JSON.stringify(snapshot.settings);
+  const modelRoles = (advanced: boolean) =>
+    Object.entries(draft.model_roles)
+      .filter(([role]) => (advanced ? role !== 'agent' : role === 'agent'))
+      .map(([role, name]) => (
+        <label className="setting-row" key={role}>
+          <span className="txt">
+            {{
+              agent: '对话模型',
+              compaction: '上下文压缩',
+              skill_generation: 'Skill 生成',
+              title: '标题生成',
+            }[role] ?? role}
+          </span>
+          <Select
+            aria-label={`模型角色 ${role}`}
+            value={name}
+            onChange={(value) =>
+              setDraft({ ...draft, model_roles: { ...draft.model_roles, [role]: value } })
+            }
+            optionList={draft.model_settings.map((model) => ({
+              value: model.name,
+              label: model.name,
+            }))}
+          />
+        </label>
+      ));
   return (
     <form
       className="settings-server-form"
@@ -115,7 +150,7 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
           });
           setSnapshot(value);
           setDraft(value.settings);
-          setMessage('已保存，新建或重新加载会话后生效。');
+          setMessage('已保存，请新建会话使用新配置。');
         } catch (error) {
           setMessage(error instanceof Error ? error.message : '保存失败');
         } finally {
@@ -124,38 +159,44 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
       }}
     >
       <p className="settings-section-hint">
-        与终端共用服务端配置。保存后用于新建或重新加载的会话，当前任务继续执行。
+        与终端共用服务端配置，影响所有客户端。保存后请新建会话使用新配置；刷新页面不会更新已有会话的配置。
       </p>
       {tab === 'agent' ? (
         <>
-          {numberField('最大执行步数', draft.agent.max_steps, (value) =>
-            setDraft({ ...draft, agent: { ...draft.agent, max_steps: value } }),
-          )}
-          {numberField(
-            '每批最多工具调用',
-            draft.agent.tool_execution.max_calls_per_batch,
-            (value) => patchTool('max_calls_per_batch', value),
-          )}
-          {numberField(
-            '默认工具超时（秒）',
-            draft.agent.tool_execution.default_timeout_seconds,
-            (value) => patchTool('default_timeout_seconds', value),
-          )}
-          {numberField(
-            '最长工具超时（秒）',
-            draft.agent.tool_execution.max_timeout_seconds,
-            (value) => patchTool('max_timeout_seconds', value),
-          )}
-          {numberField(
-            '默认工具输出 Token',
-            draft.agent.tool_execution.default_output_tokens,
-            (value) => patchTool('default_output_tokens', value),
-          )}
-          {numberField(
-            '每批工具输出 Token',
-            draft.agent.tool_execution.batch_output_tokens,
-            (value) => patchTool('batch_output_tokens', value),
-          )}
+          <details className="settings-advanced">
+            <summary>高级执行设置</summary>
+            <p className="settings-section-hint">
+              限制单次任务的执行步数、工具调用和输出预算。通常保持服务端默认值即可。
+            </p>
+            {numberField('最大执行步数', draft.agent.max_steps, (value) =>
+              setDraft({ ...draft, agent: { ...draft.agent, max_steps: value } }),
+            )}
+            {numberField(
+              '每批最多工具调用',
+              draft.agent.tool_execution.max_calls_per_batch,
+              (value) => patchTool('max_calls_per_batch', value),
+            )}
+            {numberField(
+              '默认工具超时（秒）',
+              draft.agent.tool_execution.default_timeout_seconds,
+              (value) => patchTool('default_timeout_seconds', value),
+            )}
+            {numberField(
+              '最长工具超时（秒）',
+              draft.agent.tool_execution.max_timeout_seconds,
+              (value) => patchTool('max_timeout_seconds', value),
+            )}
+            {numberField(
+              '默认工具输出 Token',
+              draft.agent.tool_execution.default_output_tokens,
+              (value) => patchTool('default_output_tokens', value),
+            )}
+            {numberField(
+              '每批工具输出 Token',
+              draft.agent.tool_execution.batch_output_tokens,
+              (value) => patchTool('batch_output_tokens', value),
+            )}
+          </details>
           {(
             [
               { key: 'allow_produce', label: '允许生成 Skill' },
@@ -181,120 +222,97 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
       ) : (
         <>
           <p className="settings-section-hint">
-            模型使用服务端已有的连接与凭据；API Key 由服务端环境管理。
+            选择已配置的对话模型。模型连接与 API Key 由服务端管理。
           </p>
-          <div className="settings-model-roles">
-            {Object.entries(draft.model_roles).map(([role, name]) => (
-              <label className="setting-row" key={role}>
-                <span className="txt">
-                  {{
-                    agent: '对话模型',
-                    compaction: '上下文压缩',
-                    skill_generation: 'Skill 生成',
-                    title: '标题生成',
-                  }[role] ?? role}
-                </span>
-                <Select
-                  aria-label={`模型角色 ${role}`}
-                  value={name}
-                  onChange={(value) =>
+          {modelRoles(false)}
+          <details className="settings-advanced">
+            <summary>高级模型配置</summary>
+            <p className="settings-section-hint">
+              供维护服务的人调整模型目录和后台任务分工。模型 ID
+              必须由当前服务端连接支持；温度、输出上限由模型支持情况决定。思考参数由服务端管理。
+            </p>
+            <div className="settings-model-roles">{modelRoles(true)}</div>
+            {draft.model_settings.map((model, index) => (
+              <fieldset className="settings-model-card" key={index}>
+                <legend>模型 {index + 1}</legend>
+                <label className="field">
+                  名称
+                  <input
+                    type="text"
+                    aria-label={`模型 ${index + 1} 名称`}
+                    required
+                    value={model.name}
+                    onChange={(event) => patchModel(index, { name: event.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  模型 ID
+                  <input
+                    type="text"
+                    aria-label={`模型 ${index + 1} ID`}
+                    required
+                    value={model.model_name}
+                    onChange={(event) => patchModel(index, { model_name: event.target.value })}
+                  />
+                </label>
+                {numberField(`模型 ${index + 1} 上下文窗口`, model.context_window, (value) =>
+                  patchModel(index, { context_window: value }),
+                )}
+                {numberField(`模型 ${index + 1} 最大输出 Token`, model.max_tokens, (value) =>
+                  patchModel(index, { max_tokens: value }),
+                )}
+                {numberField(
+                  `模型 ${index + 1} 温度`,
+                  model.temperature,
+                  (value) => patchModel(index, { temperature: value }),
+                  { min: 0, max: 2, step: 0.1 },
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={
+                    draft.model_settings.length === 1 ||
+                    Object.values(draft.model_roles).includes(model.name)
+                  }
+                  title={
+                    Object.values(draft.model_roles).includes(model.name)
+                      ? '请先将使用此模型的角色切换到其他模型'
+                      : undefined
+                  }
+                  onClick={() =>
                     setDraft({
                       ...draft,
-                      model_roles: { ...draft.model_roles, [role]: String(value) },
+                      model_settings: draft.model_settings.filter((_, i) => i !== index),
                     })
                   }
-                  optionList={draft.model_settings.map((model) => ({
-                    value: model.name,
-                    label: model.name,
-                  }))}
-                />
-              </label>
+                >
+                  移除模型
+                </button>
+              </fieldset>
             ))}
-          </div>
-          {draft.model_settings.map((model, index) => (
-            <fieldset className="settings-model-card" key={index}>
-              <legend>模型 {index + 1}</legend>
-              <label className="field">
-                名称
-                <input
-                  type="text"
-                  aria-label={`模型 ${index + 1} 名称`}
-                  required
-                  value={model.name}
-                  onChange={(event) => patchModel(index, { name: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                模型 ID
-                <input
-                  type="text"
-                  aria-label={`模型 ${index + 1} ID`}
-                  required
-                  value={model.model_name}
-                  onChange={(event) => patchModel(index, { model_name: event.target.value })}
-                />
-              </label>
-              {numberField(`模型 ${index + 1} 上下文窗口`, model.context_window, (value) =>
-                patchModel(index, { context_window: value }),
-              )}
-              {numberField(`模型 ${index + 1} 最大输出 Token`, model.max_tokens, (value) =>
-                patchModel(index, { max_tokens: value }),
-              )}
-              {numberField(
-                `模型 ${index + 1} 温度`,
-                model.temperature,
-                (value) => patchModel(index, { temperature: value }),
-                { min: 0, max: 2, step: 0.1 },
-              )}
-              <label className="setting-row">
-                <span className="txt">思考强度</span>
-                <Select
-                  aria-label={`模型 ${index + 1} 思考强度`}
-                  value={model.default_think_level}
-                  onChange={(value) => patchModel(index, { default_think_level: String(value) })}
-                  optionList={['low', 'medium', 'high', 'max'].map((level) => ({
-                    value: level,
-                    label: level,
-                  }))}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={draft.model_settings.length === 1}
-                onClick={() =>
-                  setDraft({
-                    ...draft,
-                    model_settings: draft.model_settings.filter((_, i) => i !== index),
-                  })
-                }
-              >
-                移除模型
-              </button>
-            </fieldset>
-          ))}
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() =>
-              setDraft({
-                ...draft,
-                model_settings: [
-                  ...draft.model_settings,
-                  {
-                    name: '',
-                    model_name: '',
-                    context_window: 65536,
-                    max_tokens: 8192,
-                    temperature: 0.6,
-                    default_think_level: 'medium',
-                  },
-                ],
-              })
-            }
-          >
-            添加模型
-          </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() =>
+                setDraft({
+                  ...draft,
+                  model_settings: [
+                    ...draft.model_settings,
+                    {
+                      name: '',
+                      model_name: '',
+                      context_window: 65536,
+                      max_tokens: 8192,
+                      temperature: 0.6,
+                      default_think_level: 'medium',
+                    },
+                  ],
+                })
+              }
+            >
+              添加模型
+            </button>
+          </details>
         </>
       )}
       {message && (

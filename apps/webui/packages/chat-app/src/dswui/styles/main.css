@@ -10,7 +10,7 @@
 }
 
 .dswui .topbar {
-  height: 60px;
+  height: var(--header-height);
   flex: none;
   display: flex;
   align-items: center;
@@ -41,7 +41,6 @@
   padding: 8px 12px;
   margin-left: -11px;
   position: relative;
-  top: -3px;
   border: 1px solid transparent;
   border-radius: 22px;
   overflow: hidden;
@@ -99,7 +98,7 @@
 
 .dswui .conversation-title-wrap { max-width: min(100%, 480px); transition: margin-left var(--dur) var(--ease); }
 .dswui .sidebar-is-collapsed .conversation-title-wrap { margin-left: 174px; max-width: min(480px, calc(100% - 174px)); }
-.dswui .conversation-title-editor { display: inline-grid; max-width: 100%; min-width: 26px; height: 40px; margin-left: -11px; position: relative; top: -3px; }
+.dswui .conversation-title-editor { display: inline-grid; max-width: 100%; min-width: 26px; height: 40px; margin-left: -11px; position: relative; }
 .dswui .conversation-title-editor::after { content: attr(data-value); visibility: hidden; white-space: pre; padding: 0 13px; font-size: 14px; font-weight: 500; line-height: 40px; overflow: hidden; }
 .dswui .conversation-title-input { position: absolute; inset: 0; min-width: 0; }
 @media (max-width: 767px) { .dswui .conversation-title-wrap { max-width: 60vw; } .dswui .sidebar-is-collapsed .conversation-title-wrap { max-width: calc(100% - 174px); } }

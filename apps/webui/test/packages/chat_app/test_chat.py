@@ -803,6 +803,91 @@ def test_unapplied_steer_is_marked_when_task_stops(page):
     expect(page.locator('.chat-message-state')).to_have_text('引导未应用')
 
 
+def test_steer_identity_reconciles_repeated_text_and_late_applied_events(page):
+    state, emit = gateway(page)
+    emit('task.started', {})
+    editor = page.get_by_role('textbox', name='发送消息')
+    for _ in range(2):
+        editor.fill('继续检查')
+        page.get_by_role('button', name='引导当前任务', exact=True).click()
+        expect(editor).to_have_value('')
+    calls = [call for call in state['calls'] if call['method'] == 'session.steer']
+    assert len(calls) == 2
+    emit('user.correction', {'text': '继续检查', 'submission_id': calls[1]['params']['submission_id']})
+    expect(page.locator('.chat-message-state')).to_have_text(['引导待应用', '引导已应用'])
+    emit('task.finished', {'status': 'completed'})
+    expect(page.locator('.chat-message-state')).to_have_text(['引导未应用', '引导已应用'])
+    emit('user.correction', {'text': '继续检查（已规范化）', 'submission_id': calls[0]['params']['submission_id']})
+    expect(page.locator('.chat-message-state')).to_have_text(['引导已应用', '引导已应用'])
+    expect(page.locator('.chat-user')).to_have_count(2)
+    page.reload()
+    expect(page.locator('.chat-user')).to_have_count(2)
+
+
+@pytest.mark.parametrize('width', [320, 390, 1440])
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_steering_action_uses_composer_toolbar_without_overflow(page, width, theme):
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.emulate_media(color_scheme=theme)
+    state, emit = gateway(page)
+    emit('task.started', {})
+    emit('user.message', {'text': '正在处理的原始任务'})
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('请换一个方向继续')
+    steer = page.get_by_role('button', name='引导当前任务', exact=True)
+    expect(steer).to_be_visible()
+    expect(page.locator('.composer-actions').get_by_role('button', name='引导当前任务')).to_be_visible()
+    expect(page.locator('.chat-runtime-actions')).to_have_count(0)
+    assert steer.evaluate('el => getComputedStyle(el).borderRadius') == '120px'
+    assert page.locator('.composer').evaluate('el => el.scrollWidth <= el.clientWidth')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    buttons = page.locator('.composer-actions > .send-btn').all()
+    assert buttons[0].bounding_box()['x'] + buttons[0].bounding_box()['width'] < buttons[1].bounding_box()['x']
+    page.locator('.composer').screenshot(path=f'test-results/steer-toolbar-{theme}-{width}.png')
+    steer.click()
+    expect(editor).to_have_value('')
+    assert any(call['method'] == 'session.steer' for call in state['calls'])
+
+
+def test_steer_retry_after_reconnect_keeps_applied_history_without_duplicate(page):
+    state, emit = gateway(page, disconnect_steer=True)
+    emit('task.started', {})
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('断线前的引导')
+    page.get_by_role('button', name='引导当前任务', exact=True).click()
+    expect(page.get_by_role('button', name='重试发送', exact=True)).to_be_visible()
+    call = next(call for call in state['calls'] if call['method'] == 'session.steer')
+    # The server applied the request while the socket was disconnected.
+    for kind, payload in [
+        ('user.correction', {'text': '断线前的引导', 'submission_id': call['params']['submission_id']}),
+        ('task.finished', {'status': 'completed'}),
+    ]:
+        state['records'].append({'workspace_key': 'workspace-key', 'session_id': 'session-1',
+            'task_id': 'task-1', 'type': kind, 'payload': payload, 'sequence': len(state['records']) + 1})
+    expect(page.get_by_text('已连接', exact=True)).to_be_visible(timeout=15000)
+    expect(page.locator('.chat-message-state')).to_have_text('引导已应用')
+    page.get_by_role('button', name='重试发送', exact=True).click()
+    expect(editor).to_have_value('')
+    expect(page.locator('.chat-user')).to_have_count(1)
+    expect(page.locator('.chat-message-state')).to_have_text('引导已应用')
+    expect(page.get_by_role('button', name='停止执行', exact=True)).to_have_count(0)
+    calls = [call for call in state['calls'] if call['method'] == 'session.steer']
+    assert len(calls) == 2 and calls[0]['params'] == calls[1]['params']
+
+
+def test_fallback_title_is_short_when_model_title_is_unavailable(page):
+    text = '检查整个项目的布局以及配置选项是否真实生效' * 5 + '\n不要把整条消息作为标题'
+    gateway(page, sessions=[{'session_id': 'session-1', 'first_user_input': text}], records=[
+        {'workspace_key': 'workspace-key', 'session_id': 'session-1', 'task_id': 'task-1',
+         'sequence': 1, 'type': 'user.message', 'payload': {'text': text}},
+    ])
+    expect(page.locator('.chat-title-edit')).to_have_text(text[:12])
+    expect(page.locator('.chat-user')).to_contain_text(text)
+    page.get_by_role('button', name='搜索对话', exact=True).click()
+    page.get_by_role('textbox', name='搜索会话…').fill('不要把整条消息作为标题')
+    expect(page.get_by_role('dialog', name='搜索对话').get_by_role('button', name=text[:12], exact=True)).to_be_visible()
+
+
 def test_stop_works_while_steer_confirmation_is_pending(page):
     state, emit = gateway(page, hold_steer=True)
     emit('task.started', {})
@@ -835,16 +920,21 @@ def test_ai_title_is_background_and_full_title_time_are_available_on_hover(page)
     expect(page.get_by_role('dialog', name='搜索对话').get_by_role('button', name=title, exact=True)).to_be_visible()
 
 @pytest.mark.parametrize('theme', ['light', 'dark'])
-def test_long_session_title_wraps_and_can_be_edited(page, theme):
+def test_long_session_title_stays_on_one_line_and_can_be_edited(page, theme):
     page.emulate_media(color_scheme=theme)
     title = '检查长会话标题悬浮时能够完整阅读，以及在浅色和深色主题下保持清晰可见' * 2
     gateway(page, sessions=[{'session_id': 'session-1', 'title': title, 'first_user_input': '原始问题'}], records=[
-        {'sequence': 1, 'type': 'user.message', 'task_id': 'task-1', 'payload': {'text': '原始问题'}},
+        {'session_id': 'session-1', 'sequence': 1, 'type': 'user.message', 'task_id': 'task-1', 'payload': {'text': '原始问题'}},
     ])
     row = page.get_by_role('button', name=title, exact=True)
     expect(page.locator('.session-item')).to_have_attribute('title', title)
-    assert row.bounding_box()['height'] <= 40
-    assert row.evaluate('el => getComputedStyle(el).whiteSpace') == 'normal'
+    assert row.bounding_box()['height'] <= 20
+    assert row.evaluate('el => getComputedStyle(el).whiteSpace') == 'nowrap'
+    heading = page.locator('.chat-title-edit')
+    assert heading.bounding_box()['height'] == 22
+    assert heading.evaluate('el => getComputedStyle(el).whiteSpace') == 'nowrap'
+    assert heading.evaluate('el => getComputedStyle(el).textOverflow') == 'ellipsis'
+    assert page.locator('.conversation-title').bounding_box()['height'] == 40
     page.get_by_role('button', name='修改对话标题', exact=True).click()
     expect(page.get_by_role('textbox', name='修改对话标题', exact=True)).to_have_value(title)
 

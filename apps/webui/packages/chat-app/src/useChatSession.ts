@@ -429,12 +429,13 @@ export default function useChatSession(hash: string) {
       );
       setTranscript((previous) => ({
         ...previous,
-        items: previous.items.some((item) => item.id === optimisticId)
+        items: previous.items.some((item) => item.submissionId === submission.id)
           ? previous.items
           : [
               ...previous.items,
               {
                 id: optimisticId,
+                submissionId: submission.id,
                 taskId: submission.taskId,
                 kind: 'user',
                 text: submission.text,
@@ -475,7 +476,15 @@ export default function useChatSession(hash: string) {
         setTranscript((previous) => ({
           ...previous,
           items: previous.items.map((item) =>
-            item.id === optimisticId ? { ...item, taskId: result.task_id } : item,
+            item.id === optimisticId
+              ? {
+                  ...item,
+                  taskId: result.task_id,
+                  ...(submission.taskId && previous.finished.has(result.task_id)
+                    ? { pending: false, label: '引导未应用' }
+                    : {}),
+                }
+              : item,
           ),
           tasks: previous.finished.has(result.task_id)
             ? previous.tasks

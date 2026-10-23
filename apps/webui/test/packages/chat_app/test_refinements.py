@@ -7,6 +7,45 @@ from test.navigation import open_settings
 from test.packages.chat_app.test_chat import gateway
 
 
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+@pytest.mark.parametrize('width', [390, 1440])
+def test_conversation_and_thinking_use_dswui_scrollbars(page, theme, width):
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({'width': width, 'height': 900})
+    _, emit = gateway(page)
+    emit('user.message', {'text': '检查滚动条'})
+    for step in range(1, 9):
+        emit('assistant.thinking', {'step': step, 'text': '思考过程\n' * 20})
+    emit('assistant.message', {'step': 9, 'text': '对话正文\n\n' * 60})
+    emit('task.finished', {'status': 'completed'})
+    expect(page.locator('.chat-thinking')).to_have_count(8)
+    page.locator('.chat-process > summary').click()
+    page.mouse.move(0, 0)
+    for selector in ['.chat-transcript', '.chat-process-items']:
+        container = page.locator(selector)
+        expect(container).to_be_visible()
+        metrics = container.evaluate('''el => {
+            const style = getComputedStyle(el);
+            const bar = getComputedStyle(el, '::-webkit-scrollbar');
+            const thumb = getComputedStyle(el, '::-webkit-scrollbar-thumb');
+            const track = getComputedStyle(el, '::-webkit-scrollbar-track');
+            el.scrollTop = 20;
+            return {width: style.scrollbarWidth, color: style.scrollbarColor,
+                barWidth: bar.width, barHeight: bar.height,
+                thumbColor: thumb.backgroundColor, radius: thumb.borderRadius,
+                track: track.backgroundColor, scrollTop: el.scrollTop,
+                overflowing: el.scrollHeight > el.clientHeight};
+        }''')
+        assert metrics == {
+            'width': 'auto', 'color': 'auto', 'barWidth': '8px', 'barHeight': '8px',
+            'thumbColor': 'rgba(0, 0, 0, 0.12)' if theme == 'light' else 'rgba(255, 255, 255, 0.14)',
+            'radius': '8px', 'track': 'rgba(0, 0, 0, 0)', 'scrollTop': 20,
+            'overflowing': True,
+        }
+    page.locator('.chat-transcript').evaluate('el => el.scrollTop = 0')
+    page.screenshot(path=f'test-results/dswui-scrollbars-{theme}-{width}.png')
+
+
 def test_session_rename_pin_export_and_click_title(page):
     state, emit = gateway(page, sessions=[
         {'session_id': 'session-1', 'title': '原始标题', 'first_user_input': '问题'},
@@ -116,6 +155,9 @@ def test_agent_and_model_settings_share_server_configuration(page):
     settings = page.get_by_role('dialog', name='设置', exact=True)
     settings.get_by_role('button', name='Agent 与工具', exact=True).click()
     steps = settings.get_by_role('spinbutton', name='最大执行步数', exact=True)
+    expect(steps).not_to_be_visible()
+    expect(settings.get_by_role('checkbox', name='允许生成 Skill')).to_be_visible()
+    settings.get_by_text('高级执行设置', exact=True).click()
     steps.fill('64')
     assert steps.evaluate('el => getComputedStyle(el).outlineStyle') == 'none'
     scroll = settings.locator('.settings-content')
@@ -126,11 +168,18 @@ def test_agent_and_model_settings_share_server_configuration(page):
     assert snapshot['settings']['agent']['max_steps'] == 64
     page.screenshot(path='test-results/refinement-agent-settings.png', full_page=True)
     settings.get_by_role('button', name='模型配置', exact=True).click()
+    expect(settings.get_by_role('combobox', name='模型角色 agent')).to_be_visible()
+    expect(settings.get_by_role('textbox', name='模型 1 ID', exact=True)).not_to_be_visible()
+    settings.get_by_text('高级模型配置', exact=True).click()
     settings.get_by_role('textbox', name='模型 1 ID', exact=True).fill('new-model')
-    settings.get_by_role('combobox', name='模型 1 思考强度', exact=True).click()
-    settings.get_by_role('option', name='high', exact=True).click()
+    settings.get_by_role('textbox', name='模型 1 名称', exact=True).fill('renamed-main')
+    expect(settings.get_by_role('combobox', name='模型角色 title')).to_contain_text('renamed-main')
+    expect(settings.get_by_role('combobox', name='模型 1 思考强度', exact=True)).to_have_count(0)
+    expect(settings.get_by_role('button', name='移除模型', exact=True)).to_be_disabled()
     settings.get_by_role('button', name='保存配置', exact=True).click()
     expect(settings.get_by_role('status')).to_contain_text('已保存')
     assert snapshot['settings']['model_settings'][0]['model_name'] == 'new-model'
-    assert snapshot['settings']['model_settings'][0]['default_think_level'] == 'high'
+    assert snapshot['settings']['model_settings'][0]['default_think_level'] == 'medium'
+    assert set(snapshot['settings']['model_roles'].values()) == {'renamed-main'}
+    assert snapshot['settings']['agent']['tool_execution']['default_timeout_seconds'] == 120
     assert snapshot['settings']['agent']['max_steps'] == 64

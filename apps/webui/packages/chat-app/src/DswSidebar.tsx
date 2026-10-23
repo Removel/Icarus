@@ -20,7 +20,12 @@ import {
   IconTrash,
 } from './dswui/Icons';
 
-export const titleOf = (session: Session) => session.title || session.first_user_input || '新会话';
+export const titleOf = (session: Session) => {
+  if (session.title) return session.title;
+  const firstLine = session.first_user_input?.trim().split(/\r?\n/)[0] ?? '';
+  const preview = firstLine.replace(/\s+/g, ' ');
+  return preview ? Array.from(preview).slice(0, 12).join('') : '新会话';
+};
 
 function groupSessions(sessions: Session[], pinned: string[]) {
   const today = new Date();

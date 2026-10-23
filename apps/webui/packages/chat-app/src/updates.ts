@@ -3,6 +3,7 @@ import type { RuntimeUpdate } from './gateway';
 export type ChatItem = {
   id: string;
   taskId?: string;
+  submissionId?: string;
   kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error';
   text: string;
   label?: string;
@@ -57,6 +58,7 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
       kind: 'user',
       text,
       final: true,
+      submissionId: typeof p.submission_id === 'string' ? p.submission_id : undefined,
       label: update.type === 'user.correction' ? '引导已应用' : undefined,
     };
   } else if (
@@ -101,7 +103,13 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
   item.live = live;
   if (update.type === 'user.message' || update.type === 'user.correction') {
     const pending = state.items.find(
-      (row) => row.pending && row.text === text && (!row.taskId || row.taskId === task),
+      (row) =>
+        (!row.taskId || row.taskId === task) &&
+        (item.submissionId
+          ? row.submissionId === item.submissionId
+          : row.pending &&
+            row.text === text &&
+            Boolean(row.label) === (update.type === 'user.correction')),
     );
     if (pending)
       return { ...state, items: state.items.map((row) => (row === pending ? item : row)) };

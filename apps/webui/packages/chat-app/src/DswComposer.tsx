@@ -127,64 +127,66 @@ export default function DswComposer({
               <AnimatedToggleIcon kind="search" enabled={false} />
               智能搜索
             </button>
-            <div className="spacer" />
-            <button
-              type="button"
-              className="composer-attach"
-              disabled
-              title="当前 Gateway 尚无附件上传接口"
-              aria-label="添加附件"
-            >
-              <IconPaperclip />
-            </button>
-            {running && (
+            <div className="composer-actions">
+              {unknown ? (
+                <button
+                  type="button"
+                  className="pill composer-reconcile"
+                  disabled={busy || submitting}
+                  onClick={chat.clearDraft}
+                  title="已核对历史，清除草稿"
+                  aria-label="已核对历史，清除草稿"
+                >
+                  清除草稿
+                </button>
+              ) : transcript.tasks.length > 0 && draft.trim() ? (
+                <button
+                  type="button"
+                  className="pill composer-steer"
+                  disabled={!connected || loading || busy || submitting}
+                  onClick={() => void chat.send(true)}
+                  title="引导当前任务"
+                  aria-label="引导当前任务"
+                >
+                  <IconPencil />
+                  引导
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="send-btn stop"
-                disabled={!connected || busy}
-                onClick={chat.cancel}
-                title="停止生成"
-                aria-label="停止执行"
+                className="composer-attach"
+                disabled
+                title="当前 Gateway 尚无附件上传接口"
+                aria-label="添加附件"
               >
-                <IconStop />
+                <IconPaperclip />
               </button>
-            )}
-            {(!running || draft.trim()) && (
-              <button
-                type="submit"
-                className="send-btn"
-                disabled={loading || busy || (unknown && submitting) || !draft.trim()}
-                title={sendLabel}
-                aria-label={sendLabel}
-              >
-                <IconArrowUp />
-              </button>
-            )}
+              {running && (
+                <button
+                  type="button"
+                  className="send-btn stop"
+                  disabled={!connected || busy}
+                  onClick={chat.cancel}
+                  title="停止生成"
+                  aria-label="停止执行"
+                >
+                  <IconStop />
+                </button>
+              )}
+              {(!running || draft.trim()) && (
+                <button
+                  type="submit"
+                  className="send-btn"
+                  disabled={loading || busy || (unknown && submitting) || !draft.trim()}
+                  title={sendLabel}
+                  aria-label={sendLabel}
+                >
+                  <IconArrowUp />
+                </button>
+              )}
+            </div>
           </div>
         </div>
-        {(unknown || (transcript.tasks.length > 0 && Boolean(draft.trim()))) && (
-          <div className="chat-runtime-actions">
-            {unknown ? (
-              <button
-                type="button"
-                className="mini-btn"
-                disabled={busy || submitting}
-                onClick={chat.clearDraft}
-              >
-                已核对历史，清除草稿
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="mini-btn"
-                disabled={!connected || loading || busy || submitting || !draft.trim()}
-                onClick={() => void chat.send(true)}
-              >
-                引导当前任务
-              </button>
-            )}
-          </div>
-        )}
         <div className="disclaimer">内容由 AI 生成，请仔细甄别</div>
       </div>
     </form>

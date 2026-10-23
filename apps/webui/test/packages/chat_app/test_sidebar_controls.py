@@ -13,6 +13,35 @@ SESSIONS = [
 
 
 @pytest.mark.parametrize('width', [390, 1440])
+@pytest.mark.parametrize('title', ['测试会话', '较长的会话标题' * 10])
+def test_navigation_icons_align_in_open_and_collapsed_sidebar(page, width, title):
+    page.set_viewport_size({'width': width, 'height': 900})
+    _, emit = gateway(page, sessions=[{'session_id': 'session-1', 'title': title, 'first_user_input': ''}])
+    emit('user.message', {'text': '开始对话'})
+    expect(page.locator('.chat-title-edit')).to_be_visible()
+    open_sessions(page)
+    for selector in ['.brand-actions', '.collapsed-actions']:
+        if selector == '.collapsed-actions':
+            page.get_by_role('button', name='收起会话列表', exact=True).click()
+        icons = page.locator(selector + ' .icon-btn > svg')
+        expect(icons.first).to_be_visible()
+        bounds = icons.evaluate_all('nodes => nodes.map(el => { const r = el.getBoundingClientRect(); return { y: r.y, height: r.height, width: r.width }; })')
+        assert len(bounds) >= 2 and all(box == bounds[0] for box in bounds)
+        assert bounds[0]['height'] == 16
+        title_box = page.locator('.chat-title-edit').bounding_box()
+        icon_center = bounds[0]['y'] + bounds[0]['height'] / 2
+        assert abs(title_box['y'] + title_box['height'] / 2 - icon_center) < 1, (title_box, bounds)
+        if width >= 768 or selector == '.collapsed-actions':
+            page.get_by_role('button', name='修改对话标题', exact=True).click()
+            editor = page.get_by_role('textbox', name='修改对话标题', exact=True)
+            box = editor.bounding_box()
+            assert abs(box['y'] + box['height'] / 2 - icon_center) < 1, (box, bounds)
+            editor.press('Escape')
+        page.screenshot(path=f'test-results/header-alignment-{width}-{len(title)}-{selector[1:]}.png',
+                        clip={'x': 0, 'y': 0, 'width': width, 'height': 80})
+
+
+@pytest.mark.parametrize('width', [390, 1440])
 def test_multi_select_pin_cancel_and_delete(page, width):
     page.set_viewport_size({'width': width, 'height': 900})
     state, _ = gateway(page, sessions=[dict(row) for row in SESSIONS])
@@ -99,6 +128,13 @@ def test_dswui_fields_navigation_and_settings_dropdown(page, theme):
     expect(page.locator('.brand .icarus-wordmark')).to_have_attribute('src', '/icarus-wordmark.svg')
     expect(page.locator('link[rel="icon"]')).to_have_attribute('href', '/icarus.svg')
     expect(page.locator('.chat-workspace-trigger')).to_have_count(0)
+    icons = page.locator('.brand-actions .icon-btn > svg').evaluate_all('''nodes => nodes.map(el => {
+        const box = el.getBoundingClientRect();
+        return {y: box.y, height: box.height, width: box.width, display: getComputedStyle(el).display};
+    })''')
+    assert len(icons) == 2
+    assert icons[0] == icons[1]
+    assert icons[0]['height'] == 16 and icons[0]['display'] == 'block'
     page.get_by_role('button', name='搜索对话', exact=True).click()
     search = page.get_by_role('textbox', name='搜索会话…')
     expect(search).to_be_focused()

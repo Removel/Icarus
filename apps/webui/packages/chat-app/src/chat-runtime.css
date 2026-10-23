@@ -61,6 +61,11 @@ html[data-theme='dark'] .dswui .icarus-wordmark {
   min-height: 0;
   flex: 1;
 }
+/* Let the original dswui pseudo-elements style both scroll containers. */
+.dswui :is(.chat-transcript, .chat-process-items) {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
 .dswui .dsw-welcome-topbar {
   position: absolute;
   top: 0;
@@ -134,10 +139,23 @@ html[data-theme='dark'] .dswui .icarus-wordmark {
 .dswui .composer-attach:disabled {
   opacity: 0.4;
 }
-.dswui .chat-runtime-actions {
+.dswui .composer-bar {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.dswui .composer-actions {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 6px;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.dswui .composer-actions :is(.pill, .composer-attach) {
+  margin-right: 0;
+}
+.dswui .composer-steer,
+.dswui .composer-reconcile {
+  flex: none;
+  color: var(--label-secondary);
 }
 .dswui .chat-queue {
   margin-bottom: 8px;
@@ -318,13 +336,10 @@ html[data-theme='dark'] .dswui .icarus-wordmark {
   padding-block: 8px;
 }
 .dswui .session-item .title {
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
   line-height: 20px;
-  max-height: 40px;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dswui .session-item.active .title {
   padding-right: 28px;
@@ -347,16 +362,18 @@ html[data-theme='dark'] .dswui .icarus-wordmark {
 .dswui .conversation-title {
   width: fit-content;
   min-width: 0;
-  height: auto;
-  max-height: 64px;
+  height: 40px;
   margin-block: 0;
-  white-space: normal;
+  white-space: nowrap;
 }
 .dswui .chat-title-edit {
   display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-align: left;
   line-height: 22px;
-  overflow-wrap: anywhere;
 }
 .dswui .session-item input.rename {
   color: var(--label-primary);
@@ -482,6 +499,16 @@ html[data-theme='dark'] .dswui .icarus-wordmark {
   color: var(--label-secondary);
   font-size: 13px;
   line-height: 22px;
+}
+.dswui .settings-advanced {
+  margin: 16px 0;
+  border-block: 1px solid var(--border-l2);
+}
+.dswui .settings-advanced > summary {
+  padding: 16px 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--label-secondary);
 }
 .dswui .settings-server-state {
   display: grid;
