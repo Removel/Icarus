@@ -199,7 +199,7 @@ def test_fixed_page_size_preserves_page_across_sidebar_and_window_resize(page):
     memory_page_size(page)
     ids = page.locator('.memory-entry').evaluate_all('cards => cards.map(card => card.dataset.memoryId)')
     requests = len(page.mem0_calls)
-    for action in ['收起侧边栏', '展开侧边栏']:
+    for action in ['收起会话列表', '展开会话列表']:
         page.get_by_role('button', name=action, exact=True).click()
         assert memory_page_size(page) == 15
         assert page.locator('.memory-entry').evaluate_all('cards => cards.map(card => card.dataset.memoryId)') == ids
@@ -220,7 +220,7 @@ def test_resize_keeps_bulk_selection_and_edit_draft_stable(page):
     original_size = memory_page_size(page)
     page.get_by_role('button', name='多选', exact=True).click()
     page.get_by_text('全选当前结果', exact=True).click()
-    page.get_by_role('button', name='收起侧边栏', exact=True).click()
+    page.get_by_role('button', name='收起会话列表', exact=True).click()
     assert memory_page_size(page) == original_size
     expect(page.locator('.selection-count')).to_have_text(f'已选 {original_size} 条')
     expect(page.locator('.memory-entry')).to_have_count(original_size)
@@ -258,12 +258,12 @@ def test_sidebar_animates_width_without_replacing_cards_or_changing_columns(page
         let mutations = 0, minOpacity = 1, intermediateWidth = false;
         const observer = new MutationObserver(records => mutations += records.length);
         observer.observe(document.querySelector('.memory-list'), {childList: true});
-        document.querySelector('[aria-label="收起侧边栏"]').click();
+        document.querySelector('[aria-label="收起会话列表"]').click();
         const started = performance.now();
         await new Promise(resolve => {
             function sample() {
-                const width = document.querySelector('.app-sidebar').getBoundingClientRect().width;
-                intermediateWidth ||= width > 65 && width < 207;
+                const width = document.querySelector('.chat-page').getBoundingClientRect().width;
+                intermediateWidth ||= width > 1 && width < 260;
                 for (const card of window.memoryOriginalCards)
                     minOpacity = Math.min(minOpacity, Number(getComputedStyle(card).opacity));
                 if (performance.now() - started < 400) requestAnimationFrame(sample); else resolve();
@@ -284,7 +284,7 @@ def test_sidebar_animates_width_without_replacing_cards_or_changing_columns(page
     assert abs(current['y'] - original['y']) <= 1
     expect(page.locator('.memory-board')).to_have_attribute('aria-busy', 'false')
     page.screenshot(path='test-results/memory-stable-collapsed.png', full_page=True)
-    page.get_by_role('button', name='展开侧边栏', exact=True).click()
+    page.get_by_role('button', name='展开会话列表', exact=True).click()
     memory_page_size(page)
     assert len(page.mem0_calls) == requests
 
@@ -314,7 +314,7 @@ def test_sidebar_resize_cancels_running_page_animation(page):
     page.wait_for_function('window.memoryTransition !== undefined')
     page.evaluate('''async () => {
         await window.memoryTransition.ready;
-        document.querySelector('[aria-label="收起侧边栏"]').click();
+        document.querySelector('[aria-label="收起会话列表"]').click();
         await window.memoryTransition.finished;
     }''')
     assert page.evaluate('window.memorySkippedTransitions') == 1
