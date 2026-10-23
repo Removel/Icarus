@@ -1,0 +1,79 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* 下拉菜单 */
+.dswui .popup-menu-mask { position: fixed; inset: 0; z-index: 60; }
+.dswui .popup-menu {
+  position: fixed;
+  z-index: 61;
+  min-width: 124px;
+  max-width: 280px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--bg-layer-1);
+  box-shadow: 0 0 1px rgba(0,0,0,.2), 0 0 4px rgba(0,0,0,.02), 0 12px 32px rgba(0,0,0,.08);
+}
+.dswui .popup-menu button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  gap: 8px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--label-primary);
+  white-space: nowrap;
+  text-align: left;
+}
+.dswui .popup-menu button:is(:hover,:focus-visible) { background: var(--hover); outline: none; }
+.dswui .popup-menu button.danger { color: #ec1313; }
+.dswui .popup-menu button.danger:is(:hover,:focus-visible) { background: rgba(236,19,19,.06); }
+.dswui .popup-menu svg { width: 16px; height: 16px; flex: none; }
+html[data-theme="dark"] .dswui .popup-menu { background: #2c2c2e; }
+html[data-theme="dark"] .dswui .popup-menu button.danger { color: #ff6666; }
+.dswui .select-menu { max-width: min(280px, calc(100vw - 16px)); width: max-content; overflow-y: auto; overscroll-behavior: contain; }
+.dswui .select-menu button { min-height: 40px; padding: 0 10px; border-radius: 10px; line-height: 22px; justify-content: space-between; gap: 24px; }
+.dswui .select-menu button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dswui .select-menu button[aria-selected="true"] { color: var(--label-primary); }
+.dswui .menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  background: var(--bg-layer-1);
+  border: 1px solid var(--border-l1);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+  padding: 6px;
+  animation: fade-in 0.12s var(--ease);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.dswui .menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  color: var(--label-primary);
+  text-align: left;
+}
+.dswui .menu-item:hover {
+  background: var(--hover);
+}
+.dswui .menu-item .check {
+  color: var(--brand);
+}
+.dswui .menu-sep {
+  height: 1px;
+  background: var(--border-l1);
+  margin: 6px 4px;
+}
+.dswui .menu-label {
+  font-size: 12px;
+  color: var(--label-tertiary);
+  padding: 6px 10px 4px;
+}

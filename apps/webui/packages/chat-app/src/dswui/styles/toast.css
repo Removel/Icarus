@@ -1,0 +1,34 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* Toast */
+.dswui .toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.dswui .toast {
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  font-size: 13px;
+  padding: 9px 16px;
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  animation: toast-in 0.2s var(--ease);
+  max-width: 80vw;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
