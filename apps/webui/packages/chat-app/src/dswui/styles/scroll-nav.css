@@ -1,0 +1,141 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* 对话悬浮目录：收起时只显示 34px 指示条，hover 展开标题 */
+.dswui .scroll-nav {
+  position: fixed;
+  top: 50%;
+  right: 16px;
+  z-index: 5;
+  width: 34px;
+  max-width: calc(100vw - 32px);
+  height: min(300px, calc(100vh - 260px));
+  display: flex;
+  align-items: center;
+  transform: translateY(-50%);
+  user-select: none;
+  transition: width 0.2s var(--ease);
+}
+.dswui .scroll-nav-bg {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: -1;
+  width: 34px;
+  height: calc(100% - 8px);
+  transform: translateY(-50%);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(5px);
+}
+html[data-theme="dark"] .dswui .scroll-nav-bg {
+  background: rgba(21, 21, 23, 0.6);
+}
+.dswui .scroll-nav-list {
+  width: 34px;
+  max-height: 100%;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  overflow-y: auto;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  pointer-events: auto;
+  scrollbar-width: none;
+  transition: width 0.2s var(--ease), background 0.2s, box-shadow 0.2s;
+}
+.dswui .scroll-nav-list::-webkit-scrollbar {
+  display: none;
+}
+.dswui .scroll-nav:hover {
+  width: 240px;
+}
+.dswui .scroll-nav:hover .scroll-nav-list {
+  width: 240px;
+  pointer-events: auto;
+  background: var(--bg-layer-1);
+  border-color: var(--border-l2);
+  box-shadow: var(--shadow-pop);
+}
+.dswui .scroll-nav-item {
+  width: 100%;
+  height: 30px;
+  margin: 0;
+  padding: 0 4px 0 8px;
+  border-radius: 6px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: var(--label-tertiary);
+  line-height: 20px;
+}
+.dswui .scroll-nav-item:hover {
+  background: var(--hover);
+  color: var(--label-primary);
+}
+.dswui .scroll-nav-title {
+  flex: 1;
+  min-width: 0;
+  margin-right: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.2s;
+}
+.dswui .scroll-nav:hover .scroll-nav-title {
+  opacity: 1;
+}
+.dswui .scroll-nav-item.active .scroll-nav-title {
+  color: var(--brand);
+  font-weight: 500;
+}
+.dswui .scroll-nav-indicator {
+  width: 16px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.dswui .scroll-nav-indicator i {
+  width: 8px;
+  height: 2px;
+  border-radius: 4px;
+  background: var(--border-l3);
+  transition: background-color 0.2s, transform 0.2s;
+}
+.dswui .scroll-nav-item:hover .scroll-nav-indicator i {
+  background: var(--label-primary);
+}
+.dswui .scroll-nav-item.active .scroll-nav-indicator i {
+  background: var(--brand);
+  transform: scale(1.5);
+}
+@media (max-width: 767px) {
+  .dswui .scroll-nav {
+    display: none;
+  }
+}
+
+.dswui .scroll-bottom {
+  position: absolute;
+  right: 12px;
+  bottom: calc(100% + 20px);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--bg-layer-1);
+  border: 1px solid var(--border-l2);
+  box-shadow: 0 0 1px rgba(0,0,0,.2), 0 0 4px rgba(0,0,0,.02), 0 12px 32px rgba(0,0,0,.08);
+  display: grid;
+  place-items: center;
+  color: var(--label-primary);
+  z-index: 6;
+  animation: none;
+}
+.dswui .scroll-bottom svg { width: 14px; height: 14px; }
+.dswui .scroll-bottom:hover { background: var(--bg-layer-2); }
+html[data-theme="dark"] .dswui .scroll-bottom { background: #2c2c2e; }

@@ -1,0 +1,271 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* ============================ Markdown ============================ */
+.dswui .md-body {
+  font-size: 16px;
+  line-height: 28px;
+  color: var(--label-primary);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.dswui .md-body > *:first-child {
+  margin-top: 0;
+}
+.dswui .md-body > *:last-child {
+  margin-bottom: 0;
+}
+.dswui .md-body p {
+  margin: 16px 0;
+}
+.dswui .md-body h1,
+.dswui .md-body h2,
+.dswui .md-body h3,
+.dswui .md-body h4,
+.dswui .md-body h5,
+.dswui .md-body h6 {
+  margin: 32px 0 16px;
+  font-weight: 700;
+}
+.dswui .md-body h1 {
+  font-size: 24px;
+  line-height: 34px;
+}
+.dswui .md-body h2 {
+  font-size: 22px;
+  line-height: 32px;
+}
+.dswui .md-body h3 {
+  font-size: 20px;
+  line-height: 30px;
+}
+.dswui .md-body :is(h4,h5,h6) {
+  font-size: 16px;
+  line-height: 28px;
+  font-weight: 600;
+  margin: 16px 0;
+}
+.dswui .md-body :is(h4,h5,h6):has(+ul,+ol) { margin-bottom: 8px; }
+.dswui .md-body :is(h4,h5,h6) + :is(ul,ol) { margin-top: 8px; }
+.dswui .md-body ul,
+.dswui .md-body ol {
+  margin: 16px 0;
+  padding-left: 18px;
+}
+.dswui .md-body li {
+  margin: 0;
+}
+.dswui .md-body li:not(:first-child) { margin-top: 6px; }
+.dswui .md-body li::marker { color: var(--label-secondary); }
+.dswui .md-body li > :is(ul,ol) { margin-top: 4px; }
+.dswui .md-body li > p {
+  margin: 8px 0;
+}
+.dswui .md-body li > :first-child { margin-top: 0; }
+.dswui .md-body li > :last-child { margin-bottom: 0; }
+.dswui .md-body :is(ul,ol) ol { padding-left: 0; list-style-position: inside; }
+.dswui .md-body a {
+  color: var(--brand);
+  text-decoration: none;
+  border: solid transparent;
+  border-width: 2px 3px;
+  margin: 0 -3px;
+}
+.dswui .md-body a:hover {
+  text-decoration: underline;
+}
+.dswui .md-body blockquote {
+  margin: 16px 0 0;
+  padding-left: 14px;
+  border-left: 2px solid var(--label-dimmed);
+}
+.dswui .md-body hr {
+  border: none;
+  border-top: 1px solid var(--border-l2);
+  margin: 32px 0;
+}
+.dswui .md-body code:not(.hljs) {
+  font-family: var(--font-code);
+  font-size: 0.875em;
+  line-height: 22px;
+  background: var(--inline-code-bg);
+  border-radius: 6px;
+  padding: 0 5px;
+  word-break: break-word;
+}
+.dswui .md-body table {
+  border-collapse: collapse;
+  margin: 16px 0;
+  width: max-content;
+  min-width: 100%;
+  font-size: 15px;
+  line-height: 25px;
+}
+.dswui .md-table-wrap { margin: 16px 0; overflow-x: auto; }
+.dswui .md-table-wrap table { margin: 0; }
+.dswui .md-body th,
+.dswui .md-body td {
+  border: none;
+  border-bottom: 1px solid var(--border-l2);
+  padding: 10px 16px;
+  min-width: 100px;
+  max-width: min(30vw, 320px);
+}
+.dswui .md-body th {
+  text-align: left;
+  border-bottom-color: var(--border-l3);
+  font-weight: 500;
+}
+.dswui .md-body :is(th,td):first-child { padding-left: 0; }
+.dswui .md-body :is(th,td):last-child { padding-right: 0; }
+.dswui .md-body img {
+  max-width: 100%;
+  border-radius: var(--radius-s);
+}
+.dswui .md-body strong {
+  font-weight: 600;
+}
+
+/* 代码块 */
+.dswui .code-block {
+  margin: 16px 0;
+  border-radius: var(--radius-m);
+  overflow: clip;
+  background: var(--code-bg);
+}
+.dswui .code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+  padding: 9px 14px;
+  background: var(--code-head);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.dswui .code-lang {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--label-primary);
+  text-transform: lowercase;
+}
+.dswui .code-copy {
+  font-size: 13px;
+  color: var(--label-secondary);
+  padding: 0;
+  border-radius: 5px;
+  transition: all 0.15s var(--ease);
+}
+.dswui .code-copy:hover {
+  background: var(--hover);
+  color: var(--label-primary);
+}
+.dswui .code-pre {
+  margin: 0;
+  padding: 16px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 22px;
+}
+.dswui .code-pre code {
+  font-family: var(--font-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+
+/* highlight.js —— 自定义浅/深色配色 */
+.dswui .hljs-comment,
+.dswui .hljs-quote {
+  color: #a0a1a7;
+  font-style: italic;
+}
+.dswui .hljs-keyword,
+.dswui .hljs-selector-tag,
+.dswui .hljs-literal,
+.dswui .hljs-type {
+  color: #a626a4;
+}
+.dswui .hljs-string,
+.dswui .hljs-doctag,
+.dswui .hljs-regexp {
+  color: #50a14f;
+}
+.dswui .hljs-number,
+.dswui .hljs-built_in,
+.dswui .hljs-symbol {
+  color: #b76b01;
+}
+.dswui .hljs-title,
+.dswui .hljs-title.function_,
+.dswui .hljs-section,
+.dswui .hljs-name {
+  color: #4078f2;
+}
+.dswui .hljs-attr,
+.dswui .hljs-attribute,
+.dswui .hljs-variable,
+.dswui .hljs-template-variable,
+.dswui .hljs-params {
+  color: #383a42;
+}
+.dswui .hljs-meta,
+.dswui .hljs-tag {
+  color: #383a42;
+}
+.dswui .hljs-deletion {
+  background: #ffebe9;
+}
+.dswui .hljs-addition {
+  background: #dafbe1;
+}
+html[data-theme="dark"] .dswui .hljs-comment,
+html[data-theme="dark"] .dswui .hljs-quote {
+  color: #5c6370;
+}
+html[data-theme="dark"] .dswui .hljs-keyword,
+html[data-theme="dark"] .dswui .hljs-selector-tag,
+html[data-theme="dark"] .dswui .hljs-literal,
+html[data-theme="dark"] .dswui .hljs-type {
+  color: #c678dd;
+}
+html[data-theme="dark"] .dswui .hljs-string,
+html[data-theme="dark"] .dswui .hljs-doctag,
+html[data-theme="dark"] .dswui .hljs-regexp {
+  color: #98c379;
+}
+html[data-theme="dark"] .dswui .hljs-number,
+html[data-theme="dark"] .dswui .hljs-built_in,
+html[data-theme="dark"] .dswui .hljs-symbol {
+  color: #d19a66;
+}
+html[data-theme="dark"] .dswui .hljs-title,
+html[data-theme="dark"] .dswui .hljs-title.function_,
+html[data-theme="dark"] .dswui .hljs-section,
+html[data-theme="dark"] .dswui .hljs-name {
+  color: #61afef;
+}
+html[data-theme="dark"] .dswui .hljs-attr,
+html[data-theme="dark"] .dswui .hljs-attribute,
+html[data-theme="dark"] .dswui .hljs-variable,
+html[data-theme="dark"] .dswui .hljs-template-variable,
+html[data-theme="dark"] .dswui .hljs-params {
+  color: #e06c75;
+}
+html[data-theme="dark"] .dswui .hljs-meta,
+html[data-theme="dark"] .dswui .hljs-tag {
+  color: #a0a1a7;
+}
+
+/* 数学 */
+.dswui .katex-inline {
+  font-size: 1.02em;
+}
+.dswui .katex-block {
+  margin: 16px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+.dswui .katex-display {
+  margin: 0;
+}

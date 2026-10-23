@@ -1,0 +1,169 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* ============================ 输入区 ============================ */
+.dswui .composer-wrap {
+  flex: none;
+  padding: 8px var(--msg-pad-x) 14px;
+  background: linear-gradient(to bottom, transparent, var(--bg-base) 22%);
+  position: relative;
+}
+@media (max-width: 767px) {
+  .dswui .composer-wrap {
+    padding: 6px 16px 12px;
+  }
+}
+.dswui .composer-inner {
+  position: relative;
+  max-width: 776px;
+  margin: 0 auto;
+}
+
+.dswui .composer {
+  border: 1px solid var(--border-l2);
+  border-radius: 24px;
+  background: var(--composer-fill);
+  box-shadow: 0 4px 10px rgba(0,0,0,.02), 0 2px 4px rgba(0,0,0,.04);
+  transition: border-color 0.15s var(--ease), background-color 0.15s var(--ease);
+  overflow: hidden;
+}
+/* 官方 bordered 变体聚焦时只保留中性描边，不会变品牌色，也没有外发光 */
+.dswui .composer.focused {
+  border-color: var(--border-l2);
+  box-shadow: none;
+}
+.dswui .composer textarea {
+  display: block;
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: none;
+  font-size: 16px;
+  line-height: 24px;
+  min-height: 60px;
+  margin-top: 4px;
+  padding: 12px 12px 0 16px;
+  max-height: 336px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  color: var(--label-primary);
+  caret-color: var(--brand);
+}
+.dswui .composer textarea::placeholder {
+  color: var(--label-tertiary);
+}
+.dswui .composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-height: 58px;
+  margin: 0;
+  padding: 12px;
+}
+.dswui .composer-attach {
+  flex: none;
+  margin-right: 10px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--label-primary);
+}
+.dswui .composer-attach:hover {
+  background: var(--hover);
+  color: var(--label-primary);
+}
+.dswui .composer-bar .spacer {
+  flex: 1;
+}
+
+.dswui .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 10px;
+  margin-right: 10px;
+  border-radius: 120px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+  color: var(--label-primary);
+  border: 1px solid var(--border-l2);
+  background: none;
+  transition: background-color 0.2s var(--ease), color 0.2s var(--ease);
+  white-space: nowrap;
+}
+.dswui .pill:hover {
+  background: var(--hover);
+  color: var(--label-primary);
+}
+.dswui .pill.on {
+  color: var(--brand);
+  background: var(--brand-weak);
+  border-color: var(--brand-border);
+}
+html[data-theme="dark"] .dswui .pill.on {
+  background: rgba(57, 100, 254, 0.14);
+}
+.dswui .pill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.dswui .pill:disabled:hover {
+  background: none;
+}
+
+.dswui .send-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  transition: all 0.15s var(--ease);
+  flex: none;
+}
+.dswui .send-btn:hover:not(:disabled) {
+  background: var(--brand-hover);
+  transform: scale(1.04);
+}
+.dswui .send-btn:disabled {
+  background: var(--send-disabled);
+  color: #fff;
+  cursor: not-allowed;
+}
+.dswui .send-btn.stop {
+  background: var(--label-primary);
+  color: var(--bg-base);
+}
+
+.dswui .disclaimer {
+  text-align: center;
+  font-size: 12px;
+  color: var(--label-dimmed);
+  margin-top: 8px;
+  user-select: none;
+}
+
+
+.dswui .pill svg { width: 14px; height: 14px; flex: none; }
+.dswui .toggle-icon { display: inline-flex; width: 14px; height: 14px; flex: none; }
+.dswui .toggle-icon svg path[fill]:not([fill="none"]) { fill: currentColor; }
+.dswui .toggle-icon svg path[stroke]:not([stroke="none"]) { stroke: currentColor; }
+.dswui .composer-attach svg { width: 16px; height: 16px; }
+.dswui .send-btn svg { width: 16px; height: 16px; }
+.dswui .welcome-composer .composer, .dswui .welcome-composer .composer.focused { box-shadow: 0 4px 12px rgba(0,0,0,.02), 0 2px 2px rgba(72,104,178,.01), 0 30px 60px rgba(72,104,178,.03); }
+html[data-theme="dark"] .dswui .composer { border-color: rgba(255,255,255,.06); }
+html[data-theme="dark"] .dswui .welcome-composer .composer { box-shadow: none; }
+@media (max-width: 439px) { .dswui .composer textarea { min-height: 42px; } .dswui .pill { padding: 0 10px; } }
+.dswui .composer-bar .composer-effort { flex: none; height: 28px; padding: 0 8px; gap: 4px; font-size: 12px; background: transparent; color: var(--label-secondary); }
+.dswui .composer-bar .composer-effort svg { width: 12px; height: 12px; }
+.dswui .composer-bar .composer-effort:hover { background: var(--hover); }
+@media (max-width: 767px) {
+  .dswui .composer-bar:has(.composer-effort) { position: relative; padding-top: 44px; }
+  .dswui .composer-bar .composer-effort { position: absolute; right: 12px; top: 8px; }
+  .dswui .composer-bar .composer-effort::before { content: '思考强度'; white-space: nowrap; }
+}
+@media (max-width: 359px) { .dswui .composer-bar .pill { padding: 0 6px; margin-right: 6px; } }
