@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from icarus.runtime.paths import DataPathResolver
 from icarus.core.identity import SessionIdentity
-from icarus.core.contracts.input import InputAccepted
+from icarus.core.contracts.input import InputAccepted, UserInputEvent
 from icarus.core.run_control import TaskOperationResult
 from icarus.core.resource_ref import ResourceRef
 from agent_app.application.models.status import (
@@ -218,14 +218,16 @@ class SessionApi:
         submission_id: str,
         resources: tuple[ResourceRef, ...] = (),
         display_text: str | None = None,
+        request_options: dict[str, object] | None = None,
     ) -> InputAccepted:
         self._require_accepting()
         if not submission_id.strip():
             raise ValueError("submission_id cannot be empty")
+        request_options = dict(UserInputEvent(prompt=prompt, request_options=request_options or {}).request_options)
         identity = SessionIdentity.create(workspace_path, session_id)
         entry = await self._entry(identity)
         fingerprint = _submission_fingerprint(
-            prompt, resources, display_text
+            prompt, resources, display_text, request_options
         )
         while True:
             wait_for: asyncio.Task | None = None
@@ -255,6 +257,7 @@ class SessionApi:
                         prompt,
                         images,
                         task_id=task_id,
+                        **({"request_options": request_options} if request_options else {}),
                     )
                     now = self._clock()
                     entry.last_task_activity_at = now

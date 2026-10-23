@@ -28,7 +28,7 @@ def test_installed_discovery_keeps_plugins_lazy(tmp_path):
     assert isolated_code(tmp_path,
         "import sys; from icarus.runtime.discovery import PluginManifestDiscovery; "
         "result=PluginManifestDiscovery(builtin_package='agent_app.plugins').discover(); "
-        "assert len(result.plugins)==14;"
+        "assert len(result.plugins)==15;"
         "assert not any(n.startswith('agent_app.plugins.') for n in sys.modules); print('lazy')") == "lazy"
 
 

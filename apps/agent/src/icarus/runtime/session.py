@@ -71,6 +71,7 @@ class SessionHost:
         input_images: list[ImagePart | str | Path] | None = None,
         *,
         task_id: str | None = None,
+        request_options: dict[str, object] | None = None,
     ) -> InputAccepted:
         if not self._started or self._user_input is None:
             raise RuntimeError("SessionRuntime is not running")
@@ -78,6 +79,7 @@ class SessionHost:
             prompt,
             input_images,
             task_id=task_id,
+            **({"request_options": request_options} if request_options else {}),
         )
 
     async def checkpoint(self) -> tuple[str, ...]:

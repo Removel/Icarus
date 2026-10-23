@@ -45,6 +45,7 @@ class PendingInput:
     task_id: str
     prompt: str
     input_images: list[ImagePart | str | Path] = field(default_factory=list)
+    request_options: dict[str, object] = field(default_factory=dict)
 
 
 class UserInputPlugin(BasePlugin):
@@ -105,6 +106,7 @@ class UserInputPlugin(BasePlugin):
         input_images: list[ImagePart | str | Path] | None = None,
         *,
         task_id: str | None = None,
+        request_options: dict[str, object] | None = None,
     ) -> InputAccepted:
         if (
             not self._accepting_submissions
@@ -112,6 +114,7 @@ class UserInputPlugin(BasePlugin):
             or self._worker.done()
         ):
             raise RuntimeError("UserInputPlugin is not running")
+        options = dict(UserInputEvent(prompt=prompt, request_options=request_options or {}).request_options)
         async with self._submit_lock:
             task_id = task_id or uuid4().hex
             if self.task_channels.get(task_id) is not None:
@@ -122,6 +125,7 @@ class UserInputPlugin(BasePlugin):
                 task_id=task_id,
                 prompt=prompt,
                 input_images=list(input_images or []),
+                request_options=options,
             )
             self.task_channels.create(task_id)
             await self._queue.put(pending)
@@ -233,6 +237,7 @@ class UserInputPlugin(BasePlugin):
                                     task_id=pending.task_id,
                                     prompt=pending.prompt,
                                     input_images=input_images,
+                                    request_options=pending.request_options,
                                 )
                             )
                         if self._active_status == "failed":

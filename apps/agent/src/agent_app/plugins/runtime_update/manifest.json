@@ -22,12 +22,14 @@
     "agent.tool_completed",
     "agent.completed",
     "task.error",
-    "process.updated"
+    "process.updated",
+    "web_search.updated"
   ],
   "state_scopes": [],
   "tier": "base",
   "required_config": [],
   "optional_consumed_events": [
-    "process.updated"
+    "process.updated",
+    "web_search.updated"
   ]
 }

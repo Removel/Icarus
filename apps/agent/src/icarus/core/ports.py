@@ -13,7 +13,8 @@ class InputSubmission(Protocol):
     @property
     def queued_count(self) -> int: ...
     async def submit(self, prompt: str, input_images: list[ImagePart | str | Path] | None = None,
-                     *, task_id: str | None = None) -> InputAccepted: ...
+                     *, task_id: str | None = None,
+                     request_options: dict[str, object] | None = None) -> InputAccepted: ...
 
 
 @runtime_checkable
