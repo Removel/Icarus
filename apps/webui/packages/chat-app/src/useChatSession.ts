@@ -26,6 +26,11 @@ export default function useChatSession(hash: string) {
   const [path, setPath] = useState(workspace);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [transcript, setTranscript] = useState(emptyTranscript);
+  const transcriptRef = useRef(transcript);
+  transcriptRef.current = transcript;
+  const historyCache = useRef(new Map<string, ReturnType<typeof emptyTranscript>>());
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [gateway, setGateway] = useState<Gateway>();
@@ -108,6 +113,7 @@ export default function useChatSession(hash: string) {
     setError('');
     setGateway(undefined);
     if (listedWorkspace.current !== workspace) {
+      historyCache.current.clear();
       setSessions([]);
       listedWorkspace.current = workspace;
       createdSession.current = undefined;
@@ -157,7 +163,9 @@ export default function useChatSession(hash: string) {
   }, [workspace, version]);
 
   useEffect(() => {
-    setTranscript(emptyTranscript());
+    const cacheKey = workspace + '\u0000' + sessionId;
+    const cached = historyCache.current.get(cacheKey);
+    setTranscript(cached ?? emptyTranscript());
     receive.current = undefined;
     setLoading(Boolean(workspace && sessionId));
     if (!gateway || client.current !== gateway || !sessionId) return;
@@ -189,8 +197,8 @@ export default function useChatSession(hash: string) {
       key = status.workspace_key;
       await gateway!.request('session.subscribe', { workspace_key: key, session_id: sessionId });
       if (stale) return;
-      let state = emptyTranscript();
-      let cursor = 0;
+      let state = cached ?? emptyTranscript();
+      let cursor = [...state.seen].reduce((max, value) => Math.max(max, value), 0);
       if (!fresh)
         while (!stale) {
           const history = await gateway!.request<History>('session.get_history', {
@@ -215,7 +223,10 @@ export default function useChatSession(hash: string) {
       setTranscript(state);
       setLoading(false);
       setError('');
-      if (state.items.some((item) => item.kind === 'user'))
+      if (
+        !sessionsRef.current.find((item) => item.session_id === sessionId)?.title &&
+        state.items.some((item) => item.kind === 'user')
+      )
         requestTitle(gateway!, sessionId, workspace);
     }
     load().catch((error) => {
@@ -225,6 +236,15 @@ export default function useChatSession(hash: string) {
       }
     });
     return () => {
+      if (ready) {
+        historyCache.current.delete(cacheKey);
+        historyCache.current.set(cacheKey, {
+          ...transcriptRef.current,
+          items: transcriptRef.current.items.map((item) => ({ ...item, live: false })),
+        });
+        if (historyCache.current.size > 12)
+          historyCache.current.delete(historyCache.current.keys().next().value!);
+      }
       stale = true;
       receive.current = undefined;
       if (key)
@@ -325,6 +345,7 @@ export default function useChatSession(hash: string) {
       if (!['discarded', 'not_found'].includes(result.status))
         throw new Error('删除失败，请重试。');
       const remaining = sessions.filter((item) => item.session_id !== id);
+      historyCache.current.delete(workspace + '\u0000' + id);
       setSessions(remaining);
       if (createdSession.current?.session_id === id) createdSession.current = undefined;
       if (createdStatus.current?.session_id === id) createdStatus.current = undefined;
