@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useRef } from 'react';
 import ChatReasoning from './ChatReasoning';
 import ThinkingWave from './ThinkingWave';
+import { IconThinking, IconChevronDown } from './dswui/Icons';
 import type { ChatItem } from './updates';
 
 export default function ChatProcess({
@@ -38,7 +39,7 @@ export default function ChatProcess({
   }, [entries, active, grow]);
   return (
     <details
-      className="chat-process"
+      className={`think chat-process ${running ? 'thinking' : ''}`}
       data-live={entries.some((entry) => entry.live) || undefined}
       onToggle={(event) => {
         if (event.target !== event.currentTarget) return;
@@ -46,16 +47,20 @@ export default function ChatProcess({
         scrollLatest();
       }}
     >
-      <summary>
-        思考与工具
+      <summary className="think-head">
+        <IconThinking className="think-icon" />
+        <span className="think-label">思考与工具</span>
         <span className="chat-process-status">
           {running && <ThinkingWave active={active && !loading} />}
           {running ? '进行中' : `${entries.length} 项`}
         </span>
+        <span className="caret">
+          <IconChevronDown width={14} height={14} />
+        </span>
       </summary>
       <div
         ref={viewport}
-        className="chat-process-items"
+        className="think-body chat-process-items"
         tabIndex={0}
         aria-label="思考与工具明细"
         onWheel={(event) => {

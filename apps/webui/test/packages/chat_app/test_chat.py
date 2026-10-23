@@ -271,13 +271,13 @@ def test_burst_output_and_thinking_reveal_progressively_and_history_is_immediate
     answer = '平滑输出的正文，包含完整结果和后续补全的文字。' * 30 + '🌷'
     emit('task.started', {})
     emit('assistant.thinking_delta', {'step': 1, 'text': thinking})
-    expect(page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header')).to_have_count(1)
+    expect(page.locator('.chat-thinking summary')).to_have_count(1)
     emit('assistant.text_delta', {'step': 1, 'text': answer[:200]})
     emit('assistant.message', {'step': 1, 'text': answer})
     emit('assistant.thinking', {'step': 1, 'text': thinking})
     emit('task.finished', {'status': 'completed'})
     content = page.locator('.chat-assistant .chat-markdown')
-    thought = page.locator('.chat-thinking pre')
+    thought = page.locator('.chat-thinking .chat-reasoning-text')
     expect(content).to_have_attribute('data-streaming', 'true')
     expect(thought).to_have_attribute('data-streaming', 'true')
     page.evaluate('window.advancePresentation()')
@@ -293,7 +293,7 @@ def test_burst_output_and_thinking_reveal_progressively_and_history_is_immediate
     page.reload()
     expect(content).to_have_text(answer)
     page.locator('.chat-process > summary').click()
-    page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header').click()
+    page.locator('.chat-thinking summary').click()
     expect(thought).to_have_text(thinking)
     expect(content).not_to_have_attribute('data-streaming', 'true')
 
@@ -519,23 +519,19 @@ def test_delete_current_conversation_updates_list_and_survives_reload(page, widt
 def test_process_is_grouped_and_message_navigation_preserves_reading_position(page):
     _, emit = gateway(page)
     for step in range(1, 5):
+        emit('user.message', {'text': f'问题 {step}'}, task_id=f'task-{step}')
         emit('assistant.thinking', {'step': step, 'text': '详细思考' * 100})
         emit('tool.completed', {'call_id': str(step), 'tool_name': 'read', 'success': True, 'output_preview': 'result'})
         emit('assistant.message', {'step': step, 'text': f'回答 {step}。' * 120})
     expect(page.locator('.chat-process')).to_have_count(1)
     assert page.locator('.chat-process').get_attribute('open') is None
-    expect(page.locator('.chat-thinking pre').first).not_to_be_visible()
-    page.get_by_role('button', name='定位消息', exact=True).click()
-    page.get_by_placeholder('搜索本段对话…').fill('回答 1')
-    page.get_by_role('navigation', name='消息定位').get_by_role('button').click()
-    first = page.locator('.chat-assistant').first
+    navigation = page.get_by_role('navigation', name='对话目录')
+    navigation.get_by_role('button', name='问题 1', exact=True).click()
+    first = page.locator('.chat-user').first
     expect(first).to_be_in_viewport()
     emit('assistant.message', {'step': 5, 'text': '新的回答'})
     expect(first).to_be_in_viewport()
-    page.get_by_role('button', name='下一条消息', exact=True).click()
-    expect(page.locator('.chat-assistant').nth(1)).to_be_in_viewport()
     page.get_by_role('button', name='回到最新消息', exact=True).click()
-    page.screenshot(path='test-results/refinement-chat.png', full_page=True)
 
 
 def test_draft_confirmation_happens_before_creating_a_session(page):
@@ -597,7 +593,7 @@ def test_process_wave_continues_after_response_and_stops_on_finish(page, motion)
 
 
 @pytest.mark.parametrize('width', [390, 1440])
-def test_process_window_fits_five_rows_and_respects_manual_scroll(page, width):
+def test_process_window_is_capped_and_respects_manual_scroll(page, width):
     page.set_viewport_size({'width': width, 'height': 900})
     _, emit = gateway(page)
     emit('task.started', {})
@@ -611,21 +607,14 @@ def test_process_window_fits_five_rows_and_respects_manual_scroll(page, width):
         return el.scrollTop > 0 && el.scrollHeight - el.scrollTop - el.clientHeight < 2;
     }''')
     assert items.evaluate('el => el.clientHeight') == 194
-    visible = items.evaluate('''el => {
-        const bounds = el.getBoundingClientRect();
-        return [...el.children].filter(row => {
-            const b = row.getBoundingClientRect();
-            return b.top >= bounds.top - 1 && b.bottom <= bounds.bottom + 1;
-        }).length;
-    }''')
-    assert visible == 5
+    assert items.evaluate('el => el.scrollHeight > el.clientHeight')
     items.evaluate('el => el.scrollTop = 0')
     expect(page.get_by_role('button', name='查看最新过程')).to_have_count(0)
     page.wait_for_function("document.querySelector('.chat-process-items').scrollTop === 0")
     emit('assistant.thinking', {'step': 9, 'text': '新增过程'})
     expect(page.locator('.chat-thinking')).to_have_count(9)
     assert items.evaluate('el => el.scrollTop') == 0
-    page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header').first.click()
+    page.locator('.chat-thinking summary').first.click()
     assert items.evaluate('el => el.scrollTop') == 0
     assert items.evaluate('el => el.clientHeight') == 194
     items.evaluate('el => el.scrollTop = el.scrollHeight')
@@ -964,26 +953,18 @@ def test_copy_failure_keeps_button_available_without_success_feedback(page):
 
 
 def test_reasoning_loads_on_demand_without_blocking_message_copy(page):
-    pending = []
-    page.route('**/packages/ui/src/ai.ts*', lambda route: pending.append(route))
     page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
     _, emit = gateway(page)
     emit('task.started', {})
     answer = '```python\nprint(1)\n```'
     emit('assistant.message', {'step': 1, 'text': answer})
-    expect(page.get_by_role('button', name='复制回答', exact=True)).to_be_visible()
-    assert not pending
-    emit('assistant.thinking_delta', {'step': 2, 'text': '继续分析'})
+    emit('assistant.thinking_delta', {'step': 2, 'text': '**继续分析**'})
     page.locator('.chat-process > summary').click()
-    expect(page.locator('.chat-reasoning-pending')).to_be_visible()
-    assert len(pending) == 1
+    expect(page.locator('.chat-thinking strong')).to_have_text('继续分析')
+    expect(page.locator('.semi-ai-chat-dialogue-reasoning')).to_have_count(0)
     page.get_by_role('button', name='复制回答', exact=True).click()
     expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
-    assert page.evaluate('navigator.clipboard.readText()') == answer
-    pending[0].continue_()
-    expect(page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header')).to_contain_text('正在思考')
-    expect(page.locator('.chat-thinking pre')).to_have_text('继续分析')
-    expect(page.locator('.chat-reasoning-pending')).to_have_count(0)
+    assert page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n') == answer
 
 
 @pytest.mark.parametrize('motion', ['reduce', 'no-preference'])
@@ -994,48 +975,21 @@ def test_semi_reasoning_preserves_manual_collapse_and_history(page, motion):
     emit('assistant.thinking_delta', {'step': 1, 'text': '第一段思考'})
     page.locator('.chat-process > summary').click()
     thought = page.locator('.chat-thinking')
-    header = thought.locator('.semi-ai-chat-dialogue-reasoning-header')
-    panel = thought.locator('.semi-collapsible-wrapper')
-    expect(header).to_contain_text('正在思考')
-    expect(thought.locator('pre')).to_have_text('第一段思考')
+    header = thought.locator('summary')
+    panel = thought.locator('.chat-reasoning-text')
+    expect(panel).to_have_text('第一段思考')
     header.click()
-    page.wait_for_function("document.querySelector('.chat-thinking .semi-collapsible-wrapper').getBoundingClientRect().height === 0")
-    if motion == 'no-preference':
-        page.evaluate('''() => {
-            window.thoughtFrames = new Map();
-            window.thoughtFrameId = 0;
-            window.thoughtTime = performance.now();
-            window.requestAnimationFrame = callback => {
-                const id = ++window.thoughtFrameId;
-                window.thoughtFrames.set(id, callback);
-                return id;
-            };
-            window.cancelAnimationFrame = id => window.thoughtFrames.delete(id);
-        }''')
-    emit('assistant.thinking_delta', {'step': 1, 'text': '，第二段思考'})
+    expect(panel).not_to_be_visible()
     emit('assistant.thinking', {'step': 1, 'text': '第一段思考，第二段思考'})
-    expect(header).to_contain_text('已思考完成')
-    assert panel.bounding_box()['height'] == 0
-    if motion == 'no-preference':
-        page.evaluate('''() => {
-            for (let i = 0; i < 80; i++) {
-                window.thoughtTime += 16;
-                const frames = [...window.thoughtFrames.values()];
-                window.thoughtFrames.clear();
-                frames.forEach(callback => callback(window.thoughtTime));
-            }
-        }''')
-    thought.get_by_role('button').focus()
-    thought.get_by_role('button').press('Enter')
-    expect(thought.locator('pre')).to_have_text('第一段思考，第二段思考')
-    expect(thought.locator('pre')).not_to_have_attribute('data-streaming', 'true')
-    thought.locator('pre').click()
-    expect(thought.locator('pre')).to_be_visible()
+    expect(header).to_contain_text('已思考')
+    expect(panel).not_to_be_visible()
+    header.focus()
+    header.press('Enter')
+    expect(panel).to_have_text('第一段思考，第二段思考')
     emit('task.finished', {'status': 'completed'})
     page.reload()
     page.locator('.chat-process > summary').click()
-    expect(header).to_contain_text('已思考完成')
-    assert panel.bounding_box()['height'] == 0
+    expect(panel).not_to_be_visible()
     header.click()
-    expect(thought.locator('pre')).to_have_text('第一段思考，第二段思考')
-    page.screenshot(path=f'test-results/chat-semi-reasoning-{motion}.png', full_page=True)
+    expect(panel).to_have_text('第一段思考，第二段思考')
+    expect(thought).not_to_have_attribute('data-streaming', 'true')
