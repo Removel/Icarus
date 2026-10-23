@@ -27,6 +27,10 @@ htmlcov/
 node_modules/
 apps/agent/build/
 apps/agent/dist/
+
+# Personal resume material
+/resume/
+
 apps/mem0/build/
 apps/mem0/dist/
 apps/openkb/build/
