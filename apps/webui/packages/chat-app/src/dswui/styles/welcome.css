@@ -1,0 +1,101 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* ============================ 欢迎页 ============================ */
+/* 线上：flex 列居中，容器 840 / 1024 以下 712，左右 32、底部 64 */
+.dswui .welcome {
+  flex: none;
+  width: 100%;
+  max-width: var(--message-max);
+  margin: auto;
+  padding: 0 32px 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  position: relative;
+  overflow-y: auto;
+}
+@media (max-width: 1023.98px) {
+  .dswui .welcome {
+    max-width: 712px;
+  }
+}
+
+.dswui .welcome-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  margin-bottom: 21px;
+  color: var(--label-primary);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 32px;
+}
+.dswui .welcome-heading h1 {
+  margin: 0;
+  font: inherit;
+}
+.dswui .welcome-mark {
+  width: 34px;
+  height: 25px;
+  margin-right: 10px;
+  object-fit: contain;
+  flex: none;
+}
+@media (max-width: 439.98px) {
+  .dswui .welcome-heading {
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 28px;
+  }
+  .dswui .welcome-mark {
+    transform: scale(0.88);
+  }
+}
+
+/* 欢迎页输入区不使用底部吸附条的内边距与渐变，宽度与文案容器一致 */
+.dswui .welcome-composer {
+  width: 100%;
+  margin-top: 6px;
+  margin-bottom: 0;
+}
+.dswui .welcome-composer .composer-wrap {
+  padding: 0;
+  background: none;
+}
+.dswui .welcome-composer .composer-inner {
+  max-width: none;
+}
+.dswui .welcome-composer .disclaimer { display: none; }
+.dswui .welcome-logo {
+  width: 34px;
+  height: 34px;
+  color: var(--brand);
+  display: grid;
+  place-items: center;
+}
+
+.dswui .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 22px;
+  max-width: 560px;
+}
+.dswui .chip {
+  border: 1px solid var(--border-l2);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--label-secondary);
+  background: var(--bg-base);
+  transition: all 0.15s var(--ease);
+}
+.dswui .chip:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-weak);
+}
