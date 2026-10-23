@@ -720,3 +720,48 @@ kbd {
   min-height: 120px;
   width: 100%;
 }
+
+.navigation-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: min(288px, calc(100vw - 48px));
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--surface);
+  overflow: hidden;
+  box-shadow: 12px 0 40px #0002;
+}
+.navigation-drawer[open] {
+  display: flex;
+  flex-direction: column;
+}
+.navigation-drawer::backdrop {
+  background: #0006;
+}
+.navigation-drawer-heading {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 12px 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+.navigation-drawer-heading h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.navigation-drawer-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: env(safe-area-inset-bottom);
+}

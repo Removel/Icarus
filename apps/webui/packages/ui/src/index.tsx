@@ -33,6 +33,7 @@ export {
   Dropdown,
 } from '@douyinfe/semi-ui';
 export { navigate, useHashLocation, useUnsavedChanges } from './navigation';
+export { NavigationDrawer, useNarrowLayout } from './navigation-drawer';
 
 let layoutTransition: ViewTransition | undefined;
 
