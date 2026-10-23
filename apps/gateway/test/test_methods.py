@@ -42,6 +42,10 @@ class RuntimeStub:
         self.titled = (workspace_path, session_id)
         return "生成的标题"
 
+    async def rename_session(self, workspace_path, session_id, title):
+        self.renamed = (workspace_path, session_id, title)
+        return title.strip()
+
     async def discard_empty_session(self, workspace_path, session_id):
         self.discarded = (workspace_path, session_id)
         return DiscardSessionResult(
@@ -420,4 +424,17 @@ def test_gateway_methods_generate_session_title():
         with pytest.raises(GatewayRpcError) as error:
             await methods.dispatch('session.generate_title', {'workspace_path': '/workspace'}, set())
         assert error.value.code == -32602
+    asyncio.run(run())
+
+
+def test_gateway_rename_and_reject_invalid_titles():
+    async def run():
+        runtime = RuntimeStub()
+        methods = GatewayMethods(runtime)
+        params = {'workspace_path': '/workspace', 'session_id': 'session', 'title': '新标题'}
+        assert await methods.dispatch('session.rename', params, set()) == {'title': '新标题'}
+        assert runtime.renamed == ('/workspace', 'session', '新标题')
+        for title in ('', '   ', '长' * 81):
+            with pytest.raises(GatewayRpcError):
+                await methods.dispatch('session.rename', {**params, 'title': title}, set())
     asyncio.run(run())

@@ -63,6 +63,12 @@ class CreateSessionParams(WorkspaceParams):
     )
 
 
+class RenameSessionParams(SessionParams):
+    title: StrictStr = Field(min_length=1, max_length=80, pattern=r".*\S.*")
+
+
+
+
 class SubmitParams(SessionParams):
     prompt: str
     display_text: str | None = None
@@ -121,6 +127,7 @@ class GatewayMethods:
             "session.create": self._session_create,
             "session.list": self._session_list,
             "session.generate_title": self._session_generate_title,
+            "session.rename": self._session_rename,
             "session.discard_empty": self._session_discard_empty,
             "session.delete": self._session_delete,
             "session.get": self._session_get,
@@ -182,6 +189,8 @@ class GatewayMethods:
         self._validate(StrictModel, params)
         return {"status": "ready" if self.runtime.is_running else "stopped"}
 
+
+
     async def _session_create(self, params):
         value = self._validate(CreateSessionParams, params)
         try:
@@ -212,6 +221,12 @@ class GatewayMethods:
         value = self._validate(SessionParams, params)
         return {"title": await self.runtime.generate_session_title(
             value.workspace_path, value.session_id
+        )}
+
+    async def _session_rename(self, params):
+        value = self._validate(RenameSessionParams, params)
+        return {"title": await self.runtime.rename_session(
+            value.workspace_path, value.session_id, value.title
         )}
 
     async def _session_discard_empty(self, params):
