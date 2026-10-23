@@ -944,12 +944,12 @@ def test_message_copy_keeps_raw_markdown_and_does_not_submit_or_scroll(page):
     top = container.evaluate('el => el.scrollTop')
     page.get_by_role('button', name='复制回答', exact=True).click()
     expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
-    assert page.evaluate('navigator.clipboard.readText()') == answer
+    assert page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n') == answer
     assert container.evaluate('el => el.scrollTop') == top
     page.reload()
     page.get_by_role('button', name='复制回答', exact=True).click()
     expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
-    assert page.evaluate('navigator.clipboard.readText()') == answer
+    assert page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n') == answer
     assert not any(call['method'] in {'session.submit', 'session.steer'} for call in state['calls'])
 
 

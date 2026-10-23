@@ -12,9 +12,9 @@ export default function ChatCodeBlock({ children }: ComponentProps<'pre'>) {
   const language = /\blanguage-([^\s]+)/.exec(children.props.className ?? '')?.[1] ?? 'text';
   const code = String(children.props.children ?? '').replace(/\n$/, '');
   return (
-    <div className="chat-code-block">
-      <div className="chat-code-heading">
-        <span>{language === 'text' ? '纯文本' : language}</span>
+    <div className="code-block chat-code-block">
+      <div className="code-head chat-code-heading">
+        <span className="code-lang">{language === 'text' ? '纯文本' : language}</span>
         <ChatCopyButton text={code} label="复制代码" />
       </div>
       <CodeHighlight key={language} code={code} language={language} lineNumber={false} />
