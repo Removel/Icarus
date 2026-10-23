@@ -87,7 +87,13 @@ export class Gateway {
         this.pending.delete(value.id);
         clearTimeout(request.timer);
         if (value.error)
-          request.reject(new RpcError(String(value.error.message ?? 'Agent 请求失败')));
+          request.reject(
+            new RpcError(
+              value.error.code === -32601
+                ? '当前 Gateway 尚未加载此功能，请重启 Gateway 服务后重试。'
+                : String(value.error.message ?? 'Agent 请求失败'),
+            ),
+          );
         else request.resolve(value.result);
       } catch {
         this.socket.close(4002, 'Invalid gateway response');
