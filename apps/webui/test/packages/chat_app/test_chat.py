@@ -2,26 +2,45 @@ import json
 
 import pytest
 from playwright.sync_api import expect
+from test.navigation import follow_link, open_sessions, delete_session
 
 
-def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None, selected='session-1', generated_title=None, hold_title=False, hold_submit=False, steer_status='accepted', hold_steer=False, disconnect_steer=False):
+def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None, selected='session-1', generated_title=None, hold_title=False, hold_submit=False, steer_status='accepted', hold_steer=False, disconnect_steer=False, hold_create=False, reject_create=False, disconnect_create=False):
     state = {'calls': [], 'records': records or [], 'sockets': [], 'disconnect': disconnect,
-             'sessions': sessions or [{'session_id': 'session-1', 'first_user_input': '测试会话'}]}
+             'sessions': sessions if sessions is not None else [{'session_id': 'session-1', 'first_user_input': '测试会话'}]}
 
     def route(socket):
-        state['sockets'].append(socket)
-
         def receive(raw):
             call = json.loads(raw)
-            state['calls'].append(call)
             method, params = call['method'], call['params']
+            # Memory uses a separate RPC connection while modules remain mounted.
+            if method == 'memory.get_context':
+                result = {'user_id': 'configured-user', 'agent_id': 'icarus', 'run_id': 'global'}
+                workspace = params.get('workspace_path')
+                if workspace:
+                    result.update(run_id='workspace:1234567890abcdef', workspace_path=workspace)
+                socket.send(json.dumps({'jsonrpc': '2.0', 'id': call['id'], 'result': result}))
+                return
+            if socket not in state['sockets']:
+                state['sockets'].append(socket)
+            state['calls'].append(call)
             result = {}
             if method == 'session.list':
                 result = {'sessions': state['sessions']}
             elif method in ('session.get', 'session.create'):
                 result = {'workspace_key': 'workspace-key', 'session_id': params.get('session_id', 'session-1'), 'active_task_ids': []}
                 if method == 'session.create':
+                    if reject_create:
+                        socket.send(json.dumps({'jsonrpc': '2.0', 'id': call['id'], 'error': {'code': -32000, 'message': '创建失败'}}))
+                        return
                     state['sessions'].insert(0, {'session_id': result['session_id'], 'first_user_input': ''})
+                    if hold_create:
+                        state['pending_create'] = (socket, call['id'], result)
+                        return
+                    if disconnect_create and not state.get('create_disconnected'):
+                        state['create_disconnected'] = True
+                        socket.close()
+                        return
             elif method == 'session.get_history':
                 remaining = [item for item in state['records'] if item['sequence'] > params['after_sequence']]
                 batch = remaining[:2]
@@ -35,6 +54,11 @@ def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None
                     for row in state['sessions']:
                         if row['session_id'] == params['session_id']:
                             row['title'] = generated_title
+            elif method == 'session.rename':
+                result = {'title': params['title'].strip()}
+                for row in state['sessions']:
+                    if row['session_id'] == params['session_id']:
+                        row['title'] = result['title']
             elif method == 'session.delete':
                 state['sessions'] = [item for item in state['sessions'] if item['session_id'] != params['session_id']]
                 result = {'status': 'discarded'}
@@ -74,6 +98,8 @@ def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None
     page.reload()
     page.goto(page.url.split('#')[0] + '#/chat?workspace=%2Ftmp%2Fwebui-test&session=' + selected)
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
+    # A connected socket precedes session subscription and history hydration.
+    expect(page.get_by_role('textbox', name='发送消息')).to_be_enabled()
     return state, emit
 
 
