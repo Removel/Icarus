@@ -9,7 +9,7 @@ import ChatSettings, { type ChatSettingsProps } from './ChatSettings';
 import ChatDialog from './ChatDialog';
 import DswSidebar, { titleOf } from './DswSidebar';
 import DswComposer from './DswComposer';
-import { IconClose, IconFile, IconSearch } from './dswui/Icons';
+import { IconClose, IconSearch } from './dswui/Icons';
 import { pickWelcomeMessage } from './dswui/welcomeMessages';
 import './dswui/styles/index.css';
 import './chat-runtime.css';
@@ -41,7 +41,7 @@ export default function ChatApp({
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [deleting, setDeleting] = useState<Session>();
+  const [deleting, setDeleting] = useState<Session[]>([]);
   const [greeting] = useState(() => pickWelcomeMessage());
   const [enterToSend, setEnterPreference] = useState(readEnterPreference);
   const [fontSize, setFontSize] = useChatPreference('icarus.chat.fontSize', 16);
@@ -69,7 +69,7 @@ export default function ChatApp({
     }
   }, [active, narrow]);
   useEffect(() => {
-    setDeleting(undefined);
+    setDeleting([]);
     setRenaming(false);
   }, [chat.workspace]);
   useEffect(() => {
@@ -142,7 +142,7 @@ export default function ChatApp({
         searchOpen ||
         connectionOpen ||
         chat.guard.confirming ||
-        deleting
+        deleting.length > 0
       )
         return;
       if (event.key.toLowerCase() === 'k') {
@@ -185,7 +185,7 @@ export default function ChatApp({
         </span>
         <button
           type="submit"
-          className="mini-btn"
+          className="btn btn-ghost"
           disabled={!chat.path.trim() || chat.busy || chat.submitting}
         >
           连接工作区
@@ -226,10 +226,10 @@ export default function ChatApp({
             className={`topbar conversation-topbar chat-conversation-heading ${empty ? 'dsw-welcome-topbar' : ''} ${sidebarOpen ? '' : 'sidebar-is-collapsed'}`}
           >
             <div className="conversation-title-wrap">
-              <h2 className="conversation-title" title={selected ? titleOf(selected) : undefined}>
-                {renaming && selected ? (
+              {renaming && selected ? (
+                <div className="conversation-title-editor" data-value={titleDraft || '新对话'}>
                   <input
-                    className="rename chat-heading-rename"
+                    className="conversation-title-input"
                     aria-label="修改对话标题"
                     autoFocus
                     maxLength={80}
@@ -252,7 +252,9 @@ export default function ChatApp({
                       if (event.key === 'Escape') setRenaming(false);
                     }}
                   />
-                ) : (
+                </div>
+              ) : (
+                <h2 className="conversation-title" title={selected ? titleOf(selected) : undefined}>
                   <button
                     className="chat-title-edit"
                     disabled={!selected || !chat.connected}
@@ -266,22 +268,14 @@ export default function ChatApp({
                   >
                     {empty ? '' : selected ? titleOf(selected) : '新会话'}
                   </button>
-                )}
-              </h2>
+                </h2>
+              )}
             </div>
             {(chat.submitting || chat.transcript.tasks.length > 0) && (
               <span className="chat-running" role="status">
                 正在执行
               </span>
             )}
-            <button
-              className="icon-btn chat-workspace-trigger"
-              title={chat.workspace || '连接工作区'}
-              aria-label={chat.connected ? '切换工作区' : '连接工作区'}
-              onClick={() => setConnectionOpen(true)}
-            >
-              <IconFile />
-            </button>
             <span className="chat-connection-status" role="status">
               {chat.connected ? '已连接' : ''}
             </span>
@@ -340,7 +334,7 @@ export default function ChatApp({
           gateway={chat.gateway}
         />
         <ChatDialog
-        open={connectionOpen}
+          open={connectionOpen}
           label="切换工作区"
           onClose={() => setConnectionOpen(false)}
         >
@@ -358,12 +352,7 @@ export default function ChatApp({
             <div className="dialog-body">{connectionForm}</div>
           </div>
         </ChatDialog>
-        <ChatDialog
-        open={searchOpen}
-          label="搜索对话"
-          search
-          onClose={() => setSearchOpen(false)}
-        >
+        <ChatDialog open={searchOpen} label="搜索对话" search onClose={() => setSearchOpen(false)}>
           <div className="search-dialog">
             <div className="search-dialog-input">
               <IconSearch />
@@ -411,20 +400,22 @@ export default function ChatApp({
           </div>
         </ChatDialog>
         <ChatDialog
-        open={Boolean(deleting)}
-          label="删除这段对话？"
+          open={deleting.length > 0}
+          label={deleting.length > 1 ? `删除选择的 ${deleting.length} 个对话？` : '删除这段对话？'}
           onClose={() => {
-            if (!chat.busy) setDeleting(undefined);
+            if (!chat.busy) setDeleting([]);
           }}
         >
           <div className="confirm-modal">
-            <h3>删除这段对话？</h3>
-            {chat.error && <p role="alert">{chat.error}</p>}
+            <h3>
+              {deleting.length > 1 ? `删除选择的 ${deleting.length} 个对话？` : '删除这段对话？'}
+            </h3>
+            {chat.deleteError && <p role="alert">{chat.deleteError}</p>}
             <div className="confirm-actions">
               <button
                 className="confirm-cancel"
                 disabled={chat.busy}
-                onClick={() => setDeleting(undefined)}
+                onClick={() => setDeleting([])}
               >
                 取消
               </button>
@@ -432,8 +423,12 @@ export default function ChatApp({
                 className="confirm-ok danger"
                 disabled={chat.busy}
                 onClick={async () => {
-                  if (deleting && (await chat.deleteSession(deleting.session_id)))
-                    setDeleting(undefined);
+                  const deleted = await chat.deleteSessions(
+                    deleting.map((session) => session.session_id),
+                  );
+                  setDeleting((items) =>
+                    items.filter((session) => !deleted.includes(session.session_id)),
+                  );
                 }}
               >
                 删除

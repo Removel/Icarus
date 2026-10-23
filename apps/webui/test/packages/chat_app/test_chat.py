@@ -2,7 +2,7 @@ import json
 
 import pytest
 from playwright.sync_api import expect
-from test.navigation import follow_link, open_sessions, delete_session
+from test.navigation import follow_link, open_sessions, open_settings, delete_session
 
 
 def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None, selected='session-1', generated_title=None, hold_title=False, hold_submit=False, steer_status='accepted', hold_steer=False, disconnect_steer=False, hold_create=False, reject_create=False, disconnect_create=False):
@@ -42,7 +42,10 @@ def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None
                         socket.close()
                         return
             elif method == 'session.get_history':
-                remaining = [item for item in state['records'] if item['sequence'] > params['after_sequence']]
+                if state.get('hold_history'):
+                    state.setdefault('pending_history', []).append((socket, call['id']))
+                    return
+                remaining = [item for item in state['records'] if item['session_id'] == params['session_id'] and item['sequence'] > params['after_sequence']]
                 batch = remaining[:2]
                 result = {'records': batch, 'next_after_sequence': batch[-1]['sequence'] if batch else params['after_sequence'], 'has_more': len(remaining) > 2, 'history_cursor': len(state['records'])}
             elif method == 'session.generate_title':
@@ -60,8 +63,10 @@ def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None
                     if row['session_id'] == params['session_id']:
                         row['title'] = result['title']
             elif method == 'session.delete':
-                state['sessions'] = [item for item in state['sessions'] if item['session_id'] != params['session_id']]
-                result = {'status': 'discarded'}
+                status = state.get('delete_status', {}).get(params['session_id'], 'discarded')
+                if status == 'discarded':
+                    state['sessions'] = [item for item in state['sessions'] if item['session_id'] != params['session_id']]
+                result = {'status': status}
             elif method == 'session.submit':
                 if hold_submit:
                     state['pending_submit'] = (socket, call['id'])
@@ -453,7 +458,7 @@ def test_session_selection_keeps_scroll_and_deep_link_is_visible(page):
 
 
 def test_created_session_is_listed_and_first_prompt_updates_title(page):
-    state, _ = gateway(page)
+    state, _ = gateway(page, hold_submit=True)
     page.get_by_role('button', name='新建会话').click()
     page.wait_for_function("new URLSearchParams(location.hash.split('?')[1]).get('session') !== 'session-1'")
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
@@ -462,6 +467,11 @@ def test_created_session_is_listed_and_first_prompt_updates_title(page):
     page.get_by_role('textbox', name='发送消息').fill('新会话的首条问题')
     page.get_by_role('button', name='发送', exact=True).click()
     expect(selected).to_contain_text('新会话的首条问题')
+    group = selected.locator('xpath=../..').locator('.session-group-title span')
+    expect(group).to_have_text('今天')
+    socket, request_id = state['pending_submit']
+    socket.send(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'result': {'task_id': 'task-1'}}))
+    expect(group).to_have_text('今天')
     expect(page.locator('.chat-conversation-heading h2')).to_have_text('新会话的首条问题')
 
 
@@ -972,12 +982,14 @@ def test_connected_layout_keeps_workspace_editing_out_of_transcript(page, width,
     editor.fill('继续优化间距')
     calls = len(state['calls'])
     sockets = len(state['sockets'])
-    page.get_by_role('button', name='切换工作区', exact=True).click()
-    modal = page.get_by_role('dialog', name='切换工作区', exact=True)
+    expect(page.locator('.chat-workspace-trigger')).to_have_count(0)
+    open_settings(page)
+    modal = page.get_by_role('dialog', name='设置', exact=True)
+    modal.get_by_role('button', name='工作区', exact=True).click()
     expect(modal).to_be_visible()
     expect(modal.get_by_role('textbox', name='工作区路径')).to_have_value('/tmp/webui-test')
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    modal.get_by_role('button', name='关闭工作区', exact=True).click()
+    modal.get_by_role('button', name='关闭设置', exact=True).click()
     expect(modal).not_to_be_visible()
     expect(editor).to_have_value('继续优化间距')
     assert len(state['calls']) == calls
@@ -1021,10 +1033,11 @@ def test_workspace_switch_keeps_draft_until_confirmation(page):
     state, _ = gateway(page)
     editor = page.get_by_role('textbox', name='发送消息')
     editor.fill('工作区切换前的草稿')
-    modal = page.get_by_role('dialog', name='切换工作区', exact=True)
+    modal = page.get_by_role('dialog', name='设置', exact=True)
     guard = page.get_by_role('dialog', name='放弃未发送的消息？', exact=True)
     for discard in [False, True]:
-        page.get_by_role('button', name='切换工作区', exact=True).click()
+        open_settings(page)
+        modal.get_by_role('button', name='工作区', exact=True).click()
         modal.get_by_role('textbox', name='工作区路径').fill('/tmp/next-workspace')
         modal.get_by_role('button', name='连接工作区', exact=True).click()
         expect(modal).not_to_be_visible()

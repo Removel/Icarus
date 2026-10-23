@@ -66,7 +66,7 @@ def test_session_switch_reuses_cache_and_requests_only_updates(page):
         {'workspace_key': 'workspace-key', 'session_id': 'session-1', 'task_id': 'task-1',
          'type': 'user.message', 'payload': {'text': '已缓存的问题'}, 'sequence': 1},
         {'workspace_key': 'workspace-key', 'session_id': 'session-1', 'task_id': 'task-1',
-         'type': 'assistant.message', 'payload': {'step': 1, 'text': '已缓存的回答'}, 'sequence': 2},
+         'type': 'assistant.message', 'payload': {'step': 1, 'text': '已缓存的回答\n' + '对话正文\n' * 60}, 'sequence': 2},
     ]
     state, _ = gateway(page, records=records, sessions=[
         {'session_id': 'session-1', 'title': '第一段', 'first_user_input': '已缓存的问题'},
@@ -75,9 +75,20 @@ def test_session_switch_reuses_cache_and_requests_only_updates(page):
     expect(page.locator('.chat-assistant')).to_contain_text('已缓存的回答')
     page.get_by_role('button', name='第二段', exact=True).click()
     expect(page.get_by_role('textbox', name='发送消息')).to_be_enabled()
-    page.get_by_role('button', name='第一段', exact=True).click()
+    expect(page.locator('.chat-assistant')).to_have_count(0)
+    state['hold_history'] = True
+    frame = page.get_by_role('button', name='第一段', exact=True).evaluate('''el => {
+        el.click();
+        return new Promise(resolve => requestAnimationFrame(() => {
+            const log = document.querySelector('.chat-transcript');
+            resolve({text: log.textContent, top: log.scrollTop,
+                     bottom: log.scrollHeight - log.clientHeight});
+        }));
+    }''')
+    assert '已缓存的回答' in frame['text']
+    assert frame['top'] > 0
+    assert abs(frame['top'] - frame['bottom']) < 2
     expect(page.locator('.chat-assistant')).to_contain_text('已缓存的回答')
-    expect(page.get_by_role('textbox', name='发送消息')).to_be_enabled()
     reads = [call['params'] for call in state['calls'] if call['method'] == 'session.get_history' and call['params']['session_id'] == 'session-1']
     assert reads[-1]['after_sequence'] == 2
 
@@ -104,14 +115,22 @@ def test_agent_and_model_settings_share_server_configuration(page):
     open_settings(page)
     settings = page.get_by_role('dialog', name='设置', exact=True)
     settings.get_by_role('button', name='Agent 与工具', exact=True).click()
-    settings.get_by_role('spinbutton', name='最大执行步数', exact=True).fill('64')
+    steps = settings.get_by_role('spinbutton', name='最大执行步数', exact=True)
+    steps.fill('64')
+    assert steps.evaluate('el => getComputedStyle(el).outlineStyle') == 'none'
+    scroll = settings.locator('.settings-content')
+    assert scroll.evaluate('el => getComputedStyle(el).scrollbarWidth') == 'auto'
+    assert scroll.evaluate('el => getComputedStyle(el, "::-webkit-scrollbar").width') == '8px'
     settings.get_by_role('button', name='保存配置', exact=True).click()
     expect(settings.get_by_role('status')).to_contain_text('已保存')
     assert snapshot['settings']['agent']['max_steps'] == 64
     page.screenshot(path='test-results/refinement-agent-settings.png', full_page=True)
     settings.get_by_role('button', name='模型配置', exact=True).click()
     settings.get_by_role('textbox', name='模型 1 ID', exact=True).fill('new-model')
+    settings.get_by_role('button', name='模型 1 思考强度', exact=True).click()
+    settings.get_by_role('option', name='high', exact=True).click()
     settings.get_by_role('button', name='保存配置', exact=True).click()
     expect(settings.get_by_role('status')).to_contain_text('已保存')
     assert snapshot['settings']['model_settings'][0]['model_name'] == 'new-model'
+    assert snapshot['settings']['model_settings'][0]['default_think_level'] == 'high'
     assert snapshot['settings']['agent']['max_steps'] == 64

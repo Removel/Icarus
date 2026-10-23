@@ -25,12 +25,16 @@
   min-height: 0;
   color: var(--label-primary);
 }
-.dswui .brand > span {
-  font-size: 23px;
-  letter-spacing: -0.5px;
-  color: var(--brand);
+.dswui .brand .icarus-wordmark {
+  display: block;
+  width: auto;
+  height: 27px;
+}
+html[data-theme='dark'] .dswui .icarus-wordmark {
+  filter: brightness(0) saturate(100%) invert(83%) sepia(12%) saturate(867%) hue-rotate(296deg);
 }
 .dswui .brand {
+  gap: 4px;
   color: var(--brand);
 }
 .dswui .welcome-mark {
@@ -78,9 +82,6 @@
 .dswui .chat-conversation-heading h2 {
   margin-block: 0;
   cursor: default;
-}
-.dswui .chat-conversation-heading .chat-workspace-trigger {
-  margin-left: auto;
 }
 .dswui .chat-connection-status,
 .dswui .chat-running {
@@ -258,7 +259,7 @@
   opacity: 1;
 }
 .dswui :is(button, a, summary, input, [tabindex]):focus-visible {
-  outline: 2px solid var(--brand);
+  outline: 2px solid var(--label-tertiary);
   outline-offset: 2px;
 }
 .dswui .composer textarea:focus-visible {
@@ -292,26 +293,24 @@
   overflow: visible;
 }
 .dswui .chat-management-links {
-  display: flex;
-  gap: 4px;
-  padding: 4px 0 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 0 0;
 }
 .dswui .chat-management-links a {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  gap: 8px;
-  padding: 9px 10px;
-  border-radius: 10px;
-  color: var(--label-secondary);
-  font-size: 14px;
+  min-width: 0;
+  padding: 0 8px;
 }
-.dswui .chat-management-links a:hover {
-  background: var(--session-hover);
+.dswui .chat-management-links a::after {
+  content: none;
 }
 .dswui .chat-management-links a[aria-current] {
   background: var(--session-active);
   color: var(--brand);
+}
+.dswui .session-region {
+  margin-top: 12px;
 }
 .dswui .session-item {
   height: auto;
@@ -359,12 +358,53 @@
   line-height: 22px;
   overflow-wrap: anywhere;
 }
-.dswui .chat-heading-rename {
-  width: min(500px, 45vw);
-  border: 1px solid var(--brand);
-  background: var(--bg-base);
-  border-radius: 8px;
-  padding: 2px 8px;
+.dswui .session-item input.rename {
+  color: var(--label-primary);
+  border-color: var(--label-tertiary);
+}
+/* Text fields use their own focus border; an outer focus ring clips in rows/dialogs. */
+.dswui
+  :is(
+    .rename,
+    .conversation-title-input,
+    .search-dialog-input input,
+    .setting-input,
+    .field input,
+    .field textarea
+  ):focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.dswui
+  :is(.rename, .conversation-title-input, .setting-input, .field input, .field textarea):focus {
+  border-color: var(--label-tertiary);
+  box-shadow: none;
+}
+.dswui .session-select-all {
+  color: var(--label-secondary);
+  font-size: 12px;
+}
+.dswui .brand .icarus-brand-mark {
+  width: 24px;
+  height: 24px;
+}
+.dswui .collapsed-brand .icarus-brand-mark {
+  width: 27px;
+  height: 27px;
+}
+.dswui .welcome-mark {
+  height: 34px;
+}
+.dswui .welcome-mark .icarus-brand-mark {
+  width: 34px;
+  height: 34px;
+}
+.dswui .settings-content {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+.dswui .setting-input {
+  height: 36px;
   outline: none;
 }
 .dswui .md-body,

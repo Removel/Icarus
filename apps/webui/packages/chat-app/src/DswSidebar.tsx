@@ -6,9 +6,13 @@ import type { Session } from './gateway';
 import useChatPreference from './useChatPreference';
 import { BookOpen, Brain, Download, Pencil, Pin } from 'lucide-react';
 import type { ManagementPage } from './ChatSettings';
+import ChatDialog from './ChatDialog';
 import {
+  IconCheck,
+  IconClose,
   IconEmptyHistory,
   IconMore,
+  IconMultiSelect,
   IconNewChat,
   IconSearch,
   IconSettings,
@@ -76,7 +80,7 @@ export default function DswSidebar({
   onNewChat: () => void;
   onSearch: () => void;
   onSettings: () => void;
-  onDelete: (session: Session) => void;
+  onDelete: (sessions: Session[]) => void;
   onExport: (session: Session) => void;
   managementPage?: ManagementPage;
   managementPaths: Record<ManagementPage, string>;
@@ -94,10 +98,46 @@ export default function DswSidebar({
   const groups = groupSessions(chat.sessions, pinned);
   const [renaming, setRenaming] = useState('');
   const [titleDraft, setTitleDraft] = useState('');
+  const [multi, setMulti] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [pinConfirm, setPinConfirm] = useState(false);
+  const selectedSessions = chat.sessions.filter((session) =>
+    selectedIds.includes(session.session_id),
+  );
+  const allPinned =
+    selectedSessions.length > 0 &&
+    selectedSessions.every((session) => pinned.includes(session.session_id));
+  const exitMulti = () => {
+    setMulti(false);
+    setSelectedIds([]);
+    setPinConfirm(false);
+  };
+  const toggleSelected = (id: string) =>
+    setSelectedIds((ids) =>
+      ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id],
+    );
+  useEffect(() => {
+    setMulti(false);
+    setSelectedIds([]);
+    setPinConfirm(false);
+    setRenaming('');
+    setMenu('');
+  }, [chat.workspace]);
+  useEffect(() => {
+    if (!multi) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !document.querySelector('dialog[open]')) exitMulti();
+    };
+    window.addEventListener('keydown', escape);
+    return () => window.removeEventListener('keydown', escape);
+  }, [multi]);
+  useEffect(() => {
+    if (selectedIds.length && !selectedSessions.length && !chat.busy) exitMulti();
+  }, [selectedIds.length, selectedSessions.length, chat.busy]);
   const menuSession = chat.sessions.find((session) => session.session_id === menu);
   const saveTitle = async () => {
     if (!renaming) return;
-    if (titleDraft.trim() && (await chat.renameSession(renaming, titleDraft))) setRenaming('');
+    if (!titleDraft.trim() || (await chat.renameSession(renaming, titleDraft))) setRenaming('');
   };
   useEffect(() => {
     if (!active || !open) return;
@@ -148,7 +188,8 @@ export default function DswSidebar({
           if (!narrow || !open) return;
           if (event.key === 'Escape') {
             event.preventDefault();
-            close();
+            if (multi) exitMulti();
+            else close();
           }
           if (event.key === 'Tab') {
             const elements = [
@@ -166,19 +207,29 @@ export default function DswSidebar({
       >
         <div className="sidebar-top">
           <div className="brand-row">
-            <button className="brand" onClick={onNewChat} title="返回主页" aria-label="返回主页">
+            <button
+              className="brand"
+              onClick={() => {
+                exitMulti();
+                onNewChat();
+              }}
+              title="返回主页"
+              aria-label="返回主页"
+            >
               <BrandMark size={24} />
-              <span>Icarus</span>
+              <img className="icarus-wordmark" src="/icarus-wordmark.svg" alt="Icarus" />
             </button>
             <div className="brand-actions">
-              <button
-                className="icon-btn"
-                onClick={onSearch}
-                title="搜索对话 Ctrl K"
-                aria-label="搜索对话"
-              >
-                <IconSearch />
-              </button>
+              {!multi && (
+                <button
+                  className="icon-btn"
+                  onClick={onSearch}
+                  title="搜索对话 Ctrl K"
+                  aria-label="搜索对话"
+                >
+                  <IconSearch />
+                </button>
+              )}
               <button
                 className="icon-btn"
                 onClick={close}
@@ -189,10 +240,21 @@ export default function DswSidebar({
               </button>
             </div>
           </div>
-          <button className="new-chat" onClick={onNewChat} disabled={busy} aria-label="新建会话">
-            <IconNewChat width={16} height={16} />
-            <span>开启新对话</span>
-          </button>
+          {multi ? (
+            <div className="session-batch-bar">
+              <span className="count">
+                {selectedSessions.length ? `已选择 ${selectedSessions.length} 个对话` : '选择对话'}
+              </span>
+              <button onClick={exitMulti} aria-label="退出多选" title="退出多选" disabled={busy}>
+                <IconClose width={12} height={12} />
+              </button>
+            </div>
+          ) : (
+            <button className="new-chat" onClick={onNewChat} disabled={busy} aria-label="新建会话">
+              <IconNewChat width={16} height={16} />
+              <span>开启新对话</span>
+            </button>
+          )}
           <nav className="chat-management-links" aria-label="工作台入口">
             {(
               [
@@ -201,6 +263,7 @@ export default function DswSidebar({
               ] as const
             ).map((item) => (
               <a
+                className="new-chat"
                 key={item.id}
                 href={managementPaths[item.id]}
                 aria-current={managementPage === item.id ? 'page' : undefined}
@@ -223,15 +286,58 @@ export default function DswSidebar({
             className={`session-list chat-session-list ${!chat.sessions.length ? 'empty' : ''}`}
             aria-label="会话列表"
           >
-            {groups.map(([label, sessions]) => (
+            {groups.map(([label, sessions], index) => (
               <div key={label}>
-                <div className="session-group-title">{label}</div>
+                <div className="session-group-title">
+                  <span>{label}</span>
+                  {index === 0 &&
+                    (!multi ? (
+                      <button
+                        className="session-batch-entry"
+                        aria-label="多选"
+                        title="多选"
+                        disabled={busy}
+                        onClick={() => {
+                          setRenaming('');
+                          setMulti(true);
+                        }}
+                      >
+                        <IconMultiSelect />
+                      </button>
+                    ) : (
+                      <button
+                        className="session-select-all"
+                        disabled={busy}
+                        onClick={() =>
+                          setSelectedIds(
+                            selectedSessions.length === chat.sessions.length
+                              ? []
+                              : chat.sessions.map((session) => session.session_id),
+                          )
+                        }
+                      >
+                        {selectedSessions.length === chat.sessions.length ? '取消全选' : '全选'}
+                      </button>
+                    ))}
+                </div>
                 {sessions.map((session) => (
                   <div
                     className={`session-item ${!managementPage && chat.sessionId === session.session_id ? 'active' : ''} ${renaming === session.session_id ? 'is-renaming' : ''}`}
                     key={session.session_id}
                     title={titleOf(session)}
                   >
+                    {multi && (
+                      <button
+                        className={`session-check ${selectedIds.includes(session.session_id) ? 'on' : ''}`}
+                        role="checkbox"
+                        aria-checked={selectedIds.includes(session.session_id)}
+                        aria-label={`选择对话：${titleOf(session)}`}
+                        disabled={busy}
+                        onClick={() => toggleSelected(session.session_id)}
+                      >
+                        <IconCheck width={12} height={12} />
+                      </button>
+                    )}
                     {renaming === session.session_id ? (
                       <input
                         className="rename"
@@ -260,6 +366,10 @@ export default function DswSidebar({
                         disabled={busy}
                         aria-current={chat.sessionId === session.session_id ? 'page' : undefined}
                         onClick={() => {
+                          if (multi) {
+                            toggleSelected(session.session_id);
+                            return;
+                          }
                           if (narrow) close();
                           chat.go({ workspace: chat.workspace, session: session.session_id });
                         }}
@@ -267,21 +377,23 @@ export default function DswSidebar({
                         {titleOf(session)}
                       </button>
                     )}
-                    {pinned.includes(session.session_id) && (
+                    {!multi && pinned.includes(session.session_id) && (
                       <Pin className="pin-dot" size={12} aria-label="已置顶" />
                     )}
-                    <span className="row-actions">
-                      <button
-                        className="icon-btn"
-                        aria-label={`会话操作：${titleOf(session)}`}
-                        aria-haspopup="menu"
-                        aria-expanded={menu === session.session_id}
-                        disabled={busy}
-                        onClick={(event) => popup(session.session_id, event.currentTarget)}
-                      >
-                        <IconMore width={18} height={18} />
-                      </button>
-                    </span>
+                    {!multi && (
+                      <span className="row-actions">
+                        <button
+                          className="icon-btn"
+                          aria-label={`会话操作：${titleOf(session)}`}
+                          aria-haspopup="menu"
+                          aria-expanded={menu === session.session_id}
+                          disabled={busy}
+                          onClick={(event) => popup(session.session_id, event.currentTarget)}
+                        >
+                          <IconMore width={18} height={18} />
+                        </button>
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -294,21 +406,50 @@ export default function DswSidebar({
             )}
           </nav>
         </div>
-        <div className="sidebar-foot">
-          <button
-            className="profile-trigger"
-            onClick={(event) => popup('profile', event.currentTarget)}
-            aria-label="账户菜单"
-            aria-haspopup="menu"
-            aria-expanded={menu === 'profile'}
-          >
-            <span className="avatar">I</span>
-            <span className="who" title={chat.workspace || 'Icarus'}>
-              {chat.workspace.split(/[\\/]/).filter(Boolean).pop() || 'Icarus'}
-            </span>
-            <IconMore className="profile-more" />
-          </button>
-        </div>
+        {multi ? (
+          <div className="session-batch-actions">
+            <button disabled={!selectedSessions.length || busy} onClick={() => setPinConfirm(true)}>
+              <Pin size={16} />
+              {allPinned ? '取消置顶' : '置顶'}
+            </button>
+            <span className="batch-divider" />
+            <button
+              className="danger"
+              disabled={
+                !selectedSessions.length ||
+                !chat.connected ||
+                busy ||
+                selectedSessions.some(
+                  (session) =>
+                    session.session_id === chat.sessionId &&
+                    (chat.transcript.tasks.length > 0 ||
+                      Boolean(chat.draft) ||
+                      chat.queue.length > 0),
+                )
+              }
+              onClick={() => onDelete(selectedSessions)}
+            >
+              <IconTrash width={16} height={16} />
+              删除
+            </button>
+          </div>
+        ) : (
+          <div className="sidebar-foot">
+            <button
+              className="profile-trigger"
+              onClick={(event) => popup('profile', event.currentTarget)}
+              aria-label="账户菜单"
+              aria-haspopup="menu"
+              aria-expanded={menu === 'profile'}
+            >
+              <span className="avatar">I</span>
+              <span className="who" title={chat.workspace || 'Icarus'}>
+                {chat.workspace.split(/[\\/]/).filter(Boolean).pop() || 'Icarus'}
+              </span>
+              <IconMore className="profile-more" />
+            </button>
+          </div>
+        )}
       </aside>
       {!open && (
         <div className="collapsed-nav">
@@ -416,6 +557,18 @@ export default function DswSidebar({
                 </button>
                 <button
                   role="menuitem"
+                  onClick={() => {
+                    closeMenu();
+                    setRenaming('');
+                    setMulti(true);
+                    setSelectedIds([menuSession.session_id]);
+                  }}
+                >
+                  <IconMultiSelect />
+                  多选
+                </button>
+                <button
+                  role="menuitem"
                   className="danger"
                   disabled={
                     !chat.connected ||
@@ -430,7 +583,7 @@ export default function DswSidebar({
                     const session = chat.sessions.find((s) => s.session_id === menu);
                     closeMenu();
                     if (narrow) close();
-                    if (session) requestAnimationFrame(() => onDelete(session));
+                    if (session) requestAnimationFrame(() => onDelete([session]));
                   }}
                 >
                   <IconTrash />
@@ -441,6 +594,37 @@ export default function DswSidebar({
           </div>
         </>
       )}
+      <ChatDialog
+        open={pinConfirm}
+        label={`将选择的 ${selectedSessions.length} 个对话${allPinned ? '取消置顶' : '置顶'}？`}
+        onClose={() => setPinConfirm(false)}
+      >
+        <div className="confirm-modal">
+          <h3>
+            将选择的 {selectedSessions.length} 个对话{allPinned ? '取消置顶' : '置顶'}？
+          </h3>
+          <div className="confirm-actions">
+            <button className="confirm-cancel" onClick={() => setPinConfirm(false)}>
+              取消
+            </button>
+            <button
+              className="confirm-ok"
+              onClick={() => {
+                const ids = selectedSessions.map((session) => session.session_id);
+                setPins({
+                  ...pins,
+                  [chat.workspace]: allPinned
+                    ? pinned.filter((id) => !ids.includes(id))
+                    : [...new Set([...pinned, ...ids])],
+                });
+                exitMulti();
+              }}
+            >
+              {allPinned ? '取消置顶' : '置顶'}
+            </button>
+          </div>
+        </div>
+      </ChatDialog>
     </>
   );
 }

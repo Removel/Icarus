@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Gateway } from './gateway';
+import { Select } from './dswui/Select';
 
 type Model = {
   name: string;
@@ -80,7 +81,7 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
       <div className="settings-server-state">
         <p role="status">{message || '正在读取服务端配置…'}</p>
         {message && (
-          <button className="mini-btn" onClick={() => setReload((value) => value + 1)}>
+          <button className="btn btn-ghost" onClick={() => setReload((value) => value + 1)}>
             重新载入
           </button>
         )}
@@ -193,23 +194,20 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
                     title: '标题生成',
                   }[role] ?? role}
                 </span>
-                <select
-                  className="setting-select"
-                  aria-label={`模型角色 ${role}`}
+                <Select
+                  label={`模型角色 ${role}`}
                   value={name}
-                  onChange={(event) =>
+                  onChange={(value) =>
                     setDraft({
                       ...draft,
-                      model_roles: { ...draft.model_roles, [role]: event.target.value },
+                      model_roles: { ...draft.model_roles, [role]: String(value) },
                     })
                   }
-                >
-                  {draft.model_settings.map((model, index) => (
-                    <option key={index} value={model.name}>
-                      {model.name}
-                    </option>
-                  ))}
-                </select>
+                  options={draft.model_settings.map((model) => ({
+                    value: model.name,
+                    label: model.name,
+                  }))}
+                />
               </label>
             ))}
           </div>
@@ -250,24 +248,19 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
               )}
               <label className="setting-row">
                 <span className="txt">思考强度</span>
-                <select
-                  className="setting-select"
-                  aria-label={`模型 ${index + 1} 思考强度`}
+                <Select
+                  label={`模型 ${index + 1} 思考强度`}
                   value={model.default_think_level}
-                  onChange={(event) =>
-                    patchModel(index, { default_think_level: event.target.value })
-                  }
-                >
-                  {['low', 'medium', 'high', 'max'].map((level) => (
-                    <option key={level} value={level}>
-                      {level}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => patchModel(index, { default_think_level: String(value) })}
+                  options={['low', 'medium', 'high', 'max'].map((level) => ({
+                    value: level,
+                    label: level,
+                  }))}
+                />
               </label>
               <button
                 type="button"
-                className="mini-btn"
+                className="btn btn-ghost"
                 disabled={draft.model_settings.length === 1}
                 onClick={() =>
                   setDraft({
@@ -282,7 +275,7 @@ export default function ChatServerSettings({ gateway, tab }: { gateway?: Gateway
           ))}
           <button
             type="button"
-            className="mini-btn"
+            className="btn btn-ghost"
             onClick={() =>
               setDraft({
                 ...draft,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { navigate, useUnsavedChanges } from '@icarus/ui';
 import {
   Gateway,
@@ -39,6 +39,7 @@ export default function useChatSession(hash: string) {
   selection.current = { workspace, sessionId };
   const createdStatus = useRef<SessionStatus | undefined>(undefined);
   const [error, setError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -162,7 +163,7 @@ export default function useChatSession(hash: string) {
     };
   }, [workspace, version]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const cacheKey = workspace + '\u0000' + sessionId;
     const cached = historyCache.current.get(cacheKey);
     setTranscript(cached ?? emptyTranscript());
@@ -296,6 +297,7 @@ export default function useChatSession(hash: string) {
       const fresh = {
         session_id: session.session_id,
         first_user_input: '',
+        created_at: new Date().toISOString(),
       };
       createdSession.current = fresh;
       setSessions((previous) => [
@@ -329,36 +331,46 @@ export default function useChatSession(hash: string) {
       setBusy(false);
     }
   }
-  async function deleteSession(id: string) {
-    if (!client.current || working.current) return false;
+  async function deleteSessions(ids: string[]) {
+    if (!client.current || working.current) return [];
     working.current = true;
     setBusy(true);
     setError('');
+    setDeleteError('');
     const connection = client.current;
+    const deleted: string[] = [];
     try {
-      const result = await connection.request<{ status: string }>('session.delete', {
-        workspace_path: workspace,
-        session_id: id,
-      });
-      if (client.current !== connection) return false;
-      if (result.status === 'busy') throw new Error('会话正在执行，请停止后再删除。');
-      if (!['discarded', 'not_found'].includes(result.status))
-        throw new Error('删除失败，请重试。');
-      const remaining = sessions.filter((item) => item.session_id !== id);
-      historyCache.current.delete(workspace + '\u0000' + id);
-      setSessions(remaining);
-      if (createdSession.current?.session_id === id) createdSession.current = undefined;
-      if (createdStatus.current?.session_id === id) createdStatus.current = undefined;
-      if (sessionId === id)
-        go({ workspace, ...(remaining[0] ? { session: remaining[0].session_id } : {}) });
-      return true;
+      for (const id of new Set(ids)) {
+        const result = await connection.request<{ status: string }>('session.delete', {
+          workspace_path: workspace,
+          session_id: id,
+        });
+        if (client.current !== connection) break;
+        if (result.status === 'busy') throw new Error('会话正在执行，请停止后再删除。');
+        if (!['discarded', 'not_found'].includes(result.status))
+          throw new Error('删除失败，请重试。');
+        deleted.push(id);
+        historyCache.current.delete(workspace + '\u0000' + id);
+        setSessions((items) => items.filter((item) => item.session_id !== id));
+        if (createdSession.current?.session_id === id) createdSession.current = undefined;
+        if (createdStatus.current?.session_id === id) createdStatus.current = undefined;
+      }
     } catch (error) {
-      setError(error instanceof Error ? error.message : '删除失败');
-      return false;
+      const message = error instanceof Error ? error.message : '删除失败';
+      setError(message);
+      setDeleteError(message);
     } finally {
+      if (client.current === connection && deleted.includes(sessionId)) {
+        const remaining = sessions.filter((item) => !deleted.includes(item.session_id));
+        go({ workspace, ...(remaining[0] ? { session: remaining[0].session_id } : {}) });
+      }
       working.current = false;
       setBusy(false);
     }
+    return deleted;
+  }
+  async function deleteSession(id: string) {
+    return (await deleteSessions([id])).includes(id);
   }
 
   async function renameSession(id: string, title: string) {
@@ -698,6 +710,8 @@ export default function useChatSession(hash: string) {
     },
     createSession,
     deleteSession,
+    deleteSessions,
+    deleteError,
     renameSession,
     gateway,
     send,

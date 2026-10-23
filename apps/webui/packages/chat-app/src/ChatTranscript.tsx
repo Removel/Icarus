@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import ChatContent from './ChatContent';
 import ChatMessageActions from './ChatMessageActions';
 import ChatProcess from './ChatProcess';
@@ -50,13 +50,13 @@ export default function ChatTranscript({
     node.scrollTop = node.scrollHeight;
     followedTop.current = node.scrollTop;
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     follow.current = true;
     followedTop.current = 0;
     setAway(false);
     setPosition(null);
   }, [sessionId]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (active) onGrowth();
   }, [transcript.items, active, waiting, onGrowth]);
   function jump(id: string) {

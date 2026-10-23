@@ -209,6 +209,48 @@ html[data-theme='dark'] .semi-button-primary.semi-button-solid {
 .semi-select-selection {
   min-height: 34px;
 }
+.icarus-select.semi-select:hover,
+.icarus-select.semi-select:focus,
+.icarus-select.semi-select.semi-select-focus {
+  outline: none;
+  box-shadow: none;
+}
+.icarus-select.semi-select {
+  border: 0;
+  border-radius: 18px;
+  background: var(--subtle);
+  font-weight: 400;
+}
+.icarus-select.semi-select:hover {
+  background: var(--selected);
+}
+.icarus-select-dropdown {
+  padding: 4px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow:
+    0 0 1px rgb(0 0 0 / 20%),
+    0 0 4px rgb(0 0 0 / 2%),
+    0 12px 32px rgb(0 0 0 / 8%);
+}
+.icarus-select-dropdown .semi-select-option {
+  min-height: 40px;
+  border-radius: 10px;
+}
+.icarus-select-dropdown .semi-select-option-selected {
+  color: var(--ink);
+  background: var(--selected);
+}
+.icarus-brand-mark {
+  display: block;
+  flex: none;
+  object-fit: contain;
+}
+html[data-theme='dark'] .icarus-brand-mark {
+  filter: brightness(0) invert(0.85);
+}
 .semi-input-wrapper .semi-input {
   height: 34px;
   line-height: 34px;
