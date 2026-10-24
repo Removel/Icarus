@@ -42,6 +42,15 @@ class SearchHttpBackend:
         try:
             response = await self.client.post(self.endpoint + "/tools/" + name, json=payload,
                 headers={"Authorization": f"Bearer {self.api_key}"}, timeout=15 if name == "search" else 20)
+            messages = {
+                401: "联网搜索服务密钥无效或已失效，请检查配置，已继续正常回答。",
+                402: "联网搜索服务账户余额不足，已继续正常回答。",
+                403: ("联网搜索服务拒绝访问，请检查接口权限，已继续正常回答。" if name == "search"
+                      else "网页抓取被服务安全策略拒绝。"),
+                429: "联网搜索请求过于频繁，请稍后重试，已继续正常回答。",
+            }
+            if response.status_code in messages:
+                raise SearchUnavailable(messages[response.status_code])
             if response.status_code in {404, 405, 501} and name == "search":
                 raise SearchUnavailable("该中转不支持深度检索，已继续正常回答。")
             response.raise_for_status()

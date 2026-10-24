@@ -177,6 +177,41 @@ def test_http_contract_paths_rate_gate_and_private_errors():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("status,message", [
+    (401, "密钥无效"),
+    (402, "余额不足"),
+    (403, "拒绝访问"),
+    (429, "请求过于频繁"),
+    (404, "不支持"),
+])
+def test_search_http_errors_explain_configuration_without_exposing_response(status, message):
+    async def run():
+        def transport(request):
+            return httpx.Response(status, text="private-key and private provider details")
+        backend = SearchHttpBackend("https://search.example", "private-key", transport=httpx.MockTransport(transport))
+        try:
+            with pytest.raises(SearchUnavailable) as caught:
+                await backend.search("query", "question")
+            assert message in str(caught.value)
+            assert "private-key" not in str(caught.value)
+            assert "provider details" not in str(caught.value)
+        finally:
+            await backend.aclose()
+    asyncio.run(run())
+
+
+def test_fetch_security_rejection_is_reported_without_claiming_missing_search_permission():
+    async def run():
+        backend = SearchHttpBackend("https://search.example", "private-key",
+            transport=httpx.MockTransport(lambda request: httpx.Response(403)))
+        try:
+            with pytest.raises(SearchUnavailable, match="安全策略"):
+                await backend.fetch("https://page.example/article")
+        finally:
+            await backend.aclose()
+    asyncio.run(run())
+
+
 def test_off_means_zero_requests_and_local_clock_is_dynamic_user_context():
     async def run():
         backend = Backend()
