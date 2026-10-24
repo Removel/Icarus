@@ -3,6 +3,8 @@ import ChatContent from './ChatContent';
 import ChatMessageActions from './ChatMessageActions';
 import type { ChatItem } from './updates';
 import type { WebSource } from './webSearch';
+import ChatImages from './ChatImages';
+import type { ImageResource } from './imageResources';
 
 export default memo(function ChatMessage({
   item,
@@ -14,6 +16,8 @@ export default memo(function ChatMessage({
   onGrowth,
   onCompose,
   anchor,
+  workspace,
+  sessionId,
 }: {
   item: ChatItem;
   active: boolean;
@@ -22,8 +26,10 @@ export default memo(function ChatMessage({
   prompt?: string;
   sources?: WebSource[];
   onGrowth: () => void;
-  onCompose: (text: string) => void;
+  onCompose: (text: string, resources?: ImageResource[]) => void;
   anchor: (id: string, node: HTMLElement | null) => void;
+  workspace: string;
+  sessionId: string;
 }) {
   return (
     <article
@@ -36,7 +42,17 @@ export default memo(function ChatMessage({
         {item.kind === 'user' ? '你' : item.kind === 'error' ? '执行失败' : 'Icarus'}
       </strong>
       {item.kind === 'user' ? (
-        <div className="bubble">{item.text}</div>
+        <div className="bubble">
+          {item.resources?.length ? (
+            <ChatImages
+              resources={item.resources}
+              workspace={workspace}
+              session={sessionId}
+              onGrowth={onGrowth}
+            />
+          ) : null}
+          {item.text}
+        </div>
       ) : (
         <div className={item.kind === 'error' ? 'error-card' : 'body'}>
           <ChatContent
@@ -51,15 +67,17 @@ export default memo(function ChatMessage({
         </div>
       )}
       {item.label && <small className="chat-message-state">{item.label}</small>}
-      {(item.kind === 'user' || (item.kind === 'assistant' && item.final)) && item.text && (
-        <ChatMessageActions
-          text={item.text}
-          user={item.kind === 'user'}
-          onCompose={onCompose}
-          disabled={disabled}
-          prompt={prompt}
-        />
-      )}
+      {(item.kind === 'user' || (item.kind === 'assistant' && item.final)) &&
+        (item.text || item.resources?.length) && (
+          <ChatMessageActions
+            text={item.text}
+            user={item.kind === 'user'}
+            onCompose={onCompose}
+            disabled={disabled}
+            prompt={prompt}
+            resources={item.resources}
+          />
+        )}
     </article>
   );
 });

@@ -1,5 +1,6 @@
 import type { RuntimeUpdate } from './gateway';
 import { parseSearchState, type WebSearchState } from './webSearch';
+import { parseImageResources, type ImageResource } from './imageResources';
 
 export type ChatItem = {
   id: string;
@@ -8,6 +9,7 @@ export type ChatItem = {
   kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'search';
   search?: WebSearchState;
   text: string;
+  resources?: ImageResource[];
   label?: string;
   detail?: string;
   final: boolean;
@@ -82,6 +84,7 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
       id: `user:${task}:${update.type}:${update.sequence ?? ''}`,
       kind: 'user',
       text,
+      resources: parseImageResources(p.resources),
       final: true,
       submissionId: typeof p.submission_id === 'string' ? p.submission_id : undefined,
       label: update.type === 'user.correction' ? '引导已应用' : undefined,

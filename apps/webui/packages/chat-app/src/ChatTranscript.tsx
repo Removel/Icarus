@@ -6,6 +6,7 @@ import { IconChevronDown, IconThinking } from './dswui/Icons';
 import { ScrollNav } from './dswui/ScrollNav';
 import type { Transcript, ChatItem } from './updates';
 import type { WebSource } from './webSearch';
+import type { ImageResource } from './imageResources';
 
 type Row = {
   id: string;
@@ -19,6 +20,7 @@ export default function ChatTranscript({
   transcript,
   active,
   sessionId,
+  workspace,
   loading,
   submitting,
   onCompose,
@@ -26,9 +28,10 @@ export default function ChatTranscript({
   transcript: Transcript;
   active: boolean;
   sessionId: string;
+  workspace: string;
   loading: boolean;
   submitting: boolean;
-  onCompose: (text: string) => void;
+  onCompose: (text: string, resources?: ImageResource[]) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -70,7 +73,7 @@ export default function ChatTranscript({
       rows,
       outline: transcript.items
         .filter((item) => item.kind === 'user')
-        .map((item) => ({ id: item.id, title: item.text })),
+        .map((item) => ({ id: item.id, title: item.text || '图片消息' })),
       waiting:
         !loading &&
         (submitting
@@ -197,6 +200,8 @@ export default function ChatTranscript({
     ) : (
       <ChatMessage
         item={row.item}
+        workspace={workspace}
+        sessionId={sessionId}
         active={active}
         loading={loading}
         disabled={disabled}

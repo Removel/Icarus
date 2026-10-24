@@ -8,6 +8,7 @@ import {
   IconShare,
 } from './dswui/Icons';
 import ChatCopyButton from './ChatCopyButton';
+import type { ImageResource } from './imageResources';
 
 export default function ChatMessageActions({
   text,
@@ -15,10 +16,12 @@ export default function ChatMessageActions({
   onCompose,
   prompt,
   disabled,
+  resources,
 }: {
   text: string;
   user: boolean;
-  onCompose: (text: string) => void;
+  onCompose: (text: string, resources?: ImageResource[]) => void;
+  resources?: ImageResource[];
   prompt?: string;
   disabled: boolean;
 }) {
@@ -38,14 +41,14 @@ export default function ChatMessageActions({
   }, [notice]);
   return (
     <div className={`msg-actions ${user ? '' : 'assistant-actions'} chat-message-actions`}>
-      <ChatCopyButton text={text} label={user ? '复制消息' : '复制回答'} />
+      {text && <ChatCopyButton text={text} label={user ? '复制消息' : '复制回答'} />}
       {user ? (
         <button
           className="icon-btn"
           title="编辑为新消息"
           aria-label="编辑为新消息"
           disabled={disabled}
-          onClick={() => onCompose(text)}
+          onClick={() => onCompose(text, resources)}
         >
           <IconEdit />
         </button>

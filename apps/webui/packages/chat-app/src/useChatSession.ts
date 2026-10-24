@@ -12,6 +12,8 @@ import { applyUpdate, emptyTranscript } from './updates';
 import useChatPreference from './useChatPreference';
 import { localClock, type RequestOptions } from './webSearch';
 import { deleteHistory, readHistory, saveHistory } from './historyCache';
+import useImageInputs from './useImageInputs';
+import type { ImageResource } from './imageResources';
 
 type Submission = {
   id: string;
@@ -21,6 +23,7 @@ type Submission = {
   taskId?: string;
   cancelRequested?: boolean;
   requestOptions?: RequestOptions;
+  resources?: ImageResource[];
 };
 
 export default function useChatSession(hash: string) {
@@ -46,6 +49,9 @@ export default function useChatSession(hash: string) {
   const [error, setError] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [draft, setDraft] = useState('');
+  const attachments = useImageInputs();
+  const { clear: clearImages, restore: restoreImages, consume: consumeImages } = attachments;
+  const imagesReady = attachments.images.every((image) => image.resource && !image.error);
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [version, setVersion] = useState(0);
@@ -68,7 +74,9 @@ export default function useChatSession(hash: string) {
   const autoFirst = useRef<Submission | undefined>(undefined);
   const readySelection = useRef('');
   const titleRequests = useRef(new Set<string>());
-  const guard = useUnsavedChanges(Boolean(draft) || queue.length > 0);
+  const guard = useUnsavedChanges(
+    Boolean(draft) || attachments.images.length > 0 || queue.length > 0,
+  );
   const requestTitle = useCallback(
     (connection: Gateway, session: string, targetWorkspace: string) => {
       const key = targetWorkspace + '\u0000' + session;
@@ -104,17 +112,19 @@ export default function useChatSession(hash: string) {
     const moving = transfer.current;
     transfer.current = undefined;
     if (moving?.workspace === workspace && moving.sessionId === sessionId) {
+      if (moving.submission) clearImages();
       autoFirst.current = moving.submission;
       return;
     }
     firstCreate.current = undefined;
     autoFirst.current = undefined;
     setDraft('');
+    clearImages();
     setUnknown(false);
     setQueue([]);
     setQueuePaused(false);
     pending.current = undefined;
-  }, [workspace, sessionId]);
+  }, [workspace, sessionId, clearImages]);
   useEffect(() => {
     readySelection.current = '';
     setConnected(false);
@@ -290,7 +300,7 @@ export default function useChatSession(hash: string) {
     return () => clearTimeout(timer);
   }, [transcript, loading, workspace, sessionId]);
 
-  async function createSession(firstText?: string) {
+  async function createSession(firstText?: string, resources: ImageResource[] = []) {
     if (!client.current || working.current) return;
     working.current = true;
     setBusy(true);
@@ -342,15 +352,17 @@ export default function useChatSession(hash: string) {
       transfer.current = {
         workspace,
         sessionId: session.session_id,
-        submission: firstText
-          ? {
-              id: crypto.randomUUID(),
-              text: firstText,
-              workspace,
-              session: session.session_id,
-              requestOptions: { web_search: webSearch, deep_search: deepSearch },
-            }
-          : undefined,
+        submission:
+          firstText || resources.length
+            ? {
+                id: crypto.randomUUID(),
+                text: firstText ?? '',
+                resources,
+                workspace,
+                session: session.session_id,
+                requestOptions: { web_search: webSearch, deep_search: deepSearch },
+              }
+            : undefined,
       };
       firstCreate.current = undefined;
       guard.markSaved();
@@ -455,13 +467,23 @@ export default function useChatSession(hash: string) {
         : unknown && draft.startsWith(submission.text + '\n')
           ? draft.slice(submission.text.length + 1)
           : '';
-      if (!nextDraft && queue.length <= (fromQueue ? 1 : 0)) guard.markSaved();
+      const remainingImages = attachments.images.some(
+        (image) =>
+          fromQueue ||
+          !submission.resources?.some(
+            (resource) => resource.resource_id === image.resource?.resource_id,
+          ),
+      );
+      if (!nextDraft && !remainingImages && queue.length <= (fromQueue ? 1 : 0)) guard.markSaved();
       if (fromQueue) setQueue((items) => items.filter((item) => item.id !== submission.id));
-      else setDraft(nextDraft);
+      else {
+        setDraft(nextDraft);
+        consumeImages(submission.resources ?? []);
+      }
       setSessions((previous) =>
         previous.map((item) =>
           item.session_id === submission.session
-            ? { ...item, first_user_input: item.first_user_input || submission.text }
+            ? { ...item, first_user_input: item.first_user_input || submission.text || '[Image]' }
             : item,
         ),
       );
@@ -477,6 +499,7 @@ export default function useChatSession(hash: string) {
                 taskId: submission.taskId,
                 kind: 'user',
                 text: submission.text,
+                resources: submission.resources,
                 final: true,
                 pending: true,
                 label: submission.taskId ? '引导待应用' : undefined,
@@ -497,6 +520,7 @@ export default function useChatSession(hash: string) {
             session_id: submission.session,
             prompt: submission.text,
             submission_id: submission.id,
+            ...(submission.resources?.length ? { resources: submission.resources } : {}),
             ...(submission.taskId ? { task_id: submission.taskId } : {}),
             ...(!submission.taskId ? { request_options: submission.requestOptions } : {}),
           },
@@ -539,7 +563,7 @@ export default function useChatSession(hash: string) {
             item.session_id === submission.session
               ? {
                   ...item,
-                  first_user_input: item.first_user_input || submission.text,
+                  first_user_input: item.first_user_input || submission.text || '[Image]',
                   updated_at: new Date().toISOString(),
                 }
               : item,
@@ -582,6 +606,7 @@ export default function useChatSession(hash: string) {
             ),
           );
         setDraft((current) => (current ? submission.text + '\n' + current : submission.text));
+        restoreImages(submission.resources ?? [], submission.workspace, submission.session);
         setTranscript((previous) => ({
           ...previous,
           items: previous.items.filter((item) => item.id !== optimisticId),
@@ -608,6 +633,9 @@ export default function useChatSession(hash: string) {
       guard,
       queue.length,
       requestTitle,
+      attachments.images,
+      consumeImages,
+      restoreImages,
     ],
   );
 
@@ -660,9 +688,20 @@ export default function useChatSession(hash: string) {
   ]);
 
   async function send(steer = false) {
-    if (!client.current || !connected || loading || busy || !draft.trim()) return;
+    if (
+      !client.current ||
+      !connected ||
+      loading ||
+      busy ||
+      !imagesReady ||
+      (!draft.trim() && !attachments.images.length)
+    )
+      return;
+    const resources = attachments.images.flatMap((image) =>
+      image.resource ? [image.resource] : [],
+    );
     if (!sessionId) {
-      if (!working.current && !steer) await createSession(draft.trim());
+      if (!working.current && !steer) await createSession(draft.trim(), resources);
       return;
     }
     if (unknown) {
@@ -673,6 +712,7 @@ export default function useChatSession(hash: string) {
     const submission: Submission = {
       id: crypto.randomUUID(),
       text: draft.trim(),
+      resources,
       workspace,
       session: sessionId,
       requestOptions: { web_search: webSearch, deep_search: deepSearch },
@@ -681,6 +721,7 @@ export default function useChatSession(hash: string) {
     if (!steer && (submitting || transcript.tasks.length || queue.length)) {
       setQueue((items) => [...items, submission]);
       setDraft('');
+      clearImages();
     } else await dispatch(submission);
   }
 
@@ -737,6 +778,8 @@ export default function useChatSession(hash: string) {
     error,
     draft,
     setDraft,
+    attachments,
+    imagesReady,
     busy,
     submitting,
     unknown,
@@ -754,6 +797,7 @@ export default function useChatSession(hash: string) {
       setQueuePaused(true);
       setQueue((items) => items.filter((item) => item.id !== id));
       setDraft((current) => (current ? current + '\n' + item.text : item.text));
+      restoreImages(item.resources ?? [], item.workspace, item.session);
     },
     guard,
     go,
@@ -782,6 +826,7 @@ export default function useChatSession(hash: string) {
       setUnknown(false);
       guard.markSaved();
       setDraft('');
+      clearImages();
     },
     discardDraft: () => {
       firstCreate.current = undefined;
@@ -789,6 +834,7 @@ export default function useChatSession(hash: string) {
       pending.current = undefined;
       setUnknown(false);
       setDraft('');
+      clearImages();
       setQueue([]);
       setQueuePaused(false);
       guard.discardChanges();

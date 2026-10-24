@@ -13,6 +13,7 @@ import { IconClose, IconSearch } from './dswui/Icons';
 import { pickWelcomeMessage } from './dswui/welcomeMessages';
 import './dswui/styles/index.css';
 import './chat-runtime.css';
+import { imageUrl, type ImageResource } from './imageResources';
 
 function readEnterPreference() {
   try {
@@ -86,14 +87,16 @@ export default function ChatApp({
     });
   };
   const setDraft = chat.setDraft;
+  const restoreImages = chat.attachments.restore;
   const compose = useCallback(
-    (text: string) => {
+    (text: string, resources?: ImageResource[]) => {
       setDraft((current) => (current ? current + '\n' + text : text));
+      if (resources?.length) restoreImages(resources, chat.workspace, chat.sessionId);
       requestAnimationFrame(() =>
         document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus(),
       );
     },
-    [setDraft],
+    [setDraft, restoreImages, chat.workspace, chat.sessionId],
   );
   async function exportSession(session: Session) {
     if (!chat.gateway) return;
@@ -119,7 +122,10 @@ export default function ChatApp({
         '\n\n' +
         state.items
           .filter((item) => item.kind === 'user' || item.kind === 'assistant')
-          .map((item) => `## ${item.kind === 'user' ? '你' : 'Icarus'}\n\n${item.text}`)
+          .map(
+            (item) =>
+              `## ${item.kind === 'user' ? '你' : 'Icarus'}\n\n${item.text}${(item.resources ?? []).map((image) => `\n\n![图片](${new URL(imageUrl(image, chat.workspace, session.session_id), location.origin).href})`).join('')}`,
+          )
           .join('\n\n');
       const url = URL.createObjectURL(
         new Blob([markdown], { type: 'text/markdown;charset=utf-8' }),
@@ -306,6 +312,7 @@ export default function ChatApp({
             </div>
             <div className="dsw-transcript-slot" hidden={empty}>
               <ChatTranscript
+                workspace={chat.workspace}
                 key={chat.workspace + chat.sessionId}
                 transcript={chat.transcript}
                 active={active}

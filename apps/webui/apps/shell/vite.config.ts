@@ -23,6 +23,10 @@ export default defineConfig(({ mode }) => {
           target: env.ICARUS_GATEWAY_ENDPOINT || 'http://127.0.0.1:8765',
           ws: true,
         },
+        '/resources': {
+          target: env.ICARUS_GATEWAY_ENDPOINT || 'http://127.0.0.1:8765',
+          changeOrigin: true,
+        },
         '/api/v1': {
           target: env.ICARUS_OPENKB_ENDPOINT || 'http://127.0.0.1:7566',
           changeOrigin: true,

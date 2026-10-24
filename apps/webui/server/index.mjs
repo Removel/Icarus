@@ -35,6 +35,11 @@ const routes = [
       : {},
   },
   { prefix: '/rpc', target: env.ICARUS_GATEWAY_ENDPOINT || 'http://127.0.0.1:8765', headers: {} },
+  {
+    prefix: '/resources',
+    target: env.ICARUS_GATEWAY_ENDPOINT || 'http://127.0.0.1:8765',
+    headers: {},
+  },
 ].map((route) => ({ ...route, target: new URL(route.target) }));
 for (const route of routes)
   if (

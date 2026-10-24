@@ -60,9 +60,11 @@ def production():
             self.respond()
 
         def respond(self):
-            body = self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode()
+            body_bytes = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            body = body_bytes.decode(errors='replace')
             data = json.dumps(
-                {"path": self.path, "headers": dict(self.headers), "body": body}
+                {"path": self.path, "headers": dict(self.headers), "body": body,
+                 "body_base64": base64.b64encode(body_bytes).decode('ascii')}
             ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -212,6 +214,24 @@ def test_websocket_proxy_auth_origin_and_forwarding(production):
     assert b"sec-websocket-extensions: permessage-deflate" in connect(
         AUTH, production[1], extensions=True
     )
+
+
+def test_image_resource_proxy_keeps_auth_origin_and_binary_body(production):
+    payload = b'\x89PNG\r\n\x1a\nimage'
+    assert request(production, 'POST', '/resources', payload, {'Content-Type': 'image/png'})[0] == 401
+    assert request(production, 'POST', '/resources', payload, {'Authorization': AUTH, 'Origin': 'https://evil.example'})[0] == 403
+    status, headers, body = request(production, 'POST', '/resources', payload, {
+        'Authorization': AUTH, 'Origin': production[1], 'Content-Type': 'image/png',
+        'Cookie': 'private=secret', 'X-API-Key': 'untrusted',
+    })
+    assert status == 200 and headers['cache-control'] == 'no-store'
+    value = json.loads(body)
+    assert value['path'] == '/resources' and base64.b64decode(value['body_base64']) == payload
+    forwarded = {key.lower(): value for key, value in value['headers'].items()}
+    assert forwarded['content-type'] == 'image/png'
+    assert not {'authorization', 'cookie', 'x-api-key', 'origin'} & forwarded.keys()
+    status, _, body = request(production, path='/resources?resource_id=webui/test.png', headers={'Authorization': AUTH})
+    assert status == 200 and json.loads(body)['path'] == '/resources?resource_id=webui/test.png'
 
 
 def test_public_binding_requires_authentication(production):

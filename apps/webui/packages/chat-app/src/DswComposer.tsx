@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type useChatSession from './useChatSession';
 import { IconArrowUp, IconPaperclip, IconPencil, IconStop, IconTrash } from './dswui/Icons';
 import { AnimatedToggleIcon } from './dswui/AnimatedToggleIcon';
+import { imageTypes } from './imageResources';
 
 export default function DswComposer({
   chat,
@@ -14,9 +15,13 @@ export default function DswComposer({
   onConnect: () => void;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const [focused, setFocused] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const { connected, busy, submitting, loading, unknown, draft, setDraft, transcript } = chat;
   const running = submitting || transcript.tasks.length > 0;
+  const hasInput = Boolean(draft.trim() || chat.attachments.images.length);
+  const attachmentDisabled = busy || unknown || loading;
   useLayoutEffect(() => {
     const node = textarea.current;
     if (!node) return;
@@ -31,6 +36,21 @@ export default function DswComposer({
   return (
     <form
       className="composer-wrap chat-compose"
+      data-dragging={dragging || undefined}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes('Files')) return;
+        event.preventDefault();
+        if (!attachmentDisabled) setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.types.includes('Files')) return;
+        event.preventDefault();
+        setDragging(false);
+        if (!attachmentDisabled) chat.attachments.add(Array.from(event.dataTransfer.files));
+      }}
       onSubmit={(event) => {
         event.preventDefault();
         send();
@@ -60,7 +80,8 @@ export default function DswComposer({
                 <li key={item.id}>
                   <span className="chat-queue-number">{index + 1}</span>
                   <span className="chat-queue-text" title={item.text}>
-                    {item.text}
+                    {item.text || '图片消息'}
+                    {item.resources?.length ? ` · ${item.resources.length} 张图片` : ''}
                   </span>
                   <button
                     type="button"
@@ -84,6 +105,66 @@ export default function DswComposer({
           </div>
         )}
         <div className={`composer ${focused ? 'focused' : ''}`}>
+          <input
+            ref={picker}
+            type="file"
+            multiple
+            accept={imageTypes.join(',')}
+            hidden
+            aria-label="选择图片"
+            onChange={(event) => {
+              chat.attachments.add(Array.from(event.target.files ?? []));
+              event.target.value = '';
+            }}
+          />
+          {dragging && (
+            <div className="chat-image-drop" role="status">
+              松开以添加图片
+            </div>
+          )}
+          {chat.attachments.images.length > 0 && (
+            <div className="chat-image-inputs" aria-label="待发送图片">
+              {chat.attachments.images.map((image, index) => (
+                <div className="chat-image-input" key={image.id}>
+                  <img src={image.preview} alt={`待发送图片 ${index + 1}`} />
+                  <span className="chat-image-name" title={image.name}>
+                    {image.name}
+                  </span>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    disabled={attachmentDisabled}
+                    aria-label={`移除图片 ${index + 1}`}
+                    onClick={() => chat.attachments.remove(image.id)}
+                  >
+                    <IconTrash />
+                  </button>
+                  {image.error ? (
+                    <div className="chat-image-upload-error">
+                      <span role="alert">{image.error}</span>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        disabled={attachmentDisabled}
+                        onClick={() => chat.attachments.retry(image.id)}
+                      >
+                        重试上传
+                      </button>
+                    </div>
+                  ) : (
+                    <span role="status">
+                      {image.resource ? '已上传' : `上传中 ${image.progress}%`}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {chat.attachments.error && (
+            <div className="chat-image-upload-error" role="alert">
+              {chat.attachments.error}
+            </div>
+          )}
           <textarea
             ref={textarea}
             aria-label="发送消息"
@@ -94,6 +175,26 @@ export default function DswComposer({
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             disabled={busy || unknown || loading}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData.items)
+                .filter((item) => item.kind === 'file')
+                .flatMap((item) => {
+                  const file = item.getAsFile();
+                  return file ? [file] : [];
+                });
+              if (!files.length) return;
+              event.preventDefault();
+              if (!attachmentDisabled) {
+                chat.attachments.add(files);
+                const text = event.clipboardData.getData('text/plain');
+                if (text) {
+                  const node = event.currentTarget;
+                  setDraft(
+                    draft.slice(0, node.selectionStart) + text + draft.slice(node.selectionEnd),
+                  );
+                }
+              }
+            }}
             onKeyDown={(event) => {
               if (
                 event.nativeEvent.isComposing ||
@@ -141,11 +242,11 @@ export default function DswComposer({
                 >
                   清除草稿
                 </button>
-              ) : transcript.tasks.length > 0 && draft.trim() ? (
+              ) : transcript.tasks.length > 0 && hasInput ? (
                 <button
                   type="button"
                   className="pill composer-steer"
-                  disabled={!connected || loading || busy || submitting}
+                  disabled={!connected || loading || busy || submitting || !chat.imagesReady}
                   onClick={() => void chat.send(true)}
                   title="引导当前任务"
                   aria-label="引导当前任务"
@@ -157,9 +258,10 @@ export default function DswComposer({
               <button
                 type="button"
                 className="composer-attach"
-                disabled
-                title="当前 Gateway 尚无附件上传接口"
-                aria-label="添加附件"
+                disabled={attachmentDisabled}
+                title="添加图片，支持粘贴或拖入"
+                aria-label="添加图片"
+                onClick={() => picker.current?.click()}
               >
                 <IconPaperclip />
               </button>
@@ -175,11 +277,13 @@ export default function DswComposer({
                   <IconStop />
                 </button>
               )}
-              {(!running || draft.trim()) && (
+              {(!running || hasInput) && (
                 <button
                   type="submit"
                   className="send-btn"
-                  disabled={loading || busy || (unknown && submitting) || !draft.trim()}
+                  disabled={
+                    loading || busy || !chat.imagesReady || (unknown && submitting) || !hasInput
+                  }
                   title={sendLabel}
                   aria-label={sendLabel}
                 >
