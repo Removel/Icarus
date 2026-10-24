@@ -19,6 +19,10 @@ node --env-file=.env.local server/index.mjs
 
 默认打开 `http://127.0.0.1:8080`。`pnpm start` 直接读取进程环境；生产入口不会隐式加载仓库根 `.env`。开发模式 `pnpm dev` 才从仓库根目录读取 `ICARUS_` 配置，并监听 `127.0.0.1:5173`。Vite preview 仅用于构建预览，不提供生产认证与代理。
 
+构建会为超过 1 KB 且压缩有效的 JS、CSS、HTML、SVG 生成 `.br` / `.gz` 副本。部署时保留整个 `apps/shell/dist`，Node 入口按 `Accept-Encoding` 协商并返回 `Vary: Accept-Encoding`，不在请求时压缩。没有副本时可回退到原文件。哈希资源继续使用一年 immutable 缓存，HTML 使用 `no-cache`；反向代理应保留这些响应头。
+
+聊天历史会在当前浏览器的 IndexedDB 缓存最多 12 个会话、保留 7 天，刷新后先展示快照，再从服务端重建历史校准。缓存不可用或连续失败时自动停用，不阻塞 RPC；删除会话会清除对应缓存。排查旧快照时可在浏览器开发者工具的 Application / IndexedDB 中删除 `icarus.webui.history`，无需修改后端数据。性能实现与验证见 [WebUI 性能改造](spec/2026-10-24-webui-performance/plan.md)。
+
 ## 配置
 
 | 变量 | 默认值或用途 |
