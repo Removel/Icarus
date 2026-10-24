@@ -7,6 +7,7 @@
   },
   "dependencies": {
     "@icarus/ui": "workspace:*",
+    "@tanstack/react-virtual": "^3.14.22",
     "katex": "0.18.1",
     "lottie-web": "5.13.0",
     "lucide-react": "0.577.0",
@@ -16,6 +17,8 @@
     "rehype-katex": "^7.0.1",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "4.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5"
   }
 }

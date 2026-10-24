@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { BrandMark, transitionLayout, useNarrowLayout } from '@icarus/ui';
 import type { History, Session } from './gateway';
 import { applyUpdate, emptyTranscript } from './updates';
@@ -85,12 +85,16 @@ export default function ChatApp({
       chat.go({ workspace: chat.workspace });
     });
   };
-  const compose = (text: string) => {
-    chat.setDraft(chat.draft ? chat.draft + '\n' + text : text);
-    requestAnimationFrame(() =>
-      document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus(),
-    );
-  };
+  const setDraft = chat.setDraft;
+  const compose = useCallback(
+    (text: string) => {
+      setDraft((current) => (current ? current + '\n' + text : text));
+      requestAnimationFrame(() =>
+        document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus(),
+      );
+    },
+    [setDraft],
+  );
   async function exportSession(session: Session) {
     if (!chat.gateway) return;
     setExportError('');

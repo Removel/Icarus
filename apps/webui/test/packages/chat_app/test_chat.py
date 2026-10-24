@@ -950,7 +950,9 @@ def test_semi_code_highlight_copy_and_horizontal_scroll(page, theme, width):
     block = page.locator('.chat-code-block')
     expect(block.locator('.chat-code-heading > span')).to_have_text('python')
     expect(block.locator('pre code')).to_have_text(code)
-    assert block.locator('.token').count() > 0
+    # The open streaming fence uses plain code; syntax highlighting runs once
+    # the final answer arrives instead of reparsing the growing fence each frame.
+    assert block.locator('.token').count() == 0
     assert page.get_by_role('button', name='复制回答', exact=True).count() == 0
     block.get_by_role('button', name='复制代码', exact=True).click()
     expect(block.get_by_role('button', name='已复制代码', exact=True)).to_be_visible()
@@ -959,6 +961,7 @@ def test_semi_code_highlight_copy_and_horizontal_scroll(page, theme, width):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     expect(page.locator('.chat-markdown p > code')).to_have_text('value')
     emit('assistant.message', {'step': 1, 'text': '内联 `value`\n\n```python\n' + code + '\n```'})
+    expect(block.locator('.token').first).to_be_visible()
     expect(page.get_by_role('button', name='复制回答', exact=True)).to_be_visible()
     page.screenshot(path=f'test-results/chat-semi-code-{theme}-{width}.png', full_page=True)
 
@@ -978,7 +981,7 @@ def test_code_languages_and_plain_fallback_survive_history_reload(page, language
     expect(block.locator('.chat-code-heading > span')).to_have_text(language or '纯文本')
     expect(block.locator('pre code')).to_have_text(code)
     if language and language != 'unknown-language':
-        assert block.locator('.token').count() > 0
+        expect(block.locator('.token').first).to_be_visible()
     assert block.locator('script').count() == 0
     page.reload()
     expect(block.locator('pre code')).to_have_text(code)

@@ -82,6 +82,9 @@ def test_chat_sidebar_collapses_without_changing_management_preference(page):
 @pytest.mark.parametrize('theme', ['light', 'dark'])
 def test_loading_chat_styles_does_not_restyle_memory(page, theme):
     page.emulate_media(color_scheme=theme)
+    # Media-query changes arrive asynchronously; compare the same applied theme
+    # before and after crossing lazy module boundaries.
+    expect(page.locator('html')).to_have_attribute('data-theme', theme)
     def appearance():
         return page.locator('.memory-page').evaluate('''el => {
             const style = getComputedStyle(el);

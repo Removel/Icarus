@@ -60,6 +60,24 @@ html[data-theme='dark'] .dswui .icarus-wordmark {
 .dswui .chat-transcript {
   min-height: 0;
   flex: 1;
+  overflow-anchor: none;
+}
+.dswui .chat-row,
+.dswui .chat-virtual-row {
+  display: flow-root;
+  min-width: 0;
+}
+.dswui .chat-virtual-items {
+  position: relative;
+}
+.dswui .chat-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+.dswui .chat-markdown-tail {
+  white-space: pre-wrap;
 }
 /* Let the original dswui pseudo-elements style both scroll containers. */
 .dswui :is(.chat-transcript, .chat-process-items) {

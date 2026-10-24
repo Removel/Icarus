@@ -2,8 +2,8 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, FileText, NotebookText, Network, ShieldCheck } from 'lucide-react';
 import { LoadingIndicator, navigate, useHashLocation } from '@icarus/ui';
 import { useTheme } from './theme';
-import MemoryApp from '@icarus/memory-app';
-import KnowledgeApp from '@icarus/knowledge-app';
+const MemoryApp = lazy(() => import('@icarus/memory-app'));
+const KnowledgeApp = lazy(() => import('@icarus/knowledge-app'));
 const ChatApp = lazy(() => import('@icarus/chat-app'));
 
 export default function App() {
@@ -12,6 +12,8 @@ export default function App() {
   const [memoryHeader, setMemoryHeader] = useState<HTMLDivElement | null>(null);
   const requested = hash.split('?')[0].split('/')[1];
   const route = requested === 'memory' || requested === 'knowledge' ? requested : 'chat';
+  const visited = useRef(new Set([route]));
+  visited.current.add(route);
   const paths = useRef({
     memory: '#/memory/all',
     knowledge: '#/knowledge/sources',
@@ -76,18 +78,28 @@ export default function App() {
         </nav>
       </header>
       <div className="management-body" hidden={route !== 'memory'}>
-        <MemoryApp
-          headerContainer={memoryHeader}
-          workspace={new URLSearchParams(paths.current.chat.split('?')[1]).get('workspace') ?? ''}
-          active={route === 'memory'}
-          hash={route === 'memory' ? hash : paths.current.memory}
-        />
+        {visited.current.has('memory') && (
+          <Suspense fallback={<LoadingIndicator label="正在加载记忆" />}>
+            <MemoryApp
+              headerContainer={memoryHeader}
+              workspace={
+                new URLSearchParams(paths.current.chat.split('?')[1]).get('workspace') ?? ''
+              }
+              active={route === 'memory'}
+              hash={route === 'memory' ? hash : paths.current.memory}
+            />
+          </Suspense>
+        )}
       </div>
       <div className="management-body" hidden={route !== 'knowledge'}>
-        <KnowledgeApp
-          active={route === 'knowledge'}
-          hash={route === 'knowledge' ? hash : paths.current.knowledge}
-        />
+        {visited.current.has('knowledge') && (
+          <Suspense fallback={<LoadingIndicator label="正在加载知识库" />}>
+            <KnowledgeApp
+              active={route === 'knowledge'}
+              hash={route === 'knowledge' ? hash : paths.current.knowledge}
+            />
+          </Suspense>
+        )}
       </div>
     </>
   );

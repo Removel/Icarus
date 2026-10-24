@@ -11,6 +11,7 @@ import {
 import { applyUpdate, emptyTranscript } from './updates';
 import useChatPreference from './useChatPreference';
 import { localClock, type RequestOptions } from './webSearch';
+import { deleteHistory, readHistory, saveHistory } from './historyCache';
 
 type Submission = {
   id: string;
@@ -32,6 +33,7 @@ export default function useChatSession(hash: string) {
   const transcriptRef = useRef(transcript);
   transcriptRef.current = transcript;
   const historyCache = useRef(new Map<string, ReturnType<typeof emptyTranscript>>());
+  const deletedHistory = useRef(new Set<string>());
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const [connected, setConnected] = useState(false);
@@ -179,6 +181,10 @@ export default function useChatSession(hash: string) {
     let ready = false;
     let key = '';
     const buffered: RuntimeUpdate[] = [];
+    if (!cached)
+      void readHistory(cacheKey).then((persisted) => {
+        if (!stale && !ready && persisted) setTranscript(persisted);
+      });
     receive.current = (update) => {
       if (
         stale ||
@@ -191,6 +197,7 @@ export default function useChatSession(hash: string) {
       else setTranscript((previous) => applyUpdate(previous, update, true));
     };
     async function load() {
+      const started = performance.now();
       const fresh =
         createdStatus.current?.session_id === sessionId ? createdStatus.current : undefined;
       const status =
@@ -227,8 +234,14 @@ export default function useChatSession(hash: string) {
       ready = true;
       readySelection.current = workspace + '\u0000' + sessionId;
       setTranscript(state);
+      void saveHistory(cacheKey, state);
       setLoading(false);
       setError('');
+      performance.clearMeasures('icarus.chat.history');
+      performance.measure('icarus.chat.history', {
+        start: started,
+        detail: { records: state.seen.size, memoryCache: Boolean(cached) },
+      });
       if (
         !sessionsRef.current.find((item) => item.session_id === sessionId)?.title &&
         state.items.some((item) => item.kind === 'user')
@@ -237,12 +250,14 @@ export default function useChatSession(hash: string) {
     }
     load().catch((error) => {
       if (!stale) {
+        if (!cached) setTranscript(emptyTranscript());
         setLoading(false);
         setError(error instanceof Error ? error.message : '加载失败');
       }
     });
     return () => {
-      if (ready) {
+      if (ready && !deletedHistory.current.has(cacheKey)) {
+        void saveHistory(cacheKey, transcriptRef.current);
         historyCache.current.delete(cacheKey);
         historyCache.current.set(cacheKey, {
           ...transcriptRef.current,
@@ -259,6 +274,21 @@ export default function useChatSession(hash: string) {
           .catch(() => {});
     };
   }, [gateway, workspace, sessionId, version, requestTitle]);
+
+  useEffect(() => {
+    if (
+      loading ||
+      !sessionId ||
+      !workspace ||
+      transcript.tasks.length ||
+      deletedHistory.current.has(workspace + '\u0000' + sessionId)
+    )
+      return;
+    const timer = setTimeout(() => {
+      void saveHistory(workspace + '\u0000' + sessionId, transcript);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [transcript, loading, workspace, sessionId]);
 
   async function createSession(firstText?: string) {
     if (!client.current || working.current) return;
@@ -356,7 +386,9 @@ export default function useChatSession(hash: string) {
         if (!['discarded', 'not_found'].includes(result.status))
           throw new Error('删除失败，请重试。');
         deleted.push(id);
+        deletedHistory.current.add(workspace + '\u0000' + id);
         historyCache.current.delete(workspace + '\u0000' + id);
+        void deleteHistory(workspace + '\u0000' + id);
         setSessions((items) => items.filter((item) => item.session_id !== id));
         if (createdSession.current?.session_id === id) createdSession.current = undefined;
         if (createdStatus.current?.session_id === id) createdStatus.current = undefined;

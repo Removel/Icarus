@@ -39,7 +39,12 @@ export default function ChatReasoning({
       >
         <summary>{entry.final || !running ? '已思考' : '正在思考'}</summary>
         <div className="chat-reasoning-text" data-streaming={content !== entry.text || undefined}>
-          <ChatContent text={content} live={false} onGrowth={onGrowth} />
+          <ChatContent
+            text={content}
+            live={false}
+            streaming={Boolean(entry.live && (!entry.final || content !== entry.text))}
+            onGrowth={onGrowth}
+          />
         </div>
       </details>
     </div>

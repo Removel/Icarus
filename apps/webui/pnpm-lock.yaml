@@ -78,6 +78,9 @@ importers:
       '@icarus/ui':
         specifier: workspace:*
         version: link:../ui
+      '@tanstack/react-virtual':
+        specifier: ^3.14.22
+        version: 3.14.22(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       katex:
         specifier: 0.18.1
         version: 0.18.1
@@ -108,6 +111,12 @@ importers:
       remark-math:
         specifier: ^6.0.0
         version: 6.0.0
+      remark-parse:
+        specifier: ^11.0.0
+        version: 11.0.0
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
 
   packages/knowledge-app:
     dependencies:
@@ -804,6 +813,15 @@ packages:
 
   '@semi-bot/semi-theme-universedesign@1.0.13':
     resolution: {integrity: sha512-U24JitECpJ4L7QuhyBnY++OuqkgKP9S5EhqdDcDvp3mymfa/AE9daFeu0fW+QIsWp4XOidxp42KAGf6C1Qf+/Q==}
+
+  '@tanstack/react-virtual@3.14.22':
+    resolution: {integrity: sha512-zNiB9IF3prySTfAUrj9tPHjD/lonBYkfxrPP4v4ITUx+qwHajJR5cY/xirjvwc+KWkur10GX3TpsbKh7JkD8Lw==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  '@tanstack/virtual-core@3.19.7':
+    resolution: {integrity: sha512-gxy5SvH0mFRJ0YujtrflB/1HAu9Wn1KGvL0bjZfQkYVVMsIpQiwcf1mR06/ViN4NjllUb4HNCjqE9FGwgTvMCQ==}
 
   '@tiptap/core@3.31.3':
     resolution: {integrity: sha512-Cz50pvciQrxdSxgTkHOVz0uD0Yl/8Xt0QatGD6ILm47jW8EzyHR9RkUGs/D5IqzXKuVPntfw1ttaT926vXfiRg==}
@@ -2905,6 +2923,14 @@ snapshots:
     optional: true
 
   '@semi-bot/semi-theme-universedesign@1.0.13': {}
+
+  '@tanstack/react-virtual@3.14.22(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+    dependencies:
+      '@tanstack/virtual-core': 3.19.7
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+
+  '@tanstack/virtual-core@3.19.7': {}
 
   '@tiptap/core@3.31.3(@tiptap/pm@3.31.3)':
     dependencies:
