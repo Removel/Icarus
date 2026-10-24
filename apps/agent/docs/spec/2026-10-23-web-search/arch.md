@@ -46,6 +46,8 @@ RuntimeUpdatePlugin 只接受 `web-search` 身份的该事件，转换为 `web_s
 ## 配置
 
 Gateway 进程环境中的 `ICARUS_WEB_SEARCH_API_KEY` 是独立搜索凭据，不自动借用模型 Key。
+DeepSeek 官方 Search/Fetch 使用普通 DeepSeek API Key；部署时可显式复用同一个 Key，
+填入根 `.env` 的该变量。根 `.example.env` 提供空值入口，不包含真实凭据。
 可通过 Agent 设置的 `runtime.plugin_config.web-search` 配置：
 
 ```json
@@ -59,6 +61,8 @@ Gateway 进程环境中的 `ICARUS_WEB_SEARCH_API_KEY` 是独立搜索凭据，�
 endpoint 若没有 path，自动补 `/v1`；带 path 则按配置使用。仅回环地址允许 HTTP，远端要求
 HTTPS；不跟随重定向，不把原始 HTTP 响应或凭据带入公共错误。缺少 Key 时前端收到可读
 提示，正常回答继续。配置用于新建或重新加载的会话，更新代码/进程环境需重启 Gateway。
+HTTP 401、402、403、429 分别转换为密钥无效、余额不足、访问被拒绝和限流提示；
+Fetch 的 403 单独表示网页被安全策略拒绝，不推断为搜索权限不足。错误不包含响应原文或密钥。
 
 ## 验证入口
 

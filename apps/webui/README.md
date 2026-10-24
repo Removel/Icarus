@@ -27,8 +27,11 @@
 沿用服务端任务与历史机制。
 
 使用前更新并重启 Gateway，在服务端进程环境或仓库 `.env` 设置
-`ICARUS_WEB_SEARCH_API_KEY`；不要使用 `VITE_` 前缀。Key 不下发浏览器。自定义中转/代理
-配置见 [Agent 联网检索架构](../agent/docs/spec/2026-10-23-web-search/arch.md)。请求由服务端
+`ICARUS_WEB_SEARCH_API_KEY`；不要使用 `VITE_` 前缀。Key 不下发浏览器。
+DeepSeek 官方 Search/Fetch 使用普通 DeepSeek API Key，可将同一个有效 Key 填入根 `.env`
+的 `ICARUS_WEB_SEARCH_API_KEY`；程序不会自动从模型 Key 回退。缺少搜索密钥时继续普通回答；
+密钥无效、余额不足、接口拒绝访问和限流会分别显示原因。修改后重启 Gateway，并新建会话。
+自定义中转/代理配置见 [Agent 联网检索架构](../agent/docs/spec/2026-10-23-web-search/arch.md)。请求由服务端
 发出，浏览器无需直连 DeepSeek，也无需增加跨域配置。未配置凭据或中转不支持接口时
 会显示可读降级提示。设置页展示官方每次成功请求的成本估算，另计模型费用。
 
