@@ -5,6 +5,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, relative, extname, isAbsolute } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
+import { acceptedEncodings } from './static-encoding.mjs';
 
 const env = process.env;
 const host = env.ICARUS_WEBUI_HOST || '127.0.0.1';
@@ -164,15 +165,42 @@ const server = http.createServer(async (request, response) => {
     const child = relative(root, file);
     if (child.startsWith('..') || isAbsolute(child) || !(await stat(file)).isFile())
       return reply(response, 404, 'Not found');
+    let representation = file;
+    let encoding;
+    for (const candidate of acceptedEncodings(request.headers['accept-encoding'])) {
+      if (candidate === 'identity') {
+        encoding = 'identity';
+        break;
+      }
+      try {
+        const compressed = await realpath(file + (candidate === 'br' ? '.br' : '.gz'));
+        const compressedChild = relative(root, compressed);
+        if (
+          compressedChild.startsWith('..') ||
+          isAbsolute(compressedChild) ||
+          !(await stat(compressed)).isFile()
+        )
+          continue;
+        representation = compressed;
+        encoding = candidate;
+        break;
+      } catch {
+        /* An uncompressed build remains usable. */
+      }
+    }
+    if (!encoding) return reply(response, 406, 'No acceptable representation');
     response.writeHead(200, {
       'Content-Type': mime[extname(file)] || 'application/octet-stream',
+      Vary: 'Accept-Encoding',
+      ...(encoding !== 'identity' ? { 'Content-Encoding': encoding } : {}),
+      'Content-Length': (await stat(representation)).size,
       'Cache-Control': path.startsWith('/assets/')
         ? 'public, max-age=31536000, immutable'
         : 'no-cache',
     });
     if (request.method === 'HEAD') response.end();
     else {
-      const stream = createReadStream(file);
+      const stream = createReadStream(representation);
       stream.on('error', () => response.destroy());
       stream.pipe(response);
     }

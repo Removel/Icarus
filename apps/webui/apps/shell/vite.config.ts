@@ -2,13 +2,14 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import semiPlugin from '@douyinfe/semi-vite-plugin';
+import precompress from './precompress';
 
 export default defineConfig(({ mode }) => {
   const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
   const env = loadEnv(mode, repoRoot, 'ICARUS_');
   const token = env.ICARUS_OPENKB_API_TOKEN;
   return {
-    plugins: [react(), semiPlugin({ theme: '@semi-bot/semi-theme-universedesign' })],
+    plugins: [react(), semiPlugin({ theme: '@semi-bot/semi-theme-universedesign' }), precompress()],
     base: './',
     server: {
       proxy: {

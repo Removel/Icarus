@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import gzip
 import http.client
 import json
 import os
@@ -235,3 +236,65 @@ def test_production_assets_exclude_demo_content(production):
         assert '工作台阅读体验访谈' not in content
         assert '知识检索与来源追溯实验' not in content
         assert '浏览示例' not in content
+
+
+@pytest.mark.parametrize('accept,encoding', [
+    ('br, gzip', 'br'),
+    ('gzip', 'gzip'),
+    ('gzip;q=0.9, br;q=0.5, identity;q=0.1', 'gzip'),
+    ('br;q=0, *;q=1', 'gzip'),
+    ('identity', None),
+])
+def test_precompressed_assets_negotiate_and_keep_long_cache(production, accept, encoding):
+    asset = max((ROOT / 'apps' / 'shell' / 'dist' / 'assets').glob('*.js'), key=lambda path: path.stat().st_size)
+    headers = {'Authorization': AUTH, 'Accept-Encoding': accept}
+    path = '/assets/' + asset.name
+    status, response, body = request(production, path=path, headers=headers)
+    assert status == 200
+    assert response.get('Content-Encoding') == encoding
+    assert response['Vary'] == 'Accept-Encoding'
+    assert 'immutable' in response['Cache-Control']
+    assert 'javascript' in response['Content-Type']
+    assert int(response['Content-Length']) == len(body)
+    original = asset.read_bytes()
+    if encoding == 'gzip':
+        assert gzip.decompress(body) == original
+    elif encoding == 'br':
+        decoded = subprocess.run(['node', '-e', "process.stdin.on('data', c => chunks.push(c)); const chunks = []; process.stdin.on('end', () => process.stdout.write(require('node:zlib').brotliDecompressSync(Buffer.concat(chunks))));"], input=body, capture_output=True, check=True)
+        assert decoded.stdout == original
+    else:
+        assert body == original
+    status, head, empty = request(production, method='HEAD', path=path, headers=headers)
+    assert status == 200 and empty == b''
+    assert head['Content-Length'] == response['Content-Length']
+    assert head.get('Content-Encoding') == encoding
+
+
+def test_compression_keeps_authentication_and_rejects_disallowed_representations(production):
+    assert request(production, headers={'Accept-Encoding': 'br'})[0] == 401
+    asset = next((ROOT / 'apps' / 'shell' / 'dist' / 'assets').glob('*.js'))
+    assert request(production, path='/assets/' + asset.name, headers={
+        'Authorization': AUTH, 'Accept-Encoding': '*;q=0'})[0] == 406
+    status, headers, _ = request(production, headers={'Authorization': AUTH, 'Accept-Encoding': 'br'})
+    assert status == 200
+    assert headers['Cache-Control'] == 'no-cache'
+
+
+def test_homepage_defers_optional_renderers_and_management(production, browser):
+    context = browser.new_context(http_credentials={'username': 'webui', 'password': 'test-password'})
+    try:
+        page = context.new_page()
+        scripts = []
+        page.on('request', lambda request: scripts.append(request.url) if request.resource_type == 'script' else None)
+        page.goto(production[1], wait_until='networkidle')
+        page.locator('.dswui').wait_for()
+        for optional in ('mathRenderer-', 'ChatCodeHighlight-', 'MemoryApp-', 'KnowledgeApp-', 'EvidenceMap-'):
+            assert not any(optional in script for script in scripts), scripts
+        resources = page.evaluate('''() => performance.getEntriesByType('resource')
+            .filter(entry => entry.name.endsWith('.js')).map(entry => ({
+                name: new URL(entry.name).pathname.split('/').pop(),
+                encoded: entry.encodedBodySize, decoded: entry.decodedBodySize}))''')
+        print('HOMEPAGE_JS', json.dumps(resources))
+        assert resources and all(resource['encoded'] > 0 for resource in resources)
+    finally:
+        context.close()
