@@ -5,6 +5,7 @@ from __future__ import annotations
 from icarus.runtime.fanout import DEFAULT_QUEUE_CAPACITY
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket
 
@@ -15,12 +16,14 @@ from apps.gateway.src.connection import (
     RuntimeUpdatePump,
 )
 from apps.gateway.src.protocol.methods import GatewayMethods
+from apps.gateway.src.resources import image_routes
 
 
 def create_app(
     runtime: AgentRuntime | None = None,
     *,
     connection_queue_capacity: int | None = None,
+    resource_data_dir: str | Path | None = None,
 ) -> FastAPI:
     runtime = runtime or AgentRuntime()
     hub = ConnectionHub()
@@ -41,6 +44,7 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan)
     app.state.agent_runtime = runtime
+    app.include_router(image_routes(runtime, data_dir=resource_data_dir))
 
     @app.get("/health")
     async def health():
