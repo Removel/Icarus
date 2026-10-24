@@ -25,6 +25,14 @@ node --env-file=.env.local server/index.mjs
 
 ## 配置
 
+图片输入依赖新版 Gateway 的 `POST/GET /resources`，Vite 与生产 Node 入口均代理到
+`ICARUS_GATEWAY_ENDPOINT`。更新后重启 Gateway；生产环境重新构建 WebUI 并重启 Node，
+开发环境更新代理配置后重启 Vite。反向代理的请求体上限应允许单张 20 MiB 原始图片。
+图片暂存在 Gateway 的 incoming/webui 目录，由既有 Agent 导入器写入会话 assets；
+WebUI 进程不挂载或读取 Agent 数据目录。移除草稿不删除服务端资源，暂存文件目前不自动回收。
+消息中的图片链接受当前入口认证保护，Markdown 导出包含这些链接，不嵌入图片或凭据，
+离线阅读需要另行保存图片。没有图片输入能力的模型仍由服务端报告错误，浏览器不判断供应商。
+
 | 变量 | 默认值或用途 |
 | --- | --- |
 | `ICARUS_WEBUI_HOST` | `127.0.0.1`；非回环地址必须设置入口账号密码 |
@@ -72,6 +80,8 @@ node --env-file=.env.local server/check-services.mjs
 | 页面 401 | 核对入口 Basic 凭据；浏览器可能缓存旧凭据 |
 | 写入或对话 403 | 核对 `ICARUS_WEBUI_ORIGIN` 与地址栏 origin、反向代理是否保留 Host 和 Origin |
 | API 502 | 检查后端进程、容器网络地址和端口；运行真实服务检查 |
+| 图片接口不可用 | 更新并重启 Gateway，确认 Vite/Node 和外层反向代理转发 `/resources` |
+| 图片上传 413 | 单张限制 20 MiB，同时检查外层反向代理请求体限制 |
 | Mem0 401/403 | 检查服务管理 Key；全列表需要管理员权限 |
 | 对话断线 | 检查 Gateway `/health`、WebSocket 转发和代理超时；客户端会恢复历史，不自动重发输入 |
 | 发送结果未知 | 核对历史后再重试；重试复用 submission ID，幂等范围是同一 Gateway 进程，进程重启后不要盲目重试 |

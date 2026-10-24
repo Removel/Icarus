@@ -36,6 +36,10 @@
 
 ### A 图片上传（下一项）
 
+2026-10-24 更新：图片输入已按 [独立实施计划](../2026-10-24-chat-image-input/plan.md) 接入，
+Gateway 使用原始二进制 body 接收单张图片，无需新增 multipart 依赖。下文保留最初方案作为背景，
+当前接口与验证以独立计划及 Gateway 图片资源架构为准。
+
 目前 session.submit/steer 已有 resources，但浏览器不能把本地绝对路径作为服务端文件路径。TUI 当前通过 incoming 资源目录交接给 ResourceImporter；WebUI 应复用后半段导入逻辑。
 
 1. Gateway 增加 `POST /resources`，接 multipart 文件，按实际图片类型和字节上限校验，生成不含用户路径的资源 ID 并写入现有 incoming 目录；返回既有 ResourceRef 字段。禁止把浏览器给出的绝对路径直接交给 importer。

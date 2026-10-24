@@ -32,6 +32,12 @@ Shell 的 theme.ts 管理浅色、深色、跟随系统三种模式，默认跟�
 
 `historyCache.ts` 使用 IndexedDB 提前展示历史快照，最多保留 12 个会话、7 天，每会话最多 200 万文本字符。读取不阻塞 RPC，刷新从序列 0 重建权威历史并替换快照；同页会话切换保持内存缓存的增量同步。缓存操作 3 秒超时，连续 3 次失败后当前页面停用，删除会话时清除持久缓存。`icarus.chat.history` 仅作为浏览器本地 Performance measure，不记录原文或外部上报。
 
+图片输入通过 `useImageInputs` 与 `DswComposer` 接文件选择、粘贴和拖入；本地对象 URL 展示缩略图，
+XHR 上传提供进度、取消与失败重试。成功后草稿、队列及 submit/steer 快照携带 ResourceRef，
+纯图片可发送，未知结果重试复用 submission_id。`ChatImages` 从公共用户事件的 resources 渲染历史图片，
+加载或失败时通知滚动和虚拟列表测量；历史消息编辑会先重新暂存图片。Vite 与 Node 将 `/resources`
+转发至 Gateway，沿用同源认证，不直接读取 Agent 数据目录。详见 [图片输入](../2026-10-24-chat-image-input/plan.md)。
+
 Shell 构建通过 `precompress.ts` 为大于 1 KB 的可压缩资源生成 Brotli/gzip 副本，`server/static-encoding.mjs` 按 Accept-Encoding 的 q 值协商。静态响应保留原资源 MIME、鉴权与缓存规则，设置 Vary、压缩后的 Content-Length，并支持 HEAD。实现范围与验证记录见 [WebUI 性能改造](../2026-10-24-webui-performance/plan.md)。
 
 `useChatSession` 保存当前页面、当前会话的待发送队列，不在服务器或浏览器存储中另建消息队列。空闲时 Enter 直接提交，执行中或等待提交确认时 Enter 排队；task.finished 后逐条调用 session.submit。排队消息可删除或移回草稿，编辑时暂停队列；停止当前任务也暂停队列，明确发送失败或未知结果恢复原消息、保留新草稿并暂停。历史同步未完成或失败时不自动发送。引导按钮调用已有 session.steer，复用当前 task ID；接收成功后显示“引导待应用”，user.correction 去重替换本地消息并显示“引导已应用”，任务结束仍未收到应用事件则标记“引导未应用”。未知结果重试保持原 RPC 方法、task ID 和 submission_id，已结束或正在取消的引导恢复草稿，避免隐式变为新任务。

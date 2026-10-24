@@ -14,6 +14,12 @@
 
 ## 启动
 
+对话支持图片选择、粘贴和拖入，可预览、移除及重试上传；支持纯图片、图文消息、排队与引导。
+选择入口每条消息最多添加 8 张，单张不超过 20 MiB，格式为 PNG、JPEG、GIF、WebP。
+需要同时更新并重启 Gateway；生产部署还需重新构建 WebUI 并重启 Node 入口。
+历史图片通过同源接口读取，编辑为新消息会重新暂存图片，不把历史 asset 引用直接当作 incoming 引用提交。
+实现边界见 [图片输入计划](docs/spec/2026-10-24-chat-image-input/plan.md)。
+
 联网搜索优化依据与原规格见 [联网搜索实施计划](docs/spec/2026-10-23-web-search/plan.md)。
 输入框的「联网搜索」默认关闭；系统设置可开启「深度检索（多页）」。默认执行 2 条查询、
 最多读取 3 页，深度模式最多 5 条查询、6 页。搜索数量使用实际命中总数，浏览列表只展示
@@ -37,7 +43,7 @@ pnpm dev
 
 开发服务将 `/api/v1` 代理至 `http://127.0.0.1:7566`，并从仓库根目录 `.env`（或进程环境）读取 `ICARUS_OPENKB_API_TOKEN`，仅在 Node 代理侧添加 Bearer 请求头。令牌不使用 `VITE_` 前缀，也不进入浏览器代码。修改令牌后需重启开发服务。后端须单独启动；使用 Docker 管理时，在仓库根目录执行 `icarus start openkb`。其他部署使用 `ICARUS_OPENKB_ENDPOINT` 指定服务地址，并在代理层处理授权。
 
-开发服务同时把 `/api/mem0` 代理到 `127.0.0.1:8888`、`/rpc` 代理到 `127.0.0.1:8765`。通过 `ICARUS_MEM0_ENDPOINT`、`ICARUS_OPENKB_ENDPOINT`、`ICARUS_GATEWAY_ENDPOINT` 覆盖地址，Mem0 管理 Key 使用 `ICARUS_MEM0_API_KEY`。对话页填写服务端工作区绝对路径，连接后选择或新建会话。生产运行使用 `pnpm build` 和 `node --env-file=.env.local server/index.mjs`，完整配置、容器、验收、回滚和排障见 [部署说明](docs/deployment.md)。
+开发服务同时把 `/api/mem0` 代理到 `127.0.0.1:8888`、`/rpc` 与 `/resources` 代理到 `127.0.0.1:8765`。通过 `ICARUS_MEM0_ENDPOINT`、`ICARUS_OPENKB_ENDPOINT`、`ICARUS_GATEWAY_ENDPOINT` 覆盖地址，Mem0 管理 Key 使用 `ICARUS_MEM0_API_KEY`。对话页填写服务端工作区绝对路径，连接后选择或新建会话。生产运行使用 `pnpm build` 和 `node --env-file=.env.local server/index.mjs`，完整配置、容器、验收、回滚和排障见 [部署说明](docs/deployment.md)。
 
 ## 通过 Icarus 控制面启动
 
