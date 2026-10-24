@@ -221,7 +221,7 @@ export default function DswComposer({
             </button>
             <button
               type="button"
-              className="pill"
+              className={chat.webSearch ? 'pill on' : 'pill'}
               aria-pressed={chat.webSearch}
               disabled={unknown}
               onClick={() => chat.setWebSearch(!chat.webSearch)}

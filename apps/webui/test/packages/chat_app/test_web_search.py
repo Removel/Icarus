@@ -117,6 +117,28 @@ def test_search_preferences_are_captured_per_queued_message_and_time_is_local(pa
     assert calls[0]["params"]["prompt"] == "关闭搜索的第一条"
 
 
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_search_toggle_visibly_distinguishes_enabled_state(page, theme):
+    gateway(page)
+    page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+    toggle = page.get_by_role("button", name="联网搜索", exact=True)
+    toggle.hover()
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    off_color = toggle.evaluate("node => getComputedStyle(node).color")
+    off_border = toggle.evaluate("node => getComputedStyle(node).borderColor")
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "true")
+    page.wait_for_function(
+        "({color, border}) => { const node = document.querySelector('button[aria-pressed]'); "
+        "const style = getComputedStyle(node); return style.color !== color && style.borderColor !== border; }",
+        arg={"color": off_color, "border": off_border},
+    )
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    expect(toggle).to_have_css("color", off_color)
+    expect(toggle).to_have_css("border-color", off_border)
+
+
 def test_deep_search_and_real_six_page_overflow(page):
     _, emit = gateway(page)
     open_settings(page)
