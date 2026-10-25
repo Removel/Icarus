@@ -77,6 +77,23 @@ POST/GET http://127.0.0.1:8765/resources
 
 第一阶段默认只监听本机地址，不提供远程认证。
 
+## Argus 后台交接（默认不启用）
+
+本机 `/rpc` 保留普通用户方法；`/argus/rpc` 仅提供 `argus.wake/status/cancel/release`，每次请求
+都需 `protocol_version=1` 和环境 `ARGUS_GATEWAY_TOKEN` 对应的 `caller_token`。缺 token 拒绝，
+普通入口不会转发这些方法，专用入口也不接受 session.create/submit。后台会话不出现在普通列表，
+普通会话 API 和未知 ID 预订阅不能访问它。status 的 `execution_stopped` 不等于 `release_complete`。
+
+启用前在 Agent 可信配置中设置 `argus.enabled=true`、已存在的绝对后台 workspace 和 Argus
+`base_url`，并提供独立的`ARGUS_AGENT_API_TOKEN`。后台现在直接继承已配置的MCP服务器，可由模型
+按需调用QQ工具；没有新增动作白名单、当前群范围强制检查或发送outbox，最终正文不自动发布。
+同一 Agent data_dir 只允许一个宿主进程。默认最多8个后台执行，wait/pending_sync仍占名额。
+
+独立部署可显式传 `--service-host <私有LAN或VPN地址> --service-port <端口>`；普通 `--host`
+仅允许 loopback，远端 listener 只有 `/argus/rpc` 和 health。两入口同进程共用一个 runtime。
+必须有网络 ACL；本阶段不做 TLS、不支持公网，也不把 forwarded header 作为身份。示例不自动
+启用、不写真实密钥，正式迁移/部署/模型冒烟需要另行授权。
+
 ## 测试
 
 ```bash

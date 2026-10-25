@@ -5,11 +5,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from agent_app.application.models.scoped_execution import ScopedWakeRequest
+from agent_app.argus_protocol import Scope
+
 
 class ServiceParams(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True, hide_input_in_errors=True)
     caller_token: SecretStr
-    protocol_version: Literal[1]
+    protocol_version: Literal[1, 2]
 
     @field_validator('protocol_version', mode='before')
     @classmethod
@@ -19,13 +22,28 @@ class ServiceParams(BaseModel):
         return value
 
 
-class WakeParams(ServiceParams):
+class WakeParams(ScopedWakeRequest):
+    """Reuse Agent's versioned target presence, normalization and frozen payload."""
+
+    caller_token: SecretStr
+
+
+class SessionsParams(ServiceParams):
+    protocol_version: Literal[2]
+    scope: Scope
+    cursor: str | None = Field(default=None, max_length=2048)
+    limit: int = Field(default=10, ge=1, le=20)
+
+
+class NotifyParams(ServiceParams):
+    protocol_version: Literal[2]
     wake_id: str
-    origin_boot_id: str
-    scope: dict
-    reason: str
-    rule_id: str | None
-    items: list[dict]
+    session_id: str
+
+    @field_validator('wake_id', 'session_id')
+    @classmethod
+    def canonical_id(cls, value):
+        return str(UUID(value))
 
 
 class StatusParams(ServiceParams):

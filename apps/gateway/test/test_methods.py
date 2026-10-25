@@ -441,3 +441,15 @@ def test_gateway_rename_and_reject_invalid_titles():
             with pytest.raises(GatewayRpcError):
                 await methods.dispatch('session.rename', {**params, 'title': title}, set())
     asyncio.run(run())
+
+
+def test_interactive_cancel_still_uses_task_stop_not_semantic_notification():
+    class CancellableRuntime(RuntimeStub):
+        async def cancel_task(self, workspace_path, session_id, task_id, reason):
+            assert (workspace_path, session_id, task_id, reason) == ('/workspace', 'interactive', 'task', 'user stop')
+            return TaskOperationResult(task_id=task_id, status='accepted', run_id='run')
+        async def scoped_notify(self, **kwargs):
+            raise AssertionError('Explicit cancellation must not become notification')
+    result = asyncio.run(GatewayMethods(CancellableRuntime()).dispatch('session.cancel', {
+        'workspace_path': '/workspace', 'session_id': 'interactive', 'task_id': 'task', 'reason': 'user stop'}, set()))
+    assert result == {'task_id': 'task', 'status': 'accepted', 'run_id': 'run'}
