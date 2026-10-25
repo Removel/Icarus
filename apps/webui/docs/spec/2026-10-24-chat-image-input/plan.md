@@ -1,6 +1,6 @@
 # WebUI 图片输入
 
-依据：[架构与安全评估的多媒体输入链路](../../2026-10-23-architecture-and-security-review.md#2-多媒体输入链路)、
+依据：[架构与安全评估的多媒体输入链路](../../research/2026-10-23-architecture-and-security-review.md#2-多媒体输入链路)、
 [对话体验补齐方案](../2026-10-23-dswui-chat-integration/plan-refinements.md#A-图片上传下一项)。
 
 ## 目标与范围

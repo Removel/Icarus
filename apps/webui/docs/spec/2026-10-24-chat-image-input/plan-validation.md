@@ -42,6 +42,11 @@ Gateway `test_resources.py` 首轮 13 项通过，覆盖四种图片签名、MIM
 
 ## 回归与既有失败
 
+本节保留图片接入轮次的历史结果。“既有”对照使用当时的本地 HEAD，不能据此认定为
+远端 PR 基线已有问题。2026-10-25 的 PR 复核已修复聊天历史夹具，并补充纯图片草稿的
+单删/批量删除保护、纯图片与图文消息的“再次提问”回归测试。
+完整复验结果见 [PR 修复复验](../2026-10-24-webui-performance/plan-validation.md#2026-10-25-pr-修复复验)。
+
 WebUI 执行范围：`test/packages/chat_app test/apps/shell test/server`。
 首次结果 **169 passed、5 failed、2 errors**，耗时约 8 分 50 秒。
 原始报告：本地 `test-results/image-regression.xml`。

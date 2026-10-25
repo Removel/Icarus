@@ -47,6 +47,10 @@ $env:WEBUI_BROWSER_CHANNEL = 'msedge'
 
 ## 完整测试与既有问题
 
+以下为性能轮次的历史记录，其中“既有”仅相对当时的本地 HEAD，并非 PR 的远端
+`upstream/feature` 基线。2026-10-25 按 `04b203f` 复核后，夹具、滚动容器、提示断言及
+DSWUI 文件格式问题均属于此次 PR 需要处理的范围，已在工作区修复；这些历史失败不再作为豁免。
+
 完整 WebUI 套件首次结果：**239 passed、15 failed、13 skipped、2 errors**，共 267 项，
 运行约 11 分 55 秒。完整原始报告保留在本地 `apps/webui/test-results/performance-full.xml`。
 其中 1 个失败为主题事件尚未应用的测试时序问题；补充明确等待后，整个聊天外壳测试文件 **9 passed**。
@@ -75,6 +79,45 @@ workspace 包指向临时目录内的原始源码，既有第三方依赖复用�
 
 主题样式回归测试增加了等待 `data-theme` 应用完成的断言，避免异步系统主题事件尚未到达时，
 将主题变化误判为模块样式污染。
+
+## 2026-10-25 PR 修复复验
+
+PR 对照为 `upstream/feature@04b203f` 到 `feat/webui@620989c` 加工作区改动。
+已修复图片草稿删除保护、再次提问恢复图片、导航后清理 Select 弹层、测试夹具及过时断言，
+并统一 DSWUI 文件格式。全量复验另发现批量更新后焦点提前恢复；`useMemories.refresh`
+现同步设置加载状态，等待新列表就绪后再恢复焦点。
+
+浏览器及生命周期测试在 WSL Ubuntu 运行，使用 WebUI 自有 Python 3.14 环境、
+Playwright 1.58.0 和 Chromium headless shell。Ubuntu 26.04 下使用
+`PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64`；浏览器通过 localhost 临时转发访问 Vite。
+
+| 执行范围 | 结果 | 本地报告 |
+| --- | --- | --- |
+| WSL 全量首轮 | 282 passed、1 failed、13 skipped、13 errors | `test-results/fix-review-full-wsl.xml` |
+| 焦点修复后的 WSL 记忆页完整测试组 | 38 passed | `test-results/fix-review-memory-wsl.xml` |
+| Windows 服务代理与静态资源测试组 | 13 passed | `test-results/fix-review-server-windows.xml` |
+
+首轮唯一功能失败为上述焦点时序问题。13 个 setup error 来自共享 Windows node_modules 的
+Linux 原生构建依赖和挂载目录读取问题；服务端测试改在原生 Windows 环境重新构建并验证。
+按测试标识取最后一次结果，**296 passed、13 skipped，无剩余失败或 error**。
+跳过项为需要显式开启的真实服务/模型集成测试。此结果由全量与受影响组的复测共同组成，
+不表示一次 WSL 全量命令全部通过。
+
+`pnpm lint`、`pnpm format:check`、`pnpm typecheck`、生产构建、测试目录 compileall
+及 `git diff --check` 均通过。测试截图、XML 和临时环境保持为忽略产物；未提交或推送。
+
+## PR 发布准备复验
+
+隐藏输入框“深度思考”按钮后重新构建，WSL 欢迎页与搜索测试 **17 passed**；
+390px/1440px 的独立 Chromium 检查确认按钮不存在，联网搜索及图片上传控件可见，页面无横向溢出。
+截图与报告位于忽略的 `test-results/pr-composer-no-thinking-*.png`、`pr-final-composer-wsl.xml`。
+
+Agent 在 WSL 补跑会话 Runtime、共享设置、标题、搜索提交、搜索插件、输入插件和公开事件投影，
+结果 **110 passed**。Gateway RPC、搜索参数、图片资源及模拟模型端到端测试 **27 passed**。
+这些为相关范围验证，不代表两应用全量套件。隐藏按钮后的 lint、格式、类型检查与生产构建再次通过。
+
+调研文档归入 WebUI `docs/research`，同步更新链接；个人忽略规则移到 Git 本地 exclude，
+不改变提交历史。PR 描述见 [提交说明](../2026-10-23-dswui-chat-integration/plan-pull-request.md)。
 
 ## 保留边界
 

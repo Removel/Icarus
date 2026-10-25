@@ -2,7 +2,7 @@
 
 状态日期：2026-10-24（Asia/Shanghai）。
 
-参考：[DeepSeek 网页「快」与「顺」的逆向调研](../../deepseek-performance-reverse-2026-10-23.md)。
+参考：[DeepSeek 网页「快」与「顺」的逆向调研](../../research/deepseek-performance-reverse-2026-10-23.md)。
 实施入口：[WebUI 性能改造](plan.md)；结果与测试：[验证记录](plan-validation.md)。
 下表章节编号均指原调研文档。
 

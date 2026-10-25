@@ -1,6 +1,6 @@
 # WebUI 性能改造
 
-参考：[DeepSeek 网页性能逆向调研](../../deepseek-performance-reverse-2026-10-23.md)。
+参考：[DeepSeek 网页性能逆向调研](../../research/deepseek-performance-reverse-2026-10-23.md)。
 
 逐项实施状态、未实施原因及后续纯 WebUI 候选见 [落地对照清单](plan-coverage.md)；
 构建与测试结果见 [验证记录](plan-validation.md)。
