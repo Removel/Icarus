@@ -21,8 +21,12 @@
   border: 1px solid var(--border-l2);
   border-radius: 24px;
   background: var(--composer-fill);
-  box-shadow: 0 4px 10px rgba(0,0,0,.02), 0 2px 4px rgba(0,0,0,.04);
-  transition: border-color 0.15s var(--ease), background-color 0.15s var(--ease);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.02),
+    0 2px 4px rgba(0, 0, 0, 0.04);
+  transition:
+    border-color 0.15s var(--ease),
+    background-color 0.15s var(--ease);
   overflow: hidden;
 }
 /* 官方 bordered 变体聚焦时只保留中性描边，不会变品牌色，也没有外发光 */
@@ -91,7 +95,9 @@
   color: var(--label-primary);
   border: 1px solid var(--border-l2);
   background: none;
-  transition: background-color 0.2s var(--ease), color 0.2s var(--ease);
+  transition:
+    background-color 0.2s var(--ease),
+    color 0.2s var(--ease);
   white-space: nowrap;
 }
 .dswui .pill:hover {
@@ -103,7 +109,7 @@
   background: var(--brand-weak);
   border-color: var(--brand-border);
 }
-html[data-theme="dark"] .dswui .pill.on {
+html[data-theme='dark'] .dswui .pill.on {
   background: rgba(57, 100, 254, 0.14);
 }
 .dswui .pill:disabled {
@@ -147,23 +153,86 @@ html[data-theme="dark"] .dswui .pill.on {
   user-select: none;
 }
 
-
-.dswui .pill svg { width: 14px; height: 14px; flex: none; }
-.dswui .toggle-icon { display: inline-flex; width: 14px; height: 14px; flex: none; }
-.dswui .toggle-icon svg path[fill]:not([fill="none"]) { fill: currentColor; }
-.dswui .toggle-icon svg path[stroke]:not([stroke="none"]) { stroke: currentColor; }
-.dswui .composer-attach svg { width: 16px; height: 16px; }
-.dswui .send-btn svg { width: 16px; height: 16px; }
-.dswui .welcome-composer .composer, .dswui .welcome-composer .composer.focused { box-shadow: 0 4px 12px rgba(0,0,0,.02), 0 2px 2px rgba(72,104,178,.01), 0 30px 60px rgba(72,104,178,.03); }
-html[data-theme="dark"] .dswui .composer { border-color: rgba(255,255,255,.06); }
-html[data-theme="dark"] .dswui .welcome-composer .composer { box-shadow: none; }
-@media (max-width: 439px) { .dswui .composer textarea { min-height: 42px; } .dswui .pill { padding: 0 10px; } }
-.dswui .composer-bar .composer-effort { flex: none; height: 28px; padding: 0 8px; gap: 4px; font-size: 12px; background: transparent; color: var(--label-secondary); }
-.dswui .composer-bar .composer-effort svg { width: 12px; height: 12px; }
-.dswui .composer-bar .composer-effort:hover { background: var(--hover); }
-@media (max-width: 767px) {
-  .dswui .composer-bar:has(.composer-effort) { position: relative; padding-top: 44px; }
-  .dswui .composer-bar .composer-effort { position: absolute; right: 12px; top: 8px; }
-  .dswui .composer-bar .composer-effort::before { content: '思考强度'; white-space: nowrap; }
+.dswui .pill svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
 }
-@media (max-width: 359px) { .dswui .composer-bar .pill { padding: 0 6px; margin-right: 6px; } }
+.dswui .toggle-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.dswui .toggle-icon svg path[fill]:not([fill='none']) {
+  fill: currentColor;
+}
+.dswui .toggle-icon svg path[stroke]:not([stroke='none']) {
+  stroke: currentColor;
+}
+.dswui .composer-attach svg {
+  width: 16px;
+  height: 16px;
+}
+.dswui .send-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.dswui .welcome-composer .composer,
+.dswui .welcome-composer .composer.focused {
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.02),
+    0 2px 2px rgba(72, 104, 178, 0.01),
+    0 30px 60px rgba(72, 104, 178, 0.03);
+}
+html[data-theme='dark'] .dswui .composer {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+html[data-theme='dark'] .dswui .welcome-composer .composer {
+  box-shadow: none;
+}
+@media (max-width: 439px) {
+  .dswui .composer textarea {
+    min-height: 42px;
+  }
+  .dswui .pill {
+    padding: 0 10px;
+  }
+}
+.dswui .composer-bar .composer-effort {
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  gap: 4px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--label-secondary);
+}
+.dswui .composer-bar .composer-effort svg {
+  width: 12px;
+  height: 12px;
+}
+.dswui .composer-bar .composer-effort:hover {
+  background: var(--hover);
+}
+@media (max-width: 767px) {
+  .dswui .composer-bar:has(.composer-effort) {
+    position: relative;
+    padding-top: 44px;
+  }
+  .dswui .composer-bar .composer-effort {
+    position: absolute;
+    right: 12px;
+    top: 8px;
+  }
+  .dswui .composer-bar .composer-effort::before {
+    content: '思考强度';
+    white-space: nowrap;
+  }
+}
+@media (max-width: 359px) {
+  .dswui .composer-bar .pill {
+    padding: 0 6px;
+    margin-right: 6px;
+  }
+}

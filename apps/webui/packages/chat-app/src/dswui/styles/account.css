@@ -29,7 +29,21 @@
   white-space: nowrap;
 }
 
-
-.dswui .profile-trigger { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 2px 6px 6px; border-radius: 12px; text-align: left; }
-.dswui .profile-trigger:hover, .dswui .profile-trigger:focus-visible { background: var(--session-hover); }
-.dswui .profile-more { margin: 0 8px 0 auto; flex: none; color: var(--label-tertiary); }
+.dswui .profile-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 2px 6px 6px;
+  border-radius: 12px;
+  text-align: left;
+}
+.dswui .profile-trigger:hover,
+.dswui .profile-trigger:focus-visible {
+  background: var(--session-hover);
+}
+.dswui .profile-more {
+  margin: 0 8px 0 auto;
+  flex: none;
+  color: var(--label-tertiary);
+}

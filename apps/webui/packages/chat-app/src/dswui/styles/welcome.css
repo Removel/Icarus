@@ -68,7 +68,9 @@
 .dswui .welcome-composer .composer-inner {
   max-width: none;
 }
-.dswui .welcome-composer .disclaimer { display: none; }
+.dswui .welcome-composer .disclaimer {
+  display: none;
+}
 .dswui .welcome-logo {
   width: 34px;
   height: 34px;

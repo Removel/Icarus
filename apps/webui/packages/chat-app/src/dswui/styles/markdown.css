@@ -37,14 +37,18 @@
   font-size: 20px;
   line-height: 30px;
 }
-.dswui .md-body :is(h4,h5,h6) {
+.dswui .md-body :is(h4, h5, h6) {
   font-size: 16px;
   line-height: 28px;
   font-weight: 600;
   margin: 16px 0;
 }
-.dswui .md-body :is(h4,h5,h6):has(+ul,+ol) { margin-bottom: 8px; }
-.dswui .md-body :is(h4,h5,h6) + :is(ul,ol) { margin-top: 8px; }
+.dswui .md-body :is(h4, h5, h6):has(+ ul, + ol) {
+  margin-bottom: 8px;
+}
+.dswui .md-body :is(h4, h5, h6) + :is(ul, ol) {
+  margin-top: 8px;
+}
 .dswui .md-body ul,
 .dswui .md-body ol {
   margin: 16px 0;
@@ -53,15 +57,28 @@
 .dswui .md-body li {
   margin: 0;
 }
-.dswui .md-body li:not(:first-child) { margin-top: 6px; }
-.dswui .md-body li::marker { color: var(--label-secondary); }
-.dswui .md-body li > :is(ul,ol) { margin-top: 4px; }
+.dswui .md-body li:not(:first-child) {
+  margin-top: 6px;
+}
+.dswui .md-body li::marker {
+  color: var(--label-secondary);
+}
+.dswui .md-body li > :is(ul, ol) {
+  margin-top: 4px;
+}
 .dswui .md-body li > p {
   margin: 8px 0;
 }
-.dswui .md-body li > :first-child { margin-top: 0; }
-.dswui .md-body li > :last-child { margin-bottom: 0; }
-.dswui .md-body :is(ul,ol) ol { padding-left: 0; list-style-position: inside; }
+.dswui .md-body li > :first-child {
+  margin-top: 0;
+}
+.dswui .md-body li > :last-child {
+  margin-bottom: 0;
+}
+.dswui .md-body :is(ul, ol) ol {
+  padding-left: 0;
+  list-style-position: inside;
+}
 .dswui .md-body a {
   color: var(--brand);
   text-decoration: none;
@@ -99,8 +116,13 @@
   font-size: 15px;
   line-height: 25px;
 }
-.dswui .md-table-wrap { margin: 16px 0; overflow-x: auto; }
-.dswui .md-table-wrap table { margin: 0; }
+.dswui .md-table-wrap {
+  margin: 16px 0;
+  overflow-x: auto;
+}
+.dswui .md-table-wrap table {
+  margin: 0;
+}
 .dswui .md-body th,
 .dswui .md-body td {
   border: none;
@@ -114,8 +136,12 @@
   border-bottom-color: var(--border-l3);
   font-weight: 500;
 }
-.dswui .md-body :is(th,td):first-child { padding-left: 0; }
-.dswui .md-body :is(th,td):last-child { padding-right: 0; }
+.dswui .md-body :is(th, td):first-child {
+  padding-left: 0;
+}
+.dswui .md-body :is(th, td):last-child {
+  padding-right: 0;
+}
 .dswui .md-body img {
   max-width: 100%;
   border-radius: var(--radius-s);
@@ -218,41 +244,41 @@
 .dswui .hljs-addition {
   background: #dafbe1;
 }
-html[data-theme="dark"] .dswui .hljs-comment,
-html[data-theme="dark"] .dswui .hljs-quote {
+html[data-theme='dark'] .dswui .hljs-comment,
+html[data-theme='dark'] .dswui .hljs-quote {
   color: #5c6370;
 }
-html[data-theme="dark"] .dswui .hljs-keyword,
-html[data-theme="dark"] .dswui .hljs-selector-tag,
-html[data-theme="dark"] .dswui .hljs-literal,
-html[data-theme="dark"] .dswui .hljs-type {
+html[data-theme='dark'] .dswui .hljs-keyword,
+html[data-theme='dark'] .dswui .hljs-selector-tag,
+html[data-theme='dark'] .dswui .hljs-literal,
+html[data-theme='dark'] .dswui .hljs-type {
   color: #c678dd;
 }
-html[data-theme="dark"] .dswui .hljs-string,
-html[data-theme="dark"] .dswui .hljs-doctag,
-html[data-theme="dark"] .dswui .hljs-regexp {
+html[data-theme='dark'] .dswui .hljs-string,
+html[data-theme='dark'] .dswui .hljs-doctag,
+html[data-theme='dark'] .dswui .hljs-regexp {
   color: #98c379;
 }
-html[data-theme="dark"] .dswui .hljs-number,
-html[data-theme="dark"] .dswui .hljs-built_in,
-html[data-theme="dark"] .dswui .hljs-symbol {
+html[data-theme='dark'] .dswui .hljs-number,
+html[data-theme='dark'] .dswui .hljs-built_in,
+html[data-theme='dark'] .dswui .hljs-symbol {
   color: #d19a66;
 }
-html[data-theme="dark"] .dswui .hljs-title,
-html[data-theme="dark"] .dswui .hljs-title.function_,
-html[data-theme="dark"] .dswui .hljs-section,
-html[data-theme="dark"] .dswui .hljs-name {
+html[data-theme='dark'] .dswui .hljs-title,
+html[data-theme='dark'] .dswui .hljs-title.function_,
+html[data-theme='dark'] .dswui .hljs-section,
+html[data-theme='dark'] .dswui .hljs-name {
   color: #61afef;
 }
-html[data-theme="dark"] .dswui .hljs-attr,
-html[data-theme="dark"] .dswui .hljs-attribute,
-html[data-theme="dark"] .dswui .hljs-variable,
-html[data-theme="dark"] .dswui .hljs-template-variable,
-html[data-theme="dark"] .dswui .hljs-params {
+html[data-theme='dark'] .dswui .hljs-attr,
+html[data-theme='dark'] .dswui .hljs-attribute,
+html[data-theme='dark'] .dswui .hljs-variable,
+html[data-theme='dark'] .dswui .hljs-template-variable,
+html[data-theme='dark'] .dswui .hljs-params {
   color: #e06c75;
 }
-html[data-theme="dark"] .dswui .hljs-meta,
-html[data-theme="dark"] .dswui .hljs-tag {
+html[data-theme='dark'] .dswui .hljs-meta,
+html[data-theme='dark'] .dswui .hljs-tag {
   color: #a0a1a7;
 }
 

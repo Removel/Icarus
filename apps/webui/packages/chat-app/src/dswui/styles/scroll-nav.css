@@ -26,7 +26,7 @@
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(5px);
 }
-html[data-theme="dark"] .dswui .scroll-nav-bg {
+html[data-theme='dark'] .dswui .scroll-nav-bg {
   background: rgba(21, 21, 23, 0.6);
 }
 .dswui .scroll-nav-list {
@@ -41,7 +41,10 @@ html[data-theme="dark"] .dswui .scroll-nav-bg {
   border-radius: 16px;
   pointer-events: auto;
   scrollbar-width: none;
-  transition: width 0.2s var(--ease), background 0.2s, box-shadow 0.2s;
+  transition:
+    width 0.2s var(--ease),
+    background 0.2s,
+    box-shadow 0.2s;
 }
 .dswui .scroll-nav-list::-webkit-scrollbar {
   display: none;
@@ -83,7 +86,9 @@ html[data-theme="dark"] .dswui .scroll-nav-bg {
   text-align: right;
   font-size: 13px;
   opacity: 0;
-  transition: opacity 0.1s, color 0.2s;
+  transition:
+    opacity 0.1s,
+    color 0.2s;
 }
 .dswui .scroll-nav:hover .scroll-nav-title {
   opacity: 1;
@@ -105,7 +110,9 @@ html[data-theme="dark"] .dswui .scroll-nav-bg {
   height: 2px;
   border-radius: 4px;
   background: var(--border-l3);
-  transition: background-color 0.2s, transform 0.2s;
+  transition:
+    background-color 0.2s,
+    transform 0.2s;
 }
 .dswui .scroll-nav-item:hover .scroll-nav-indicator i {
   background: var(--label-primary);
@@ -129,13 +136,23 @@ html[data-theme="dark"] .dswui .scroll-nav-bg {
   border-radius: 50%;
   background: var(--bg-layer-1);
   border: 1px solid var(--border-l2);
-  box-shadow: 0 0 1px rgba(0,0,0,.2), 0 0 4px rgba(0,0,0,.02), 0 12px 32px rgba(0,0,0,.08);
+  box-shadow:
+    0 0 1px rgba(0, 0, 0, 0.2),
+    0 0 4px rgba(0, 0, 0, 0.02),
+    0 12px 32px rgba(0, 0, 0, 0.08);
   display: grid;
   place-items: center;
   color: var(--label-primary);
   z-index: 6;
   animation: none;
 }
-.dswui .scroll-bottom svg { width: 14px; height: 14px; }
-.dswui .scroll-bottom:hover { background: var(--bg-layer-2); }
-html[data-theme="dark"] .dswui .scroll-bottom { background: #2c2c2e; }
+.dswui .scroll-bottom svg {
+  width: 14px;
+  height: 14px;
+}
+.dswui .scroll-bottom:hover {
+  background: var(--bg-layer-2);
+}
+html[data-theme='dark'] .dswui .scroll-bottom {
+  background: #2c2c2e;
+}

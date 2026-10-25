@@ -45,7 +45,10 @@
   border-radius: 17px;
   font-size: 14px;
   font-weight: 500;
-  transition: background 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease);
+  transition:
+    background 0.15s var(--ease),
+    color 0.15s var(--ease),
+    border-color 0.15s var(--ease);
 }
 .dswui .confirm-cancel {
   border: 1px solid var(--border-l2);
@@ -97,7 +100,7 @@
   flex: none;
 }
 .dswui .switch::after {
-  content: "";
+  content: '';
   position: absolute;
   top: 2px;
   left: 2px;
@@ -137,7 +140,7 @@
   color: var(--brand);
   background: var(--brand-weak);
 }
-html[data-theme="dark"] .dswui .provider-tab.on {
+html[data-theme='dark'] .dswui .provider-tab.on {
   background: rgba(57, 100, 254, 0.14);
 }
 
