@@ -11,6 +11,28 @@ from apps.argus.src.core.database import Database
 from apps.argus.test.common.repositories.test_observation_repository import draft
 
 
+async def test_v2_to_v3_concurrent_migration_preserves_frozen_body_and_reports(database):
+    import asyncio
+    from apps.argus.test.common.repositories.test_handoff_repository import bound
+    _, handoff, first, wake, binding = await bound(database)
+    await handoff.mark_exposed(binding, [first.id])
+    receipt = await handoff.report(binding, {'report_id': 'legacy', 'items': [
+        {'observation_id': str(first.id), 'status': 'handled'}]})
+    async with database.begin() as db:
+        saved = (await db.execute(text('SELECT payload, handoff FROM wake_requests'))).one()
+        await db.execute(text('UPDATE schema_version SET version=2'))
+    instances = [Database(database.dsn, schema=database.schema) for _ in range(2)]
+    try:
+        await asyncio.gather(*(instance.start() for instance in instances))
+        async with instances[0].session() as db:
+            after = (await db.execute(text('SELECT payload, handoff FROM wake_requests'))).one()
+            assert after == saved
+            assert after.handoff['report_log']['legacy']['receipt'] == receipt
+            assert await db.scalar(text('SELECT version FROM schema_version')) == 3
+    finally:
+        await asyncio.gather(*(instance.close() for instance in instances))
+
+
 async def test_schema_v2_has_only_two_new_columns_and_preserves_v1_data(database):
     repo = ObservationRepository(database, boot_id=uuid4())
     item, _ = await repo.upsert_revision(draft())
@@ -26,7 +48,7 @@ async def test_schema_v2_has_only_two_new_columns_and_preserves_v1_data(database
     await migrated.start()
     try:
         async with migrated.session() as session:
-            assert await session.scalar(text('SELECT version FROM schema_version')) == 2
+            assert await session.scalar(text('SELECT version FROM schema_version')) == 3
             assert await session.scalar(text('SELECT count(*) FROM observed_items')) == 1
             assert await session.scalar(text('SELECT count(*) FROM wake_requests')) == 1
             saved = (await session.execute(text('SELECT status, payload, handoff FROM wake_requests'))).one()

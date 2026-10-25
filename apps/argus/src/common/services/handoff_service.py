@@ -41,7 +41,10 @@ class HandoffService:
         return {'observation_id': str(value.id), 'source': value.source, 'chat_id': value.chat_id,
                 'message_id': value.message_id, 'revision': value.revision, 'locator': value.locator,
                 'observed_at': value.observed_at.isoformat(), 'deleted': value.deleted, 'latest': latest,
-                'role': role, 'origin': origin, 'excerpt': excerpt, 'truncated': len(excerpt) < len(item_text(value))}
+                'role': role, 'origin': origin, 'excerpt': excerpt, 'truncated': len(excerpt) < len(item_text(value)),
+                'sender_id': value.sender_id, 'sender_name': value.sender_name, 'sent_at': value.sent_at.isoformat(),
+                'scope_kind': value.locator.get('chat_kind'), 'is_self': value.is_self,
+                'content_types': list(dict.fromkeys(part.kind for part in value.content))}
 
     async def bind(self, wake_id, payload):
         binding = await self.repository.bind(wake_id, payload)
@@ -58,17 +61,36 @@ class HandoffService:
         scope = binding['scope']
         watermark = binding['initial_cursor']
         cursor = self.cursor(scope, 'forward', datetime.fromisoformat(watermark['observed_at']), watermark['id'])
-        return {**binding, 'protocol_version': 1, 'initial_items': references, 'initial_cursor': cursor}
+        return {**binding, 'protocol_version': binding.get('protocol_version', 1), 'initial_items': references, 'initial_cursor': cursor}
+
+    async def available(self, binding_id) -> dict:
+        binding = await self.repository.binding(binding_id)
+        if binding.get('protocol_version', 1) != 2:
+            raise HandoffConflict('protocol_mismatch')
+        count, latest = await self.repository.pending_summary(binding_id, policy=self.policy)
+        watermark = None if latest is None else self.cursor(binding['scope'], 'forward', *latest)
+        return {'protocol_version': 2, 'pending_count': count, 'watermark': watermark}
+
+    async def session_pending(self, session_id, scope) -> dict:
+        from ..schemas.handoff import Scope
+        scope = Scope.model_validate(scope).model_dump()
+        count, latest = await self.repository.session_pending_summary(session_id, scope, policy=self.policy)
+        return {'protocol_version': 2, 'pending_count': count,
+            'last_related_at': latest.isoformat() if latest is not None else None}
 
     async def deliver(self, binding_id, identifiers):
+        binding = await self.repository.binding(binding_id)
+        version = binding.get('protocol_version', 1)
         for identifier in identifiers:
-            item, _, origin, _ = await self.repository.read(binding_id, identifier)
-            if origin != 'initial':
+            item, role, origin, _ = await self.repository.read(binding_id, identifier)
+            if version == 1 and origin != 'initial':
                 raise HandoffConflict('item_not_initial')
+            if version == 2 and role != 'work':
+                raise HandoffConflict('item_not_reportable')
             if not self.policy.allows(item):
                 raise HandoffConflict('content_restricted')
         await self.repository.mark_exposed(binding_id, identifiers)
-        return {'protocol_version': 1, 'delivered_ids': list(map(str, identifiers))}
+        return {'protocol_version': version, 'delivered_ids': list(map(str, identifiers))}
 
     async def read(self, binding_id, observation_id, *, text_offset=0, max_chars=20000):
         if type(text_offset) is not int or type(max_chars) is not int or not 1 <= max_chars <= 20000:
@@ -80,8 +102,10 @@ class HandoffService:
         if not 0 <= text_offset <= len(text):
             raise HandoffConflict('invalid_read_range')
         end = min(len(text), text_offset + max_chars)
-        await self.repository.mark_exposed(binding_id, [value.id])
-        return {'protocol_version': 1, 'item': self.item(value, role, origin, latest), 'text': text[text_offset:end],
+        version = (await self.repository.binding(binding_id)).get('protocol_version', 1)
+        if version == 1:
+            await self.repository.mark_exposed(binding_id, [value.id])
+        return {'protocol_version': version, 'item': self.item(value, role, origin, latest), 'text': text[text_offset:end],
                 'next_text_offset': end if end < len(text) else None, 'truncated': end < len(text)}
 
     async def _page(self, binding_id, *, cursor=None, limit=20, direction='forward'):
@@ -89,13 +113,24 @@ class HandoffService:
             raise HandoffConflict('invalid_limit')
         binding = await self.repository.binding(binding_id)
         scope = binding['scope']
+        version = binding.get('protocol_version', 1)
+        scan_after = None
         if cursor is None:
             initial = binding['initial_cursor']
             point = datetime.fromisoformat(initial['observed_at']), UUID(initial['id'])
             cursor = self.cursor(scope, direction, *point)
         else:
-            point = self.decode_cursor(cursor, scope, direction)
-        rows = await self.repository.candidates(binding_id, **{'after' if direction == 'forward' else 'before': point}, limit=500)
+            try:
+                point = self.decode_cursor(cursor, scope, direction)
+            except HandoffConflict:
+                if direction != 'forward' or version != 2:
+                    raise
+                point = self.decode_cursor(cursor, scope, 'pending-scan')
+                scan_after = point
+        if direction == 'forward' and version == 2:
+            rows = await self.repository.pending_items(binding_id, after=scan_after)
+        else:
+            rows = await self.repository.candidates(binding_id, **{'after' if direction == 'forward' else 'before': point}, limit=500)
         items, identifiers, remaining, next_cursor = [], [], 20000, cursor
         consumed, truncated = 0, False
         for value, role, origin, latest in rows:
@@ -113,9 +148,18 @@ class HandoffService:
             consumed += 1
             next_cursor = self.cursor(scope, direction, value.observed_at, value.id)
             truncated |= len(excerpt) < len(text)
-        if identifiers:
+        if direction == 'forward' and version == 2:
+            # Only policy-only exhausted windows move the scan cursor. Any visible
+            # unconfirmed work remains pending-first until explicit delivery.
+            if not items and rows and len(rows) == 500:
+                last = rows[-1][0]
+                next_cursor = self.cursor(scope, 'pending-scan', last.observed_at, last.id)
+            elif not items:
+                initial = binding['initial_cursor']
+                next_cursor = self.cursor(scope, direction, datetime.fromisoformat(initial['observed_at']), initial['id'])
+        if identifiers and version == 1:
             await self.repository.mark_exposed(binding_id, identifiers)
-        return {'protocol_version': 1, 'items': items, 'next_cursor': next_cursor,
+        return {'protocol_version': version, 'items': items, 'next_cursor': next_cursor,
                 'has_more': consumed < len(rows) or len(rows) == 500, 'truncated': truncated}
 
     async def history(self, binding_id, *, cursor=None, limit=20):

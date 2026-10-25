@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import String, and_, cast, or_, select, tuple_
 
 from ..models.observation import ObservationRow
 from ..models.wake import WakeRow
@@ -19,15 +19,23 @@ class HandoffConflict(ValueError):
 
 
 class HandoffRepository:
-    def __init__(self, database, *, clock=lambda: datetime.now(UTC)):
-        self.database, self.clock = database, clock
+    def __init__(self, database, *, boot_id=None, policy=None, clock=lambda: datetime.now(UTC)):
+        self.database, self.clock, self.boot_id = database, clock, boot_id
+        self.policy = policy
 
     async def bind(self, wake_id, binding):
+        binding = dict(binding)
+        if binding.get('protocol_version') == 1:
+            binding.pop('protocol_version')
         async with self.database.begin() as db:
             existing_row = await db.get(WakeRow, UUID(str(wake_id)))
             if existing_row is None:
                 raise NotFound('Wake not found')
             await ObservationRepository.lock_scope(db, 'qq', existing_row.chat_id)
+            items = list(await db.scalars(select(ObservationRow).where(ObservationRow.id.in_(self._initial_ids(existing_row)))))
+            locker = ObservationRepository(self.database, boot_id=existing_row.boot_id)
+            for item in sorted(items, key=locker._identity):
+                await locker._lock_message(db, item)
             row = await db.get(WakeRow, UUID(str(wake_id)), with_for_update=True, populate_existing=True)
             if row is None:
                 raise NotFound('Wake not found')
@@ -39,6 +47,12 @@ class HandoffRepository:
                 from ..schemas.wake import WakePayload, request_fingerprint
                 if binding['request_fingerprint'] != request_fingerprint(WakePayload.model_validate(row.payload)):
                     raise HandoffConflict('submission_conflict')
+            version = row.payload.get('protocol_version', 1)
+            if binding.get('protocol_version', 1) != version:
+                raise HandoffConflict('protocol_mismatch')
+            target = row.handoff.get('target_session_id')
+            if version == 2 and target is not None and target != binding['session_id']:
+                raise HandoffConflict('session_mismatch')
             existing = (row.handoff or {}).get('binding')
             if existing is not None:
                 if any(existing.get(key) != value for key, value in binding.items()):
@@ -51,10 +65,126 @@ class HandoffRepository:
             initial = max(items, key=lambda item: (item.observed_at, item.id))
             result = {**binding, 'binding_id': str(uuid4()),
                       'initial_cursor': {'observed_at': initial.observed_at.isoformat(), 'id': str(initial.id)}}
+            if version == 2:
+                owner = await db.scalar(select(WakeRow.id).where(WakeRow.chat_id == row.chat_id,
+                    WakeRow.id != row.id, ObservationRepository._real_active()).limit(1))
+                if owner is not None:
+                    raise HandoffConflict('scope_busy')
+                for item in items:
+                    if item.detail.get('argus_session_id', binding['session_id']) != binding['session_id']:
+                        raise HandoffConflict('session_mismatch')
+                    item.detail = {**item.detail, 'argus_session_id': binding['session_id']}
             row.handoff = {**(row.handoff or {}), 'mode': 'gateway', 'binding': result,
+                           **({'protocol_version': 2, 'target_session_id': binding['session_id'],
+                               'submission_may_have_run': True} if version == 2 else {}),
                            'report_cursor': 0, 'report_log': {}, 'phase': 'bound'}
             await db.flush()
             return result
+
+    async def attach(self, wake_id, *, session_id, observation_ids) -> dict:
+        session_id = str(UUID(str(session_id)))
+        identifiers = {UUID(str(value)) for value in observation_ids}
+        if not identifiers or len(identifiers) > 20:
+            raise HandoffConflict('invalid_attachment')
+        async with self.database.begin() as db:
+            wake = await db.get(WakeRow, UUID(str(wake_id)))
+            if wake is None:
+                raise NotFound('Wake not found')
+            await ObservationRepository.lock_scope(db, 'qq', wake.chat_id)
+            rows = list(await db.scalars(select(ObservationRow).where(ObservationRow.id.in_(identifiers))))
+            locker = ObservationRepository(self.database, boot_id=wake.boot_id)
+            for item in sorted(rows, key=locker._identity):
+                await locker._lock_message(db, item)
+            wake = await db.get(WakeRow, wake.id, with_for_update=True, populate_existing=True)
+            binding = wake.handoff.get('binding')
+            if 'finalize' in wake.handoff or wake.handoff.get('local_terminal') or wake.handoff.get('release_complete'):
+                raise HandoffConflict('execution_closed')
+            if (not binding or binding.get('protocol_version', 1) != 2 or binding['session_id'] != session_id
+                    or (self.boot_id is not None and str(self.boot_id) != binding['origin_boot_id'])):
+                raise HandoffConflict('session_mismatch')
+            if len(rows) != len(identifiers):
+                raise HandoffConflict('invalid_attachment')
+            latest = set(await db.scalars(select(ObservationRow.id).where(ObservationRow.id.in_(identifiers), locker._latest())))
+            for item in rows:
+                if (item.id not in latest or item.deleted or item.is_self or item.chat_id != wake.chat_id
+                        or str(item.boot_id) != binding['origin_boot_id'] or item.status not in ('new', 'delivered')
+                        or item.wake_id not in (None, wake.id)
+                        or item.detail.get('argus_session_id', session_id) != session_id
+                        or (self.policy is not None and not self.policy.allows(observed(item)))):
+                    raise HandoffConflict('invalid_attachment')
+            added = any(item.wake_id != wake.id for item in rows)
+            for item in rows:
+                item.detail = {**item.detail, 'argus_session_id': session_id}
+                item.wake_id = wake.id
+            if added:
+                wake.handoff = {**wake.handoff, 'notify_pending': True,
+                    'notify_generation': wake.handoff.get('notify_generation', 0) + 1}
+            return {'attached_ids': sorted(map(str, identifiers))}
+
+    @staticmethod
+    def _pending_query(wake, binding):
+        return select(ObservationRow).where(ObservationRow.wake_id == wake.id,
+            ObservationRow.chat_id == wake.chat_id, ObservationRow.boot_id == UUID(binding['origin_boot_id']),
+            ObservationRow.detail['argus_session_id'].astext == binding['session_id'],
+            ObservationRow.status.in_(('new', 'delivered')), ObservationRow.deleted.is_(False),
+            ObservationRow.is_self.is_(False), ObservationRepository._latest(),
+            ObservationRow.exposed_wake_id.is_distinct_from(wake.id))
+
+    async def pending_items(self, binding_id, *, limit=500, after=None):
+        async with self.database.session() as db:
+            wake, binding = await self._binding(db, binding_id, lock=False)
+            if 'finalize' in wake.handoff:
+                raise HandoffConflict('execution_closed')
+            query = self._pending_query(wake, binding)
+            if after is not None:
+                query = query.where(tuple_(ObservationRow.observed_at, ObservationRow.id) > after)
+            rows = await db.scalars(query.order_by(ObservationRow.observed_at, ObservationRow.id).limit(limit))
+            initial = self._initial_ids(wake)
+            return [(observed(item), 'work', 'initial' if item.id in initial else 'incidental', True) for item in rows]
+
+    async def pending_summary(self, binding_id, *, policy):
+        """Stream exact eligible count without materializing an unbounded body list."""
+        async with self.database.session() as db:
+            wake, binding = await self._binding(db, binding_id, lock=False)
+            if 'finalize' in wake.handoff:
+                raise HandoffConflict('execution_closed')
+            rows = await db.stream_scalars(self._pending_query(wake, binding)
+                .order_by(ObservationRow.observed_at, ObservationRow.id).execution_options(yield_per=500))
+            count, latest = 0, None
+            async for row in rows:
+                item = observed(row)
+                if policy.allows(item):
+                    count += 1
+                    latest = item.observed_at, item.id
+            return count, latest
+
+    def _session_pending_query(self, session_id, chat):
+        legitimate_old = and_(
+            WakeRow.handoff['binding']['protocol_version'].astext == '2',
+            WakeRow.handoff['binding']['session_id'].astext == session_id,
+            WakeRow.handoff['binding']['origin_boot_id'].astext == cast(ObservationRow.boot_id, String),
+            ~WakeRow.handoff.has_key('finalize'),
+            WakeRow.handoff['release_complete'].astext.is_distinct_from('true'))
+        current = ObservationRow.boot_id == self.boot_id if self.boot_id is not None else False
+        return select(ObservationRow).outerjoin(WakeRow, ObservationRow.wake_id == WakeRow.id).where(
+            ObservationRow.chat_id == chat, ObservationRow.detail['argus_session_id'].astext == session_id,
+            ObservationRow.deleted.is_(False), ObservationRow.is_self.is_(False),
+            ObservationRow.status.in_(('new', 'delivered')), ObservationRepository._latest(),
+            or_(current, legitimate_old))
+
+    async def session_pending_summary(self, session_id, scope, *, policy):
+        session_id = str(UUID(str(session_id)))
+        chat = f"{scope['source']}:{scope['account_id']}:{scope['chat_kind']}:{scope['external_id']}"
+        async with self.database.session() as db:
+            rows = await db.stream_scalars(self._session_pending_query(session_id, chat)
+                .execution_options(yield_per=500))
+            count, latest = 0, None
+            async for row in rows:
+                item = observed(row)
+                if policy.allows(item):
+                    count += 1
+                    latest = item.observed_at if latest is None else max(latest, item.observed_at)
+            return count, latest
 
     async def candidates(self, binding_id, *, after=None, before=None, limit=500):
         from sqlalchemy import tuple_
@@ -115,8 +245,12 @@ class HandoffRepository:
             ObservationRow.message_id == item.message_id, ObservationRow.revision > item.revision).limit(1))
         initial = item.id in self._initial_ids(wake)
         current_boot = str(item.boot_id) == binding['origin_boot_id']
-        available = (item.wake_id == wake.id and item.status in ('new', 'delivered')) if initial else (
-            item.wake_id is None and item.status == 'new')
+        if binding.get('protocol_version', 1) == 2:
+            available = (item.wake_id == wake.id and item.status in ('new', 'delivered') and
+                item.detail.get('argus_session_id') == binding['session_id'] and not item.is_self)
+        else:
+            available = (item.wake_id == wake.id and item.status in ('new', 'delivered')) if initial else (
+                item.wake_id is None and item.status == 'new')
         return ('work' if current_boot and available and not item.deleted and newer is None else 'context',
                 'initial' if initial else 'incidental', newer is None)
 
@@ -130,8 +264,12 @@ class HandoffRepository:
             if len(rows) != len(set(map(str, item_ids))) or any(item.chat_id != wake.chat_id for item in rows):
                 raise HandoffConflict('scope_mismatch')
             for item in rows:
+                if binding.get('protocol_version', 1) == 2:
+                    role, _, _ = await self.role(db, item, wake, binding)
+                    if role != 'work':
+                        raise HandoffConflict('item_not_reportable')
                 item.exposed_wake_id = wake.id
-                if item.id in self._initial_ids(wake) and item.status == 'new':
+                if item.status == 'new' and (binding.get('protocol_version', 1) == 2 or item.id in self._initial_ids(wake)):
                     item.status = 'delivered'
 
     async def report(self, binding_id, report, *, policy=None):
@@ -179,7 +317,7 @@ class HandoffRepository:
                     item = by_id[value['observation_id']]
                     item.wake_id, item.status, item.status_reason = wake.id, 'processed', value['status']
                 cursor += 1
-            receipt = {'protocol_version': 1, 'report_id': report_id,
+            receipt = {'protocol_version': binding.get('protocol_version', 1), 'report_id': report_id,
                        'disposition': 'rejected' if error else 'accepted', 'report_cursor': cursor}
             if error:
                 receipt['code'] = error
@@ -195,7 +333,7 @@ class HandoffRepository:
 
     async def finalize(self, binding_id, evidence):
         async with self.database.begin() as db:
-            wake, _ = await self._binding(db, binding_id)
+            wake, binding = await self._binding(db, binding_id)
             handoff = dict(wake.handoff)
             if handoff.get('finalize') is not None:
                 if handoff['exit_evidence'] != evidence:
@@ -212,7 +350,13 @@ class HandoffRepository:
                 results.append({'observation_id': str(item.id), 'result': status})
                 if status == 'unresolved':
                     item.status, item.status_reason = 'failed', 'unresolved'
-            result = {'protocol_version': 1, 'finalized': True, 'report_cursor': evidence['report_cursor'],
+            if binding.get('protocol_version', 1) == 2:
+                appended = await db.scalars(select(ObservationRow).where(ObservationRow.wake_id == wake.id,
+                    ObservationRow.id.not_in(self._initial_ids(wake)), ObservationRow.status.in_(('new', 'delivered')))
+                    .with_for_update())
+                for item in appended:
+                    item.wake_id, item.exposed_wake_id, item.status = None, None, 'new'
+            result = {'protocol_version': binding.get('protocol_version', 1), 'finalized': True, 'report_cursor': evidence['report_cursor'],
                       'initial_results': sorted(results, key=lambda item: item['observation_id'])}
             wake.status = 'resolved'
             wake.handoff = {**handoff, 'phase': 'stopped', 'stopped': True, 'finalize': result, 'exit_evidence': evidence}

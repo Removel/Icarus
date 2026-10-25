@@ -9,6 +9,60 @@ from apps.argus.src.common.schemas.judgement import JudgementOutcome
 from apps.argus.src.common.schemas.wake import WakeReceipt
 
 
+async def test_notify_unknown_receipt_retries_same_binding_without_duplicate_attachment(database):
+    from apps.argus.src.common.services.real_wake_service import RealWakeService
+    from apps.argus.test.common.repositories.test_semantic_assignment import semantic_bound
+    repo, handoff, _, wake, binding, target = await semantic_bound(database)
+    extra, _ = await repo.upsert_revision(draft('extra', message_id='extra'))
+    calls = []
+    class Agent:
+        async def status(self, **kwargs):
+            return {'phase': 'running', 'execution_stopped': False, 'release_complete': False}
+        async def notify(self, wake_id, session_id):
+            calls.append((wake_id, session_id))
+            if len(calls) == 1:
+                raise TimeoutError('unknown receipt')
+            return {'protocol_version': 2, 'accepted': True, 'merged': True}
+    service = RealWakeService(repo, Agent(), handoff=handoff)
+    await service.attach(wake, session_id=target, observation_ids=[extra.id])
+    assert (await repo.get_wake(wake.id)).handoff['notify_pending'] is True
+    await service.advance(wake.id)
+    assert calls == [(wake.id, target), (wake.id, target)]
+    assert (await repo.get_wake(wake.id)).handoff['notify_pending'] is False
+    assert len(await repo.wake_items(wake.id)) == 2
+
+
+async def test_old_notify_success_cannot_ack_new_attach_after_new_notify_timeout(database):
+    import asyncio
+    from apps.argus.src.common.services.real_wake_service import RealWakeService
+    from apps.argus.test.common.repositories.test_semantic_assignment import semantic_bound
+    repo, handoff, _, wake, _, target = await semantic_bound(database)
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+    class Agent:
+        async def notify(self, wake_id, session_id):
+            calls.append((wake_id, session_id))
+            if len(calls) == 1:
+                entered.set()
+                await release.wait()
+            elif len(calls) == 2:
+                raise TimeoutError('new generation receipt unknown')
+            return {'protocol_version': 2, 'accepted': True, 'merged': True}
+    service = RealWakeService(repo, Agent(), handoff=handoff)
+    a, _ = await repo.upsert_revision(draft('A', message_id='a'))
+    b, _ = await repo.upsert_revision(draft('B', message_id='b'))
+    first = asyncio.create_task(service.attach(wake, session_id=target, observation_ids=[a.id]))
+    await asyncio.wait_for(entered.wait(), 1)
+    await service.attach(wake, session_id=target, observation_ids=[b.id])
+    release.set()
+    await first
+    current = await repo.get_wake(wake.id)
+    assert current.handoff['notify_pending'] is True
+    await service.notify(current)
+    assert (await repo.get_wake(wake.id)).handoff['notify_pending'] is False
+    assert len(calls) == 3
+
+
 async def test_real_wake_does_not_mark_initial_delivered_on_accept_or_release_before_remote(database):
     from apps.argus.src.common.services.real_wake_service import RealWakeService
 

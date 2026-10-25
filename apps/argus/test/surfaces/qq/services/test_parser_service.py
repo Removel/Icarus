@@ -9,6 +9,16 @@ def event(**changes):
             'message': '帮我整理笔记', **changes}
 
 
+def test_parser_keeps_reply_and_readable_text_without_media_placeholders():
+    from apps.argus.src.surfaces.qq.services.parser_service import QQParser
+    result = QQParser('123').parse(event(message=[
+        {'type': 'reply', 'data': {'id': '-12'}}, {'type': 'at', 'data': {'qq': '123'}},
+        {'type': 'text', 'data': {'text': ' help '}}, {'type': 'image', 'data': {'file': 'ref'}}]))
+    assert result.detail['reply_to'] == '-12'
+    assert result.detail['readable_text'] == 'help'
+    assert result.content[-1].value == 'ref'
+
+
 def test_private_is_strong_without_name():
     from apps.argus.src.surfaces.qq.services.parser_service import QQParser
     result = QQParser('123').parse(event())

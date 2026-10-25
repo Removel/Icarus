@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class RequestBody(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True, hide_input_in_errors=True)
-    protocol_version: Literal[1]
+    protocol_version: Literal[1, 2]
 
     @field_validator('protocol_version', mode='before')
     @classmethod
@@ -33,6 +33,11 @@ class Scope(BaseModel):
     account_id: str = Field(pattern=r'^[1-9][0-9]{0,63}$')
     chat_kind: Literal['group', 'private']
     external_id: str = Field(pattern=r'^[1-9][0-9]{0,63}$')
+
+
+class SessionPendingBody(RequestBody):
+    protocol_version: Literal[2]
+    scope: Scope
 
 
 class BindBody(RequestBody):

@@ -6,7 +6,7 @@ import json
 from typing import Literal, Protocol
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_serializer, model_validator
 
 from .observation import FrozenSchema
 
@@ -26,6 +26,30 @@ class WakeItem(FrozenSchema):
 
 
 class WakePayload(FrozenSchema):
+    protocol_version: Literal[1, 2] = 1
+    target_session_id: UUID | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def require_target(cls, value):
+        if isinstance(value, dict):
+            version = value.get('protocol_version', 1)
+            if type(version) is not int or version not in (1, 2):
+                raise ValueError('Invalid protocol version')
+            if version == 2 and 'target_session_id' not in value:
+                raise ValueError('v2 target_session_id is required nullable')
+            if version == 1 and 'target_session_id' in value:
+                raise ValueError('v1 cannot target a semantic session')
+        return value
+
+    @model_serializer(mode='wrap')
+    def legacy_dump(self, handler):
+        value = handler(self)
+        if self.protocol_version == 1:
+            value.pop('protocol_version', None)
+            value.pop('target_session_id', None)
+        return value
+
     wake_id: UUID
     boot_id: UUID
     chat_id: str
@@ -78,7 +102,10 @@ class WakeView(FrozenSchema):
 def wake_wire(payload):
     source, account, kind, target = payload.chat_id.split(':', 3)
     scope = {'source': source, 'account_id': account, 'chat_kind': kind, 'external_id': target}
-    return {'protocol_version': 1, 'wake_id': str(payload.wake_id), 'origin_boot_id': str(payload.boot_id),
+    return {'protocol_version': payload.protocol_version,
+            **({'target_session_id': str(payload.target_session_id) if payload.target_session_id else None}
+               if payload.protocol_version == 2 else {}),
+            'wake_id': str(payload.wake_id), 'origin_boot_id': str(payload.boot_id),
             'scope': scope, 'reason': payload.reason, 'rule_id': payload.rule_id,
             'items': [{'observation_id': str(item.item_id), 'source': item.source, 'chat_id': item.chat_id,
                 'message_id': item.message_id, 'revision': item.revision, 'locator': dict(item.locator),

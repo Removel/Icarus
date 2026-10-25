@@ -1,0 +1,17 @@
+{
+  "request": {
+    "protocol_version": 2,
+    "target_session_id": null,
+    "wake_id": "10000000-0000-4000-8000-000000000001",
+    "origin_boot_id": "20000000-0000-4000-8000-000000000001",
+    "scope": {"source": "qq", "account_id": "7", "chat_kind": "group", "external_id": "42"},
+    "reason": "question",
+    "rule_id": null,
+    "items": [{"observation_id": "60000000-0000-4000-8000-000000000001", "source": "qq", "chat_id": "qq:7:group:42", "message_id": "88", "revision": 1, "locator": {"account_id": "7", "chat_kind": "group", "external_id": "42", "message_id": "88", "time": 10}, "excerpt": "question", "truncated": false}]
+  },
+  "fingerprint": "9b649cf4d923bf0abd172685a2d34710f72d31ca9d3a1e39781d725eb2fe5557",
+  "sessions": {"protocol_version": 2, "sessions": [{"session_id": "30000000-0000-4000-8000-000000000001", "summary": "topic A", "last_related_at": null, "has_work": true}], "next_cursor": null},
+  "notify": {"protocol_version": 2, "wake_id": "10000000-0000-4000-8000-000000000001", "session_id": "30000000-0000-4000-8000-000000000001"},
+  "available": {"protocol_version": 2, "pending_count": 1, "watermark": null},
+  "session_pending": {"protocol_version": 2, "pending_count": 1, "last_related_at": null}
+}

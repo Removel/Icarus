@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class SchemaVersionError(RuntimeError):
@@ -56,6 +56,13 @@ class Database:
                             await connection.execute(text(statement))
                     await connection.execute(text('UPDATE schema_version SET version=2, applied_at=now()'))
                     versions = [2]
+                if versions == [2]:
+                    migration = Path(__file__).resolve().parents[2] / 'db/migrations/003_semantic_sessions.sql'
+                    for statement in migration.read_text().split(';'):
+                        if statement.strip():
+                            await connection.execute(text(statement))
+                    await connection.execute(text('UPDATE schema_version SET version=3, applied_at=now()'))
+                    versions = [3]
                 if versions != [SCHEMA_VERSION]:
                     raise SchemaVersionError('Unsupported Argus schema version')
         except BaseException:

@@ -24,6 +24,14 @@ async def bound(database):
     return observations, handoff, first, wake, binding['binding_id']
 
 
+async def test_legacy_binding_replay_tolerates_explicit_v1_envelope(database):
+    _, handoff, _, _, binding_id = await bound(database)
+    original = await handoff.binding(binding_id)
+    body = {key: original[key] for key in ('execution_id', 'session_id', 'task_id', 'scope', 'origin_boot_id')}
+    result = await handoff.bind(original['wake_id'], {**body, 'protocol_version': 1})
+    assert result['binding_id'] == binding_id and 'protocol_version' not in result
+
+
 async def test_incidental_delivery_does_not_claim_and_finalize_preserves_new(database):
     observations, handoff, first, wake, binding = await bound(database)
     incidental, _ = await observations.upsert_revision(draft('incidental', message_id='incidental'))

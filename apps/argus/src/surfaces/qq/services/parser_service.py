@@ -5,6 +5,7 @@ from math import isfinite
 import unicodedata
 
 from ....common.schemas.observation import ContentPart, ObservedItemDraft
+from .fact_service import readable_text
 from ..schemas.onebot import OneBotEvent
 
 
@@ -55,7 +56,7 @@ class QQParser:
         is_self = event.post_type == 'message_sent' or sender_id == self.bot_id
         target = positive_id(raw.get('group_id'), 'group_id') if kind == 'group' else (
             positive_id(raw.get('target_id'), 'target_id') if is_self and not recall else sender_id)
-        parts, mentions = [], False
+        parts, mentions, reply_to = [], False, None
         if not recall:
             body = raw.get('message')
             if isinstance(body, str):
@@ -75,6 +76,9 @@ class QQParser:
                         if not isinstance(data.get('file'), str) or not data['file']:
                             raise ValueError('Image segment requires reference')
                         parts.append(ContentPart(kind='image', value=data['file']))
+                    elif segment_type == 'reply':
+                        reply_to = message_id(data.get('id'))
+                        parts.append(ContentPart(kind='other', value=segment_type))
                     elif segment_type == 'at':
                         target_account = str(data.get('qq'))
                         if target_account != 'all':
@@ -96,7 +100,7 @@ class QQParser:
             raise ValueError('Invalid Unix timestamp') from None
         text = normalized('\n'.join(part.value for part in parts if part.kind == 'text'))
         name_hit = any(name in text for name in self.bot_names)
-        return ObservedItemDraft(source='qq', chat_id=f'qq:{self.bot_id}:{kind}:{target}',
+        result = ObservedItemDraft(source='qq', chat_id=f'qq:{self.bot_id}:{kind}:{target}',
             message_id=identifier, deleted=recall, is_self=is_self,
             strong_signal=not recall and not is_self and (kind == 'private' or mentions or name_hit),
             sender_id=sender_id, sender_name=sender.get('card') or sender.get('nickname'),
@@ -104,3 +108,5 @@ class QQParser:
             locator={'account_id': self.bot_id, 'chat_kind': kind, 'external_id': target,
                      'message_id': identifier, 'time': stamp},
             detail={'mentions_bot': mentions, 'bot_name_hit': name_hit})
+        return result.model_copy(update={'detail': {**result.detail, 'readable_text': readable_text(result),
+            **({'reply_to': reply_to} if reply_to is not None else {})}})

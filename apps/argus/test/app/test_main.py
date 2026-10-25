@@ -19,6 +19,37 @@ def headers(raw):
     return {'X-Self-ID': '123', 'X-Signature': 'sha1=' + hmac.new(b'test-secret', raw, hashlib.sha1).hexdigest()}
 
 
+async def test_gateway_composition_routes_v2_and_mounts_service_pending(database, monkeypatch):
+    from uuid import uuid4
+    from apps.argus.src.main import create_app, create_service_app
+    from apps.argus.src.common.schemas.wake import WakeReceipt
+    monkeypatch.setenv('ARGUS_AGENT_API_TOKEN', 'fixture-data')
+    calls = []
+    class Agent:
+        async def status(self, **kwargs): return None
+        async def sessions(self, scope, **kwargs):
+            return {'protocol_version': 2, 'sessions': [], 'next_cursor': None}
+        async def submit(self, payload):
+            calls.append(payload)
+            return WakeReceipt(accepted=True)
+    app = create_app(ArgusConfig(execution={'mode': 'gateway'}, qq=QQConfig(enabled=True, bot_id='123'),
+        scan_interval_seconds=.01), database=database, agent=Agent(), qq_secret='test-secret')
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+            raw = body()
+            assert (await client.post('/api/argus/qq/onebot/events', content=raw, headers=headers(raw))).status_code == 204
+            async with asyncio.timeout(2):
+                while not calls:
+                    await asyncio.sleep(.01)
+            assert calls[0].protocol_version == 2 and calls[0].target_session_id is None
+        service = create_service_app(app)
+        async with AsyncClient(transport=ASGITransport(app=service), base_url='http://test') as client:
+            response = await client.post(f'/api/argus/internal/sessions/{uuid4()}/pending', json={
+                'protocol_version': 2, 'scope': {'source': 'qq', 'account_id': '123', 'chat_kind': 'private', 'external_id': '456'}},
+                headers={'Authorization': 'Bearer fixture-data'})
+            assert response.status_code == 200 and response.json()['pending_count'] == 0
+
+
 async def test_http_private_flow_resolves_with_mock(database):
     from apps.argus.src.main import create_app
     config = ArgusConfig(qq=QQConfig(enabled=True, bot_id='123'), scan_interval_seconds=.01)

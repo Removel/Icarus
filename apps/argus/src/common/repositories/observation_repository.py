@@ -14,7 +14,7 @@ from ..models.observation import ObservationRow
 from ..models.wake import WakeRow
 from ..schemas.observation import ObservedItem, ObservedItemDraft, PendingWindow
 from ..schemas.judgement import JudgementOutcome
-from ..schemas.wake import ACTIVE_STATUSES, WakeItem, WakeOutcome, WakePayload, WakeView
+from ..schemas.wake import ACTIVE_STATUSES, WakeItem, WakeOutcome, WakePayload, WakeView, request_fingerprint
 
 
 class NotFound(LookupError):
@@ -107,10 +107,14 @@ class ObservationRepository:
                 raise NotFound('Observation not found')
             return observed(row)
 
-    async def latest_open_items(self, chat_id, *, limit=20):
+    async def latest_open_items(self, chat_id, *, limit=20, routing_fair=False):
         async with self.database.session() as session:
-            rows = await session.scalars(select(ObservationRow).where(*self._pending(),
-                ObservationRow.chat_id == chat_id).order_by(ObservationRow.observed_at, ObservationRow.id).limit(limit))
+            query = select(ObservationRow).where(*self._pending(), ObservationRow.chat_id == chat_id)
+            if routing_fair:
+                # Untouched arrivals get priority; deferred replies rotate by last
+                # attempt, so neither a blocked head nor a full head window wins forever.
+                query = query.order_by(func.coalesce(ObservationRow.decision_detail['routing_attempted_at'].astext, ''))
+            rows = await session.scalars(query.order_by(ObservationRow.observed_at, ObservationRow.id).limit(limit))
             return tuple(observed(row) for row in rows)
 
     async def recent_context(self, chat_id, *, before, limit=10):
@@ -136,7 +140,9 @@ class ObservationRepository:
     def _real_active():
         return and_(WakeRow.handoff['mode'].astext == 'gateway',
                     func.coalesce(WakeRow.handoff['local_terminal'].astext, 'false') != 'true',
-                    func.coalesce(WakeRow.handoff['release_complete'].astext, 'false') != 'true')
+                    func.coalesce(WakeRow.handoff['release_complete'].astext, 'false') != 'true',
+                    or_(func.coalesce(WakeRow.handoff['protocol_version'].astext, '1') != '2',
+                        WakeRow.handoff['submission_may_have_run'].astext == 'true'))
 
     async def update_handoff(self, wake_id, changes, *, status=None):
         async with self.database.begin() as session:
@@ -149,6 +155,14 @@ class ObservationRepository:
             row.updated_at = datetime.now(UTC)
             await session.flush()
             return wake_view(row)
+
+    async def acknowledge_notify(self, wake_id, *, generation):
+        async with self.database.begin() as db:
+            row = await db.get(WakeRow, UUID(str(wake_id)), with_for_update=True)
+            if row is None:
+                raise NotFound('Wake not found')
+            if row.handoff.get('notify_generation', 0) == generation:
+                row.handoff = {**row.handoff, 'notify_pending': False}
 
     async def chats_to_scan(self):
         async with self.database.session() as session:
@@ -164,7 +178,8 @@ class ObservationRepository:
                     func.coalesce(WakeRow.handoff['mode'].astext, 'mock') != 'gateway'))))
             return None if row is None else wake_view(row)
 
-    async def commit_judgement(self, chat_id: str, outcome: JudgementOutcome):
+    async def commit_judgement(self, chat_id: str, outcome: JudgementOutcome, *, protocol_version=1,
+                               target_session_id=None, target_waiting_wake_id=None):
         selected = [value.item.id for value in outcome.selected]
         ignored = [identifier for group in outcome.ignored for identifier in group.item_ids]
         identifiers = selected + ignored
@@ -199,8 +214,17 @@ class ObservationRepository:
                     return None
                 if not selected:
                     return None
+                if protocol_version == 2 and target_waiting_wake_id is not None:
+                    return await self._merge_waiting(session, target_waiting_wake_id, chat_id, outcome, by_id)
+                target = str(UUID(str(target_session_id))) if target_session_id is not None else None
+                if protocol_version == 2:
+                    for identifier in selected:
+                        assigned = by_id[identifier].detail.get('argus_session_id')
+                        if assigned is not None and assigned != target:
+                            raise StaleSelection('Semantic assignment changed')
                 now, identifier = datetime.now(UTC), uuid4()
                 payload = WakePayload(wake_id=identifier, boot_id=self.boot_id, chat_id=chat_id,
+                    **({'protocol_version': 2, 'target_session_id': target} if protocol_version == 2 else {}),
                     reason=outcome.reason, rule_id=outcome.rule_id,
                     items=tuple(WakeItem(item_id=value.item.id, source=value.item.source,
                         chat_id=chat_id, message_id=value.item.message_id, revision=value.item.revision,
@@ -208,11 +232,16 @@ class ObservationRepository:
                         for value in outcome.selected))
                 wake = WakeRow(id=identifier, boot_id=self.boot_id, chat_id=chat_id, status='waiting',
                     reason=outcome.reason, rule_id=outcome.rule_id, payload=payload.model_dump(mode='json'),
-                    decision_detail=outcome.decision_detail, attempt_count=0, created_at=now, updated_at=now)
+                    decision_detail=outcome.decision_detail, attempt_count=0, created_at=now, updated_at=now,
+                    handoff=({'mode': 'gateway', 'protocol_version': 2, 'target_session_id': target,
+                        'request_fingerprint': request_fingerprint(payload), 'routing_reason': outcome.reason}
+                        if protocol_version == 2 else {'mode': 'mock'}))
                 session.add(wake)
                 await session.flush()
                 for identifier in selected:
                     by_id[identifier].wake_id = wake.id
+                    if protocol_version == 2 and target is not None:
+                        by_id[identifier].detail = {**by_id[identifier].detail, 'argus_session_id': target}
                     by_id[identifier].status_reason = outcome.reason
                     by_id[identifier].decision_detail = outcome.decision_detail
                 await session.flush()
@@ -221,6 +250,140 @@ class ObservationRepository:
             if getattr(error.orig, 'sqlstate', None) == '23505':
                 raise ActiveWakeExists('Chat already has an active request') from None
             raise
+
+    async def reply_session(self, chat_id, message_id):
+        async with self.database.session() as db:
+            row = await db.scalar(select(ObservationRow).where(ObservationRow.chat_id == chat_id,
+                ObservationRow.message_id == str(message_id), ObservationRow.deleted.is_(False), self._latest())
+                .order_by(ObservationRow.revision.desc()).limit(1))
+            return None if row is None else row.detail.get('argus_session_id')
+
+    async def routing_deferred(self, item_ids, *, cursor=None, reason):
+        async with self.database.begin() as db:
+            rows = list(await db.scalars(select(ObservationRow).where(ObservationRow.id.in_(item_ids))))
+            if not rows:
+                return
+            await self.lock_scope(db, 'qq', rows[0].chat_id)
+            for row in rows:
+                if row.boot_id == self.boot_id and row.status == 'new' and row.wake_id is None:
+                    row.decision_detail = {**(row.decision_detail or {}), 'routing_reason': reason,
+                        'routing_cursor': cursor, 'routing_attempted_at': datetime.now(UTC).isoformat()}
+
+    async def waiting_wakes(self, chat_id, *, limit=20):
+        async with self.database.session() as db:
+            rows = await db.scalars(select(WakeRow).where(WakeRow.chat_id == chat_id,
+                WakeRow.boot_id == self.boot_id, WakeRow.handoff['protocol_version'].astext == '2',
+                func.coalesce(WakeRow.handoff['submission_may_have_run'].astext, 'false') != 'true',
+                func.coalesce(WakeRow.handoff['local_terminal'].astext, 'false') != 'true',
+                func.coalesce(WakeRow.handoff['release_complete'].astext, 'false') != 'true')
+                .order_by(WakeRow.created_at, WakeRow.id).limit(limit))
+            return tuple(wake_view(row) for row in rows)
+
+    async def fail_stale_submission(self, wake_id):
+        """Retire an unsent batch and atomically release only untouched current work."""
+        async with self.database.begin() as db:
+            existing = await db.get(WakeRow, UUID(str(wake_id)))
+            if existing is None:
+                raise NotFound('Wake not found')
+            await self.lock_scope(db, 'qq', existing.chat_id)
+            row = await db.get(WakeRow, existing.id, with_for_update=True, populate_existing=True)
+            if row.boot_id != self.boot_id or row.handoff.get('submission_may_have_run'):
+                return
+            items = list(await db.scalars(select(ObservationRow).where(ObservationRow.wake_id == row.id,
+                ObservationRow.boot_id == self.boot_id, ObservationRow.status == 'new',
+                ObservationRow.deleted.is_(False), ObservationRow.exposed_wake_id.is_(None), self._latest())))
+            row.handoff = {**row.handoff, 'local_terminal': True}
+            row.status = 'failed'
+            row.updated_at = self.clock()
+            for item in items:
+                item.wake_id = None
+
+    async def prepare_submission(self, wake_id):
+        """Reserve the sole possible-running owner before any external call."""
+        async with self.database.begin() as db:
+            existing = await db.get(WakeRow, UUID(str(wake_id)))
+            if existing is None:
+                raise NotFound('Wake not found')
+            await self.lock_scope(db, 'qq', existing.chat_id)
+            items = list(await db.scalars(select(ObservationRow).where(ObservationRow.wake_id == existing.id)))
+            for item in sorted(items, key=self._identity):
+                await self._lock_message(db, item)
+            row = await db.get(WakeRow, existing.id, with_for_update=True, populate_existing=True)
+            owner = await db.scalar(select(WakeRow.id).where(WakeRow.chat_id == row.chat_id,
+                WakeRow.id != row.id, self._real_active()).limit(1))
+            if owner is not None:
+                raise ActiveWakeExists('Scope owner may still be running')
+            if row.boot_id != self.boot_id and not row.handoff.get('submission_may_have_run'):
+                raise StaleSelection('Old boot cannot submit new work')
+            if not row.handoff.get('submission_may_have_run'):
+                expected = {value.item_id for value in wake_view(row).payload.items}
+                valid = set(await db.scalars(select(ObservationRow.id).where(ObservationRow.id.in_(expected),
+                    ObservationRow.boot_id == self.boot_id, ObservationRow.deleted.is_(False), self._latest())))
+                if valid != expected:
+                    raise StaleSelection('Request changed before submission')
+            fingerprint = request_fingerprint(wake_view(row).payload)
+            if row.handoff.get('request_fingerprint', fingerprint) != fingerprint:
+                raise StaleSelection('Frozen request changed')
+            row.handoff = {**row.handoff, 'mode': 'gateway', 'request_fingerprint': fingerprint,
+                'submission_may_have_run': True}
+            row.status = 'sent'
+            await db.flush()
+            return wake_view(row)
+
+    async def assign_to_session(self, item_ids, *, session_id, wake_id=None) -> None:
+        session_id = str(UUID(str(session_id)))
+        identifiers = {UUID(str(value)) for value in item_ids}
+        if not identifiers:
+            return
+        async with self.database.begin() as db:
+            rows = list(await db.scalars(select(ObservationRow).where(ObservationRow.id.in_(identifiers))))
+            if len(rows) != len(identifiers) or len({row.chat_id for row in rows}) != 1:
+                raise StaleSelection('Invalid assignment scope')
+            await self.lock_scope(db, 'qq', rows[0].chat_id)
+            rows = list(await db.scalars(select(ObservationRow).where(ObservationRow.id.in_(identifiers))
+                .with_for_update().execution_options(populate_existing=True)))
+            for row in sorted(rows, key=self._identity):
+                await self._lock_message(db, row)
+            valid = set(await db.scalars(select(ObservationRow.id).where(ObservationRow.id.in_(identifiers),
+                *self._pending())))
+            if valid != identifiers:
+                raise StaleSelection('Assignment changed')
+            if wake_id is not None:
+                wake = await db.get(WakeRow, UUID(str(wake_id)), with_for_update=True)
+                if wake is None or wake.chat_id != rows[0].chat_id or wake.handoff.get('target_session_id') != session_id:
+                    raise StaleSelection('Invalid assignment wake')
+            for row in rows:
+                if row.detail.get('argus_session_id', session_id) != session_id:
+                    raise StaleSelection('Already assigned to another session')
+                row.detail = {**row.detail, 'argus_session_id': session_id}
+                if wake_id is not None:
+                    row.wake_id = UUID(str(wake_id))
+
+    async def _merge_waiting(self, db, wake_id, chat_id, outcome, by_id):
+        wake = await db.get(WakeRow, UUID(str(wake_id)), with_for_update=True)
+        if (wake is None or wake.chat_id != chat_id or wake.boot_id != self.boot_id
+                or wake.handoff.get('protocol_version') != 2 or wake.handoff.get('submission_may_have_run')
+                or wake.handoff.get('local_terminal') or wake.handoff.get('binding')):
+            raise StaleSelection('Waiting candidate changed')
+        target = wake.handoff.get('target_session_id')
+        for value in outcome.selected:
+            row = by_id[value.item.id]
+            if row.detail.get('argus_session_id', target) != target:
+                raise StaleSelection('Semantic assignment changed')
+            row.wake_id = wake.id
+            if target is not None:
+                row.detail = {**row.detail, 'argus_session_id': target}
+        payload = wake_view(wake).payload
+        additions = tuple(WakeItem(item_id=value.item.id, source=value.item.source, chat_id=chat_id,
+            message_id=value.item.message_id, revision=value.item.revision, locator=value.item.locator,
+            excerpt=value.excerpt, truncated=value.truncated) for value in outcome.selected)
+        if len(payload.items) + len(additions) > 20 or sum(len(value.excerpt) for value in (*payload.items, *additions)) > 20000:
+            raise StaleSelection('Waiting batch full')
+        payload = payload.model_copy(update={'items': (*payload.items, *additions)})
+        wake.payload = payload.model_dump(mode='json')
+        wake.handoff = {**wake.handoff, 'request_fingerprint': request_fingerprint(payload)}
+        await db.flush()
+        return wake_view(wake)
 
     async def get_wake(self, wake_id):
         async with self.database.session() as session:
