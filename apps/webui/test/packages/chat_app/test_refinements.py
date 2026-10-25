@@ -116,6 +116,7 @@ def test_session_switch_reuses_cache_and_requests_only_updates(page):
     expect(page.get_by_role('textbox', name='发送消息')).to_be_enabled()
     expect(page.locator('.chat-assistant')).to_have_count(0)
     state['hold_history'] = True
+    page.expose_function('pending_history_count', lambda: len(state.get('pending_history', [])))
     frame = page.get_by_role('button', name='第一段', exact=True).evaluate('''el => {
         el.click();
         return new Promise(resolve => requestAnimationFrame(() => {
@@ -128,8 +129,18 @@ def test_session_switch_reuses_cache_and_requests_only_updates(page):
     assert frame['top'] > 0
     assert abs(frame['top'] - frame['bottom']) < 2
     expect(page.locator('.chat-assistant')).to_contain_text('已缓存的回答')
+    # Cached content paints before the asynchronous status/subscribe/history RPCs finish.
+    page.wait_for_function('async () => await window.pending_history_count() === 1')
     reads = [call['params'] for call in state['calls'] if call['method'] == 'session.get_history' and call['params']['session_id'] == 'session-1']
-    assert reads[-1]['after_sequence'] == 2
+    assert [read['after_sequence'] for read in reads] == [0, 2]
+    socket, request_id = state['pending_history'][0]
+    update = {**records[1], 'payload': {'step': 2, 'text': '增量回答'}, 'sequence': 3}
+    socket.send(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'result': {
+        'records': [update], 'has_more': False, 'next_after_sequence': 3, 'history_cursor': 3}}))
+    expect(page.locator('.chat-assistant')).to_have_count(2)
+    expect(page.locator('.chat-assistant').first).to_contain_text('已缓存的回答')
+    expect(page.locator('.chat-assistant').last).to_contain_text('增量回答')
+    expect(page.get_by_role('textbox', name='发送消息')).to_be_enabled()
 
 
 def test_agent_and_model_settings_share_server_configuration(page):
