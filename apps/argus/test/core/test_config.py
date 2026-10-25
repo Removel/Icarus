@@ -56,6 +56,18 @@ def test_config_errors_hide_accidentally_supplied_secret():
     assert 'synthetic-secret-must-not-leak' not in str(error.value)
 
 
+def test_qq_history_enabled_requires_its_token(tmp_path, monkeypatch):
+    from apps.argus.src.core import config
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'qq': {'enabled': True, 'bot_id': '123',
+        'history': {'enabled': True, 'endpoint': 'http://127.0.0.1:3010/'}}}))
+    monkeypatch.setenv('ARGUS_DATABASE_URL', 'postgresql+asyncpg://test:test@127.0.0.1/argus_test')
+    monkeypatch.setenv('ARGUS_QQ_REPORT_SECRET', 'synthetic')
+    monkeypatch.delenv('SNOWLUMA_MCP_TOKEN', raising=False)
+    with pytest.raises(ValueError, match='SNOWLUMA_MCP_TOKEN'):
+        config.load_config(settings_path=path)
+
+
 def test_missing_database_url_is_explicit(tmp_path, monkeypatch):
     from apps.argus.src.core import config
     path = tmp_path / 'settings.json'

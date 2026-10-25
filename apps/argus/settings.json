@@ -7,28 +7,48 @@
   "max_debounce_seconds": 30.0,
   "max_items_per_wake": 20,
   "max_chars_per_wake": 20000,
-  "recent_context_items": 10,
-  "recent_context_chars": 4000,
+  "recent_context_items": 15,
+  "recent_context_chars": 6000,
   "max_concurrent_chats": 8,
   "submit_timeout_seconds": 5.0,
   "max_submit_attempts": 3,
-  "retry_delays_seconds": [1.0, 2.0],
+  "retry_delays_seconds": [
+    1.0,
+    2.0
+  ],
   "outcome_timeout_seconds": 60.0,
   "sensitive_keywords": [],
   "default_permission_level": 2,
   "permission_overrides": {},
   "jev": {
-    "enabled": false,
-    "base_url": "https://openrouter.ai/api",
-    "model": "typesafe/jev-1.13",
+    "enabled": true,
+    "base_url": "http://100.70.8.11:8009",
+    "model": "jev-latest",
     "timeout_seconds": 5.0,
     "attempts": 3
   },
   "qq": {
-    "enabled": false,
-    "bot_id": null,
+    "enabled": true,
+    "bot_id": "3922275740",
     "max_body_bytes": 1048576,
-    "bot_names": ["icarus", "伊卡洛斯"]
+    "bot_names": [
+      "icarus",
+      "伊卡洛斯"
+    ],
+    "history": {
+      "enabled": true,
+      "endpoint": "http://127.0.0.1:3010/",
+      "token_env": "SNOWLUMA_MCP_TOKEN",
+      "timeout_seconds": 2.0
+    }
   },
-  "mock": {"completion_delay_seconds": 0.05}
+  "mock": {
+    "completion_delay_seconds": 0.05
+  },
+  "execution": {
+    "mode": "gateway",
+    "gateway_url": "ws://127.0.0.1:8765/argus/rpc"
+  },
+  "service_host": null,
+  "service_port": null
 }

@@ -13,8 +13,9 @@
 |---|---|---|
 | 普通私聊 | `private_message`，优先级 200 | 叫醒，不调用 Jev |
 | 群聊中有人 @ 或叫机器人名字 | `mention_bot`，优先级 100 | 叫醒，不调用 Jev |
-| 其他群聊内容 | `genuine_question` / `casual_chat` | 启用 Jev 时，由它选择值得回答、普通闲聊或 none |
-| Jev 关闭、失败、返回非法结果或 none | 无叫醒规则 | 忽略，并记录原因 |
+| 其他群聊内容 | `speak` / `stay_silent` | 启用 Jev 时，先判断 `can_speak`（是否适合说话），再判断 `speak_now`（现在就说吗）；两个都是 yes/no |
+| Jev 关闭、失败或返回非法结果 | 无叫醒规则 | 忽略，并记录原因 |
+| `can_speak` 或 `speak_now` 为否 | `stay_silent` | 忽略，`decision_detail` 保留两个概率 |
 
 处理过程：
 
@@ -24,7 +25,7 @@
   → 基本检查和预算选择
   → 按优先级查找第一条命中的机械规则
   → 若机械规则没命中，筛选符合 when 的语义规则
-  → Jev 从这些候选里选一条或 none
+  → Jev 先回答 can_speak（是/否），再回答 speak_now（是/否）；两次都是是才唤醒
   → 保存忽略结果，或创建叫醒请求
 ```
 
@@ -102,23 +103,33 @@ rules:
 机械规则均未命中时，只把满足 `when` 的语义规则作为候选。例如下面这条可追加到 `rules`：
 
 ```yaml
-- id: genuine_question
-  description: "群里有人在问需要 Icarus 回答的问题，而不是闲聊或通知"
+- id: speak
+  description: "在这个窗口里，Icarus 现在说话是合适/可以的：有人向 Icarus 提问、求助或等待回应；话题直接涉及 Icarus；群里有开放问题没人接；Icarus 有新的信息可以补充；现在插话不会打断别人。"
   semantic: true
   when:
     scope_kind: group
   decision: wake
-  reason: "有人在等 Icarus 回答"
+  reason: "现在适合 Icarus 说话"
 ```
 
-`when` 是候选准入条件，不是模型结论。所有符合条件的语义候选一起交给 Jev；它返回某个
-`rule_id` 或 `none`，不生成新的规则或自由文本理由。
+`when` 是候选准入条件，不是模型结论。所有符合条件的语义候选一起交给 Jev；Jev 先回答
+`can_speak`（是否适合说话），再回答 `speak_now`（现在就说吗），两个都是 yes 才唤醒，
+不生成新的规则或自由文本理由。`speak` 和 `stay_silent` 的描述分别作为 `can_speak` 的
+true/false 说明；`speak_now` 的时机说明由服务提供。
+
+语义判断的 `state` 是一个按时间排序的 `window`，每条包含 `sender`、`text`、`sent_at` 和
+`current`。Icarus 自己的消息也作为上下文出现，但不作为当前待判断的候选。
+
+窗口优先来自本地 `observed_items`；配置 `qq.history` 时，Argus 通过 SnowLuma 的
+`get_group_msg_history` / `get_friend_msg_history` 回填缺失消息，按 `message_id` 去重，
+历史不可用时回退到本地观测。
 
 语义规则也按 priority 排序，但**高优先级不保证 Jev 选中它**。如果需要某条件必定叫醒或忽略，
-应写为机械规则。当前没有可配置的“置信度超过 0.8 才叫醒”阈值。
+应写为机械规则。当前 `can_speak` 和 `speak_now` 的阈值固定为 0.5，没有可配置的置信度阈值。
 
 没有语义候选时默认忽略；Jev 关闭记录 `jev_disabled`，调用失败或非法结果记录 `jev_failed`；
-合法返回 none 使用 `default.reason`。这些忽略不是稍后自动重新判断的等待状态。
+任一问题为否映射为 `stay_silent`，并在 `decision_detail` 保留 `can_speak` 和 `speak_now`
+两个概率用于统计。这些忽略不是稍后自动重新判断的等待状态。
 
 ## 4. 可用事实
 

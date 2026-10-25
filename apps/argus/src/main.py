@@ -25,16 +25,20 @@ from .common.clients.jev_client import JevClient
 from .common.clients.mock_agent_client import MockAgentClient
 from .common.repositories.observation_repository import ObservationRepository
 from .common.services.rule_service import load_rule_set
+from .common.services.session_routing_service import SessionRoutingService
 from .common.services.judgement_service import JudgementService
 from .common.services.wake_service import WakeService
 from .common.tasks.observation_scheduler import ObservationScheduler
 from .surfaces.qq.services.parser_service import QQParser
 from .surfaces.qq.services.fact_service import QQFactService
+from .surfaces.qq.services.history_service import QQHistoryService
 from .surfaces.qq.services.observation_service import QQObservationService
 from .surfaces.qq.api.onebot import create_qq_router
+from packages.snowluma import SnowLumaClient
 
 
-def create_app(config: ArgusConfig | None = None, *, database=None, jev=None, agent=None, qq_secret=None):
+def create_app(config: ArgusConfig | None = None, *, database=None, jev=None, agent=None,
+               history=None, qq_secret=None):
     config = config or load_config()
     if config.qq.enabled:
         qq_secret = qq_secret if qq_secret is not None else os.getenv('ARGUS_QQ_REPORT_SECRET')
@@ -62,7 +66,8 @@ def create_app(config: ArgusConfig | None = None, *, database=None, jev=None, ag
             notifier = ObservationNotifier()
             policy = ObservationAccessPolicy(config.sensitive_keywords,
                 permission_for=lambda chat: config.permission_overrides.get(chat, config.default_permission_level))
-            app.state.handoff_service = HandoffService(HandoffRepository(database), policy=policy, notifier=notifier)
+            handoff = HandoffRepository(database, boot_id=repository.boot_id, policy=policy)
+            app.state.handoff_service = HandoffService(handoff, policy=policy, notifier=notifier)
             if config.qq.enabled:
                 surface = QQFactService()
                 rules = load_rule_set(Path(__file__).resolve().parents[1] / 'rules/qq.yaml',
@@ -84,11 +89,24 @@ def create_app(config: ArgusConfig | None = None, *, database=None, jev=None, ag
                 judgement = JudgementService(rules, surface, current_jev,
                     sensitive_keywords=config.sensitive_keywords, max_items=config.max_items_per_wake,
                     max_chars=config.max_chars_per_wake, recent_chars=config.recent_context_chars)
-                wakes = (RealWakeService(repository, current_agent, policy=policy) if config.execution.mode == 'gateway'
+                parser = QQParser(config.qq.bot_id, config.qq.bot_names)
+                current_history = history
+                if current_history is None and config.qq.history.enabled:
+                    token = os.getenv(config.qq.history.token_env)
+                    if not token:
+                        raise ValueError(f'{config.qq.history.token_env} is required when QQ history is enabled')
+                    history_client = SnowLumaClient(config.qq.history.endpoint, token,
+                        self_id=config.qq.bot_id, timeout=config.qq.history.timeout_seconds)
+                    owned_clients.append(history_client)
+                    current_history = QQHistoryService(history_client, parser,
+                        limit=config.recent_context_items, timeout=config.qq.history.timeout_seconds)
+                wakes = (RealWakeService(repository, current_agent, policy=policy, handoff=handoff) if config.execution.mode == 'gateway'
                     else WakeService(repository, current_agent, submit_timeout_seconds=config.submit_timeout_seconds,
                         max_submit_attempts=config.max_submit_attempts, retry_delays_seconds=config.retry_delays_seconds,
                         outcome_timeout_seconds=config.outcome_timeout_seconds))
                 scheduler = ObservationScheduler(repository, judgement, wakes,
+                    routing=SessionRoutingService(current_jev, policy=policy) if config.execution.mode == 'gateway' else None,
+                    history=current_history,
                     permission_for=lambda chat: config.permission_overrides.get(chat, config.default_permission_level),
                     quiet_seconds=config.quiet_seconds, max_debounce_seconds=config.max_debounce_seconds,
                     scan_interval_seconds=config.scan_interval_seconds, max_concurrent_chats=config.max_concurrent_chats,
@@ -96,7 +114,7 @@ def create_app(config: ArgusConfig | None = None, *, database=None, jev=None, ag
                 def notify(chat_id, **kwargs):
                     scheduler.notify(chat_id, **kwargs)
                     notifier.notify(chat_id)
-                service = QQObservationService(repository, QQParser(config.qq.bot_id, config.qq.bot_names), notify=notify)
+                service = QQObservationService(repository, parser, notify=notify)
                 app.state.qq_service = service
                 task = asyncio.create_task(scheduler.run(), name='argus:observations')
                 app.state.scheduler_task = task

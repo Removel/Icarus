@@ -56,8 +56,10 @@ http://127.0.0.1:8766/api/argus/qq/onebot/events
 - 同一个群正在处理时继续保存新消息，不打断、不追加当前请求；结束后重新判断积累内容。
 - 不同聊天对象独立，默认最多8个并发工作。
 - 默认每批20条、20000字符；单条过长使用短摘录，完整原文保留。预算外消息仍待处理。
-- 判断规则在 `rules/qq.yaml`。只有机械规则无法决定时才使用已启用的 Jev；Jev 仅选择 rule_id/none。
-- Jev 默认关闭，开启需配置 `jev.enabled=true` 与 `ARGUS_JEV_API_KEY`。失败或 none 默认沉默。
+- 判断规则在 `rules/qq.yaml`。只有机械规则无法决定时才使用已启用的 Jev；Jev 先回答 `can_speak`（是否适合说话），再回答 `speak_now`（现在就说吗），两个都是 yes 才唤醒，没有 `none`。
+- 语义窗口优先使用已入库观测；`qq.history` 开启时从 SnowLuma 的 `get_group_msg_history` / `get_friend_msg_history` 回填缺失消息（尤其是机器人自身消息），按 `message_id` 去重，失败时回退到本地观测。
+- 推荐在 SnowLuma 适配器开启 `reportSelfMessage`，让自消息实时入库；历史回填用于补启动前或漏掉的消息。
+- Jev 默认关闭，开启需配置 `jev.enabled=true` 与 `ARGUS_JEV_API_KEY`。失败、非法结果或任一问题为否默认沉默。
 - `sensitive_keywords` 默认为空，需要操作者配置关键词；不是完整的语义内容审核机制。
 - QQ 关闭时不挂上报路由、不扫描来源、不调用 Jev/mock，但只读接口和健康检查仍可用。
 
@@ -68,7 +70,7 @@ http://127.0.0.1:8766/api/argus/qq/onebot/events
 
 - 默认机械规则：私聊叫醒（优先级200）；群 @/叫名字叫醒（优先级100），不调用 Jev。
 - 机械规则按优先级从高到低，第一条命中即结束；同优先级按文件顺序。
-- 只有机械规则未命中时，才把满足 `when` 的语义规则交给已启用的 Jev，选一个 rule_id 或 none。
+- 只有机械规则未命中时，才把满足 `when` 的语义规则交给已启用的 Jev；Jev 先回答 `can_speak`，再回答 `speak_now`，两个都是 yes 才唤醒。
 - `wake` 表示递交请求，`ignore` 表示忽略；尽快判断不等于保证叫醒，基本检查不能被规则绕过。
 
 例如，向 `rules` 列表加入下面一条，可让某个群只记录、不叫醒，即使 @ 也不递交：
@@ -112,6 +114,32 @@ http://127.0.0.1:8766/api/argus/qq/onebot/events
 | `GET /api/argus/chats/{chat_id}/unhandled?limit=50` | 本次启动尚未关联请求的最新消息 |
 
 limit 范围1–100。读接口不鉴权，因此不能开放外网；其中包含聊天原文，不用于公开页面。
+
+## 真实 Agent 接线（显式配置启用）
+
+复用真实Agent和既有会话/插件机制，同群read/history/wait与逐项report已接线；退出、工具存活、
+报告封口与scope释放分开，读过但未报告的途中消息仍new。默认仍mock，不因代码存在启用。
+2026-10-22按用户简化决议，后台直接使用Agent已配置的MCP工具（包括SnowLuma），不新增动作
+白名单、群范围校验或发送记账；是否回复由模型选择并实际调用工具，最终正文不会自动发QQ。
+
+启用需要显式配置：Argus `execution.mode="gateway"`，Gateway URL使用`/argus/rpc`；环境提供
+`ARGUS_GATEWAY_TOKEN`和独立`ARGUS_AGENT_API_TOKEN`，不复用QQ上报secret。Agent配置
+`argus.enabled=true`、已存在的绝对后台workspace、Argus内部base_url；同data_dir只能一个宿主。
+后台沿用全局MCP配置，普通交互不变；没有当前群强制路由保证。执行默认最多8个、总期限15分钟；wait单次≤30秒。
+
+数据库启动显式迁移v1→v2，原wake/observations加handoff/exposed_wake_id，不删旧记录。
+正式迁移前备份并另获授权；只在隔离PG验证过。rollback保留新schema，不清库、不切mock假装
+旧真实执行完成，保持status/cancel/报告同步通路直到确认退出。
+
+普通host保持loopback；独立部署使用显式service_host/service_port，只挂Bearer内部prefix，
+不挂公开GET/QQ上报。Gateway也有专用listener，仅四个认证方法；ACL必须，私网/VPN无TLS，
+不支持公网，不信任forwarded header。本机真实模型/QQ工具调用已验证，但不代表正式部署或
+全面生产验收；本机运行配置和原始测试记录不随代码提交。
+
+
+- [跨应用共同契约](../../spec/2026-10-21-argus-agent-handoff.md)：身份、scope、RPC/HTTP、报告和取消语义。
+- Argus：[目标设计](docs/spec/2026-10-21-argus-agent-handoff/design.md)、[当前架构差距](docs/spec/2026-10-21-argus-agent-handoff/arch.md)、[逐文件实施计划](docs/spec/2026-10-21-argus-agent-handoff/plan.md)。
+- Agent 与 Gateway 的自有设计/架构/计划由共同契约入口链接，不在 Argus 文档重复实现细节。
 
 ## 测试
 

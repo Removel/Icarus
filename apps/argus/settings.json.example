@@ -7,8 +7,8 @@
   "max_debounce_seconds": 30.0,
   "max_items_per_wake": 20,
   "max_chars_per_wake": 20000,
-  "recent_context_items": 10,
-  "recent_context_chars": 4000,
+  "recent_context_items": 15,
+  "recent_context_chars": 6000,
   "max_concurrent_chats": 8,
   "submit_timeout_seconds": 5.0,
   "max_submit_attempts": 3,
@@ -28,7 +28,13 @@
     "enabled": false,
     "bot_id": null,
     "max_body_bytes": 1048576,
-    "bot_names": ["icarus", "伊卡洛斯"]
+    "bot_names": ["icarus", "伊卡洛斯"],
+    "history": {
+      "enabled": false,
+      "endpoint": "http://127.0.0.1:3010/",
+      "token_env": "SNOWLUMA_MCP_TOKEN",
+      "timeout_seconds": 2.0
+    }
   },
   "mock": {"completion_delay_seconds": 0.05},
   "execution": {"mode": "mock", "gateway_url": "ws://127.0.0.1:8765/argus/rpc"},

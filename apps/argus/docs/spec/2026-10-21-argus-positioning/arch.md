@@ -32,7 +32,10 @@ repository.commit_judgement 在事务中重取消息身份锁，校验版本/boo
 
 普通群聊安静5秒或最长30秒，私聊和强信号尽快处理；窗口计算覆盖全部待处理消息，选取预算
 只处理前20条。判断先排除自消息和敏感全文，再构造短摘录，Jev 只见有限且过滤后的文本。
-YAML机械规则优先，语义候选才请求 typed Jev，失败/none 默认沉默。
+YAML机械规则优先，语义候选才请求 typed Jev；语义判断使用按时间排序的窗口（sender/text/
+sent_at/current），Icarus 自消息只作上下文；Jev 先回答 can_speak（是否适合说话），再回答
+speak_now（现在就说吗）；两次都是是才唤醒，失败默认沉默。窗口优先来自本地观测；配置
+qq.history 时用 SnowLuma history 回填缺失消息，失败回退。
 
 scheduler 为每 chat 最多创建一个 worker，总体有限并发并轮转。已活跃 chat 只推进其请求，
 新消息继续入库；终态后重新判断积累消息，不逐条打断，也不默认把闲聊递交。无启动恢复。

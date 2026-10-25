@@ -1,9 +1,15 @@
-version: 1
+version: 3
 source: qq
 default:
   decision: ignore
   reason: "没有命中任何叫醒规则"
 rules:
+  - id: unreadable_content
+    description: "图片、表情或单独 @ 没有可处理正文"
+    priority: 300
+    when: {has_readable_text: false}
+    decision: ignore
+    reason: "没有可处理的文字正文"
   - id: private_message
     description: "私聊即为明确寻址"
     priority: 200
@@ -16,15 +22,15 @@ rules:
     when: {mentions_bot: true}
     decision: wake
     reason: "有人直接找 Icarus"
-  - id: genuine_question
-    description: "群里有人在问需要 Icarus 回答的问题，而不是闲聊或通知"
+  - id: speak
+    description: "在这个窗口里，Icarus 现在说话是合适/可以的：有人向 Icarus 提问、求助或等待回应；话题直接涉及 Icarus；群里有开放问题没人接；Icarus 有新的信息可以补充；现在插话不会打断别人。"
     semantic: true
     when: {scope_kind: group}
     decision: wake
-    reason: "有人在等 Icarus 回答"
-  - id: casual_chat
-    description: "群友之间闲聊，不需要 Icarus 参与"
+    reason: "现在适合 Icarus 说话"
+  - id: stay_silent
+    description: "Icarus 现在不适合说话：群友之间在聊与 Icarus 无关的话题；只是表情、图片、寒暄；Icarus 刚说过且没有新信息；现在插话会打断别人；话题不适合 Icarus 参与。"
     semantic: true
     when: {scope_kind: group}
     decision: ignore
-    reason: "普通闲聊"
+    reason: "现在不适合 Icarus 说话"

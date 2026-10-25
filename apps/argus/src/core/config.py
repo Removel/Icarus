@@ -18,11 +18,27 @@ class SettingsModel(BaseModel):
     model_config = ConfigDict(extra='forbid', validate_default=True, hide_input_in_errors=True)
 
 
+class QQHistoryConfig(SettingsModel):
+    enabled: bool = False
+    endpoint: str | None = None
+    token_env: str = 'SNOWLUMA_MCP_TOKEN'
+    timeout_seconds: PositiveSeconds = 2.0
+
+    @model_validator(mode='after')
+    def enabled_endpoint(self):
+        if self.enabled and (not self.endpoint or not self.endpoint.startswith(('http://', 'https://'))):
+            raise ValueError('QQ history endpoint must be an absolute HTTP URL')
+        if self.enabled and not self.token_env:
+            raise ValueError('QQ history token_env is required')
+        return self
+
+
 class QQConfig(SettingsModel):
     enabled: bool = False
     bot_id: str | None = None
     bot_names: tuple[str, ...] = ()
     max_body_bytes: int = Field(default=1048576, gt=0, le=16 * 1024 * 1024)
+    history: QQHistoryConfig = Field(default_factory=QQHistoryConfig)
 
     @model_validator(mode='after')
     def enabled_account(self):
@@ -109,4 +125,6 @@ def load_config(*, settings_path: Path | None = None) -> ArgusConfig:
         raise ValueError('ARGUS_QQ_REPORT_SECRET is required when QQ is enabled')
     if config.qq.enabled and config.jev.enabled and not os.getenv('ARGUS_JEV_API_KEY'):
         raise ValueError('ARGUS_JEV_API_KEY is required when Jev is enabled')
+    if config.qq.enabled and config.qq.history.enabled and not os.getenv(config.qq.history.token_env):
+        raise ValueError(f'{config.qq.history.token_env} is required when QQ history is enabled')
     return config
