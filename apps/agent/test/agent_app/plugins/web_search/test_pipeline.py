@@ -123,6 +123,57 @@ def test_planner_failure_and_malformed_json_fall_back_without_interrupting():
     assert parse_queries('["one","one","two",null]', "q", 5) == ["one", "two"]
 
 
+def test_empty_query_plan_skips_search_fetch_and_progress():
+    async def no_research(question):
+        return '[]'
+    backend = Backend()
+    content, snapshots = execute(backend, no_research)
+    assert content == ""
+    assert backend.calls == []
+    assert snapshots == []
+    assert parse_queries('[]', "你好", 5) == []
+
+
+def test_skipped_search_still_releases_current_time_context():
+    async def run():
+        backend = Backend()
+        async def no_research(question, clock):
+            return '[]'
+        plugin = WebSearchPlugin("web-search", backend=backend, planner=no_research, task_channels=None)
+        events = []
+        async def publish(event):
+            events.append(event)
+        plugin.bind_publisher(publish)
+        await plugin._prepare(UserInputEvent(task_id="skip", prompt="你好", request_options={"web_search": True}))
+        assert backend.calls == []
+        assert len(events) == 1 and isinstance(events[0], ContextContributionEvent)
+        assert "当前时间" in events[0].context_blocks[0].content
+    asyncio.run(run())
+
+
+def test_cancelling_query_decision_does_not_invent_a_search_node():
+    async def run():
+        entered = asyncio.Event()
+        backend = Backend()
+        async def deciding(question, clock):
+            entered.set()
+            await asyncio.Event().wait()
+        plugin = WebSearchPlugin("web-search", backend=backend, planner=deciding, task_channels=None)
+        events = []
+        async def publish(event):
+            events.append(event)
+        plugin.bind_publisher(publish)
+        task = asyncio.create_task(plugin._prepare(UserInputEvent(task_id="decision", prompt="你好",
+            request_options={"web_search": True})))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert backend.calls == []
+        assert events == []
+    asyncio.run(run())
+
+
 def test_url_normalization_and_richer_duplicate_preserve_citation_sources():
     assert normalize_url("https://WWW.Example.com/page/?utm_source=x&ref=y&x=1#top") == "https://example.com/page?x=1"
     assert normalize_url("https://[2001:db8::1]:443/path#top") == "https://[2001:db8::1]/path"

@@ -109,6 +109,10 @@ def parse_queries(text: str, question: str, maximum: int) -> list[str]:
         rows = json.loads(match[0]) if match else None
         if not isinstance(rows, list):
             raise ValueError("Expected array")
+        # An explicit empty plan means the question needs no external research.
+        # Malformed plans still use the existing query fallback.
+        if not rows:
+            return []
         queries = list(dict.fromkeys(q.strip()[:120] for q in rows if isinstance(q, str) and len(q.strip()) > 1))
         return queries[:maximum] if len(queries) >= 2 else fallback_queries(question)
     except (ValueError, TypeError):
@@ -126,6 +130,8 @@ class SearchPipeline:
             queries = parse_queries(text, question, 5 if deep else 2)
         except Exception:
             queries = fallback_queries(question)
+        if not queries:
+            return ""
         batches: list[list[dict]] = []
         total = 0
         failures: list[Exception] = []

@@ -58,9 +58,12 @@ class WebSearchPlugin(BasePlugin):
     async def _prepare(self, event):
         clock = time_context(event.request_options)
         snapshot: dict[str, Any] = {"status": "searching"}
+        reported = False
         async def report(**values):
+            nonlocal reported
             snapshot.update(values)
             await self.publish(WebSearchUpdatedEvent(task_id=event.task_id, **snapshot))
+            reported = True
         content = clock
         enabled = event.request_options.get("web_search") is True
         try:
@@ -76,7 +79,7 @@ class WebSearchPlugin(BasePlugin):
                         deep=event.request_options.get("deep_search") is True, report=report), self.deadline_seconds)
                     content += "\n\n" + context
         except asyncio.CancelledError:
-            if enabled:
+            if enabled and reported:
                 await report(status="stopped", browsing=False, notice="搜索已停止")
             raise
         except Exception:

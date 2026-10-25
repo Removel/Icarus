@@ -11,7 +11,7 @@ from apps.agent.test.agent_app.application.test_session_runtime import make_conf
 from apps.agent.test.agent_app.plugins.web_search.test_pipeline import Backend
 
 
-@pytest.mark.parametrize("mode", ["off", "on", "search-failed", "fetch-failed", "cancel"])
+@pytest.mark.parametrize("mode", ["off", "skip", "on", "search-failed", "fetch-failed", "cancel"])
 def test_search_uses_real_runtime_events_and_never_changes_system_prompt(tmp_path, monkeypatch, mode):
     async def empty_recall(self, query, **kwargs):
         return MemoryRecallResult((), query)
@@ -33,6 +33,8 @@ def test_search_uses_real_runtime_events_and_never_changes_system_prompt(tmp_pat
         async def planner(question, clock):
             if mode == "off":
                 raise AssertionError("No planning when off")
+            if mode == "skip":
+                return '[]'
             return '["alpha","beta"]'
         search.planner = planner
         if mode == "cancel":
@@ -68,7 +70,7 @@ def test_search_uses_real_runtime_events_and_never_changes_system_prompt(tmp_pat
             # Let cancellation cleanup finish publishing the final search snapshot.
             await asyncio.wait_for(asyncio.gather(*tuple(search.work.values()), return_exceptions=True), 1)
             progress = [u for u in updates if u.type == "web_search.updated"]
-            if mode == "off":
+            if mode in {"off", "skip"}:
                 assert search.backend.calls == [] and progress == []
             elif mode == "cancel":
                 assert stopped and captured == []
