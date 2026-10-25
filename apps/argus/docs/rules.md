@@ -124,8 +124,8 @@ true/false 说明；`speak_now` 的时机说明由服务提供。
 `get_group_msg_history` / `get_friend_msg_history` 回填缺失消息，按 `message_id` 去重，
 历史不可用时回退到本地观测。
 
-语义规则也按 priority 排序，但**高优先级不保证 Jev 选中它**。如果需要某条件必定叫醒或忽略，
-应写为机械规则。当前 `can_speak` 和 `speak_now` 的阈值固定为 0.5，没有可配置的置信度阈值。
+语义规则只提供 `can_speak` 的 true/false 描述；`speak_now` 是固定的时机问题。最终由两个
+`noul` 概率和 0.5 阈值决定。如果需要某条件必定叫醒或忽略，应写为机械规则；阈值目前不可配置。
 
 没有语义候选时默认忽略；Jev 关闭记录 `jev_disabled`，调用失败或非法结果记录 `jev_failed`；
 任一问题为否映射为 `stay_silent`，并在 `decision_detail` 保留 `can_speak` 和 `speak_now`
