@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { imageUrl, type ImageResource } from './imageResources';
+import { imageBoxStyle, imagePosition, imageUrl, type ImageResource } from './imageResources';
+import ChatImageViewer from './ChatImageViewer';
 
 function Image({
   resource,
@@ -7,30 +8,43 @@ function Image({
   session,
   onGrowth,
   index,
+  onOpen,
 }: {
   resource: ImageResource;
   workspace: string;
   session: string;
   onGrowth: () => void;
   index: number;
+  onOpen: () => void;
 }) {
   const [failed, setFailed] = useState(false);
+  const [ratio, setRatio] = useState(1);
   const url = imageUrl(resource, workspace, session);
   return failed ? (
     <span className="chat-image-error">图片 {index + 1} 无法加载</span>
   ) : (
-    <a href={url} target="_blank" rel="noreferrer" aria-label={`查看图片 ${index + 1}`}>
+    <button
+      type="button"
+      className="chat-image-tile"
+      onClick={onOpen}
+      aria-label={`查看图片 ${index + 1}`}
+      style={imageBoxStyle(ratio)}
+    >
       <img
         src={url}
         alt={`图片 ${index + 1}`}
         loading="lazy"
-        onLoad={onGrowth}
+        style={{ objectPosition: imagePosition(ratio) }}
+        onLoad={(event) => {
+          setRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight);
+          onGrowth();
+        }}
         onError={() => {
           setFailed(true);
           onGrowth();
         }}
       />
-    </a>
+    </button>
   );
 }
 
@@ -45,8 +59,13 @@ export default function ChatImages({
   session: string;
   onGrowth: () => void;
 }) {
+  const [selected, setSelected] = useState<number>();
+  const images = resources.map((resource, index) => ({
+    src: imageUrl(resource, workspace, session),
+    alt: `图片 ${index + 1}`,
+  }));
   return (
-    <div className="chat-images">
+    <div className="chat-images" data-multiple={resources.length > 1 || undefined}>
       {resources.map((resource, index) => (
         <Image
           key={resource.resource_id}
@@ -55,8 +74,16 @@ export default function ChatImages({
           session={session}
           onGrowth={onGrowth}
           index={index}
+          onOpen={() => setSelected(index)}
         />
       ))}
+      {selected !== undefined && (
+        <ChatImageViewer
+          images={images}
+          initial={selected}
+          onClose={() => setSelected(undefined)}
+        />
+      )}
     </div>
   );
 }

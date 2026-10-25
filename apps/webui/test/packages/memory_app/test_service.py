@@ -136,7 +136,7 @@ def test_missing_agent_context_keeps_draft_without_writing_memory(page):
     page.route_web_socket('**/rpc', route)
     page.get_by_role('button', name='添加记忆', exact=True).click()
     page.get_by_role('textbox', name='记忆内容', exact=True).fill('保留待保存内容')
-    expect(page.get_by_role('alert')).to_contain_text('请更新 Gateway')
+    expect(page.get_by_role('alert')).to_contain_text('请重启 Gateway 服务后重试')
     expect(page.get_by_role('button', name='保存记忆', exact=True)).to_be_disabled()
     assert not any(method == 'POST' for method, _, _, _ in page.mem0_calls)
     expect(page.get_by_role('textbox', name='记忆内容', exact=True)).to_have_value('保留待保存内容')

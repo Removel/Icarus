@@ -43,7 +43,8 @@ export function Select({
   const id = useId();
   const close = useCallback(() => {
     setOpen(false);
-    trigger.current?.focus({ preventScroll: true });
+    if (trigger.current?.getClientRects().length && !trigger.current.closest('[inert]'))
+      trigger.current.focus({ preventScroll: true });
   }, []);
 
   useLayoutEffect(() => {
@@ -79,13 +80,17 @@ export function Select({
         close();
       }
     };
+    // Retained workspaces stay mounted; dismiss their portal on navigation.
+    const onNavigate = () => setOpen(false);
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
+    window.addEventListener('hashchange', onNavigate);
     return () => {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', close);
+      window.removeEventListener('hashchange', onNavigate);
     };
   }, [open, close]);
 

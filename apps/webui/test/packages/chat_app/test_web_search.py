@@ -36,8 +36,11 @@ def test_search_sources_fetch_nodes_citations_and_history(page, width):
     page.get_by_role("button", name="查看来源 2", exact=True).click()
     dialog = page.get_by_role("dialog", name="联网来源", exact=True)
     expect(dialog).to_be_visible()
+    assert dialog.evaluate("node => !node.closest('.md-body')")
     expect(dialog.locator(".web-sources-list li")).to_have_count(18)
     expect(dialog.locator("[data-selected] strong")).to_contain_text("资料标题 1")
+    expect(dialog.locator('.web-sources-list')).to_have_css('list-style-type', 'none')
+    page.screenshot(path=f"test-results/web-sources-{width}.png", full_page=True)
     dialog.get_by_role("button", name="关闭来源").click()
     page.screenshot(path=f"test-results/web-search-{width}.png", full_page=True)
     assert not any("favicon-third-party" in url for url in requests)
@@ -47,6 +50,27 @@ def test_search_sources_fetch_nodes_citations_and_history(page, width):
     expect(page.locator(".search-step")).to_contain_text("搜索到 24 个网页")
     expect(page.locator(".open-pages-list li")).to_have_count(3)
     assert len([r for r in state["records"] if r["type"] == "web_search.updated"]) == 1
+
+
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_citation_scrolls_to_selected_card_and_long_titles_fit(page, theme):
+    page.set_viewport_size({'width': 390, 'height': 844})
+    _, emit = gateway(page)
+    page.evaluate('theme => document.documentElement.dataset.theme = theme', theme)
+    data = snapshot()
+    data['sources'][-1]['title'] = 'very-long-unbroken-title-' * 24
+    emit('user.message', {'text': '查看最后一条来源'})
+    emit('web_search.updated', data)
+    emit('assistant.message', {'step': 1, 'text': '结论见 [18]。'})
+    page.get_by_role('button', name='查看来源 18', exact=True).click()
+    dialog = page.get_by_role('dialog', name='联网来源', exact=True)
+    card = dialog.locator('[data-selected]')
+    expect(card).to_be_in_viewport()
+    assert dialog.locator('.web-sources-list').evaluate('node => node.scrollWidth <= node.clientWidth')
+    page.screenshot(path=f'test-results/web-source-long-{theme}.png')
+    page.keyboard.press('Escape')
+    expect(dialog).not_to_be_visible()
+    expect(page.get_by_role('button', name='查看来源 18', exact=True)).to_be_focused()
 
 
 def test_queries_rotate_and_stop_survives_reload(page):

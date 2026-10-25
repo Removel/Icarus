@@ -1,6 +1,7 @@
 import type { RuntimeUpdate } from './gateway';
 import { parseSearchState, type WebSearchState } from './webSearch';
 import { parseImageResources, type ImageResource } from './imageResources';
+import { taskFailure } from '@icarus/ui';
 
 export type ChatItem = {
   id: string;
@@ -12,6 +13,8 @@ export type ChatItem = {
   resources?: ImageResource[];
   label?: string;
   detail?: string;
+  arguments?: string;
+  toolStatus?: 'running' | 'success' | 'error' | 'stopped';
   final: boolean;
   pending?: boolean;
   live?: boolean;
@@ -59,9 +62,16 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
                 browsing: false,
               },
             }
-          : item.taskId === task && item.pending && item.label
-            ? { ...item, pending: false, label: '引导未应用' }
-            : item,
+          : item.taskId === task && item.kind === 'tool' && !item.final
+            ? {
+                ...item,
+                final: true,
+                toolStatus: 'stopped',
+                text: p.status === 'cancelled' ? '已停止' : '未完成',
+              }
+            : item.taskId === task && item.pending && item.label
+              ? { ...item, pending: false, label: '引导未应用' }
+              : item,
       ),
       tasks: state.tasks.filter((id) => id !== task),
       finished: new Set([...state.finished, task]),
@@ -112,6 +122,8 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
       label: String(p.tool_name ?? '工具'),
       text: completed ? (p.success ? '已完成' : '执行失败') : '执行中',
       final: completed,
+      arguments: completed ? existing?.arguments : JSON.stringify(p.arguments ?? {}, null, 2),
+      toolStatus: completed ? (p.success ? 'success' : 'error') : 'running',
       detail: completed
         ? typeof (p.error ?? p.output_preview) === 'string'
           ? String(p.error ?? p.output_preview)
@@ -123,7 +135,7 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
     item = {
       id: `error:${task}`,
       kind: 'error',
-      text: String(p.message ?? '执行失败'),
+      text: taskFailure(String(p.message ?? '执行失败')),
       final: true,
     };
   } else return state;

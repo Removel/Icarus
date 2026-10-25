@@ -27,6 +27,21 @@ def test_navigation_preserves_changes_and_theme(page, knowledge_service):
     expect(page.get_by_role('complementary', name='Icarus 导航')).to_have_count(0)
 
 
+def test_filter_popup_closes_on_browser_navigation(page):
+    follow_link(page, '对话')
+    follow_link(page, '记忆')
+    select = page.get_by_role('combobox', name='筛选用户', exact=True)
+    select.click()
+    expect(page.get_by_role('listbox')).to_be_visible()
+    page.go_back()
+    expect(page.get_by_role('textbox', name='发送消息')).to_be_visible()
+    expect(page.get_by_role('listbox')).to_have_count(0)
+    expect(page.locator('.icarus-select-mask')).to_have_count(0)
+    page.go_forward()
+    expect(select).to_be_visible()
+    expect(select).to_have_attribute('aria-expanded', 'false')
+
+
 @pytest.mark.parametrize('width', [390, 768, 1280])
 def test_narrow_layout_and_dialog(page, knowledge_service, width):
     page.set_viewport_size({'width': width, 'height': 844})

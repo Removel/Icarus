@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { serviceFailure } from '@icarus/ui';
 import {
   imageTypes,
   imageUrl,
@@ -72,7 +73,7 @@ export default function useImageInputs() {
           items.map((image) => (image.id === id ? { ...image, error: message } : image)),
         );
       };
-      request.onerror = () => fail('上传失败，请重试');
+      request.onerror = () => fail('图片上传无法连接，请检查网络和 Gateway 服务后重试');
       request.ontimeout = () => fail('上传超时，请重试');
       request.onload = () => {
         if (request.status < 200 || request.status >= 300) {
@@ -83,7 +84,7 @@ export default function useImageInputs() {
                 ? '图片格式或内容不受支持'
                 : request.status === 404
                   ? '图片接口不可用，请更新并重启 Gateway'
-                  : '上传失败，请重试',
+                  : serviceFailure('图片上传服务', request.status),
           );
           return;
         }

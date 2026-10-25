@@ -9,6 +9,7 @@ import {
 } from './dswui/Icons';
 import ChatCopyButton from './ChatCopyButton';
 import type { ImageResource } from './imageResources';
+import type { ChatItem } from './updates';
 
 export default function ChatMessageActions({
   text,
@@ -22,7 +23,7 @@ export default function ChatMessageActions({
   user: boolean;
   onCompose: (text: string, resources?: ImageResource[]) => void;
   resources?: ImageResource[];
-  prompt?: string;
+  prompt?: ChatItem;
   disabled: boolean;
 }) {
   const [feedback, setFeedback] = useState<'like' | 'dislike' | null>(null);
@@ -58,9 +59,9 @@ export default function ChatMessageActions({
             className="icon-btn"
             title="再次提问（填入输入框）"
             aria-label="再次提问"
-            disabled={disabled || !prompt}
+            disabled={disabled || !(prompt?.text || prompt?.resources?.length)}
             onClick={() => {
-              if (prompt) onCompose(prompt);
+              if (prompt) onCompose(prompt.text, prompt.resources);
             }}
           >
             <IconRefresh />

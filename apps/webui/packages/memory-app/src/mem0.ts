@@ -1,4 +1,5 @@
 import { memoryDate, type MemoryEntry } from './types';
+import { serviceFailure } from '@icarus/ui';
 
 export const pageSize = 15;
 export type MemoryPage = {
@@ -37,7 +38,7 @@ async function request<T>(
     if (response.status === 401 || response.status === 403)
       throw new Error('无权访问记忆服务，请检查入口登录或服务授权。');
     if (response.status === 404) throw new Error('这条记忆不存在或已被移除。');
-    throw new Error(`记忆服务请求失败（${response.status}），请重试。`);
+    throw new Error(serviceFailure('记忆服务', response.status));
   }
   try {
     return (await response.json()) as T;

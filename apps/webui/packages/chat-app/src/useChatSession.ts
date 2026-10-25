@@ -147,7 +147,7 @@ export default function useChatSession(hash: string) {
       () => {
         if (stale) return;
         setConnected(false);
-        setError('Agent 连接已断开，正在重连并恢复历史。');
+        setError('对话连接已断开，正在重连并恢复历史。若持续无法连接，请检查 Gateway 服务。');
         reconnect = setTimeout(() => setVersion((value) => value + 1), 2000);
       },
     );
@@ -381,6 +381,13 @@ export default function useChatSession(hash: string) {
   }
   async function deleteSessions(ids: string[]) {
     if (!client.current || working.current) return [];
+    if (
+      ids.includes(sessionId) &&
+      (transcript.tasks.length > 0 || draft || attachments.images.length > 0 || queue.length > 0)
+    ) {
+      setDeleteError('当前会话正在执行或有未发送的内容，请处理后再删除。');
+      return [];
+    }
     working.current = true;
     setBusy(true);
     setError('');

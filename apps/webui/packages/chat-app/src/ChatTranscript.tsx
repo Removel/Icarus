@@ -12,7 +12,7 @@ type Row = {
   id: string;
   item: ChatItem;
   entries?: ChatItem[];
-  prompt?: string;
+  prompt?: ChatItem;
   sources?: WebSource[];
 };
 
@@ -50,12 +50,12 @@ export default function ChatTranscript({
     const sources = new Map<string | undefined, WebSource[]>();
     for (const item of transcript.items)
       if (item.search) sources.set(item.taskId, item.search.sources);
-    let prompt: string | undefined;
+    let prompt: ChatItem | undefined;
     let lastUser = -1;
     const responding = new Set<string | undefined>();
     transcript.items.forEach((item, index) => {
       if (item.kind === 'user') {
-        prompt = item.text;
+        prompt = item;
         lastUser = index;
       } else responding.add(item.taskId);
       if (item.kind === 'thinking' || item.kind === 'tool' || item.kind === 'search') {

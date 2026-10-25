@@ -27,6 +27,7 @@ export {
 export { navigate, useHashLocation, useUnsavedChanges } from './navigation';
 export { NavigationDrawer, useNarrowLayout } from './navigation-drawer';
 export { Select } from './Select';
+export { serviceFailure, taskFailure } from './serviceErrors';
 
 let layoutTransition: ViewTransition | undefined;
 

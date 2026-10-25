@@ -196,17 +196,19 @@ def test_card_grid_global_sort_and_return_context(page):
     assert first['height'] < 220
     page.get_by_role("button", name="更新时间：从新到旧", exact=True).click()
     assert entries.all_text_contents() == list(reversed(original))
-    page.set_viewport_size({"width": 1280, "height": 480})
+    # Compact cards fit at 480px; force overflow to exercise scroll restoration.
+    page.set_viewport_size({"width": 1280, "height": 320})
     entry = page.locator(".memory-entry-open").last
     entry.scroll_into_view_if_needed()
-    position = page.locator(".shell-main").evaluate("element => element.scrollTop")
+    scroll = page.locator('.management-body:visible')
+    position = scroll.evaluate("element => element.scrollTop")
     assert position > 0
     entry.click()
     page.get_by_role("dialog").wait_for()
     page.keyboard.press("Escape")
     page.get_by_role("dialog").wait_for(state="hidden")
     expect(entry).to_be_focused()
-    assert abs(page.locator(".shell-main").evaluate("element => element.scrollTop") - position) <= 1
+    assert abs(scroll.evaluate("element => element.scrollTop") - position) <= 1
 
 
 def test_unsaved_escape_and_browser_back_require_confirmation(page):

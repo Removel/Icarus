@@ -193,7 +193,7 @@ def test_missing_and_ambiguous_sources_do_not_create_false_links(page):
 def test_service_failure_is_shown_as_error_not_empty_graph(page):
     page.route('**/api/v1/kbs', lambda route: route.fulfill(status=503, json={"detail": "unavailable"}))
     follow_link(page, '知识库')
-    page.get_by_role('alert').get_by_text('知识服务请求失败（503），请稍后重试。').wait_for()
+    page.get_by_role('alert').get_by_text('知识服务暂不可用（503），请确认服务已启动后重试。').wait_for()
     assert page.get_by_role('button', name='重试加载').is_visible()
     assert page.get_by_text('知识库为空').count() == 0
 

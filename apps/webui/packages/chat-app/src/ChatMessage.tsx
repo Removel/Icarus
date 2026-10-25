@@ -23,7 +23,7 @@ export default memo(function ChatMessage({
   active: boolean;
   loading: boolean;
   disabled: boolean;
-  prompt?: string;
+  prompt?: ChatItem;
   sources?: WebSource[];
   onGrowth: () => void;
   onCompose: (text: string, resources?: ImageResource[]) => void;
@@ -42,7 +42,7 @@ export default memo(function ChatMessage({
         {item.kind === 'user' ? '你' : item.kind === 'error' ? '执行失败' : 'Icarus'}
       </strong>
       {item.kind === 'user' ? (
-        <div className="bubble">
+        <>
           {item.resources?.length ? (
             <ChatImages
               resources={item.resources}
@@ -51,8 +51,8 @@ export default memo(function ChatMessage({
               onGrowth={onGrowth}
             />
           ) : null}
-          {item.text}
-        </div>
+          {item.text && <div className="bubble">{item.text}</div>}
+        </>
       ) : (
         <div className={item.kind === 'error' ? 'error-card' : 'body'}>
           <ChatContent

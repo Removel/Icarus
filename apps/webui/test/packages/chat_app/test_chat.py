@@ -6,7 +6,7 @@ from test.navigation import follow_link, open_sessions, open_settings, delete_se
 
 
 def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None, selected='session-1', generated_title=None, hold_title=False, hold_submit=False, steer_status='accepted', hold_steer=False, disconnect_steer=False, hold_create=False, reject_create=False, disconnect_create=False):
-    state = {'calls': [], 'records': records or [], 'sockets': [], 'disconnect': disconnect,
+    state = {'calls': [], 'records': [dict(item, session_id=item.get('session_id', selected)) for item in records or []], 'sockets': [], 'disconnect': disconnect,
              'sessions': sessions if sessions is not None else [{'session_id': 'session-1', 'first_user_input': '测试会话'}]}
 
     def route(socket):
@@ -122,10 +122,12 @@ def test_stream_tools_cancel_and_history_reload(page):
     emit('tool.started', {'call_id': 'call-1', 'tool_name': 'read', 'arguments': {'path': 'demo'}})
     emit('tool.completed', {'call_id': 'call-1', 'tool_name': 'read', 'success': True, 'output_preview': {'content': '资料内容'}})
     emit('future.event', {'text': '不可显示'})
-    expect(page.locator('.chat-tool summary')).to_have_text('read · 已完成')
+    expect(page.locator('.chat-tool-name')).to_have_text('read')
+    expect(page.locator('.chat-tool-status')).to_have_text('已完成')
     page.locator('.chat-process > summary').click()
     page.locator('.chat-tool summary').click()
-    expect(page.locator('.chat-tool pre')).to_contain_text('资料内容')
+    expect(page.locator('.chat-tool pre').first).to_contain_text('demo')
+    expect(page.locator('.chat-tool pre').last).to_contain_text('资料内容')
     expect(page.locator('.chat-assistant')).to_contain_text('读取完毕')
     assert page.locator('.chat-assistant').count() == 1
     page.get_by_role('button', name='停止执行').click()

@@ -154,13 +154,13 @@ export default function MemoryApp({
 
   function openDetail(item: MemoryEntry, trigger: HTMLButtonElement) {
     entryTrigger.current = trigger;
-    listScroll.current = document.querySelector('.shell-main')?.scrollTop ?? 0;
+    listScroll.current = boardRef.current?.closest('.management-body')?.scrollTop ?? 0;
     go(tab, item.id);
   }
 
   function restoreList() {
     if (!window.location.hash.startsWith('#/memory/')) return;
-    const scroll = document.querySelector('.shell-main');
+    const scroll = boardRef.current?.closest('.management-body');
     if (scroll) scroll.scrollTop = listScroll.current;
     const trigger = entryTrigger.current;
     if (trigger?.isConnected) trigger.focus({ preventScroll: true });

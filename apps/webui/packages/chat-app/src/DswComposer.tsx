@@ -4,6 +4,7 @@ import type useChatSession from './useChatSession';
 import { IconArrowUp, IconPaperclip, IconPencil, IconStop, IconTrash } from './dswui/Icons';
 import { AnimatedToggleIcon } from './dswui/AnimatedToggleIcon';
 import { imageTypes } from './imageResources';
+import ChatImageInputs from './ChatImageInputs';
 
 export default function DswComposer({
   chat,
@@ -123,42 +124,12 @@ export default function DswComposer({
             </div>
           )}
           {chat.attachments.images.length > 0 && (
-            <div className="chat-image-inputs" aria-label="待发送图片">
-              {chat.attachments.images.map((image, index) => (
-                <div className="chat-image-input" key={image.id}>
-                  <img src={image.preview} alt={`待发送图片 ${index + 1}`} />
-                  <span className="chat-image-name" title={image.name}>
-                    {image.name}
-                  </span>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    disabled={attachmentDisabled}
-                    aria-label={`移除图片 ${index + 1}`}
-                    onClick={() => chat.attachments.remove(image.id)}
-                  >
-                    <IconTrash />
-                  </button>
-                  {image.error ? (
-                    <div className="chat-image-upload-error">
-                      <span role="alert">{image.error}</span>
-                      <button
-                        type="button"
-                        className="mini-btn"
-                        disabled={attachmentDisabled}
-                        onClick={() => chat.attachments.retry(image.id)}
-                      >
-                        重试上传
-                      </button>
-                    </div>
-                  ) : (
-                    <span role="status">
-                      {image.resource ? '已上传' : `上传中 ${image.progress}%`}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
+            <ChatImageInputs
+              images={chat.attachments.images}
+              disabled={attachmentDisabled}
+              remove={chat.attachments.remove}
+              retry={chat.attachments.retry}
+            />
           )}
           {chat.attachments.error && (
             <div className="chat-image-upload-error" role="alert">
@@ -212,20 +183,11 @@ export default function DswComposer({
           <div className="composer-bar">
             <button
               type="button"
-              className="pill"
-              disabled
-              title="思考能力由 Icarus 服务端配置，当前接口不提供前端开关"
-            >
-              <AnimatedToggleIcon kind="thinking" enabled={false} />
-              深度思考
-            </button>
-            <button
-              type="button"
               className={chat.webSearch ? 'pill on' : 'pill'}
               aria-pressed={chat.webSearch}
               disabled={unknown}
               onClick={() => chat.setWebSearch(!chat.webSearch)}
-              title="联网搜索，发送时生效；检索失败仍继续回答"
+              title="允许按需联网：需要最新资料、查证或明确要求搜索时才检索；失败仍继续回答"
             >
               <AnimatedToggleIcon kind="search" enabled={chat.webSearch} />
               联网搜索

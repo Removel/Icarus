@@ -4,6 +4,7 @@ import ThinkingWave from './ThinkingWave';
 import { IconThinking, IconChevronDown } from './dswui/Icons';
 import type { ChatItem } from './updates';
 import ChatSearch from './ChatSearch';
+import ChatTool from './ChatTool';
 
 export default function ChatProcess({
   entries,
@@ -32,9 +33,9 @@ export default function ChatProcess({
     followedTop.current = node.scrollTop;
   }, []);
   const grow = useCallback(() => {
-    scrollLatest();
+    if (running && active) scrollLatest();
     onGrowth();
-  }, [scrollLatest, onGrowth]);
+  }, [scrollLatest, onGrowth, running, active]);
   useLayoutEffect(() => {
     if (active) grow();
   }, [entries, active, grow]);
@@ -45,7 +46,8 @@ export default function ChatProcess({
       onToggle={(event) => {
         if (event.target !== event.currentTarget) return;
         followedTop.current = viewport.current?.scrollTop ?? 0;
-        scrollLatest();
+        if (running) scrollLatest();
+        else if (viewport.current) viewport.current.scrollTop = 0;
       }}
     >
       <summary className="think-head">
@@ -93,10 +95,7 @@ export default function ChatProcess({
               onGrowth={grow}
             />
           ) : (
-            <details className={`chat-message chat-${entry.kind}`} key={entry.id} onToggle={grow}>
-              <summary>{`${entry.label} · ${entry.text}`}</summary>
-              <pre>{entry.detail}</pre>
-            </details>
+            <ChatTool key={entry.id} entry={entry} onGrowth={onGrowth} />
           ),
         )}
       </div>

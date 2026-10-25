@@ -147,7 +147,7 @@ def test_dswui_fields_navigation_and_settings_dropdown(page, theme):
     page.get_by_role('menuitem', name='重命名', exact=True).click()
     rename = page.get_by_role('textbox', name='会话标题', exact=True)
     assert rename.evaluate('el => getComputedStyle(el).outlineStyle') == 'none'
-    assert rename.bounding_box()['height'] == 28
+    assert rename.bounding_box()['height'] == 40
     assert rename.evaluate('el => getComputedStyle(el).color') == page.locator('.chat-title-edit').evaluate('el => getComputedStyle(el).color')
     page.screenshot(path=f'test-results/controls-rename-{theme}.png')
     rename.press('Escape')

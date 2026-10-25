@@ -429,6 +429,7 @@ export default function DswSidebar({
                     session.session_id === chat.sessionId &&
                     (chat.transcript.tasks.length > 0 ||
                       Boolean(chat.draft) ||
+                      chat.attachments.images.length > 0 ||
                       chat.queue.length > 0),
                 )
               }
@@ -581,6 +582,7 @@ export default function DswSidebar({
                     (menu === chat.sessionId &&
                       (chat.transcript.tasks.length > 0 ||
                         Boolean(chat.draft) ||
+                        chat.attachments.images.length > 0 ||
                         chat.queue.length > 0))
                   }
                   aria-label={`删除会话：${titleOf(menuSession)}`}

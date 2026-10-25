@@ -1,0 +1,242 @@
+/* Composer thumbnails are always 64px squares; messages use 240px single / 64px group. */
+.dswui .chat-images,
+.dswui .chat-image-inputs {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: 100%;
+  white-space: normal;
+}
+.dswui .chat-images {
+  margin-bottom: 8px;
+  justify-content: flex-end;
+  max-width: 80%;
+}
+.dswui .chat-image-inputs {
+  padding: 12px 16px 0;
+}
+.dswui .chat-image-errors {
+  flex-basis: 100%;
+  min-width: 0;
+}
+.dswui .chat-image-input,
+.dswui .chat-image-tile {
+  position: relative;
+  flex: none;
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  padding: 0;
+  border: 0;
+  border-radius: 16px;
+  background: var(--bg-layer-3);
+  overflow: hidden;
+  line-height: 0;
+}
+.dswui .chat-image-tile {
+  cursor: pointer;
+}
+.dswui .chat-image-input {
+  width: 64px;
+  height: 64px;
+}
+.dswui .chat-image-input > .chat-image-tile {
+  width: 100%;
+  height: 100%;
+}
+.dswui .chat-image-tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border-l2);
+  border-radius: inherit;
+  pointer-events: none;
+}
+.dswui .chat-image-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.dswui [data-multiple] > .chat-image-tile {
+  width: 64px !important;
+  height: 64px;
+  aspect-ratio: 1 !important;
+}
+.dswui [data-multiple] .chat-image-tile img {
+  object-fit: cover;
+}
+.dswui .chat-image-remove {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #fff5;
+  border-radius: 50%;
+  color: #fff;
+  background: #16181cb3;
+  opacity: 0;
+  transition:
+    opacity 220ms ease-in-out,
+    background-color 140ms;
+}
+.dswui .chat-image-input:hover .chat-image-remove,
+.dswui .chat-image-input:focus-within .chat-image-remove {
+  opacity: 1;
+}
+.dswui .chat-image-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: #0006;
+  color: white;
+  pointer-events: none;
+}
+.dswui .chat-image-retry {
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  padding: 4px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  pointer-events: auto;
+}
+.dswui .chat-image-error {
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--label-secondary);
+}
+.dswui .chat-image-progress {
+  filter: drop-shadow(0 1px 2px #0005);
+}
+.dswui .chat-image-viewer-host .overlay {
+  padding: 0;
+  background: #0b0c10f0;
+  animation: none;
+}
+.dswui .chat-image-viewer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: #fff;
+  user-select: none;
+}
+.dswui .chat-image-viewer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: #ffffff12;
+  font-size: 13px;
+}
+.dswui .chat-image-viewer button:hover {
+  background: #ffffff26;
+}
+.dswui .chat-image-viewer button:disabled {
+  opacity: 0.3;
+}
+.dswui .chat-image-viewer-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px;
+  z-index: 1;
+}
+.dswui .chat-image-viewer-toolbar > span {
+  margin-right: auto;
+  color: #ffffffb3;
+  font-size: 13px;
+}
+.dswui .chat-image-viewer-stage {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  min-width: 0;
+  padding: 24px 56px;
+  overflow: hidden;
+  touch-action: none;
+}
+.dswui .chat-image-viewer-stage > img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: pointer;
+  -webkit-user-drag: none;
+}
+.dswui .chat-image-viewer-stage[data-zoomed] {
+  cursor: grab;
+}
+.dswui .chat-image-viewer-stage[data-zoomed] > img {
+  cursor: grab;
+}
+.dswui .chat-image-viewer-stage[data-zoomed]:active {
+  cursor: grabbing;
+}
+.dswui .chat-image-previous,
+.dswui .chat-image-next {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+}
+.dswui .chat-image-previous {
+  left: 12px;
+}
+.dswui .chat-image-next {
+  right: 12px;
+}
+.dswui .chat-image-viewer-thumbs {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  overflow-x: auto;
+}
+.dswui .chat-image-viewer-thumbs button {
+  flex: none;
+  padding: 2px;
+  border: 2px solid transparent;
+}
+.dswui .chat-image-viewer-thumbs button[aria-pressed='true'] {
+  border-color: #fff;
+}
+.dswui .chat-image-viewer-thumbs img {
+  display: block;
+  width: 44px;
+  height: 44px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+@media (hover: none) {
+  .dswui .chat-image-remove {
+    opacity: 1;
+  }
+}
+@media (max-width: 600px) {
+  .dswui .chat-image-viewer-stage {
+    padding: 12px 20px;
+  }
+}
