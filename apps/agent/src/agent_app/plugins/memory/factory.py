@@ -79,7 +79,7 @@ def create_plugin(
         )
         plugin.region_definition = RegionDefinition(
             region="memory", owner_plugin_id=plugin_id, lifetime="input",
-            required_for_start=True, auto_expose=True,
+            required_for_start=True, auto_expose=False,
             allowed_statuses=("idle", "recalling"), initial_status="idle",
             max_summary_chars=500, max_refs=top_k, max_data_chars=max_context_chars,
         )

@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from agent_app.plugins.mcp.models import (
     MCPCallResult,
     MCPContent,
@@ -60,11 +62,11 @@ class ManagerStub:
         )
 
 
-def make_tools():
+def make_tools(**options):
     manager = ManagerStub()
     plugin = MCPPlugin("mcp", manager=manager, bridge=BridgeStub())
     asyncio.run(plugin.start())
-    return manager, {tool.definition.name: tool for tool in create_mcp_tools(plugin)}
+    return manager, {tool.definition.name: tool for tool in create_mcp_tools(plugin, **options)}
 
 
 def test_mcp_tools固定名称和最小schema():
@@ -100,6 +102,21 @@ def test_search只要求query并允许多个结果():
         ("search", {"query": "create", "server": None, "limit": 5})
     ]
     assert len(result.output["matches"]) == 1
+
+
+@pytest.mark.parametrize("default_page_size", [50, 17])
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_catalog_schema默认与实际调用一致(default_page_size, asynchronous):
+    manager, tools = make_tools(default_page_size=default_page_size)
+    for name, arguments, field, expected in (
+        ("mcp_tool_list", {}, "page_size", default_page_size),
+        ("mcp_tool_search", {"query": "create"}, "limit", 5),
+    ):
+        tool = tools[name]
+        assert tool.definition.input_schema["properties"][field]["default"] == expected
+        result = asyncio.run(tool.ainvoke(arguments)) if asynchronous else tool.invoke(arguments)
+        assert result.success is True
+        assert manager.calls[-1][1][field] == expected
 
 
 def test_execute原样传递目标工具参数():

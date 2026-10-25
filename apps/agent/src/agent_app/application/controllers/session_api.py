@@ -98,6 +98,7 @@ class SessionApi:
         self._session_factory = session_factory
         self._session_store = session_store
         self._handoff_client = handoff_client
+        self._argus_availability_signals: dict[tuple[str, str], asyncio.Event] = {}
         self.scoped_executions: ScopedExecutionController | None = None
         self._data_dir = (
             Path(data_dir).expanduser().resolve()
@@ -121,7 +122,8 @@ class SessionApi:
         self.resources = ResourceImporter(path_resolver_getter=lambda: self._path_resolver)
         self.updates = UpdatePipeline(begin_unload_locked=self._begin_unload_locked, clock=self._clock, entries=self._entries, has_nonterminal_tasks=self._has_nonterminal_tasks, lifecycle_update=self._lifecycle_update, remember_task=self._remember_task, store=self._store, update_queue=self._update_queue, updates=self._updates, logger=self.logger)
         self.history = HistoryProjector(clock=self._clock, entry=self._entry, require_accepting=self._require_accepting, require_not_discarding=self._require_not_discarding, store=self._store, updates=self._updates)
-        self.reaper = SessionReaper(begin_unload_locked=self._begin_unload_locked, clock=self._clock, entries=self._entries, entries_lock=self._entries_lock, entry=self._entry, has_active_agent_work=self._has_active_agent_work, require_accepting=self._require_accepting, require_not_discarding=self._require_not_discarding, status=self._status, store=self._store, cleanup_interval=self.cleanup_interval, idle_timeout=self.idle_timeout, logger=self.logger)
+        self.reaper = SessionReaper(begin_unload_locked=self._begin_unload_locked, clock=self._clock, entries=self._entries, entries_lock=self._entries_lock, entry=self._entry, has_active_agent_work=self._has_active_agent_work, require_accepting=self._require_accepting, require_not_discarding=self._require_not_discarding, status=self._status, store=self._store, cleanup_interval=self.cleanup_interval, idle_timeout=self.idle_timeout, logger=self.logger, argus_settings=lambda: self._config_loader().argus,
+            session_pending=self._argus_pending)
 
     @property
     def update_queue_capacity(self) -> int:
@@ -145,7 +147,7 @@ class SessionApi:
             self._updates.configure_capacity(self._config_loader().runtime.update_queue_capacity)
         self._path_resolver = DataPathResolver(self._data_dir)
         if self._session_store is None:
-            self._session_store = SessionStore(self._data_dir)
+            self._session_store = SessionStore(self._data_dir, clock=self._clock)
         await self._session_store.start()
         self._started = True
         self._stopping = False
@@ -175,7 +177,7 @@ class SessionApi:
             self._store(), client, workspace=config.argus.workspace,
             submit_reserved=self._submit_reserved_task, flush_updates=self.updates.flush,
             max_active_executions=config.argus.max_active_executions, timeout_seconds=config.argus.timeout_seconds,
-            stop_evidence=self._scoped_stop_evidence, unload_session=self._unload_scoped_session,
+            stop_evidence=self._scoped_stop_evidence,
         )
 
     def subscribe_updates(self) -> RuntimeUpdateSubscription:
@@ -214,25 +216,33 @@ class SessionApi:
             raise RuntimeError('Durable terminal evidence unavailable')
         return terminal.payload['status']
 
-    async def _unload_scoped_session(self, identity):
-        entry = self._entries.get(_key(identity))
-        if entry is None or entry.runtime is None:
-            return
-        async with entry.mutation_lock:
-            task = entry.unload_task or self._begin_unload_locked(entry, 'argus_release')
-        await asyncio.shield(task)
-
     def _background_facilities(self, identity):
         async def append_record(**values):
             return await self._store().append_internal(identity, **values)
-        return {'client': self._handoff_client, 'append_record': append_record}
+        async def load_binding(task_id):
+            binding = await self._store().load_binding(identity, task_id)
+            remember = getattr(self._handoff_client, 'remember_version', None)
+            if remember is not None:
+                remember(binding['wake_id'], binding['protocol_version'])
+            return binding
+        async def load_records(update_types):
+            return await self._store().read_internal(identity, update_types=set(update_types))
+        signal = self._argus_availability_signals.setdefault(_key(identity), asyncio.Event())
+        return {'client': self._handoff_client, 'append_record': append_record,
+            'load_binding': load_binding, 'load_records': load_records, 'availability_signal': signal}
 
     async def scoped_submit(self, request):
         self._require_accepting()
         if self.scoped_executions is None:
             from agent_app.application.models.scoped_execution import ScopedExecutionError
             raise ScopedExecutionError("unavailable")
-        return await self.scoped_executions.submit(request)
+        from agent_app.argus_protocol import HandoffError
+        from agent_app.application.models.scoped_execution import ScopedExecutionError
+        try:
+            return await self.scoped_executions.submit(request)
+        except HandoffError as error:
+            raise ScopedExecutionError(error.code if error.code in {'not_found', 'scope_mismatch', 'conflict', 'execution_closed'}
+                else 'unavailable') from None
 
     async def scoped_status(self, *, wake_id=None, scope=None):
         self._require_accepting()
@@ -252,29 +262,97 @@ class SessionApi:
         if self.scoped_executions is None:
             from agent_app.application.models.scoped_execution import ScopedExecutionError
             raise ScopedExecutionError("unavailable")
-        return await self.scoped_executions.release(wake_id)
+        from agent_app.argus_protocol import HandoffError
+        from agent_app.application.models.scoped_execution import ScopedExecutionError
+        try:
+            return await self.scoped_executions.release(wake_id)
+        except HandoffError as error:
+            raise ScopedExecutionError(error.code if error.code in {'not_found', 'scope_mismatch', 'conflict', 'execution_closed'}
+                else 'unavailable') from None
+
+    async def scoped_sessions(self, scope, *, cursor=None, limit=10) -> dict:
+        """Trusted candidate projection; remote errors never mean no pending work."""
+        self._require_accepting()
+        from agent_app.argus_protocol import Scope, HandoffError
+        from agent_app.application.models.scoped_execution import ScopedExecutionError
+        scope = scope if isinstance(scope, Scope) else Scope.model_validate(scope)
+        page = await self._store().list_argus_sessions(scope, cursor=cursor, limit=limit)
+        pending = getattr(self._handoff_client, 'session_pending', None)
+        if pending is None:
+            raise ScopedExecutionError('unavailable')
+        result = []
+        for item in page['items']:
+            try:
+                state = await pending(item['session_id'], scope)
+            except HandoffError:
+                raise ScopedExecutionError('unavailable') from None
+            from agent_app.application.services.argus_pending import pending_state
+            try:
+                count, related_at = pending_state(state, now=self._clock())
+                local_at = datetime.fromisoformat(item['last_related_at'])
+                if local_at.tzinfo is None:
+                    raise ValueError('Invalid local activity')
+            except (HandoffError, ValueError, TypeError):
+                raise ScopedExecutionError('unavailable') from None
+            if related_at is not None and related_at > local_at:
+                item = {**item, 'last_related_at': related_at.isoformat()}
+            result.append({**item, 'has_work': item['has_work'] or count > 0})
+        return {**page, 'items': result}
+
+    async def scoped_notify(self, *, wake_id: str, session_id: str) -> dict:
+        """Coalesce availability only: never load, submit, steer, or restart."""
+        self._require_accepting()
+        from agent_app.application.models.scoped_execution import ScopedExecutionError
+        record = await self._store().scoped_record(wake_id)
+        if record is None or record.identity.session_id != session_id or record.properties is None:
+            raise ScopedExecutionError('not_found')
+        properties = record.properties
+        stable = await self._store().get_session(record.identity)
+        if (stable is None or (stable.properties or {}).get('owner') != 'argus'
+                or (stable.properties or {}).get('scope') != properties['scope']
+                or (stable.properties or {}).get('retired_at') is not None):
+            raise ScopedExecutionError('not_found')
+        from agent_app.argus_protocol import Scope
+        owner = await self._store().get_scoped(scope=Scope.model_validate(properties['scope']))
+        if owner is not None and owner.session_id != session_id:
+            raise ScopedExecutionError('scope_busy', owner=owner)
+        signal = self._background_facilities(record.identity)['availability_signal']
+        merged = signal.is_set()
+        signal.set()
+        return {'accepted': True, 'merged': merged}
 
     async def _submit_reserved_task(self, identity, task_id, prompt, *, execution_id):
         entry = await self._entry(identity)
-        if entry.context.metadata.get("execution_id") != execution_id:
+        binding = await self._store().load_binding(identity, task_id)
+        if binding['execution_id'] != execution_id:
             raise ValueError("Reserved execution identity does not match")
-        async with entry.mutation_lock:
-            load = self._begin_load_locked(entry) if entry.runtime is None else None
-        if load is not None:
-            await asyncio.shield(load)
-        async with entry.mutation_lock:
-            assert entry.runtime is not None
-            await entry.runtime.submit(prompt, task_id=task_id)
-            now = self._clock()
-            self._remember_task(entry, TaskStatus(
-                workspace_key=identity.workspace_key, session_id=identity.session_id,
-                task_id=task_id, lifecycle="accepted", queue_position=0, updated_at=now,
-            ))
-            await self._store().append_update(identity, RuntimeUpdate(
-                workspace_key=identity.workspace_key, session_id=identity.session_id, task_id=task_id,
-                type="user.message", payload={"text": prompt, "resources": []}, occurred_at=now,
-            ))
-            return entry.runtime
+        while True:
+            wait_for: asyncio.Task | None = None
+            async with entry.mutation_lock:
+                self._require_accepting()
+                self._require_not_discarding(entry)
+                self._require_persistence_available(entry)
+                if entry.unload_task is not None:
+                    wait_for = entry.unload_task
+                elif entry.runtime is None:
+                    wait_for = entry.load_task or self._begin_load_locked(entry)
+                else:
+                    # Keep runtime selection and admission under the same lock:
+                    # a lifecycle unload cannot start between them.
+                    await entry.runtime.submit(prompt, task_id=task_id)
+                    now = self._clock()
+                    entry.last_task_activity_at = now
+                    self._remember_task(entry, TaskStatus(
+                        workspace_key=identity.workspace_key, session_id=identity.session_id,
+                        task_id=task_id, lifecycle="accepted", queue_position=0, updated_at=now,
+                    ))
+                    await self._store().append_update(identity, RuntimeUpdate(
+                        workspace_key=identity.workspace_key, session_id=identity.session_id, task_id=task_id,
+                        type="user.message", payload={"text": prompt, "resources": []}, occurred_at=now,
+                    ))
+                    return entry.runtime
+            assert wait_for is not None
+            await asyncio.shield(wait_for)
 
     async def ensure_public_session(self, *, workspace_key: str, session_id: str) -> None:
         kind = await self._store().session_kind(workspace_key=workspace_key, session_id=session_id)
@@ -711,6 +789,16 @@ class SessionApi:
 
     async def cleanup_idle_sessions(self) -> None:
         return await self.reaper.cleanup_idle_sessions()
+
+    async def _argus_pending(self, session_id, scope):
+        from agent_app.argus_protocol import HandoffError
+        pending = getattr(self._handoff_client, 'session_pending', None)
+        if pending is None:
+            raise HandoffError('unavailable', retryable=True)
+        return await pending(session_id, scope)
+
+    async def cleanup_argus_sessions(self) -> None:
+        return await self.reaper.cleanup_argus_sessions()
 
     async def _cleanup_loop(self) -> None:
         return await self.reaper._cleanup_loop()

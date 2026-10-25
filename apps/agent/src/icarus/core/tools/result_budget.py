@@ -16,6 +16,8 @@ from icarus.core.tools.types import ToolExecutionResult
 
 TokenCounter = Callable[[str], int]
 DEFAULT_OMISSION_MARKER = "complete Tool Result was not saved"
+# A short failure view is safe only after its original diagnostics are saved.
+FAILED_RESULT_PREVIEW_TOKENS = 1000
 
 
 def conservative_token_count(text: str) -> int:
@@ -94,41 +96,55 @@ def render_tool_result(
     counter = token_counter_with_fallback(counter)
     original_text = serialize_tool_result(result)
     original_tokens = counter(original_text)
-    if original_tokens <= max_tokens:
-        return replace(
-            result,
-            metadata={
-                **result.metadata,
-                "original_tokens": original_tokens,
-                "visible_tokens": original_tokens,
-                "result_truncated": False,
-            },
-        )
-    target = max(1, min(preview_tokens, max_tokens))
-    low, high = 0, target
-    best: ToolExecutionResult | None = None
-    while low <= high:
-        content_budget = (low + high) // 2
-        preview = _preview_result(
-            result, content_budget, counter, stored, head_ratio
-        )
-        visible = counter(serialize_tool_result(preview))
-        if visible <= max_tokens:
-            best = replace(
-                preview,
+    short_failure = (
+        not result.success
+        and stored is not None
+        and stored.complete
+        and original_tokens > FAILED_RESULT_PREVIEW_TOKENS
+    )
+    actual_max_tokens = max_tokens
+    if short_failure:
+        max_tokens = min(max_tokens, FAILED_RESULT_PREVIEW_TOKENS)
+    for render_cap in dict.fromkeys((max_tokens, actual_max_tokens)):
+        if original_tokens <= render_cap:
+            return replace(
+                result,
                 metadata={
-                    **preview.metadata,
+                    **result.metadata,
                     "original_tokens": original_tokens,
-                    "visible_tokens": visible,
-                    "result_truncated": True,
+                    "visible_tokens": original_tokens,
+                    "result_truncated": False,
                     **_stored_metadata(stored),
                 },
             )
-            low = content_budget + 1
-        else:
-            high = content_budget - 1
-    if best is not None:
-        return best
+        target = max(1, min(preview_tokens, render_cap))
+        low, high = 0, target
+        best: ToolExecutionResult | None = None
+        while low <= high:
+            content_budget = (low + high) // 2
+            preview = _preview_result(
+                result, content_budget, counter, stored, head_ratio
+            )
+            visible = counter(serialize_tool_result(preview))
+            if visible <= render_cap:
+                best = replace(
+                    preview,
+                    metadata={
+                        **preview.metadata,
+                        "original_tokens": original_tokens,
+                        "visible_tokens": visible,
+                        "result_truncated": True,
+                        **_stored_metadata(stored),
+                    },
+                )
+                low = content_budget + 1
+            else:
+                high = content_budget - 1
+        if best is not None:
+            return best
+        # Preserved image/envelope overhead can exceed the preferred target.
+        # Retry against the actual allocation before degrading a fitting result.
+
     minimal = ToolExecutionResult(
         success=result.success,
         output=_minimal_value(result.output, stored),
@@ -148,12 +164,14 @@ def render_tool_result(
         metadata={
             **minimal.metadata,
             "visible_tokens": visible,
-            "context_budget_exhausted": visible > max_tokens,
+            "context_budget_exhausted": visible > actual_max_tokens,
         },
     )
 
 
 def _preview_result(result, budget, counter, stored, head_ratio):
+    if not result.success and stored is not None and stored.complete:
+        return _preview_failure_result(result, budget, counter, stored, head_ratio)
     output_budget = max(0, budget * 4 // 5)
     error_budget = max(0, budget - output_budget)
     return ToolExecutionResult(
@@ -171,6 +189,73 @@ def _preview_result(result, budget, counter, stored, head_ratio):
         images=result.images,
         metadata=result.metadata,
     )
+
+
+def _preview_failure_result(result, budget, counter, stored, head_ratio):
+    # A generic diagnostic tail, not a traceback/domain-specific parser. Its raw
+    # source is already saved. One shared marker avoids repeating the file path.
+    diagnostic = result.error
+    error_budget = max(0, budget // 3) if diagnostic else 0
+    if diagnostic and counter(_json(diagnostic)) > error_budget:
+        diagnostic = diagnostic.rstrip().rsplit("\n", 1)[-1]
+    error = (
+        _clip_failure_text(diagnostic, error_budget, counter, 0.25)
+        if diagnostic else None
+    )
+    output_budget = max(0, budget - error_budget)
+    if isinstance(result.output, dict):
+        values = {
+            key: value for key, value in result.output.items()
+            if not (key == "stderr" and result.error and value == result.error)
+        }
+        # Reserve the basic execution evidence before optional fields, regardless
+        # of their insertion order. Every candidate is measured as a whole map.
+        ordered_keys = [key for key in ("exit_code", "stdout") if key in values]
+        ordered_keys.extend(key for key in values if key not in ordered_keys)
+        output = {_omitted_key([result.output]): _marker_payload(stored)}
+        for key in ordered_keys:
+            value = values[key]
+            candidate = {**output, key: value}
+            if counter(_json(candidate)) > output_budget:
+                available = max(
+                    0,
+                    output_budget - counter(_json({**output, key: ""})) + counter(_json("")),
+                )
+                value = (
+                    _clip_failure_text(value, available, counter, head_ratio)
+                    if isinstance(value, str)
+                    else _preview_value(value, available, counter, stored, head_ratio)
+                )
+                candidate = {**output, key: value}
+            if counter(_json(candidate)) <= output_budget:
+                output = candidate
+    else:
+        output = _preview_value(result.output, output_budget, counter, stored, head_ratio)
+        if output == result.output:
+            output = {"value": output, "_icarus_omitted": _marker_payload(stored)}
+    return ToolExecutionResult(
+        success=False, output=output, error=error,
+        images=result.images, metadata=result.metadata,
+    )
+
+
+def _clip_failure_text(value, budget, counter, head_ratio):
+    """Clip evidence under the shared saved-result omission marker."""
+    if counter(_json(value)) <= budget:
+        return value
+    low, high = 0, len(value)
+    best = "…"
+    while low <= high:
+        kept = (low + high) // 2
+        head = int(kept * head_ratio)
+        tail = kept - head
+        candidate = value[:head] + "…" + (value[-tail:] if tail else "")
+        if counter(_json(candidate)) <= budget:
+            best = candidate
+            low = kept + 1
+        else:
+            high = kept - 1
+    return best
 
 
 def _preview_value(
@@ -414,7 +499,7 @@ def _marker_payload(stored, *, omission_marker=None, **counts):
             "complete": False,
             "note": "Tool Result file is incomplete",
         }
-    return {**counts, **reference}
+    return {"truncated": True, **counts, **reference}
 
 
 def _marker_text(stored, *, omitted_tokens=None, omission_marker=None):
@@ -424,16 +509,16 @@ def _marker_text(stored, *, omitted_tokens=None, omission_marker=None):
         else ""
     )
     if omission_marker is not None:
-        return f"\n... content omitted{count}; {omission_marker} ...\n"
+        return f"\n... content omitted (truncated){count}; {omission_marker} ...\n"
     if stored and stored.complete:
-        return f"\n... content omitted{count}; full Tool Result: {stored.path} ...\n"
+        return f"\n... content omitted (truncated){count}; full Tool Result: {stored.path} ...\n"
     if stored is not None:
         return (
-            f"\n... content omitted{count}; incomplete Tool Result file: "
+            f"\n... content omitted (truncated){count}; incomplete Tool Result file: "
             f"{stored.path} ...\n"
         )
     return (
-        f"\n... content omitted{count}; "
+        f"\n... content omitted (truncated){count}; "
         "complete Tool Result was not saved ...\n"
     )
 

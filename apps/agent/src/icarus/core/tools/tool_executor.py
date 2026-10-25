@@ -20,6 +20,7 @@ from icarus.core.tools.execution_policy import (
     ToolExecutionPolicy,
 )
 from icarus.core.tools.result_budget import (
+    FAILED_RESULT_PREVIEW_TOKENS,
     TokenCounter,
     conservative_token_count,
     render_tool_result,
@@ -300,7 +301,10 @@ class ToolExecutor(BaseToolExecutor):
             result = results_by_id[call.id]
             budget = allocations[call.id]
             stored = None
-            if sizes[call.id] > budget:
+            if sizes[call.id] > budget or (
+                not result.success
+                and sizes[call.id] > FAILED_RESULT_PREVIEW_TOKENS
+            ):
                 stored_result = ToolExecutionResult(
                     result.success,
                     result.output,

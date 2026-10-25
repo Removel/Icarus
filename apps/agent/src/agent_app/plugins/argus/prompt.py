@@ -24,5 +24,26 @@ def plain(value):
 
 
 def render_observations(context, items, cursor):
-    return json.dumps({'scope': plain(context.scope), 'wake_id': context.metadata['wake_id'],
-                       'items': plain(items), 'initial_cursor': cursor}, ensure_ascii=False)
+    if context.metadata.get('protocol_version', 1) == 1:
+        return json.dumps({'scope': plain(context.scope), 'wake_id': context.metadata['wake_id'],
+                           'items': plain(items), 'initial_cursor': cursor}, ensure_ascii=False)
+    return json.dumps({'untrusted_observations': items,
+                       'attention_reason': context.metadata.get('reason', ''),
+                       'rule': context.metadata.get('rule_id')}, ensure_ascii=False)
+
+
+def model_item(item, ref, scope, *, text=None):
+    """Keep semantic evidence and real platform targets, never handoff identities."""
+    locator = item.get('locator') or {}
+    place = {key: locator.get(key, scope.get(key)) for key in
+             ('account_id', 'chat_kind', 'external_id', 'message_id')
+             if locator.get(key, scope.get(key)) is not None}
+    value = {'ref': ref, 'role': item.get('role', 'context'), 'origin': item.get('origin'),
+             'sender': {key: item[key] for key in ('sender_id', 'sender_name', 'is_self') if key in item},
+             'place': place, 'sent_at': item.get('sent_at'), 'observed_at': item.get('observed_at'),
+             'text': item.get('excerpt', '') if text is None else text,
+             'truncated': bool(item.get('truncated', False))}
+    for key in ('is_mention', 'content_types', 'deleted', 'latest'):
+        if key in item:
+            value[key] = item[key]
+    return value

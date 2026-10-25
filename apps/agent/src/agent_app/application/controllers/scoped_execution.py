@@ -9,20 +9,21 @@ from uuid import uuid4
 
 from agent_app.application.models.scoped_execution import ExecutionView, ScopedExecutionError, ScopedWakeRequest
 from agent_app.argus_protocol import HandoffError
+from agent_app.application.semantic_context import initial_task_prompt
+from agent_app.application.services.argus_pending import pending_state
 from icarus.core.identity import SessionIdentity
 
 
 class ScopedExecutionController:
     def __init__(self, store, client, *, workspace: Path, submit_reserved: Callable,
                  flush_updates: Callable[[], Awaitable[None]], max_active_executions=8,
-                 timeout_seconds=900, retry_seconds=1, stop_evidence=None, unload_session=None):
+                 timeout_seconds=900, retry_seconds=1, stop_evidence=None):
         self.store, self.client = store, client
         self.workspace = Path(workspace)
         self.submit_reserved, self.flush_updates = submit_reserved, flush_updates
         self.maximum, self.timeout = max_active_executions, timeout_seconds
         self.retry_seconds = retry_seconds
         self.stop_evidence = stop_evidence
-        self.unload_session = unload_session
         self._closing = False
         self._locks: dict[str, asyncio.Lock] = {}
         self._submissions: dict[str, asyncio.Task] = {}
@@ -57,15 +58,58 @@ class ScopedExecutionController:
                     await self.cancel(request.wake_id, 'execution_timeout')
                 await asyncio.sleep(self.retry_seconds)
 
+    async def _handle_retired_bind_rejection(self, properties, error):
+        # Only decoded authoritative business refusals prove bind did not commit.
+        # Unknown/oversized/unreadable responses can follow a committed HTTP200;
+        # retain the admission and its IDs for reconciliation in both paths.
+        rejected = {'not_found', 'unauthorized', 'scope_mismatch', 'conflict',
+                    'execution_closed', 'content_restricted', 'item_not_reportable'}
+        if (properties.get('reactivating_retired_at') is not None and not error.retryable
+                and error.code in rejected):
+            await self._reject_retired_admission(properties['wake_id'])
+
+    async def _reject_retired_admission(self, wake_id):
+        # Argus explicitly rejected binding; this durable provisional execution
+        # never launched a model or tool, so there is no remote binding to finalize.
+        await self.store.update_scoped(wake_id, {
+            'phase': 'stopped', 'execution_stopped': True,
+            'exit_kind': 'start_failed', 'sync_state': 'finalized'})
+        await self.store.complete_scoped_release(wake_id)
+
     async def _submit(self, request: ScopedWakeRequest) -> ExecutionView:
         lock = self._locks.setdefault(request.wake_id, asyncio.Lock())
         async with lock:
+            identity = SessionIdentity.create(self.workspace, request.target_session_id or str(uuid4()))
+            existing = await self.store.scoped_record(request.wake_id)
+            retired_at = None
+            if existing is not None and (existing.properties or {}).get('fingerprint') != request.fingerprint:
+                raise ScopedExecutionError('submission_conflict')
+            if existing is None and request.protocol_version == 2 and request.target_session_id is not None:
+                target = await self.store.get_session(identity)
+                properties = target.properties or {} if target is not None else {}
+                if properties.get('retired_at') is not None:
+                    if (target.deleted_at is not None or properties.get('kind') != 'argus_background'
+                            or properties.get('owner') != 'argus'
+                            or properties.get('scope') != request.scope.model_dump(mode='json')):
+                        raise ScopedExecutionError('target_unavailable')
+                    pending = getattr(self.client, 'session_pending', None)
+                    if pending is None:
+                        raise ScopedExecutionError('target_unavailable')
+                    state = await pending(identity.session_id, request.scope)
+                    count, related = pending_state(state, now=self.store._clock())
+                    if count <= 0 or related is None:
+                        raise ScopedExecutionError('target_unavailable')
+                    # This permits only a hidden provisional admission. Retirement
+                    # is cleared later, atomically with exact authenticated binding.
+                    retired_at = properties['retired_at']
             view = await self.store.reserve_scoped(
-                request, identity=SessionIdentity.create(self.workspace, str(uuid4())),
+                request, identity=identity,
                 execution_id=str(uuid4()), task_id=str(uuid4()), max_active_executions=self.maximum,
+                retired_at=retired_at,
             )
             record = await self.store.scoped_record(request.wake_id)
             properties = record.properties
+            self._restore_version(record)
             if properties.get("launching") or view.release_complete or view.execution_stopped:
                 return view
             deadline = properties.get("deadline_at")
@@ -75,7 +119,11 @@ class ScopedExecutionController:
             binding = properties.get("binding")
             if binding is None:
                 await self.store.update_scoped(request.wake_id, {"binding_attempted": True})
-                binding = await self.client.bind(request, view)
+                try:
+                    binding = await self.client.bind(request, view)
+                except HandoffError as error:
+                    await self._handle_retired_bind_rejection(properties, error)
+                    raise
                 await self.store.update_scoped(request.wake_id, {"binding": binding, "bound": True})
             view = await self.status(wake_id=request.wake_id)
             if datetime.fromisoformat(deadline) <= datetime.now(UTC) and not view.cancel_requested:
@@ -88,7 +136,9 @@ class ScopedExecutionController:
             await self.store.update_scoped(request.wake_id, {"launching": True, "phase": "queued"})
             try:
                 session = await self.submit_reserved(
-                    record.identity, view.task_id, "Process the bound observations.", execution_id=view.execution_id,
+                    record.identity, view.task_id,
+                    initial_task_prompt(binding, request.model_dump(mode='json')) if request.protocol_version == 2
+                    else 'Process the bound observations.', execution_id=view.execution_id,
                 )
             except Exception:
                 await self.store.update_scoped(request.wake_id, {'launch_error': 'execution_unknown'})
@@ -166,6 +216,7 @@ class ScopedExecutionController:
         if not view.execution_stopped:
             raise ScopedExecutionError("busy", owner=view)
         record = await self.store.scoped_record(wake_id)
+        self._restore_version(record)
         binding = record.properties.get("binding")
         if binding is None:
             raise ScopedExecutionError("execution_unknown", owner=view)
@@ -173,12 +224,9 @@ class ScopedExecutionController:
         view = await self.status(wake_id=wake_id)
         await self.client.finalize(wake_id, binding["binding_id"], view.exit_kind, view.report_cursor)
         await self.store.update_scoped(wake_id, {"sync_state": "finalized"})
+        # Releasing this execution does not end the semantic session. Session
+        # lifecycle/shutdown owns resource cleanup independently of wake IDs.
         released = await self.store.complete_scoped_release(wake_id)
-        if self.unload_session is not None:
-            try:
-                await self.unload_session(record.identity)
-            except Exception:
-                await self.store.update_scoped(wake_id, {'cleanup_error': 'unload_failed'})
         self._locks.pop(wake_id, None)
         submission = self._submissions.get(wake_id)
         if submission is not None and submission.done():
@@ -189,6 +237,8 @@ class ScopedExecutionController:
         rows = await self.store.read_internal(record.identity, update_types={
             "argus_report", "argus_report_synced", "argus_report_rejected",
         })
+        rows = tuple(row for row in rows if row.payload.get("wake_id") == record.properties["wake_id"]
+            and row.payload.get("binding_id") == binding["binding_id"])
         terminal = {row.payload["report_id"] for row in rows if row.update_type != "argus_report"}
         synced_cursor = max((row.payload["report_cursor"] for row in rows if row.update_type == "argus_report_synced"), default=0)
         view = await self.status(wake_id=record.properties['wake_id'])
@@ -206,6 +256,11 @@ class ScopedExecutionController:
             if accepted:
                 await self.store.update_scoped(record.properties["wake_id"], {"report_cursor": receipt["report_cursor"]})
 
+    def _restore_version(self, record):
+        remember = getattr(self.client, "remember_version", None)
+        if remember is not None:
+            remember(record.properties["wake_id"], record.properties.get("protocol_version", 1))
+
     async def recover(self):
         for view in await self.store.active_scoped():
             record = await self.store.scoped_record(view.wake_id)
@@ -219,7 +274,8 @@ class ScopedExecutionController:
                     request = ScopedWakeRequest.model_validate(record.properties["request"])
                     try:
                         binding = await self.client.bind(request, view)
-                    except HandoffError:
+                    except HandoffError as error:
+                        await self._handle_retired_bind_rejection(record.properties, error)
                         continue
                     await self.store.update_scoped(view.wake_id, {"binding": binding, "bound": True})
                 else:

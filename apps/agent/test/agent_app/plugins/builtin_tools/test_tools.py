@@ -97,6 +97,73 @@ def test_read_拒绝非法limit(tmp_path, value):
         ReadTool().invoke({"path": str(path), "limit": value})
 
 
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_read_character_fragments_reassemble_long_unicode_line_page(tmp_path, async_mode):
+    path = tmp_path / "long.txt"
+    page = '中🙂"\\' * 12500 + '\nnext "row"\n'
+    path.write_text(page + "later\n", encoding="utf-8")
+    tool = ReadTool()
+    text_offset = 0
+    fragments = []
+    while True:
+        arguments = {
+            "path": str(path), "offset": 1, "limit": 2,
+            "text_offset": text_offset,
+        }
+        result = asyncio.run(tool.ainvoke(arguments)) if async_mode else tool.invoke(arguments)
+        output = result.output
+        assert result.success
+        assert len(output["content"]) <= 2000
+        assert output["has_more"] is True
+        assert output["next_offset"] == 3
+        fragments.append(output["content"])
+        if not output["truncated"]:
+            assert output["next_text_offset"] is None
+            break
+        assert output["next_text_offset"] == text_offset + len(output["content"])
+        text_offset = output["next_text_offset"]
+    assert "".join(fragments) == page
+    assert tool.invoke({"path": str(path), "offset": 3}).output["content"] == "later\n"
+
+
+@pytest.mark.parametrize("arguments", [
+    {"offset": True}, {"text_offset": True}, {"text_offset": -1},
+    {"max_chars": True}, {"max_chars": 0}, {"max_chars": 20001},
+    {"text_offset": 5},
+])
+def test_read_rejects_invalid_character_ranges(tmp_path, arguments):
+    path = tmp_path / "short.txt"
+    path.write_text("abc\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        ReadTool().invoke({"path": str(path), **arguments})
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_read_character_boundary_and_line_eof_are_empty(tmp_path, async_mode):
+    path = tmp_path / "short.txt"
+    path.write_text("abc\n", encoding="utf-8")
+    tool = ReadTool()
+    for arguments in ({"text_offset": 4}, {"offset": 2}):
+        arguments = {"path": str(path), **arguments}
+        result = asyncio.run(tool.ainvoke(arguments)) if async_mode else tool.invoke(arguments)
+        assert result.output["content"] == ""
+        assert result.output["truncated"] is False
+        assert result.output["next_text_offset"] is None
+        assert result.output["has_more"] is False
+        assert result.output["next_offset"] is None
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("stderr", ["", "   "])
+def test_bash_empty_stderr_has_exit_code_fallback(tmp_path, async_mode, stderr):
+    tool = BashTool()
+    arguments = {"command": f"printf '{stderr}' >&2; exit 1", "workdir": str(tmp_path)}
+    result = asyncio.run(tool.ainvoke(arguments)) if async_mode else tool.invoke(arguments)
+    assert result.success is False
+    assert result.output["exit_code"] == 1
+    assert result.error == "exit_code=1, no stderr"
+
+
 def test_bash_返回退出码标准输出和标准错误(tmp_path):
     success = BashTool().invoke(
         {

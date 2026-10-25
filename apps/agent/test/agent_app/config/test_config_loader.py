@@ -59,8 +59,22 @@ def test_get_config_default_resource_is_packaged():
     }
     config = get_config()
     assert config.agent.tool_execution.max_timeout_seconds == 600
-    assert config.agent.tool_execution.batch_output_tokens == 16000
+    assert config.agent.tool_execution.batch_output_tokens == 100000
     assert config.agent.tool_execution.max_result_file_bytes == 16 * 1024 * 1024
+
+
+@pytest.mark.parametrize("filename", ["src/agent_app/resources/default_settings.json", "settings.json.example"])
+def test_application模板保留小默认并允许显式大预算(filename):
+    from pathlib import Path
+
+    path = Path(agent_package.__file__).parent / filename
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    config = ConfigModel(**settings)
+    execution = config.agent.tool_execution
+    assert execution.default_output_tokens == 3000
+    assert execution.max_output_tokens == 25000
+    assert execution.batch_output_tokens == 100000
+    assert execution.preview_target_ratio == 0.9
 
 
 def test_config_model_skill_permissions_default_disabled():

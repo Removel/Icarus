@@ -1,0 +1,13 @@
+{
+  "request": {
+    "protocol_version": 2,
+    "target_session_id": null,
+    "wake_id": "10000000-0000-4000-8000-000000000001",
+    "origin_boot_id": "20000000-0000-4000-8000-000000000001",
+    "scope": {"source": "qq", "account_id": "7", "chat_kind": "group", "external_id": "42"},
+    "reason": "question",
+    "rule_id": null,
+    "items": [{"observation_id": "60000000-0000-4000-8000-000000000001", "source": "qq", "chat_id": "qq:7:group:42", "message_id": "88", "revision": 1, "locator": {"account_id": "7", "chat_kind": "group", "external_id": "42", "message_id": "88", "time": 10}, "excerpt": "question", "truncated": false}]
+  },
+  "fingerprint": "9b649cf4d923bf0abd172685a2d34710f72d31ca9d3a1e39781d725eb2fe5557"
+}

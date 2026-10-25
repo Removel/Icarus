@@ -9,7 +9,9 @@
     "max_steps": 1024,
     "tool_execution": {
       "default_timeout_seconds": 120.0,
-      "default_output_tokens": 3000
+      "default_output_tokens": 3000,
+      "max_output_tokens": 25000,
+      "batch_output_tokens": 100000
     }
   },
   "argus": {
@@ -17,7 +19,9 @@
     "workspace": null,
     "base_url": "http://127.0.0.1:8766",
     "max_active_executions": 8,
-    "timeout_seconds": 900
+    "timeout_seconds": 900,
+    "session_idle_seconds": 300,
+    "session_retention_seconds": 86400
   },
   "runtime": {
     "plugin_dirs": [],

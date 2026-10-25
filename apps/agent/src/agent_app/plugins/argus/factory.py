@@ -12,10 +12,12 @@ def create_plugin(plugin_id, workspace_path, session_id, config, required_capabi
     context = config.get('session_context', SessionContext())
     if context.kind != 'argus_background':
         raise ValueError('Argus is not active for this session')
-    if not context.metadata.get('binding'):
-        raise ValueError('Argus background session requires a binding')
+    if not context.metadata.get('binding') and config.get('load_binding') is None:
+        raise ValueError('Argus background session requires a binding loader')
     client, append_record = config.get('client'), config.get('append_record')
     if client is None or append_record is None:
         raise ValueError('Argus background facilities are required')
     return PluginRegistration(plugin=ArgusPlugin(plugin_id, context=context, client=client,
-        append_record=append_record, prompt_fits=config.get('prompt_fits')))
+        append_record=append_record, prompt_fits=config.get('prompt_fits'), load_binding=config.get('load_binding'),
+        session_id=session_id, load_records=config.get('load_records'), availability_signal=config.get('availability_signal'),
+        task_channels=config.get('task_channels')))

@@ -403,6 +403,123 @@ def test_tool_executor最小结果预算无法闭合时拒绝整个group():
         )
 
 
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_failed_result_saved_raw_before_short_disclosure(tmp_path, async_mode):
+    diagnostic = "Traceback (most recent call last):\n" + '  file "local.py", line 42\n' * 40 + "ValueError: important final diagnostic\n"
+    original = ToolExecutionResult(
+        False, {"exit_code": 7, "stdout": "created output.txt before failure\n", "stderr": diagnostic}, diagnostic
+    )
+
+    class FailingTool(EchoTool):
+        def invoke(self, arguments):
+            return original
+
+    registry = ToolRegistry()
+    registry.register(FailingTool())
+    executor = ToolExecutor(
+        registry, result_store=ToolResultStore(tmp_path / "results", max_file_bytes=16 * 1024 * 1024)
+    )
+    calls = [ToolCall("failed-call", "echo", {})]
+    pairs = asyncio.run(executor.aexecute_many(calls, task_id="task-1")) if async_mode else executor.execute_many(calls, task_id="task-1")
+    result = pairs[0][1]
+    text = serialize_tool_result(result)
+    assert conservative_token_count(text) <= 1000
+    assert result.success is False
+    assert result.output["exit_code"] == 7
+    assert "created output.txt" in result.output["stdout"]
+    assert "ValueError: important final diagnostic" in result.error
+    assert len(result.error) < 400
+    assert diagnostic not in text
+    saved_path = Path(result.metadata["result_file"])
+    assert str(saved_path) in text
+    assert json.loads(saved_path.read_text(encoding="utf-8")) == original.as_dict()
+    assert "content omitted" not in saved_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_fitting_image_failure_survives_preferred_short_target(tmp_path, async_mode):
+    image = ImagePart(
+        "https://example.invalid/image.png?sig=" + "A" * 1200,
+        "url", "image/png",
+    )
+    original = ToolExecutionResult(
+        False,
+        {"exit_code": 7, "stdout": "created file before failure\n"},
+        "permission denied",
+        images=(image,),
+    )
+
+    class ImageFailureTool(EchoTool):
+        def invoke(self, arguments):
+            return original
+
+    registry = ToolRegistry()
+    registry.register(ImageFailureTool())
+    executor = ToolExecutor(
+        registry,
+        result_store=ToolResultStore(tmp_path / "results", max_file_bytes=100000),
+    )
+    calls = [ToolCall("image-failure", "echo", {})]
+    pairs = (
+        asyncio.run(executor.aexecute_many(calls, task_id="task-1"))
+        if async_mode else executor.execute_many(calls, task_id="task-1")
+    )
+    result = pairs[0][1]
+    assert result.success is False
+    assert result.error == original.error
+    assert result.output == original.output
+    assert result.images == (image,)
+    assert conservative_token_count(serialize_tool_result(result)) <= 4000
+    saved_path = next((tmp_path / "results" / "task-1").glob("*.txt"))
+    assert json.loads(saved_path.read_text(encoding="utf-8")) == original.as_dict()
+
+
+@pytest.mark.parametrize("storage", ["unavailable", "fails", "incomplete"])
+def test_failed_result_storage_fallback_keeps_requested_preview(tmp_path, storage):
+    diagnostic = "start evidence\n" + "detail evidence\n" * 300 + "final evidence\n"
+    raw = ToolExecutionResult(False, {"exit_code": 9, "stdout": "wrote partial data\n", "stderr": diagnostic}, diagnostic)
+    store = None
+    if storage != "unavailable":
+        root = tmp_path / "results"
+        if storage == "fails":
+            root.write_text("not a directory", encoding="utf-8")
+        store = ToolResultStore(root, max_file_bytes=128 if storage == "incomplete" else 100000)
+    settings = ToolExecutionSettings(default_output_tokens=3000)
+    executor = ToolExecutor(ToolRegistry(), policy=ToolExecutionPolicy(settings), result_store=store)
+    call = ToolCall("failure", "unused", {})
+    result = executor.finalize_group([call], {call.id: raw}, task_id="task-1")[call.id]
+    text = serialize_tool_result(result)
+    assert 1000 < conservative_token_count(text) <= 3000
+    assert result.output["exit_code"] == 9
+    assert "wrote partial data" in result.output["stdout"]
+    assert "start evidence" in text and "final evidence" in text
+    assert "full Tool Result:" not in text
+    if storage == "incomplete":
+        assert result.metadata["result_file_complete"] is False
+        assert "incomplete" in text
+    else:
+        assert "result_file" not in result.metadata
+        assert "not saved" in text
+        assert str(tmp_path / "results") not in text
+
+
+def test_small_failures_and_repeated_read_do_not_create_result_files(tmp_path):
+    from agent_app.plugins.builtin_tools import ReadTool
+
+    path = tmp_path / "page.txt"
+    path.write_text("short page\n", encoding="utf-8")
+    root = tmp_path / "results"
+    registry = ToolRegistry()
+    registry.register(ReadTool())
+    executor = ToolExecutor(registry, result_store=ToolResultStore(root, max_file_bytes=100000))
+    for _ in range(2):
+        result = executor.execute_many([ToolCall("read", "read", {"path": str(path)})], task_id="task-1")[0][1]
+        assert result.output["content"] == "short page\n"
+    failed = ToolCall("missing", "missing", {})
+    assert executor.execute_many([failed], task_id="task-1")[0][1].success is False
+    assert not root.exists()
+
+
 def test_tool_executor异步tool超时取消并返回配对错误():
     cancelled = asyncio.Event()
 

@@ -47,6 +47,7 @@ def test_factory注册memory_region和六个工具(tmp_path, monkeypatch):
     registry = deps[("blackboard", "region_registry")]
     registration.plugin.region_registration = registry.register(definition)
     assert definition.required_for_start is True
+    assert definition.auto_expose is False
     assert definition.owner_plugin_id == "memory"
     assert definition.max_refs == 5
     assert definition.max_data_chars == 7000

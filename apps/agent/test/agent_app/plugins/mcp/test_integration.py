@@ -1,4 +1,13 @@
 import asyncio
+import base64
+
+import pytest
+
+from agent_app.plugins.mcp.client_manager import MCPClientManager
+from agent_app.plugins.mcp.config import parse_mcp_servers
+from agent_app.plugins.mcp.result_converter import MCPResultConverter
+from agent_app.plugins.persistence import PersistenceRuntime, PersistenceSession, SessionIdentity
+from apps.agent.test.agent_app.plugins.mcp.test_client_manager import FakeBackend
 
 from icarus.core.agents import ReActAgent
 from agent_app.plugins.mcp.models import (
@@ -11,6 +20,7 @@ from agent_app.plugins.mcp.tools import create_mcp_tools
 from icarus.core.tools import ToolExecutor, ToolRegistry
 from icarus.core.llm import BaseLLM
 from icarus.core.models.messages import (
+    ImagePart,
     LLMResponse,
     Message,
     TextPart,
@@ -89,6 +99,68 @@ class ScriptedLLM(BaseLLM):
         if False: yield
     def close(self): pass
     async def aclose(self): pass
+
+
+def test_agent模型视图保留混合图片且json只出现一次(tmp_path):
+    workspace = tmp_path / "workspace"
+    persistence = PersistenceSession(
+        PersistenceRuntime(tmp_path / "data", workspace),
+        SessionIdentity.create(workspace, "session"),
+    )
+
+    class MixedManager(ManagerStub):
+        async def call_tool(self, tool_ref, arguments, *, timeout_seconds=None):
+            return MCPCallResult(
+                structured_content={"unique_fact": "created"},
+                content=(
+                    MCPContent("text", '{"unique_fact":"created"}'),
+                    MCPContent("text", "supplement"),
+                    MCPContent("image", base64.b64encode(b"\x89PNG\r\n\x1a\nimage").decode("ascii"), media_type="image/png"),
+                ),
+            )
+
+    plugin = MCPPlugin("mcp", manager=MixedManager(), bridge=BridgeStub(), result_converter=MCPResultConverter(persistence))
+    registry = ToolRegistry()
+    registry.register_many(create_mcp_tools(plugin))
+    llm = ScriptedLLM()
+    agent = ReActAgent("thinking", llm, ToolExecutor(registry))
+
+    async def run():
+        await plugin.start()
+        await agent.ainvoke("", [], "create")
+        await plugin.stop()
+
+    asyncio.run(run())
+    parts = llm.calls[2][0][-1].content
+    assert parts[0].text.count("unique_fact") == 1
+    assert "supplement" in parts[0].text
+    assert len(parts) == 2 and isinstance(parts[1], ImagePart)
+    assert parts[1].source.startswith("assets/")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_execute通过真实manager验证且不回显敏感参数(asynchronous, tmp_path, caplog):
+    from apps.agent.test.agent_app.plugins.mcp.test_tools import BridgeStub as SyncBridge
+
+    backends = []
+
+    def factory(config, changed):
+        backend = FakeBackend(config.name, changed)
+        backends.append(backend)
+        return backend
+
+    manager = MCPClientManager(parse_mcp_servers({"blender": {"command": "unused"}}), workspace_path=str(tmp_path), backend_factory=factory)
+    plugin = MCPPlugin("mcp", manager=manager, bridge=SyncBridge())
+    tool = create_mcp_tools(plugin)[2]
+    asyncio.run(plugin.start())
+    arguments = {"tool_ref": "blender/create", "arguments": {"count": "synthetic-input-secret"}}
+    result = asyncio.run(tool.ainvoke(arguments)) if asynchronous else tool.invoke(arguments)
+    assert result.success is False
+    assert "$.count: expected type integer" in result.error
+    diagnostic_is_safe = "synthetic-input-secret" not in result.error + caplog.text
+    assert diagnostic_is_safe
+    assert backends[0].calls == []
+    asyncio.run(plugin.stop())
 
 
 def test_agent通过搜索schema再用固定execute调用mcp工具():

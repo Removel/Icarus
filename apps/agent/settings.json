@@ -16,18 +16,31 @@
     "plugin_dirs": [],
     "plugin_config": {
       "prompt": {
-        "required_contributors": ["persona"]
+        "required_contributors": [
+          "persona"
+        ]
       },
       "persona": {
         "jev_enabled": true,
-        "relationship_enabled": true
+        "relationship_enabled": true,
+        "relationship_endpoint": "http://127.0.0.1:8767"
       },
       "memory": {
         "user_id": "removel",
-        "agent_id": "icarus"
+        "agent_id": "icarus",
+        "endpoint": "http://127.0.0.1:8888"
       },
       "knowledge": {
-        "knowledge_base": "icarus-project"
+        "knowledge_base": "icarus-project",
+        "endpoint": "http://127.0.0.1:7566"
+      },
+      "relationship": {
+        "endpoint": "http://127.0.0.1:8767"
+      },
+      "mcp": {
+        "server_instructions": {
+          "snowluma": "QQ/OneBot 的 MCP 服务器名是 snowluma，不是 qq。它提供 list_actions、get_action、search_actions、list_categories、query_action、invoke_action 六个通用工具；send_group_msg 等是内部 action，不是 MCP tool_ref。已知要发群消息时，不用遍历所有服务器或做宽泛搜索，直接调用 mcp_tool_execute({\"tool_ref\":\"snowluma/get_action\",\"arguments\":{\"name\":\"send_group_msg\"}}) 查看参数文档；未知动作才调用 snowluma/search_actions，参数是 query（建议使用单个明确关键词或 action 名），不是 action。get_action 参数是 name，不是 action。按动作文档使用 snowluma/invoke_action，arguments 为 {\"action\":\"send_group_msg\",\"params\":{\"group_id\":实际群号,\"message\":回复内容}}；私聊用 send_private_msg 和 user_id。实际账号/聊天目标从当前观测的 scope/locator 取得，不写死测试群号。只读动作走 snowluma/query_action，其参数同样是 action 和 params。需要确认 MCP schema 时只列 snowluma：mcp_tool_list({\"server\":\"snowluma\",\"page_size\":6})，避免列出 Playwright 等全部工具导致截断。发送后检查 OneBot 响应 status/retcode，成功发送通常有 data.message_id；工具返回 success 不等于 OneBot 业务成功。最终回答正文不会自动发送到 QQ，想回复必须实际调用发送 action。"
+        }
       }
     },
     "required_plugin_ids": [
@@ -56,6 +69,10 @@
         "--browser",
         "chrome"
       ]
+    },
+    "snowluma": {
+      "command": "/home/removel_yi/bin/snowluma-mcp",
+      "args": []
     }
   },
   "model_settings": [
@@ -82,5 +99,12 @@
     "compaction": "thinking",
     "skill_generation": "thinking",
     "title": "perception"
+  },
+  "argus": {
+    "enabled": true,
+    "workspace": "/srv/icarus/workspace",
+    "base_url": "http://127.0.0.1:8766",
+    "max_active_executions": 8,
+    "timeout_seconds": 900
   }
 }

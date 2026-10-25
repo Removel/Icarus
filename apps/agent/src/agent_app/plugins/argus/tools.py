@@ -13,21 +13,25 @@ class ArgusTool(BaseTool):
     @property
     def definition(self):
         properties, required = {}, []
+        identity = 'observation_id' if getattr(self.plugin, 'protocol_version', 1) == 1 else 'ref'
+        reference = {'type': 'string', 'format': 'uuid'} if identity == 'observation_id' else {
+            'type': 'string', 'pattern': '^#[1-9][0-9]*$'}
         if self.operation == 'read':
-            properties = {'observation_id': {'type': 'string', 'format': 'uuid'},
+            properties = {identity: reference,
                           'text_offset': {'type': 'integer', 'minimum': 0},
                           'max_chars': {'type': 'integer', 'minimum': 1, 'maximum': 20000}}
-            required = ['observation_id']
+            required = [identity]
         elif self.operation in {'history', 'wait'}:
-            properties = {'cursor': {'type': 'string', 'maxLength': 2048},
-                          'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}}
+            properties = {'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}}
+            if identity == 'observation_id':
+                properties['cursor'] = {'type': 'string', 'maxLength': 2048}
             if self.operation == 'wait':
                 properties['timeout_seconds'] = {'type': 'number', 'minimum': 0, 'maximum': 30}
         else:
             properties = {'items': {'type': 'array', 'minItems': 1, 'maxItems': 50, 'items': {
-                'type': 'object', 'properties': {'observation_id': {'type': 'string'},
+                'type': 'object', 'properties': {identity: reference,
                     'status': {'enum': ['handled', 'no_action']}, 'reason': {'type': 'string', 'maxLength': 1000}},
-                'required': ['observation_id', 'status'], 'additionalProperties': False}}}
+                'required': [identity, 'status'], 'additionalProperties': False}}}
             required = ['items']
         return ToolDefinition(f'argus_{self.operation}', f'{self.operation.title()} observations within the bound chat only.',
                               {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False})

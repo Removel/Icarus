@@ -290,6 +290,11 @@ class SessionRuntime(SessionHost):
                 updates.add(plugin_id)
         argus = host.graph.registrations.get('argus')
         if argus is not None:
+            argus.plugin.input_source = host.graph.provider_id('input.submit')
+            argus.plugin.task_control_source = host.graph.provider_id('task.control')
+            argus.plugin.agent_source = host.graph.provider_id('task.control')
+            argus.plugin.context_source = next(plugin_id for plugin_id, registration in host.graph.registrations.items()
+                if registration.plugin is board)
             def argus_prompt_fits(content):
                 try:
                     rendered = compose_prompt({'argus': (PromptSection('observations', 'contributor', content),)},

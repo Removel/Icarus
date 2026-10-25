@@ -148,6 +148,12 @@ Server 在 Session 启动时不会被连接。Agent 首次调用 `mcp_tool_list`
 `mcp_tool_execute` 时才按需连接；Server 未运行会作为本次 Tool 失败反馈，不阻止其他 Session
 能力启动。Header 和环境变量中的 Secret 应写成 `${ENV_NAME}`，不要直接提交到 settings。
 
+固定工具用法可配置在 `runtime.plugin_config.mcp.server_instructions`，按服务器名填写字符串。
+MCP插件在会话初始化时将已配置服务器名和对应说明放入System的session层，不连接远端、不
+反复追加到User Prompt；说明不应包含凭据、群消息或动态处理进度。例如给`snowluma`注明
+`get_action`用`name`、`search_actions`用`query`、`invoke_action`用`action/params`，即可减少目录
+探索。已知tool_ref可直接调用，目录/参数校验仍沿用原MCP机制；配置变更须新会话/重启加载。
+
 Session 与公共 Conversation 保存在 `ICARUS_DATA_DIR/icarus.db`。Plugin State、Runtime Snapshot、
 Trace、日志和 Asset 继续按 Workspace/Session 保存为文件。旧 `conversation.jsonl` 不迁移、不兼容
 读取，也不与数据库双写；首次启用该版本需要使用不包含旧 Session 数据的新目录。

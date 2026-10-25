@@ -99,9 +99,13 @@ class ArgusSettings(pydantic.BaseModel):
     base_url: str = "http://127.0.0.1:8766"
     max_active_executions: StrictInt = pydantic.Field(default=8, ge=1, le=100)
     timeout_seconds: float = pydantic.Field(default=900, gt=0, allow_inf_nan=False)
+    session_idle_seconds: float = pydantic.Field(default=300, gt=0, allow_inf_nan=False)
+    session_retention_seconds: float = pydantic.Field(default=86400, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def trusted_workspace(self):
+        if self.session_retention_seconds <= self.session_idle_seconds:
+            raise ValueError('Argus session retention must exceed soft idle')
         if self.enabled and (self.workspace is None or not self.workspace.is_absolute()):
             raise ValueError("Argus requires an absolute background workspace")
         if not self.base_url.startswith(("http://", "https://")):

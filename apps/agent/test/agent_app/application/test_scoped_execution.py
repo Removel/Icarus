@@ -566,7 +566,9 @@ def test_runtime_scoped_facade_uses_reserved_task_identity_and_hidden_context(tm
             view = await runtime.scoped_submit(request())
             assert submitted == [view.task_id]
             assert created[0].context.kind == "argus_background"
-            assert created[0].context.metadata["binding"]["binding_id"]
+            assert "binding" not in created[0].context.metadata
+            binding = await runtime._background_facilities(created[0].identity)['load_binding'](view.task_id)
+            assert binding['binding_id'] == "70000000-0000-4000-8000-000000000001"
             assert await runtime.list_session_statuses(tmp_path / "background") == ()
             release.set()
             await runtime.scoped_executions.drain()
@@ -684,11 +686,13 @@ def test_launch_exception_without_stop_evidence_cannot_finalize_or_release(tmp_p
         from agent_app.application.models.scoped_execution import ScopedExecutionError
         store = SessionStore(tmp_path/'data')
         await store.start()
-        finalizes = []
+        finalizes, submissions = [], []
         class Client:
             async def bind(self, request, view): return {'binding_id': 'binding'}
             async def finalize(self, *args): finalizes.append(1); return {'finalized': True, 'report_cursor': 0}
-        async def submit(*args, **kwargs): raise RuntimeError('could fail after queue acceptance')
+        async def submit(*args, **kwargs):
+            submissions.append(1)
+            raise RuntimeError('could fail after queue acceptance')
         async def flush(): pass
         controller = ScopedExecutionController(store, Client(), workspace=tmp_path/'workspace', submit_reserved=submit, flush_updates=flush)
         try:
@@ -697,6 +701,11 @@ def test_launch_exception_without_stop_evidence_cannot_finalize_or_release(tmp_p
             view = await controller.status(wake_id=WAKE)
             assert not view.execution_stopped and not view.release_complete
             assert finalizes == []
+            retried = await controller.submit(request())
+            assert retried.execution_id == view.execution_id and retried.task_id == view.task_id
+            assert submissions == [1]
+            assert (await store.scoped_record(WAKE)).properties['launching'] is True
+            assert not controller._monitors
         finally:
             await controller.close()
             await store.close()
@@ -734,6 +743,329 @@ def test_frozen_json_fixture_has_cross_app_canonical_fingerprint():
     changed = json.loads(json.dumps(fixture['request']))
     changed['items'][0]['locator']['time'] = 10.0
     assert ScopedWakeRequest.model_validate(changed).fingerprint == fixture['fingerprint']
+
+
+async def finish_reservation(store, wake_id):
+    await store.update_scoped(wake_id, {"phase": "stopped", "execution_stopped": True,
+        "exit_kind": "completed", "sync_state": "finalized"})
+    return await store.complete_scoped_release(wake_id)
+
+
+def request_v2(*, wake_id=WAKE, session_id=None, target="42"):
+    from agent_app.application.models.scoped_execution import ScopedWakeRequest
+    return ScopedWakeRequest.model_validate({**request(wake_id=wake_id, target=target).model_dump(mode="json"),
+        "protocol_version": 2, "target_session_id": session_id})
+
+
+def test_semantic_reuse_preserves_prior_wake_identity_and_reports(tmp_path):
+    async def run():
+        from agent_app.application.models.scoped_execution import ScopedExecutionError
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        try:
+            first = await reserve(store, tmp_path)
+            record = await store.scoped_record(WAKE)
+            await store.update_scoped(WAKE, {"binding": {"binding_id": "old-binding"}})
+            await store.append_internal(record.identity, task_id=first.task_id, update_type="argus_report",
+                payload={"report_id": "old-report", "items": [], "fingerprint": "unchanged"})
+            old = await finish_reservation(store, WAKE)
+            second_request = request(wake_id=str(UUID(int=910)))
+            second = await store.reserve_scoped(second_request, identity=record.identity,
+                execution_id=str(UUID(int=911)), task_id=str(UUID(int=912)))
+            assert first.session_id == second.session_id
+            assert await store.get_scoped(wake_id=WAKE) == old
+            assert (await store.scoped_record(WAKE)).properties["binding"]["binding_id"] == "old-binding"
+            await store.complete_scoped_release(WAKE)
+            assert await store.get_scoped(scope=first.scope) == second
+            reports = await store.read_internal(record.identity, update_types={"argus_report"})
+            assert reports[0].payload == {"report_id": "old-report", "items": [], "fingerprint": "unchanged",
+                "wake_id": WAKE, "binding_id": "old-binding"}
+            stable = await store.get_session(record.identity)
+            assert "binding" not in stable.context.metadata and "wake_id" not in stable.context.metadata
+            assert stable.properties["current_wake_id"] == second.wake_id
+            assert "request" not in stable.properties
+            with pytest.raises(ScopedExecutionError, match="submission_conflict"):
+                await store.reserve_scoped(request(reason="changed"), identity=record.identity,
+                    execution_id=str(UUID(int=913)), task_id=str(UUID(int=914)))
+            with sqlite3.connect(store.database_path) as db:
+                before = db.execute("SELECT sequence, occurred_at FROM conversation_updates WHERE update_type='argus_execution'").fetchall()
+            await store.update_scoped(second.wake_id, {"binding_attempted": True})
+            with pytest.raises(RuntimeError, match='admission'):
+                await store.update_scoped(second.wake_id, {'unrecognized_state': True})
+            with pytest.raises(RuntimeError, match='admission'):
+                await store.update_scoped(second.wake_id, {'binding': {'binding_id': 'new', 'session_id': SESSION}})
+            with sqlite3.connect(store.database_path) as db:
+                assert db.execute("SELECT sequence, occurred_at FROM conversation_updates WHERE update_type='argus_execution'").fetchall() == before
+            public, cursor = await store.read_updates(record.identity)
+            assert public == () and cursor == 3
+        finally:
+            await store.close()
+    asyncio.run(run())
+
+
+def test_two_sessions_one_scope_only_one_execution_owner(tmp_path):
+    async def run():
+        from agent_app.application.models.scoped_execution import ScopedExecutionError
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        try:
+            first = await reserve(store, tmp_path)
+            identity1 = (await store.scoped_record(WAKE)).identity
+            await finish_reservation(store, WAKE)
+            second = await reserve(store, tmp_path, request(wake_id=str(UUID(int=920))), ordinal=2, maximum=1)
+            identity2 = (await store.scoped_record(second.wake_id)).identity
+            await finish_reservation(store, second.wake_id)
+            results = await asyncio.gather(*(store.reserve_scoped(request(wake_id=str(UUID(int=930+i))),
+                identity=identity, execution_id=str(UUID(int=940+i)), task_id=str(UUID(int=950+i)),
+                max_active_executions=1) for i, identity in enumerate((identity1, identity2))), return_exceptions=True)
+            assert sum(not isinstance(value, Exception) for value in results) == 1
+            errors = [value for value in results if isinstance(value, ScopedExecutionError)]
+            assert len(errors) == 1 and errors[0].code == "scope_busy"
+        finally:
+            await store.close()
+    asyncio.run(run())
+
+
+def test_v2_target_is_required_nullable_and_part_of_frozen_fingerprint():
+    from pydantic import ValidationError
+    from agent_app.application.models.scoped_execution import ScopedWakeRequest
+    value = request().model_dump(mode="json")
+    assert "target_session_id" not in value
+    with pytest.raises(ValidationError):
+        ScopedWakeRequest.model_validate({**value, "protocol_version": 2})
+    with pytest.raises(ValidationError):
+        ScopedWakeRequest.model_validate({**value, "target_session_id": None})
+    first = request_v2()
+    assert first.model_dump(mode="json")["target_session_id"] is None
+    assert first.fingerprint != request_v2(session_id=SESSION).fingerprint
+
+
+def test_scoped_submit_reuses_idle_session_without_changing_prior_execution(tmp_path):
+    async def run():
+        from agent_app.application.controllers.scoped_execution import ScopedExecutionController
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        tasks = []
+        class Client:
+            async def bind(self, request, view): return {"binding_id": view.execution_id}
+            async def finalize(self, *args): return {"finalized": True, "report_cursor": 0}
+        class Session:
+            async def drain_execution(self): pass
+        async def submit(identity, task_id, prompt, *, execution_id):
+            binding = await store.load_binding(identity, task_id)
+            tasks.append((identity, task_id, binding))
+            return Session()
+        async def flush(): pass
+        controller = ScopedExecutionController(store, Client(), workspace=tmp_path / "workspace",
+            submit_reserved=submit, flush_updates=flush)
+        try:
+            first = await controller.submit(request_v2())
+            await controller.drain()
+            old = await controller.status(wake_id=WAKE)
+            second = await controller.submit(request_v2(wake_id=str(UUID(int=960)), session_id=first.session_id))
+            await controller.drain()
+            assert first.session_id == second.session_id
+            assert first.execution_id != second.execution_id and first.task_id != second.task_id
+            assert tasks[0][2]["wake_id"] == WAKE and tasks[1][2]["wake_id"] == second.wake_id
+            assert tasks[0][2]["binding_id"] != tasks[1][2]["binding_id"]
+            assert await controller.status(wake_id=WAKE) == old
+            with pytest.raises(Exception):
+                await store.load_binding(tasks[0][0], "missing-task")
+        finally:
+            await controller.close()
+            await store.close()
+    asyncio.run(run())
+
+
+def test_target_session_scope_owner_and_retirement_are_validated(tmp_path):
+    async def run():
+        from agent_app.application.models.scoped_execution import ScopedExecutionError
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        try:
+            first = await reserve(store, tmp_path)
+            record = await store.scoped_record(WAKE)
+            await finish_reservation(store, WAKE)
+            interactive = SessionIdentity.create(record.identity.workspace_path, SESSION)
+            await store.create_session(interactive)
+            for identity, value in [
+                (interactive, request_v2(wake_id=str(UUID(int=971)), session_id=SESSION)),
+                (record.identity, request_v2(wake_id=str(UUID(int=972)), session_id=first.session_id, target="43")),
+                (SessionIdentity.create(tmp_path / "wrong-workspace", first.session_id), request_v2(wake_id=str(UUID(int=973)), session_id=first.session_id)),
+                (SessionIdentity.create(record.identity.workspace_path, str(UUID(int=999))), request_v2(wake_id=str(UUID(int=974)), session_id=str(UUID(int=999)))),
+            ]:
+                with pytest.raises(ScopedExecutionError, match="target_unavailable"):
+                    await store.reserve_scoped(value, identity=identity, execution_id=EXECUTION, task_id=TASK)
+            with sqlite3.connect(store.database_path) as db:
+                db.execute("UPDATE sessions SET properties=json_set(properties, '$.retired_at', '2026-10-25T00:00:00+00:00') WHERE session_id=?", (first.session_id,))
+            with pytest.raises(ScopedExecutionError, match="target_unavailable"):
+                await store.reserve_scoped(request_v2(wake_id=str(UUID(int=975)), session_id=first.session_id), identity=record.identity,
+                    execution_id=EXECUTION, task_id=TASK)
+        finally:
+            await store.close()
+    asyncio.run(run())
+
+
+def test_argus_upgrade_preserves_table_set_and_legacy_outbox(tmp_path):
+    import json
+    async def run():
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        view = await reserve(store, tmp_path)
+        identity = (await store.scoped_record(WAKE)).identity
+        await store.update_scoped(WAKE, {"binding": {"binding_id": "legacy-binding"}, "binding_attempted": True,
+            "phase": "stopped", "execution_stopped": True, "exit_kind": "interrupted", "sync_state": "pending_sync"})
+        # Explicit pre-upgrade shape, independent of the current reservation implementation.
+        legacy = {**view.model_dump(mode="json"), "kind": "argus_background", "owner": "argus",
+            "fingerprint": request().fingerprint, "request": request().model_dump(mode="json"),
+            "binding": {"binding_id": "legacy-binding"}, "binding_attempted": True,
+            "phase": "stopped", "execution_stopped": True, "exit_kind": "interrupted", "sync_state": "pending_sync"}
+        await store.close()
+        with sqlite3.connect(store.database_path) as db:
+            db.execute("DELETE FROM conversation_updates")
+            db.execute("UPDATE sessions SET properties=?, last_sequence=2", (json.dumps(legacy),))
+            db.execute("INSERT INTO conversation_updates VALUES (?, ?, 1, ?, 'user.message', ?, '2026-10-25 00:00:00')",
+                (identity.workspace_key, identity.session_id, view.task_id, json.dumps({"text": "kept", "resources": []})))
+            db.execute("INSERT INTO conversation_updates VALUES (?, ?, 2, ?, 'argus_report', ?, '2026-10-25 00:00:00')",
+                (identity.workspace_key, identity.session_id, view.task_id,
+                 json.dumps({"report_id": "legacy-report", "items": [], "fingerprint": "kept"})))
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+        assert tables == {"workspaces", "sessions", "session_titles", "conversation_updates"}
+        for _ in range(2):
+            restored = SessionStore(tmp_path / "data")
+            await restored.start()
+            try:
+                assert (await restored.get_scoped(wake_id=WAKE)).exit_kind == "interrupted"
+                public, cursor = await restored.read_updates(identity)
+                assert public[0].payload["text"] == "kept" and public[0].sequence == 1
+                assert cursor == 3
+                admissions = await restored.read_internal(identity, update_types={"argus_execution"})
+                assert len(admissions) == 1
+                reports = await restored.read_internal(identity, update_types={"argus_report"})
+                assert reports[0].sequence == 2
+                assert reports[0].payload == {"report_id": "legacy-report", "items": [], "fingerprint": "kept",
+                    "wake_id": WAKE, "binding_id": "legacy-binding"}
+                stable = await restored.get_session(identity)
+                assert "request" not in stable.properties and "wake_id" not in stable.properties
+                with sqlite3.connect(restored.database_path) as db:
+                    assert {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")} == tables
+            finally:
+                await restored.close()
+    asyncio.run(run())
+
+
+def test_argus_upgrade_invalid_recovery_snapshot_rolls_back(tmp_path):
+    import json
+    async def run():
+        store = SessionStore(tmp_path / "data")
+        await store.start()
+        await reserve(store, tmp_path)
+        await store.close()
+        invalid = {"kind": "argus_background", "owner": "argus", "wake_id": WAKE,
+            "scope": request().scope.model_dump(mode="json")}
+        with sqlite3.connect(store.database_path) as db:
+            db.execute("DELETE FROM conversation_updates")
+            db.execute("UPDATE sessions SET properties=?, last_sequence=0", (json.dumps(invalid),))
+        broken = SessionStore(tmp_path / "data")
+        with pytest.raises(RuntimeError, match="admission"):
+            await broken.start()
+        with sqlite3.connect(store.database_path) as db:
+            assert json.loads(db.execute("SELECT properties FROM sessions").fetchone()[0]) == invalid
+            assert db.execute("SELECT count(*) FROM conversation_updates").fetchone()[0] == 0
+    asyncio.run(run())
+
+
+def test_trusted_candidates_and_notify_are_scope_bound_and_do_not_launch(tmp_path):
+    from agent_app.application.agent_runtime import AgentRuntime
+    from agent_app.application.models.scoped_execution import ScopedExecutionError
+    from apps.agent.test.agent_app.application.test_session_runtime import make_config
+    from agent_app.argus_protocol import HandoffError
+    async def run():
+        runtime = AgentRuntime(config_loader=lambda: make_config(tmp_path/'data'))
+        await runtime.start()
+        class Client:
+            failed = False
+            async def session_pending(self, session_id, scope):
+                if self.failed:
+                    raise HandoffError('unavailable', retryable=True)
+                return {'protocol_version': 2, 'pending_count': 1, 'last_related_at': None}
+        client = Client()
+        runtime._handoff_client = client
+        try:
+            view = await reserve(runtime._store(), tmp_path)
+            identity = (await runtime._store().scoped_record(WAKE)).identity
+            signal = runtime._background_facilities(identity)['availability_signal']
+            assert signal is runtime._background_facilities(identity)['availability_signal']
+            page = await runtime.scoped_sessions(request().scope, limit=1)
+            assert page['items'][0]['session_id'] == view.session_id
+            assert page['items'][0]['has_work'] is True
+            assert set(page['items'][0]) == {'session_id', 'summary', 'last_related_at', 'has_work'}
+            assert (await runtime.scoped_sessions(request(target='43').scope))['items'] == []
+            assert await runtime.scoped_notify(wake_id=WAKE, session_id=view.session_id) == {'accepted': True, 'merged': False}
+            assert signal.is_set()
+            assert await runtime.scoped_notify(wake_id=WAKE, session_id=view.session_id) == {'accepted': True, 'merged': True}
+            with pytest.raises(ScopedExecutionError, match='not_found'):
+                await runtime.scoped_notify(wake_id=WAKE, session_id=SESSION)
+            assert not runtime._entries
+            with pytest.raises(ValueError): await runtime.scoped_sessions(request().scope, limit=21)
+            with pytest.raises(ValueError): await runtime.scoped_sessions(request().scope, cursor='x'*2049)
+            client.failed = True
+            with pytest.raises(ScopedExecutionError, match='unavailable'):
+                await runtime.scoped_sessions(request().scope)
+        finally:
+            runtime._handoff_client = None
+            await runtime.stop()
+    asyncio.run(run())
+
+
+def test_reused_session_report_replay_keeps_each_wake_binding_namespace(tmp_path):
+    from agent_app.application.controllers.scoped_execution import ScopedExecutionController
+    async def run():
+        store = SessionStore(tmp_path / 'data')
+        await store.start()
+        calls = []
+        class Client:
+            async def send_report(self, wake, binding, report):
+                calls.append((wake, binding, report['report_id']))
+                return {'report_id': report['report_id'], 'disposition': 'accepted', 'report_cursor': 1}
+            async def finalize(self, wake, binding, kind, cursor):
+                calls.append(('finalize', wake, binding, cursor))
+                return {'finalized': True, 'report_cursor': cursor}
+        async def flush(): pass
+        controller = ScopedExecutionController(store, Client(), workspace=tmp_path/'workspace',
+            submit_reserved=None, flush_updates=flush)
+        try:
+            first = await reserve(store, tmp_path)
+            identity = (await store.scoped_record(WAKE)).identity
+            await store.update_scoped(WAKE, {'binding': {'binding_id': 'old'}})
+            await store.append_internal(identity, task_id=first.task_id, update_type='argus_report',
+                payload={'report_id': 'same-report-id', 'items': []})
+            await finish_reservation(store, WAKE)
+            value = request(wake_id=str(UUID(int=980)))
+            second = await store.reserve_scoped(value, identity=identity, execution_id=str(UUID(int=981)), task_id=str(UUID(int=982)))
+            await store.update_scoped(second.wake_id, {'binding': {'binding_id': 'new'}, 'phase': 'stopped',
+                'execution_stopped': True, 'exit_kind': 'completed', 'sync_state': 'pending_sync'})
+            await store.append_internal(identity, task_id=second.task_id, update_type='argus_report',
+                payload={'report_id': 'same-report-id', 'items': []})
+            await controller.release(second.wake_id)
+            assert calls == [(second.wake_id, 'new', 'same-report-id'), ('finalize', second.wake_id, 'new', 1)]
+            assert (await store.get_scoped(wake_id=WAKE)).report_cursor == 0
+            receipts = await store.read_internal(identity, update_types={'argus_report_synced'})
+            assert len(receipts) == 1 and receipts[0].payload['wake_id'] == second.wake_id
+            assert receipts[0].payload['binding_id'] == 'new'
+        finally:
+            await store.close()
+    asyncio.run(run())
+
+
+def test_frozen_v2_json_fixture_retains_nullable_target_and_canonical_fingerprint():
+    import json
+    from pathlib import Path
+    from agent_app.application.models.scoped_execution import ScopedWakeRequest
+    fixture = json.loads((Path(__file__).parent/'fixtures/argus_v2.json').read_text())
+    value = ScopedWakeRequest.model_validate(fixture['request'])
+    assert value.fingerprint == fixture['fingerprint']
+    assert value.model_dump(mode='json') == fixture['request']
 
 
 def test_session_context_is_deeply_immutable():

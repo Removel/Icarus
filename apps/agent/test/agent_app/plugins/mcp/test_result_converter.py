@@ -1,4 +1,5 @@
 import base64
+import json
 
 import pytest
 
@@ -170,6 +171,91 @@ def test_converter脱敏mcp文本和业务错误(tmp_path):
     assert "top-secret" not in str(result.output)
     assert "top-secret" not in result.error
     assert "[REDACTED]" in result.error
+
+
+@pytest.mark.parametrize("payload", [
+    {"retcode": 100, "data": {"messages": "[{\"id\":1}]"}},
+    [{"id": 1}, {"id": 2}],
+])
+@pytest.mark.parametrize("is_error", [False, True])
+def test_converter仅text完整json解码一层并脱敏(tmp_path, payload, is_error):
+    raw = MCPCallResult(
+        content=(MCPContent("text", json.dumps(payload)),),
+        is_error=is_error,
+    )
+    result = make_converter(tmp_path).convert(raw)
+
+    assert result.output == {"content": [{"type": "text", "data": payload}]}
+    assert result.success is not is_error
+    assert raw.content[0].data == json.dumps(payload)
+
+
+@pytest.mark.parametrize("is_error", [False, True])
+def test_converter仅去重与structured语义相等的json保留补充块和图片(tmp_path, is_error):
+    payload = {"count": 3, "nested": {"value": True}}
+    raw = MCPCallResult(
+        structured_content=payload,
+        content=(
+            MCPContent("text", '{"nested": {"value": true}, "count": 3}'),
+            MCPContent("text", "supplemental text"),
+            MCPContent("text", '{"count": 4}'),
+            MCPContent("image", base64.b64encode(PNG).decode("ascii"), media_type="image/png"),
+        ),
+        is_error=is_error,
+    )
+    result = make_converter(tmp_path).convert(raw)
+
+    assert result.output["structured_content"] == payload
+    assert result.output["content"][:2] == [
+        {"type": "text", "text": "supplemental text"},
+        {"type": "text", "text": '{"count":4}'},
+    ]
+    assert result.output["content"][2]["type"] == "image"
+    assert len(result.images) == 1
+    assert raw.structured_content == payload
+    assert len(raw.content) == 4
+    if is_error:
+        assert "supplemental text" in result.error
+
+
+@pytest.mark.parametrize("text", ['{"incomplete":', 'plain text', '"json scalar"'])
+def test_converter保留无效json普通文本和标量(tmp_path, text):
+    result = make_converter(tmp_path).convert(MCPCallResult(content=(MCPContent("text", text),)))
+    assert result.output == {"content": [{"type": "text", "text": text}]}
+
+
+@pytest.mark.parametrize("structured", [None, {"token": "synthetic-secret", "retcode": 100}])
+@pytest.mark.parametrize("is_error", [False, True])
+def test_converter结构化和文本json在成功错误路径均脱敏(tmp_path, structured, is_error):
+    raw = MCPCallResult(
+        content=(MCPContent("text", '{"token":"synthetic-secret","retcode":100}'),),
+        structured_content=structured,
+        is_error=is_error,
+    )
+    result = make_converter(tmp_path).convert(raw)
+    safe = "synthetic-secret" not in str(result.as_dict())
+    assert safe
+    assert result.success is not is_error
+    if structured is None:
+        assert result.output["content"] == [
+            {"type": "text", "data": {"token": "[REDACTED]", "retcode": 100}}
+        ]
+    else:
+        assert result.output["structured_content"] == {"token": "[REDACTED]", "retcode": 100}
+        assert result.output["content"] == []
+        if is_error:
+            assert "retcode" not in result.error
+
+
+@pytest.mark.parametrize("structured, text", [
+    ({"value": True}, '{"value":1}'),
+    ({"token": "first-secret"}, '{"token":"second-secret"}'),
+])
+def test_converter不把类型不同或仅脱敏后相等的json去重(tmp_path, structured, text):
+    result = make_converter(tmp_path).convert(MCPCallResult(
+        structured_content=structured, content=(MCPContent("text", text),),
+    ))
+    assert len(result.output["content"]) == 1
 
 
 def test_converter保留任意json类型的structured_content(tmp_path):

@@ -9,7 +9,7 @@
   "required_capabilities": [],
   "provided_capabilities": [],
   "provided_tools": ["argus_read", "argus_history", "argus_wait", "argus_report"],
-  "published_events": ["prompt.contribution"],
-  "consumed_events": ["input.user_input", "agent.tool_completed"],
+  "published_events": ["prompt.contribution", "prompt.update"],
+  "consumed_events": ["input.user_input", "agent.tool_completed", "context.ready", "input.finished"],
   "state_scopes": []
 }

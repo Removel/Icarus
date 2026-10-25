@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 from typing import Any
 
 from agent_app.plugins.mcp.models import MCPCallResult
@@ -16,6 +17,21 @@ from icarus.core.tools import ToolExecutionResult
 
 
 MAX_MCP_IMAGES = 16
+
+
+def _json_equal(left: Any, right: Any) -> bool:
+    # JSON booleans and numbers are distinct even though True == 1 in Python.
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _json_equal(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _json_equal(a, b) for a, b in zip(left, right)
+        )
+    return left == right
 
 
 class MCPResultConverter:
@@ -33,10 +49,24 @@ class MCPResultConverter:
         image_bytes = 0
         for content in result.content:
             if content.type == "text":
-                text = self.redactor.redact_text(str(content.data))
-                contents.append({"type": "text", "text": text})
-                if text.strip():
-                    error_texts.append(text)
+                raw_text = str(content.data)
+                try:
+                    decoded = json.loads(raw_text)
+                except (ValueError, TypeError):
+                    decoded = None
+                text = self.redactor.redact_text(raw_text)
+                if (
+                    result.structured_content is not None
+                    and decoded is not None
+                    and _json_equal(decoded, result.structured_content)
+                ):
+                    continue
+                if result.structured_content is None and isinstance(decoded, (dict, list)):
+                    contents.append({"type": "text", "data": self.redactor.redact(decoded)})
+                else:
+                    contents.append({"type": "text", "text": text})
+                    if text.strip():
+                        error_texts.append(text)
                 continue
             if content.type == "image":
                 self._check_image_count(images)

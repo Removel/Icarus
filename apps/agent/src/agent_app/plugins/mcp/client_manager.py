@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 import logging
+import re
 
 from agent_app.plugins.mcp.backend import (
     FastMCPClientBackend,
@@ -236,6 +237,7 @@ def _validate_arguments(
             "JSON Schema validation support is not installed"
         ) from error
     schema = descriptor.as_dict()["input_schema"]
+    safe_ref = Redactor().redact_text(descriptor.tool_ref)[:128]
     try:
         validator_type = validator_for(schema)
         validator_type.check_schema(schema)
@@ -245,23 +247,69 @@ def _validate_arguments(
             ).iter_errors(dict(arguments)),
             key=lambda error: tuple(str(part) for part in error.absolute_path),
         )
-    except jsonschema_exceptions.SchemaError as error:
+    except jsonschema_exceptions.SchemaError:
         raise ValueError(
-            f"MCP Tool has an invalid input schema: {descriptor.tool_ref}: {error.message}"
-        ) from error
-    except Unresolvable as error:
+            f"MCP Tool has an invalid input schema: {safe_ref}"
+        ) from None
+    except Unresolvable:
         raise ValueError(
-            f"MCP Tool input schema cannot resolve external reference: {descriptor.tool_ref}"
-        ) from error
+            f"MCP Tool input schema cannot resolve external reference: {safe_ref}"
+        ) from None
     if not errors:
         return
     details = []
-    for validation_error in errors[:8]:
-        path = "$." + ".".join(str(part) for part in validation_error.absolute_path)
-        details.append(
-            f"{path.rstrip('.')}: failed {validation_error.validator} validation"
-        )
+    for validation_error in errors:
+        for detail in _validation_details(validation_error):
+            detail = detail[:240]
+            if detail not in details:
+                details.append(detail)
+            if len(details) == 8:
+                break
+        if len(details) == 8:
+            break
     raise ValueError(
-        f"MCP Tool arguments are invalid: {descriptor.tool_ref}: "
+        f"MCP Tool arguments are invalid: {safe_ref}: "
         + "; ".join(details)
     )
+
+
+def _validation_path(parts) -> str:
+    path = "$"
+    for part in parts:
+        if isinstance(part, int):
+            path += f"[{part}]"
+        else:
+            # Field names are useful; arbitrary argument values are never diagnostics.
+            name = Redactor().redact_text(str(part))
+            name = re.sub(r"[^\w$-]", "?", name)[:64]
+            path += "." + name
+    return path[:160]
+
+
+def _validation_details(error, *, depth=0):
+    path = list(error.absolute_path)
+    if error.validator in {"anyOf", "oneOf"} and error.context and depth < 4:
+        for child in error.context:
+            branch = child.schema_path[0]
+            for detail in _validation_details(child, depth=depth + 1):
+                yield f"{error.validator} alternative {branch + 1}: {detail}"
+    elif error.validator == "required":
+        for name in error.validator_value:
+            if name not in error.instance:
+                yield f"{_validation_path([*path, name])}: missing required key"
+    elif error.validator == "additionalProperties":
+        properties = error.schema.get("properties", {})
+        patterns = error.schema.get("patternProperties", {})
+        for name in error.instance:
+            if name not in properties and not any(re.search(pattern, name) for pattern in patterns):
+                yield f"{_validation_path([*path, name])}: unknown key"
+    elif error.validator == "type":
+        types = error.validator_value
+        if isinstance(types, str):
+            types = [types]
+        # check_schema has validated these standard type names, not user values.
+        yield f"{_validation_path(path)}: expected type {' or '.join(types)}"
+    elif error.validator == "enum":
+        yield f"{_validation_path(path)}: expected a declared enum value"
+    else:
+        yield f"{_validation_path(path)}: failed {error.validator} validation"

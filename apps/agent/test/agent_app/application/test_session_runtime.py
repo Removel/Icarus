@@ -49,6 +49,57 @@ def make_config(data_dir) -> ConfigModel:
     )
 
 
+def test_background_runtime_two_tasks_load_exact_bindings_with_stable_system(tmp_path):
+    from icarus.core.session import SessionContext
+    async def run():
+        bindings = {
+            'task-one': {'wake_id': 'wake-one', 'task_id': 'task-one', 'session_id': 'semantic',
+                'execution_id': 'execution-one', 'protocol_version': 2, 'scope': {'source': 'qq'},
+                'binding_id': 'binding-one', 'initial_cursor': 'cursor-one',
+                'initial_items': [{'observation_id': 'item-one', 'role': 'work', 'origin': 'initial', 'excerpt': 'FIRST QUESTION'}]},
+            'task-two': {'wake_id': 'wake-two', 'task_id': 'task-two', 'session_id': 'semantic',
+                'execution_id': 'execution-two', 'protocol_version': 2, 'scope': {'source': 'qq'},
+                'binding_id': 'binding-two', 'initial_cursor': 'cursor-two',
+                'initial_items': [{'observation_id': 'item-two', 'role': 'work', 'origin': 'initial', 'excerpt': 'SECOND QUESTION'}]},
+        }
+        loaded, delivered, updates = [], [], []
+        async def load_binding(task_id):
+            loaded.append(task_id)
+            return bindings[task_id]
+        class Client:
+            async def call(self, wake_id, operation, payload):
+                delivered.append((wake_id, operation, payload['binding_id']))
+                return {'delivered_ids': []}
+        async def append(**values): return 1
+        async def publish(update): updates.append(update)
+        context = SessionContext(kind='argus_background', scope={'source': 'qq'}, metadata={'owner': 'argus'})
+        runtime = SessionRuntime(SessionIdentity.create(tmp_path, 'semantic'), config=make_config(tmp_path/'data'),
+            context=context, publish_update=publish, argus_facilities={
+                'client': Client(), 'append_record': append, 'load_binding': load_binding})
+        await runtime.start()
+        try:
+            plugin = runtime.runtime_host.get_plugin('argus')
+            assert len(plugin.build_tools()) == 4
+            runtime.runtime_host.get_plugin('agent').agent_factory.get_agent = lambda role: AgentStub()
+            before = runtime.runtime_host.get_plugin('prompt')._system_prompt
+            for task in ('task-one', 'task-two'):
+                await runtime.submit('work', task_id=task)
+                await asyncio.wait_for(runtime.drain_execution(), 3)
+                assert runtime.execution_exit_kind(task) == 'completed'
+            assert loaded == ['task-one', 'task-two']
+            assert delivered == [('wake-one', 'deliver', 'binding-one'), ('wake-two', 'deliver', 'binding-two')]
+            assert runtime.context is context and dict(context.metadata) == {'owner': 'argus'}
+            assert runtime.runtime_host.get_plugin('prompt')._system_prompt == before
+            assert 'FIRST QUESTION' not in before and 'SECOND QUESTION' not in before
+            assert (await plugin.execute('wait', {}, task_id='task-one')).error == 'execution_mismatch'
+            assert plugin.input_source == runtime.runtime_host.graph.provider_id('input.submit')
+            assert plugin.task_control_source == runtime.runtime_host.graph.provider_id('task.control')
+            assert plugin.context_source == 'blackboard'
+        finally:
+            await runtime.stop('test')
+    asyncio.run(run())
+
+
 def test_prompt_plugin_is_initialized_with_private_instructions_and_frozen_workspace(tmp_path):
     async def run():
         (tmp_path / "AGENTS.md").write_text("WORKSPACE-OLD")
@@ -567,7 +618,10 @@ def test_session_runtime_e2e自动记忆先注入再进入完整历史(tmp_path,
     assert len(backend.calls) == 1
     assert agent.context is not None
     assert "user prefers concise docs" in agent.context.message.content[0].text
-    assert '"memory":' in agent.input_prompt
+    assert "<blackboard_regions>" not in agent.input_prompt
+    assert '"memory":' not in agent.input_prompt
+    assert '"idle"' not in agent.input_prompt
+    assert region.output.refs == ("memory:1",)
     assert region.complete_for_input is True
     assert region.state.status == "idle"
     assert [message.role for message in messages] == ["user", "assistant"]

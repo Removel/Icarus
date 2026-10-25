@@ -9,7 +9,10 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+
+from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
 from sqlalchemy import exists, func, select, text, update as update_row
 from icarus.runtime.storage import SqliteDatabase
@@ -23,6 +26,7 @@ from icarus.core.identity import (
 from agent_app.application.models.status import SessionSummary
 from agent_app.application.models.scoped_execution import ExecutionView, ScopedExecutionError, ScopedWakeRequest
 from agent_app.argus_protocol import Scope
+from agent_app.application.semantic_context import semantic_subject
 from icarus.core.session import SessionContext
 from agent_app.application.repositories.session_entities import (
     _Base,
@@ -36,7 +40,8 @@ from icarus.core.runtime_update import RuntimeUpdate, RuntimeUpdateType
 
 _SUMMARY_MAX_LENGTH = 256
 _UPDATE_TYPES = frozenset(get_args(RuntimeUpdateType))
-_INTERNAL_TYPES = frozenset({"argus_report", "argus_report_synced", "argus_report_rejected", "argus_wait_cursor"})
+_INTERNAL_TYPES = frozenset({"argus_execution", "argus_reference", "argus_action", "argus_report", "argus_report_synced", "argus_report_rejected", "argus_wait_cursor"})
+_BOUND_TYPES = frozenset({"argus_report", "argus_report_synced", "argus_report_rejected", "argus_wait_cursor", "argus_reference", "argus_action"})
 
 
 @dataclass(frozen=True)
@@ -63,6 +68,9 @@ class SessionRecord:
     @property
     def context(self) -> SessionContext:
         properties = self.properties or {}
+        if properties.get("kind") == "argus_background":
+            # The context is frozen for the loaded session, not for one wake.
+            properties = {key: properties[key] for key in ("kind", "owner", "scope") if key in properties}
         return SessionContext(
             kind=str(properties.get("kind", "interactive")),
             scope=cast(Mapping[str, Any] | None, properties.get("scope")),
@@ -76,7 +84,8 @@ SoftDeleteStatus = Literal["discarded", "not_empty", "not_found"]
 class SessionStore:
     """Persist Session business data behind a domain-oriented API."""
 
-    def __init__(self, data_dir: str | Path) -> None:
+    def __init__(self, data_dir: str | Path, *, clock: Callable[[], datetime] | None = None) -> None:
+        self._clock = clock or (lambda: datetime.now(UTC))
         resolved = Path(data_dir).expanduser()
         if not resolved.is_absolute():
             raise ValueError("ICARUS_DATA_DIR must be an absolute path")
@@ -105,6 +114,7 @@ class SessionStore:
         assert engine is not None
         try:
             async with engine.begin() as connection:
+                await connection.execute(text("BEGIN IMMEDIATE"))
                 await connection.run_sync(_Base.metadata.create_all)
                 columns = {row[1] for row in (await connection.execute(text("PRAGMA table_info(sessions)")))}
                 if "scope_key" not in columns:
@@ -115,9 +125,14 @@ class SessionStore:
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_scope ON sessions(scope_key) "
                     "WHERE scope_key IS NOT NULL"
                 ))
+                # Serialize the entire conversion, including outbox attribution. Invalid
+                # recovery evidence aborts the transaction rather than inventing an exit.
+                await connection.run_sync(_migrate_argus_admissions, self._clock())
+                await connection.execute(text("DROP INDEX IF EXISTS uq_sessions_wake"))
                 await connection.execute(text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_wake ON sessions(json_extract(properties, '$.wake_id')) "
-                    "WHERE json_extract(properties, '$.kind') = 'argus_background'"
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_argus_execution_wake "
+                    "ON conversation_updates(json_extract(payload, '$.wake_id')) "
+                    "WHERE update_type = 'argus_execution'"
                 ))
             try:
                 self.database_path.chmod(0o600)
@@ -378,11 +393,27 @@ class SessionStore:
 
     async def append_internal(self, identity: SessionIdentity, *, task_id: str | None,
                               update_type: str, payload: dict[str, object]) -> int:
-        if update_type not in _INTERNAL_TYPES:
+        if update_type not in _INTERNAL_TYPES or update_type == "argus_execution":
             raise ValueError("Unsupported internal update type")
         sessions = self._require_started()
         async with sessions.begin() as db:
-            now = datetime.now(UTC)
+            now = self._clock()
+            session = await db.get(_SessionRow, (identity.workspace_key, identity.session_id))
+            if session is None or session.deleted_at is not None:
+                raise SessionNotFoundError(identity.session_id)
+            if update_type in _BOUND_TYPES and (session.properties or {}).get("kind") == "argus_background":
+                admission = await db.scalar(_admission_query().where(
+                    _ConversationUpdateRow.workspace_key == identity.workspace_key,
+                    _ConversationUpdateRow.session_id == identity.session_id,
+                    _ConversationUpdateRow.task_id == task_id,
+                ))
+                if admission is None or not (admission.payload.get("binding") or {}).get("binding_id"):
+                    raise ScopedExecutionError("execution_unknown")
+                binding_id = admission.payload["binding"]["binding_id"]
+                if (payload.get("wake_id", admission.payload["wake_id"]) != admission.payload["wake_id"]
+                        or payload.get("binding_id", binding_id) != binding_id):
+                    raise ScopedExecutionError("execution_mismatch")
+                payload = {**payload, "wake_id": admission.payload["wake_id"], "binding_id": binding_id}
             sequence = await db.scalar(update_row(_SessionRow).where(
                 _SessionRow.workspace_key == identity.workspace_key,
                 _SessionRow.session_id == identity.session_id, _SessionRow.deleted_at.is_(None),
@@ -527,48 +558,86 @@ class SessionStore:
     async def scoped_record(self, wake_id: str) -> SessionRecord | None:
         sessions = self._require_started()
         async with sessions() as db:
-            row = await db.scalar(select(_SessionRow).where(
-                _SessionRow.properties["wake_id"].as_string() == wake_id,
-                _SessionRow.properties["kind"].as_string() == "argus_background",
-            ))
-            if row is None:
+            admission = await db.scalar(_admission_query(wake_id))
+            if admission is None:
                 return None
-            workspace = await db.get(_WorkspaceRow, row.workspace_key)
-            if workspace is None:
-                raise RuntimeError('Stored workspace is unavailable')
+            _validate_admission(admission.payload)
+            row = await db.get(_SessionRow, (admission.workspace_key, admission.session_id))
+            workspace = await db.get(_WorkspaceRow, admission.workspace_key)
+            if row is None or workspace is None:
+                raise RuntimeError("Stored admission session is unavailable")
             identity = SessionIdentity.create(workspace.workspace_path, row.session_id)
-            return _session_record(identity, row)
+            return replace(_session_record(identity, row), properties={
+                **(row.properties or {}), **admission.payload,
+            })
+
+    async def load_binding(self, identity: SessionIdentity, task_id: str) -> dict:
+        """Select this session's exact task; never fall back to its latest wake."""
+        sessions = self._require_started()
+        async with sessions() as db:
+            row = await db.get(_SessionRow, (identity.workspace_key, identity.session_id))
+            admission = await db.scalar(_admission_query().where(
+                _ConversationUpdateRow.workspace_key == identity.workspace_key,
+                _ConversationUpdateRow.session_id == identity.session_id,
+                _ConversationUpdateRow.task_id == task_id,
+            ))
+            if (row is None or row.deleted_at is not None or admission is None
+                    or (row.properties or {}).get("owner") != "argus"):
+                raise ScopedExecutionError("execution_unknown")
+            payload = admission.payload
+            _validate_admission(payload)
+            binding = payload.get("binding")
+            if not isinstance(binding, dict) or not binding.get("binding_id"):
+                raise ScopedExecutionError("execution_unknown")
+            return {**binding, "binding": dict(binding), **{name: payload[name] for name in
+                ("wake_id", "session_id", "task_id", "execution_id", "scope", "protocol_version")},
+                "reason": payload["request"]["reason"], "rule_id": payload["request"]["rule_id"]}
 
     async def active_scoped(self) -> tuple[ExecutionView, ...]:
         sessions = self._require_started()
         async with sessions() as db:
-            rows = await db.scalars(select(_SessionRow).where(
-                _SessionRow.properties["kind"].as_string() == "argus_background", _SessionRow.scope_key.is_not(None),
+            rows = await db.scalars(_admission_query().where(
+                _ConversationUpdateRow.payload["release_complete"].as_boolean() == False,
             ))
             return tuple(_execution_view(row) for row in rows)
 
     async def reserve_scoped(
         self, request: ScopedWakeRequest, *, identity: SessionIdentity,
-        execution_id: str, task_id: str, max_active_executions: int = 8,
+        execution_id: str, task_id: str, max_active_executions: int = 8, retired_at: str | None = None,
     ) -> ExecutionView:
         if not 1 <= max_active_executions <= 100:
             raise ValueError("Invalid execution capacity")
         sessions = self._require_started()
-        now = datetime.now(UTC)
+        now = self._clock()
         async with sessions() as db:
             async with db.begin():
                 await db.execute(text("BEGIN IMMEDIATE"))
-                existing = await db.scalar(select(_SessionRow).where(
-                    _SessionRow.properties["wake_id"].as_string() == request.wake_id,
-                    _SessionRow.properties["kind"].as_string() == "argus_background",
-                ))
+                existing = await db.scalar(_admission_query(request.wake_id))
                 if existing is not None:
-                    if (existing.properties or {})["fingerprint"] != request.fingerprint:
+                    _validate_admission(existing.payload)
+                    if existing.payload["fingerprint"] != request.fingerprint:
                         raise ScopedExecutionError("submission_conflict")
                     return _execution_view(existing)
+                row = await db.get(_SessionRow, (identity.workspace_key, identity.session_id))
+                if row is not None or request.target_session_id is not None:
+                    properties = row.properties or {} if row is not None else {}
+                    if (row is None or row.deleted_at is not None
+                            or properties.get("kind") != "argus_background" or properties.get("owner") != "argus"
+                            or properties.get("scope") != request.scope.model_dump(mode="json")
+                            or (properties.get('retired_at') is not None and not (
+                                request.protocol_version == 2 and request.target_session_id == identity.session_id
+                                and retired_at == properties['retired_at']))
+                            or (request.target_session_id is not None and request.target_session_id != identity.session_id)):
+                        raise ScopedExecutionError("target_unavailable")
                 owner = await db.scalar(select(_SessionRow).where(_SessionRow.scope_key == request.scope.key))
                 if owner is not None:
-                    raise ScopedExecutionError("scope_busy", owner=_execution_view(owner))
+                    current_wake_id = (owner.properties or {}).get("current_wake_id")
+                    if not isinstance(current_wake_id, str):
+                        raise ScopedExecutionError("execution_unknown")
+                    current = await db.scalar(_admission_query(current_wake_id))
+                    if current is None:
+                        raise ScopedExecutionError("execution_unknown")
+                    raise ScopedExecutionError("scope_busy", owner=_execution_view(current))
                 count = await db.scalar(select(func.count()).select_from(_SessionRow).where(
                     _SessionRow.scope_key.is_not(None),
                     _SessionRow.properties["kind"].as_string() == "argus_background",
@@ -584,13 +653,30 @@ class SessionStore:
                     execution_id=execution_id, session_id=identity.session_id,
                     task_id=task_id, scope=request.scope,
                 )
-                properties = {**view.model_dump(mode="json"), "kind": "argus_background", "owner": "argus",
-                              "fingerprint": request.fingerprint, "request": request.model_dump(mode="json")}
-                db.add(_SessionRow(
-                    workspace_key=identity.workspace_key, session_id=identity.session_id,
-                    created_at=now, updated_at=now, last_sequence=0,
-                    scope_key=request.scope.key, properties=properties,
-                ))
+                payload = {**view.model_dump(mode="json"), "fingerprint": request.fingerprint,
+                    "request": request.model_dump(mode="json"), "protocol_version": request.protocol_version,
+                    "state_updated_at": now.isoformat()}
+                if row is not None and (row.properties or {}).get('retired_at') is not None:
+                    payload['reactivating_retired_at'] = (row.properties or {})['retired_at']
+                _validate_admission(payload)
+                if row is None:
+                    row = _SessionRow(workspace_key=identity.workspace_key, session_id=identity.session_id,
+                        created_at=now, updated_at=now, last_sequence=0)
+                    db.add(row)
+                row.scope_key = request.scope.key
+                previous = row.properties or {}
+                provisional = payload.get('reactivating_retired_at') is not None
+                row.properties = {**previous, "kind": "argus_background", "owner": "argus",
+                    "scope": request.scope.model_dump(mode="json"),
+                    "summary": previous.get('summary', '') if provisional else request.reason[:256],
+                    "last_semantic_activity_at": previous['last_semantic_activity_at'] if provisional else now.isoformat(),
+                    "current_wake_id": request.wake_id}
+                row.updated_at = now
+                row.last_sequence += 1
+                await db.flush()
+                db.add(_ConversationUpdateRow(workspace_key=identity.workspace_key, session_id=identity.session_id,
+                    sequence=row.last_sequence, task_id=task_id, update_type="argus_execution", payload=payload,
+                    occurred_at=now))
                 await db.flush()
                 return view
 
@@ -599,10 +685,15 @@ class SessionStore:
             raise ValueError("Specify exactly one execution selector")
         sessions = self._require_started()
         async with sessions() as db:
-            query = select(_SessionRow).where(_SessionRow.properties["kind"].as_string() == "argus_background")
-            query = query.where(_SessionRow.scope_key == scope.key) if scope is not None else query.where(
-                _SessionRow.properties["wake_id"].as_string() == wake_id)
-            row = await db.scalar(query)
+            if scope is not None:
+                owner = await db.scalar(select(_SessionRow).where(_SessionRow.scope_key == scope.key))
+                if owner is None:
+                    return None
+                current_wake_id = (owner.properties or {}).get("current_wake_id")
+                if not isinstance(current_wake_id, str):
+                    raise ScopedExecutionError("execution_unknown")
+                wake_id = current_wake_id
+            row = await db.scalar(_admission_query(wake_id))
             return _execution_view(row) if row is not None else None
 
     async def update_scoped(self, wake_id: str, changes: dict[str, object]) -> ExecutionView:
@@ -610,19 +701,46 @@ class SessionStore:
         async with sessions() as db:
             async with db.begin():
                 await db.execute(text("BEGIN IMMEDIATE"))
-                row = await db.scalar(select(_SessionRow).where(
-                    _SessionRow.properties["wake_id"].as_string() == wake_id,
-                    _SessionRow.properties["kind"].as_string() == "argus_background",
-                ))
+                row = await db.scalar(_admission_query(wake_id))
                 if row is None:
                     raise ScopedExecutionError("not_found")
-                immutable = {"wake_id", "origin_boot_id", "execution_id", "session_id", "task_id", "scope", "fingerprint", "kind", "owner", "request", "release_complete"}
+                _validate_admission(row.payload)
+                immutable = {"wake_id", "origin_boot_id", "execution_id", "session_id", "task_id", "scope", "fingerprint",
+                    "kind", "owner", "request", "protocol_version", "target_session_id", "release_complete",
+                    'reactivating_retired_at'}
                 if immutable.intersection(changes):
                     raise ValueError("Execution identity cannot be changed")
-                if changes.get('phase') == 'cancelling' and (row.properties or {}).get('execution_stopped'):
+                if changes.get("phase") == "cancelling" and row.payload["execution_stopped"]:
                     return _execution_view(row)
-                row.properties = {**(row.properties or {}), **changes}
-                row.updated_at = datetime.now(UTC)
+                if "binding" in changes and row.payload.get("binding") is not None and changes["binding"] != row.payload["binding"]:
+                    raise ValueError("Execution binding cannot be changed")
+                first_stop = changes.get('execution_stopped') is True and not row.payload['execution_stopped']
+                payload = {**row.payload, **changes, "state_updated_at": self._clock().isoformat()}
+                if payload.get('reactivating_retired_at') is not None:
+                    if payload.get('bound') or 'binding' in changes:
+                        _validate_reactivation_binding(payload)
+                    if payload.get('launching') and not payload.get('bound'):
+                        raise ScopedExecutionError('target_unavailable')
+                _validate_admission(payload)
+                row.payload = payload
+                if 'binding' in changes:
+                    session = await db.get(_SessionRow, (row.workspace_key, row.session_id))
+                    if session is not None and (session.properties or {}).get('current_wake_id') == wake_id:
+                        if payload.get('reactivating_retired_at') is not None:
+                            if ((session.properties or {}).get('retired_at') != payload['reactivating_retired_at']
+                                    or session.scope_key != _execution_view(row).scope.key):
+                                raise ScopedExecutionError('target_unavailable')
+                            session.properties = {**(session.properties or {}), 'retired_at': None,
+                                'last_semantic_activity_at': self._clock().isoformat()}
+                        session.properties = {**(session.properties or {}),
+                            'summary': semantic_subject(payload['binding'], payload['request'])[:256]}
+                if first_stop:
+                    # Only the first durable work-stop transition is semantic activity.
+                    session = await db.get(_SessionRow, (row.workspace_key, row.session_id))
+                    if (session is not None and (session.properties or {}).get('current_wake_id') == wake_id
+                            and (session.properties or {}).get('retired_at') is None):
+                        session.properties = {**(session.properties or {}),
+                            'last_semantic_activity_at': self._clock().isoformat()}
                 return _execution_view(row)
 
     async def complete_scoped_release(self, wake_id: str) -> ExecutionView:
@@ -630,19 +748,102 @@ class SessionStore:
         async with sessions() as db:
             async with db.begin():
                 await db.execute(text("BEGIN IMMEDIATE"))
-                row = await db.scalar(select(_SessionRow).where(
-                    _SessionRow.properties["wake_id"].as_string() == wake_id,
-                    _SessionRow.properties["kind"].as_string() == "argus_background",
-                ))
-                if row is None:
+                admission = await db.scalar(_admission_query(wake_id))
+                if admission is None:
                     raise ScopedExecutionError("not_found")
-                view = _execution_view(row)
+                view = _execution_view(admission)
                 if not view.execution_stopped or view.phase != "stopped" or view.sync_state != "finalized":
                     raise ScopedExecutionError("busy", owner=view)
-                row.scope_key = None
-                row.properties = {**(row.properties or {}), "release_complete": True}
-                row.updated_at = datetime.now(UTC)
-                return _execution_view(row)
+                if view.release_complete:
+                    return view
+                row = await db.get(_SessionRow, (admission.workspace_key, admission.session_id))
+                now = self._clock()
+                if row is not None and (row.properties or {}).get("current_wake_id") == wake_id:
+                    row.scope_key = None
+                    row.properties = {**(row.properties or {}), "current_wake_id": None}
+                    row.updated_at = now
+                admission.payload = {**admission.payload, "release_complete": True, "state_updated_at": now.isoformat()}
+                return _execution_view(admission)
+
+    async def argus_lifecycle_sessions(self) -> tuple[SessionRecord, ...]:
+        sessions = self._require_started()
+        async with sessions() as db:
+            rows = await db.execute(select(_SessionRow, _WorkspaceRow.workspace_path).join(
+                _WorkspaceRow, _WorkspaceRow.workspace_key == _SessionRow.workspace_key).where(
+                _SessionRow.deleted_at.is_(None), _SessionRow.properties['kind'].as_string() == 'argus_background',
+                _SessionRow.properties['owner'].as_string() == 'argus',
+                _SessionRow.properties['retired_at'].as_string().is_(None)))
+            return tuple(_session_record(SessionIdentity.create(path, row.session_id), row) for row, path in rows)
+
+    async def retire_argus_session(self, identity, *, expected_activity: str) -> bool:
+        """Retire routing eligibility atomically, never delete conversation history."""
+        sessions = self._require_started()
+        async with sessions() as db:
+            async with db.begin():
+                await db.execute(text('BEGIN IMMEDIATE'))
+                row = await db.get(_SessionRow, (identity.workspace_key, identity.session_id))
+                if (row is None or row.deleted_at is not None or row.scope_key is not None
+                        or (row.properties or {}).get('kind') != 'argus_background'
+                        or (row.properties or {}).get('last_semantic_activity_at') != expected_activity):
+                    return False
+                updates = tuple(await db.scalars(select(_ConversationUpdateRow).where(
+                    _ConversationUpdateRow.workspace_key == identity.workspace_key,
+                    _ConversationUpdateRow.session_id == identity.session_id,
+                    _ConversationUpdateRow.update_type.in_({'argus_report', 'argus_report_synced', 'argus_report_rejected'}))))
+                terminal = {(value.payload.get('wake_id'), value.payload.get('binding_id'), value.payload.get('report_id'))
+                            for value in updates if value.update_type != 'argus_report'}
+                if any((value.payload.get('wake_id'), value.payload.get('binding_id'), value.payload.get('report_id'))
+                       not in terminal for value in updates if value.update_type == 'argus_report'):
+                    return False
+                row.properties = {**(row.properties or {}), 'retired_at': self._clock().isoformat()}
+                return True
+
+    async def list_argus_sessions(self, scope: Scope, *, cursor=None, limit=10) -> dict:
+        if not isinstance(scope, Scope):
+            scope = Scope.model_validate(scope)
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("Invalid candidate page size")
+        if cursor is not None and (not isinstance(cursor, str) or len(cursor) > 2048):
+            raise ValueError("Invalid candidate cursor")
+        import json
+        offset = 0
+        if cursor is not None:
+            try:
+                key, offset = json.loads(cursor)
+                if key != scope.key or type(offset) is not int or offset < 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise ValueError("Invalid candidate cursor") from None
+        sessions = self._require_started()
+        async with sessions() as db:
+            rows = tuple(await db.scalars(select(_SessionRow).where(
+                _SessionRow.deleted_at.is_(None), _SessionRow.properties["kind"].as_string() == "argus_background",
+                _SessionRow.properties["owner"].as_string() == "argus",
+                _SessionRow.properties["retired_at"].as_string().is_(None),
+                _SessionRow.properties['scope']['source'].as_string() == scope.source,
+                _SessionRow.properties['scope']['account_id'].as_string() == scope.account_id,
+                _SessionRow.properties['scope']['chat_kind'].as_string() == scope.chat_kind,
+                _SessionRow.properties['scope']['external_id'].as_string() == scope.external_id,
+            ).order_by(_SessionRow.properties['last_semantic_activity_at'].as_string().desc(), _SessionRow.session_id)))
+            rows = tuple(row for row in rows if (row.properties or {}).get("scope") == scope.model_dump(mode="json"))
+            page = rows[offset:offset+limit]
+            items = []
+            for row in page:
+                pending = tuple(await db.scalars(select(_ConversationUpdateRow).where(
+                    _ConversationUpdateRow.workspace_key == row.workspace_key,
+                    _ConversationUpdateRow.session_id == row.session_id,
+                    _ConversationUpdateRow.update_type.in_({"argus_report", "argus_report_synced", "argus_report_rejected"}),
+                )))
+                terminal = {(r.payload.get("wake_id"), r.payload.get("binding_id"), r.payload.get("report_id"))
+                    for r in pending if r.update_type != "argus_report"}
+                outbox = any((r.payload.get("wake_id"), r.payload.get("binding_id"), r.payload.get("report_id")) not in terminal
+                    for r in pending if r.update_type == "argus_report")
+                properties = row.properties or {}
+                items.append({"session_id": row.session_id, "summary": str(properties.get("summary", ""))[:256],
+                    "last_related_at": properties["last_semantic_activity_at"],
+                    "has_work": row.scope_key is not None or outbox})
+            return {"items": items, "next_cursor": json.dumps([scope.key, offset+limit], separators=(",", ":"))
+                if offset+limit < len(rows) else None}
 
     def _require_started(self) -> async_sessionmaker[AsyncSession]:
         if not self._started or self._sessions is None:
@@ -663,11 +864,116 @@ class SessionStore:
         )
 
 
-def _execution_view(row: _SessionRow) -> ExecutionView:
-    properties = row.properties or {}
-    return ExecutionView.model_validate({
-        name: properties[name] for name in ExecutionView.model_fields if name in properties
-    })
+def _admission_query(wake_id: str | None = None):
+    query = select(_ConversationUpdateRow).where(_ConversationUpdateRow.update_type == "argus_execution")
+    return query.where(_ConversationUpdateRow.payload["wake_id"].as_string() == wake_id) if wake_id is not None else query
+
+
+def _validate_reactivation_binding(payload):
+    """Authenticated bind proves the frozen target/items before routing revival."""
+    binding, request = payload.get('binding'), payload['request']
+    if not isinstance(binding, dict):
+        raise ScopedExecutionError('target_unavailable')
+    expected = {key: payload[key] for key in
+                ('protocol_version', 'execution_id', 'session_id', 'task_id', 'scope', 'origin_boot_id')}
+    expected['request_fingerprint'] = payload['fingerprint']
+    if any(binding.get(key) != value for key, value in expected.items()):
+        raise ScopedExecutionError('target_unavailable')
+    initial = binding.get('initial_items')
+    requested = {item['observation_id'] for item in request['items']}
+    if (not isinstance(initial, list) or {item.get('observation_id') for item in initial if isinstance(item, dict)} != requested
+            or any(not isinstance(item, dict) for item in initial)
+            or len(initial) != len(requested)):
+        raise ScopedExecutionError('target_unavailable')
+
+
+def _validate_admission(payload: dict) -> ExecutionView:
+    try:
+        allowed = set(ExecutionView.model_fields) | {"fingerprint", "request", "protocol_version", "state_updated_at",
+            "deadline_at", "binding", "binding_attempted", "bound", "launching", "deadline_expired",
+            "launch_error", "stop_error", "cleanup_error", "reactivating_retired_at"}
+        if (not isinstance(payload, dict) or not set(ExecutionView.model_fields) <= payload.keys()
+                or payload.keys() - allowed):
+            raise ValueError("Incomplete or unsupported execution evidence")
+        view = ExecutionView.model_validate({key: payload[key] for key in ExecutionView.model_fields})
+        request = ScopedWakeRequest.model_validate(payload["request"])
+        if (request.wake_id != view.wake_id or request.origin_boot_id != view.origin_boot_id or request.scope != view.scope
+                or request.fingerprint != payload["fingerprint"] or request.protocol_version != payload["protocol_version"]
+                or (request.target_session_id is not None and request.target_session_id != view.session_id)):
+            raise ValueError("Inconsistent admission identity")
+        datetime.fromisoformat(payload["state_updated_at"])
+        if 'reactivating_retired_at' in payload:
+            retired = datetime.fromisoformat(payload['reactivating_retired_at'])
+            if retired.tzinfo is None or request.protocol_version != 2 or request.target_session_id != view.session_id:
+                raise ValueError('Invalid provisional target admission')
+            if payload.get('bound'):
+                _validate_reactivation_binding(payload)
+        if "deadline_at" in payload:
+            datetime.fromisoformat(payload["deadline_at"])
+        for key in ("binding_attempted", "bound", "launching", "deadline_expired"):
+            if key in payload and type(payload[key]) is not bool:
+                raise ValueError("Invalid admission gate")
+        if "binding" in payload:
+            binding = payload["binding"]
+            if not isinstance(binding, dict) or not isinstance(binding.get("binding_id"), str) or not binding["binding_id"]:
+                raise ValueError("Invalid admission binding")
+            for key in ("wake_id", "execution_id", "session_id", "task_id", "scope", "protocol_version"):
+                if key in binding and binding[key] != payload[key]:
+                    raise ValueError("Admission binding identity mismatch")
+        for key in ("launch_error", "stop_error", "cleanup_error"):
+            if key in payload and not isinstance(payload[key], str):
+                raise ValueError("Invalid admission diagnostic")
+        return view
+    except (KeyError, TypeError, ValueError, ValidationError):
+        raise RuntimeError("Stored Argus admission is unavailable") from None
+
+
+def _migrate_argus_admissions(connection, now):
+    with Session(bind=connection) as db:
+        rows = tuple(db.scalars(select(_SessionRow).where(
+            _SessionRow.properties["kind"].as_string() == "argus_background")))
+        for row in rows:
+            properties = dict(row.properties or {})
+            if "wake_id" not in properties:
+                continue
+            # Validate all persisted exit and recovery fields before stripping the
+            # old projection. No defaults may turn unknown work into released work.
+            payload = {key: value for key, value in properties.items() if key not in {"kind", "owner"}}
+            try:
+                saved_request = ScopedWakeRequest.model_validate(payload.get("request", {}))
+            except ValidationError:
+                raise RuntimeError("Stored Argus admission is unavailable") from None
+            payload["protocol_version"] = saved_request.protocol_version
+            payload["state_updated_at"] = _as_utc(row.updated_at).isoformat()
+            _validate_admission(payload)
+            if properties.get("owner") != "argus":
+                raise RuntimeError("Stored Argus admission owner is unavailable")
+            previous = db.scalar(_admission_query(saved_request.wake_id))
+            if previous is not None:
+                raise RuntimeError("Stored Argus admission has competing authorities")
+            binding = payload.get("binding")
+            binding_id = binding.get("binding_id") if isinstance(binding, dict) else None
+            outbox = tuple(db.scalars(select(_ConversationUpdateRow).where(
+                _ConversationUpdateRow.workspace_key == row.workspace_key,
+                _ConversationUpdateRow.session_id == row.session_id,
+                _ConversationUpdateRow.update_type.in_(_BOUND_TYPES))))
+            for event in outbox:
+                if binding_id is None:
+                    raise RuntimeError("Stored Argus admission outbox binding is unavailable")
+                event.payload = {**event.payload, "wake_id": properties["wake_id"], "binding_id": binding_id}
+            row.last_sequence += 1
+            db.add(_ConversationUpdateRow(workspace_key=row.workspace_key, session_id=row.session_id,
+                sequence=row.last_sequence, task_id=payload["task_id"], update_type="argus_execution",
+                payload=payload, occurred_at=now))
+            row.properties = {"kind": "argus_background", "owner": "argus", "scope": payload["scope"],
+                "summary": saved_request.reason[:256], "last_semantic_activity_at": _as_utc(row.updated_at).isoformat(),
+                "current_wake_id": payload["wake_id"] if row.scope_key is not None else None}
+        db.flush()
+
+
+def _execution_view(row: _ConversationUpdateRow) -> ExecutionView:
+    return _validate_admission(row.payload)
+
 
 
 def _session_record(

@@ -301,6 +301,152 @@ def test_jsonschema_validator拒绝非法参数并接受嵌套参数():
         _validate_arguments(target, {"location": [1, 2], "count": "3"})
 
 
+@pytest.mark.parametrize("schema, arguments, expected", [
+    ({"type": "object", "required": ["channel"]}, {}, "$.channel: missing required key"),
+    ({"type": "object", "properties": {"payload": {
+        "type": "object", "required": ["channel"],
+    }}}, {"payload": {}}, "$.payload.channel: missing required key"),
+    ({"type": "object", "additionalProperties": False},
+     {"unexpected": "synthetic-argument-secret"}, "$.unexpected: unknown key"),
+    ({"type": "object", "properties": {"count": {"type": "integer"}}},
+     {"count": "synthetic-argument-secret"}, "$.count: expected type integer"),
+    ({"type": "object", "properties": {"mode": {"enum": ["synthetic-schema-secret"]}}},
+     {"mode": "synthetic-argument-secret"}, "$.mode: expected a declared enum value"),
+    ({"type": "object", "properties": {"rows": {
+        "type": "array", "items": {"type": "integer"},
+    }}}, {"rows": ["synthetic-argument-secret"]}, "$.rows[0]: expected type integer"),
+])
+def test_jsonschema_validator提供精确有界诊断且不回显值(schema, arguments, expected, caplog):
+    import traceback
+
+    target = MCPToolDescriptor("remote/test", "remote", "test", "Test", schema)
+    with pytest.raises(ValueError) as caught:
+        _validate_arguments(target, arguments)
+    message = str(caught.value)
+    assert expected in message
+    diagnostic_is_safe = all(secret not in message + caplog.text + "".join(
+        traceback.format_exception(caught.value)
+    ) for secret in ("synthetic-argument-secret", "synthetic-schema-secret"))
+    assert diagnostic_is_safe
+
+
+@pytest.mark.parametrize("keyword", ["anyOf", "oneOf"])
+def test_jsonschema_validator可空类型显示替代类型且不泄漏值(keyword, caplog):
+    import traceback
+
+    target = MCPToolDescriptor("remote/test", "remote", "test", "Test", {
+        "type": "object", "properties": {
+            "count": {keyword: [{"type": "integer"}, {"type": "null"}]},
+        },
+    })
+    arguments = {"count": "synthetic-union-secret"}
+    with pytest.raises(ValueError) as caught:
+        _validate_arguments(target, arguments)
+    message = str(caught.value)
+    assert f"{keyword} alternative 1: $.count: expected type integer" in message
+    assert f"{keyword} alternative 2: $.count: expected type null" in message
+    diagnostic_is_safe = "synthetic-union-secret" not in (
+        message + caplog.text + "".join(traceback.format_exception(caught.value))
+    )
+    assert diagnostic_is_safe
+    _validate_arguments(target, {"count": 3})
+    _validate_arguments(target, {"count": None})
+
+
+def test_jsonschema_validator嵌套替代保留字段诊断且不泄漏enum或参数(caplog):
+    import traceback
+
+    target = MCPToolDescriptor("remote/test", "remote", "test", "Test", {
+        "type": "object", "properties": {"config": {"oneOf": [
+            {"type": "object", "properties": {
+                "mode": {"anyOf": [
+                    {"enum": ["synthetic-enum-secret"]}, {"type": "null"},
+                ]},
+            }, "additionalProperties": False},
+            {"type": "null"},
+        ]}},
+    })
+    with pytest.raises(ValueError) as caught:
+        _validate_arguments(target, {"config": {
+            "mode": "synthetic-union-secret", "extra": "synthetic-extra-secret",
+        }})
+    message = str(caught.value)
+    assert "oneOf alternative 1: anyOf alternative 1: $.config.mode: expected a declared enum value" in message
+    assert "oneOf alternative 1: $.config.extra: unknown key" in message
+    assert "oneOf alternative 2: $.config: expected type null" in message
+    diagnostic_is_safe = all(secret not in (
+        message + caplog.text + "".join(traceback.format_exception(caught.value))
+    ) for secret in ("synthetic-enum-secret", "synthetic-union-secret", "synthetic-extra-secret"))
+    assert diagnostic_is_safe
+
+
+def test_jsonschema_validator替代诊断仍受全局八条和长度限制():
+    target = MCPToolDescriptor("remote/test", "remote", "test", "Test", {
+        "type": "object", "anyOf": [
+            {"required": ["x" * 1000 + str(index)]} for index in range(20)
+        ],
+    })
+    with pytest.raises(ValueError) as caught:
+        _validate_arguments(target, {})
+    message = str(caught.value)
+    assert message.count("anyOf alternative") == 8
+    assert len(message) <= 2200
+
+
+def test_jsonschema_validator替代递归在有限深度保留安全降级():
+    schema = {"type": "integer"}
+    for _ in range(12):
+        schema = {"anyOf": [schema, {"type": "null"}]}
+    target = MCPToolDescriptor("remote/test", "remote", "test", "Test", {
+        "type": "object", "properties": {"count": schema},
+    })
+    with pytest.raises(ValueError) as caught:
+        _validate_arguments(target, {"count": "synthetic-union-secret"})
+    message = str(caught.value)
+    assert "anyOf alternative" in message
+    assert "failed anyOf validation" in message
+    assert message.count("anyOf alternative") <= 16
+    assert len(message) <= 2200
+
+
+def test_jsonschema_validator最多8条诊断且字段长度有界():
+    target = MCPToolDescriptor("remote/test", "remote", "test", "Test", {
+        "type": "object", "required": [f"missing_{index}" for index in range(20)],
+        "additionalProperties": False,
+    })
+    with pytest.raises(ValueError) as caught:
+        _validate_arguments(target, {"x" * 10_000: "unused"})
+    message = str(caught.value)
+    assert message.count("missing required key") == 8
+    assert len(message) <= 2200
+
+
+@pytest.mark.parametrize("schema, arguments", [
+    ({"type": "object", "properties": {"value": {"type": ["integer"] * 1000}}}, {"value": "invalid"}),
+    ({"type": "object", "additionalProperties": False}, {"x" * 10_000: "invalid"}),
+])
+def test_jsonschema_validator单条诊断也有界(schema, arguments):
+    target = MCPToolDescriptor("remote/test", "remote", "test", "Test", schema)
+    with pytest.raises(ValueError) as caught:
+        _validate_arguments(target, arguments)
+    assert len(str(caught.value)) <= 500
+
+
+def test_jsonschema_validator非法schema不泄漏任意schema值(caplog):
+    import traceback
+
+    target = MCPToolDescriptor("remote/test", "remote", "test", "Test", {
+        "type": "synthetic-schema-secret",
+    })
+    with pytest.raises(ValueError) as caught:
+        _validate_arguments(target, {})
+    diagnostic_is_safe = "synthetic-schema-secret" not in (
+        "".join(traceback.format_exception(caught.value)) + caplog.text
+    )
+    assert diagnostic_is_safe
+    assert "invalid input schema" in str(caught.value)
+
+
 @pytest.mark.parametrize(
     "reference",
     [

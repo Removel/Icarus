@@ -7,7 +7,7 @@ import re
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
 
 
 class HandoffError(RuntimeError):
@@ -76,7 +76,8 @@ class WakeItem(WireModel):
 
 
 class WakeRequest(WireModel):
-    protocol_version: Literal[1]
+    protocol_version: Literal[1, 2]
+    target_session_id: str | None = None
     wake_id: str
     origin_boot_id: str
     scope: Scope
@@ -85,6 +86,29 @@ class WakeRequest(WireModel):
     items: list[WakeItem] = Field(min_length=1, max_length=100)
 
     _ids = field_validator("wake_id", "origin_boot_id")(uuid_text)
+
+    @model_validator(mode="before")
+    @classmethod
+    def versioned_target(cls, value):
+        if isinstance(value, dict):
+            version = value.get("protocol_version")
+            if version == 2 and "target_session_id" not in value:
+                raise ValueError("Version 2 requires target_session_id")
+            if version == 1 and "target_session_id" in value:
+                raise ValueError("Version 1 forbids target_session_id")
+        return value
+
+    @field_validator("target_session_id")
+    @classmethod
+    def target_uuid(cls, value):
+        return uuid_text(value) if value is not None else None
+
+    @model_serializer(mode="wrap")
+    def versioned_wire(self, handler):
+        value = handler(self)
+        if self.protocol_version == 1:
+            value.pop("target_session_id", None)
+        return value
 
     @field_validator("protocol_version", mode="before")
     @classmethod
