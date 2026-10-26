@@ -141,8 +141,6 @@ class SessionRuntime(SessionHost):
                 },
                 "web-search": {
                     **config.runtime.plugin_config.get("web-search", {}),
-                    "config_model": config,
-                    "hook_registry": self.hook_registry,
                 },
                 "knowledge": {
                     **config.runtime.plugin_config.get("knowledge", {}),

@@ -5,6 +5,8 @@ import weakref
 from urllib.parse import urlsplit
 import httpx
 
+from agent_app.plugins.web_search.url_policy import validate_fetch_url
+
 
 _gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[asyncio.Lock, list[float]]] = weakref.WeakKeyDictionary()
 
@@ -66,8 +68,8 @@ class SearchHttpBackend:
             "ori_question": question[:128], "need_content": True}, started)
         return result.get("results") if isinstance(result, dict) else None
 
-    async def fetch(self, url):
-        result = await self._post("fetch", {"url": url})
+    async def fetch(self, url, started=None):
+        result = await self._post("fetch", {"url": validate_fetch_url(url)}, started)
         if not isinstance(result, dict):
             raise ValueError("Fetch response is not an object")
         raw_data = result.get("data")
