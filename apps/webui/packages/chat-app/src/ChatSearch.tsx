@@ -38,7 +38,11 @@ export default function ChatSearch({
           ? '搜索中...'
           : search.total > 0
             ? `搜索到 ${search.total} 个网页`
-            : '未搜索到合适内容';
+            : search.browsing
+              ? '浏览页面中...'
+              : search.pages.length > 0
+                ? `已读取 ${search.pages.length} 个网页`
+                : '未搜索到合适内容';
   return (
     <div className="chat-web-search">
       <button
@@ -60,7 +64,7 @@ export default function ChatSearch({
           {queries[tick % queries.length]}
         </div>
       )}
-      {search.pages.length > 0 && (
+      {(search.pages.length > 0 || search.browsing) && (
         <div className="open-pages" data-status={search.browsing ? 'pending' : 'done'}>
           <div className="open-pages-head">
             <Globe size={16} />
