@@ -12,6 +12,12 @@ placing files here does not register plugins, run workflows, or install dependen
 | mem0-vercel-ai-sdk | Mem0 | External Vercel integration reference, not an Icarus dependency |
 | mem0-oss-to-platform | Mem0 | Upstream migration reference, not permission to migrate Icarus |
 | openkb | OpenKB | Development navigation of an OpenKB knowledge base |
+| textual-tui | Icarus | Textual TUI architecture, TCSS, terminal UX, and snapshot/replay verification |
+
+`textual-tui` is authored in this repository for the `apps/tui` client. It has no
+third-party license or upstream sync obligation. Install it for local Claude Code
+discovery with a symlink from `~/.claude/skills/textual-tui` to this directory; the
+repository copy stays canonical.
 
 Mem0 origin: `mem0ai/mem0@c7ee362aff94a369af70f13f2b4f853f6793ff4c`.
 OpenKB origin: `VectifyAI/OpenKB@ff54396e575ee6feb0113b631a34caa082b441cc`.
