@@ -79,12 +79,18 @@ def test_chat_sidebar_collapses_without_changing_management_preference(page):
     expect(page.get_by_role('complementary', name='会话管理')).to_be_visible()
 
 
-@pytest.mark.parametrize('theme', ['light', 'dark'])
-def test_loading_chat_styles_does_not_restyle_memory(page, theme):
+@pytest.mark.parametrize('theme,canvas,ink', [
+    ('light', 'rgb(255, 255, 255)', 'rgb(15, 17, 21)'),
+    ('dark', 'rgb(21, 21, 23)', 'rgb(250, 248, 249)'),
+])
+def test_loading_chat_styles_does_not_restyle_memory(page, theme, canvas, ink):
     page.emulate_media(color_scheme=theme)
     # Media-query changes arrive asynchronously; compare the same applied theme
-    # before and after crossing lazy module boundaries.
+    # before and after crossing lazy module boundaries. The attribute flips
+    # before the computed style settles, so wait for the painted theme itself.
     expect(page.locator('html')).to_have_attribute('data-theme', theme)
+    expect(page.locator('.memory-page')).to_have_css('background-color', canvas)
+    expect(page.locator('.memory-page')).to_have_css('color', ink)
     def appearance():
         return page.locator('.memory-page').evaluate('''el => {
             const style = getComputedStyle(el);
