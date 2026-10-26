@@ -113,11 +113,37 @@ def test_sidebar_collapse_preserves_page_state(page):
 def test_navigation_does_not_cover_content(page, width):
     page.set_viewport_size({'width': width, 'height': 844})
     expect(page.locator('.management-body:visible')).to_be_visible()
-    header = page.locator('.management-header').bounding_box()
-    content = page.locator('.management-body:visible').bounding_box()
+    # Read every box in a single layout pass. Separate bounding_box() calls can
+    # straddle a resize or font relayout and compare two different layouts.
+    boxes = page.evaluate('''() => {
+        const frame = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+        const read = () => {
+            const content = [...document.querySelectorAll('.management-body')]
+                .find(el => el.getClientRects().length);
+            const box = el => el.getBoundingClientRect().toJSON();
+            const sidebar = document.querySelector('aside[aria-label="会话管理"]');
+            return {
+                header: box(document.querySelector('.management-header')),
+                content: box(content),
+                sidebar: sidebar && sidebar.getClientRects().length ? box(sidebar) : null,
+            };
+        };
+        return (async () => {
+            let previous = read();
+            for (let attempt = 0; attempt < 20; attempt += 1) {
+                await frame();
+                const current = read();
+                if (JSON.stringify(current) === JSON.stringify(previous)) return current;
+                previous = current;
+            }
+            return previous;
+        })();
+    }''')
+    header, content = boxes['header'], boxes['content']
     assert header['y'] + header['height'] <= content['y']
     if width >= 768:
-        sidebar = page.get_by_role('complementary', name='会话管理').bounding_box()
+        sidebar = boxes['sidebar']
+        assert sidebar, '会话管理侧栏在该宽度下应可见'
         assert sidebar['x'] + sidebar['width'] <= content['x']
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
 
