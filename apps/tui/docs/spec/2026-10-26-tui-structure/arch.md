@@ -8,6 +8,8 @@
 
 本文替代 `app.py` 继续增长的做法，但不替代既有功能设计：[Agent Thinking Experience](../2026-09-21-agent-thinking-experience/arch.md)、[Windowed Conversation](../2026-09-23-tui-windowed-conversation/arch.md)、[Session History Restoration](../2026-08-29-tui-session-history-restoration/arch.md) 等文档描述的行为保持不变。
 
+后续目标以已确认的[聊天工作台设计](../2026-10-27-tui-chat-workspace/design.md)和[分阶段计划](../2026-10-27-tui-chat-workspace/plan.md)为准：收敛 App/Store/会话所有权、按对象组织客户端、拆分 TCSS，并实现三种聊天目标状态。该设计尚待实施；本文保留首轮抽取的历史记录，不代表完整解耦已经完成。
+
 ## 当前实现与问题
 
 `apps/tui/src` 约 6,300 行，测试约 8,100 行；`app.py` 单文件 1,879 行，`test_app.py` 单文件 3,216 行。TUI 已有 55 个提交、13 个 SVG 快照和约 200 个测试，行为成熟，但职责集中在 `IcarusTextualApp`：
