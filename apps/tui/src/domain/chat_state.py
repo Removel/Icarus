@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from apps.tui.src.submission import DraftImage, PendingMessage
+from apps.tui.src.domain.submission import DraftImage, PendingMessage
 
 
 class RuntimePhase(str, Enum):

@@ -1,6 +1,6 @@
 import pytest
 
-from apps.tui.src.commands import (
+from apps.tui.src.domain.commands import (
     CommandDefinition,
     CommandRegistry,
     create_default_command_registry,

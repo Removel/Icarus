@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from apps.tui.src import clipboard
-from apps.tui.src.clipboard import (
+from apps.tui.src.platform import clipboard
+from apps.tui.src.platform.clipboard import (
     ClipboardImage,
     ClipboardImageReadError,
 )

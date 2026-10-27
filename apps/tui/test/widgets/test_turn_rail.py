@@ -140,7 +140,7 @@ def test_turn_rail_excerpt_click_selects_the_summary_under_the_pointer():
 
 
 def test_turn_rail_excerpt_list_aligns_with_centered_dots():
-    from apps.tui.test.test_app_snapshots import SnapshotService, make_app, wait_ready
+    from apps.tui.test.support import SnapshotService, make_app, wait_ready
 
     async def run():
         app = make_app(SnapshotService())
@@ -162,7 +162,7 @@ def test_turn_rail_excerpt_list_aligns_with_centered_dots():
 def test_turn_rail_short_excerpt_list_starts_at_first_dot_on_hover():
     from textual.geometry import Offset
 
-    from apps.tui.test.test_app_snapshots import SnapshotService, make_app, wait_ready
+    from apps.tui.test.support import SnapshotService, make_app, wait_ready
 
     async def run():
         app = make_app(SnapshotService())

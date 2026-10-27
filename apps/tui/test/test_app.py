@@ -27,8 +27,9 @@ from apps.tui.src.app import (
     RuntimeOutputReceived,
     RuntimeSubscriptionFailed,
 )
-from apps.tui.src.chat_state import RuntimePhase
-from apps.tui.src.clipboard import (
+from apps.tui.src.domain.chat_state import RuntimePhase
+from apps.tui.src.screens.chat import ChatScreen
+from apps.tui.src.platform.clipboard import (
     ClipboardImage,
     ClipboardImageReadError,
 )
@@ -360,6 +361,19 @@ def make_app(
         workspace_path=workspace_path,
         projector_registry=projector_registry,
     )
+
+
+def app_with_screen(screen_cls, runtime_factory, workspace_path):
+    class App(IcarusTextualApp):
+        CSS_PATH = Path(__file__).resolve().parents[1] / "src/styles.tcss"
+
+        def build_screen(self):
+            return screen_cls(
+                self.config,
+                runtime_factory=self.runtime_factory,
+            )
+
+    return App(workspace_path=workspace_path, runtime_factory=runtime_factory)
 
 
 def make_session_app(
@@ -2122,8 +2136,7 @@ def test_early_sequence_flush_and_live_updates_share_message_loop(tmp_path, hand
                 await buffered.wait()
                 return SubmitAccepted(task_id="task-1", queue_position=0)
 
-        class App(IcarusTextualApp):
-            CSS_PATH = Path(__file__).resolve().parents[1] / "src/styles.tcss"
+        class Screen(ChatScreen):
 
             def post_message(self, message):
                 posted = super().post_message(message)
@@ -2158,7 +2171,7 @@ def test_early_sequence_flush_and_live_updates_share_message_loop(tmp_path, hand
         service = Service()
         async def factory(session_id, create_if_missing):
             return service
-        app = App(runtime_factory=factory, workspace_path=tmp_path)
+        app = app_with_screen(Screen, factory, tmp_path)
         async with app.run_test() as pilot:
             await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
             app._last_sequence = 145
@@ -2198,8 +2211,7 @@ def test_reconnect_history_and_live_updates_share_message_loop(tmp_path):
                 # Reusing a subscription is supported by the client protocol.
                 return self.subscription
 
-        class App(IcarusTextualApp):
-            CSS_PATH = Path(__file__).resolve().parents[1] / "src/styles.tcss"
+        class Screen(ChatScreen):
 
             def post_message(self, message):
                 posted = super().post_message(message)
@@ -2223,7 +2235,7 @@ def test_reconnect_history_and_live_updates_share_message_loop(tmp_path):
         service = Service()
         async def factory(session_id, create_if_missing):
             return service
-        app = App(runtime_factory=factory, workspace_path=tmp_path)
+        app = app_with_screen(Screen, factory, tmp_path)
         async with app.run_test() as pilot:
             await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
             app._last_sequence = 145
@@ -2262,8 +2274,7 @@ def test_session_activation_replay_and_live_updates_share_message_loop(tmp_path)
             "user.message", payload={"text": "restored-session", "resources": []}
         ).model_copy(update={"session_id": "replacement", "sequence": 146}),), history_cursor=146)
 
-        class App(IcarusTextualApp):
-            CSS_PATH = Path(__file__).resolve().parents[1] / "src/styles.tcss"
+        class Screen(ChatScreen):
 
             def post_message(self, message):
                 posted = super().post_message(message)
@@ -2289,7 +2300,7 @@ def test_session_activation_replay_and_live_updates_share_message_loop(tmp_path)
             nonlocal calls
             calls += 1
             return current if calls == 1 else replacement
-        app = App(runtime_factory=factory, workspace_path=tmp_path)
+        app = app_with_screen(Screen, factory, tmp_path)
         async with app.run_test() as pilot:
             await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
             app._session_has_user_input = True
@@ -2339,8 +2350,7 @@ def test_session_network_cleanup_does_not_block_message_loop(tmp_path, cleanup):
         replacement.subscription.queue.put_nowait(runtime_update("session.lifecycle", task_id=None,
             payload={"state": "ready"}).model_copy(update={"session_id": "replacement"}))
 
-        class App(IcarusTextualApp):
-            CSS_PATH = Path(__file__).resolve().parents[1] / "src/styles.tcss"
+        class Screen(ChatScreen):
 
             def post_message(self, message):
                 posted = super().post_message(message)
@@ -2354,7 +2364,7 @@ def test_session_network_cleanup_does_not_block_message_loop(tmp_path, cleanup):
 
         async def factory(session_id, create_if_missing):
             return current
-        app = App(runtime_factory=factory, workspace_path=tmp_path)
+        app = app_with_screen(Screen, factory, tmp_path)
         async with app.run_test() as pilot:
             await wait_until(pilot, lambda: app.chat_state.phase == RuntimePhase.READY)
             activation = asyncio.create_task(app._activate_session(

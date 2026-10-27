@@ -2,7 +2,7 @@
 
 from textual.widgets import Static
 
-from apps.tui.src.chat_state import RuntimePhase
+from apps.tui.src.domain.chat_state import RuntimePhase
 
 
 class RuntimeStatusBar(Static):

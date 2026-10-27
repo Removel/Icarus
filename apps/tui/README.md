@@ -145,12 +145,32 @@ apps/tui/.venv/bin/python apps/tui/scripts/replay_events.py \
   apps/tui/test/fixtures/synthetic_tui_events.jsonl
 ```
 
-视觉快照：
+视觉回归由 `test/screens/`、`test/widgets/` 的 Pilot 测试和 replay 覆盖。当前不维护 SVG 快照基线。
 
-```bash
-apps/tui/.venv/bin/python -m pytest \
-  apps/tui/test/test_app_snapshots.py -q
+## 结构
+
+```text
+apps/tui/src/
+├── main.py                 # 入口：参数 → TuiConfig → App
+├── configs/
+│   └── config.py           # 不可变运行配置
+├── app.py                  # Textual App 壳：生命周期与 Screen 路由
+├── messages.py             # App/Screen 之间的 Textual Message
+├── screens/
+│   ├── chat.py             # 主页面：布局、焦点、页面级编排
+│   └── session_picker.py   # Session 选择 ModalScreen
+├── widgets/                # 对话、Composer、队列、状态栏、轮次轨道
+├── services/               # Session、派发、更新流、输入路由、剪贴板编排
+├── gateway_client/         # JSON-RPC 传输与协议适配
+├── platform/               # 平台适配：系统剪贴板读取
+├── domain/                 # 领域模型：提交、队列状态机、命令解析
+├── event_pipeline/         # RuntimeUpdate → UiAction
+└── styles.tcss
 ```
+
+依赖方向：`main → app → screens → widgets`；`screens/app` 可以使用 `services`；`services`
+依赖 `gateway_client`、`domain`、`platform` 和 `configs`；`services`、网关、平台、领域、配置和
+纯模型不 import Textual。该方向由 `apps/tui/test/test_layering.py` 强制。
 
 ## 文档
 

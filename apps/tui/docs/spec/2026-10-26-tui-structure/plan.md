@@ -4,17 +4,19 @@
 
 **Goal:** Reduce `apps/tui/src/app.py` from a 1,879-line god object to a thin Textual App backed by a ChatScreen, framework-free services, pure models, and an immutable config object, without changing user-visible behavior.
 
-**Architecture:** Organize by Textual runtime units instead of abstract layers: `App` owns process lifecycle and screen routing; `ChatScreen` owns page composition, focus, and child-message routing; `widgets/` own local rendering; plain `services/` own Gateway session, dispatch, update consumption, input routing, and clipboard; pure modules keep state machines, projections, and data types. Behavior is preserved by extracting one responsibility at a time and keeping the 13 visual snapshots unchanged.
+**Architecture:** Organize by Textual runtime units instead of abstract layers: `App` owns process lifecycle and screen routing; `ChatScreen` owns page composition, focus, and child-message routing; `widgets/` own local rendering; plain `services/` own Gateway session, dispatch, update consumption, input routing, and clipboard; pure modules keep state machines, projections, and data types. Behavior is preserved by extracting one responsibility at a time and covering it with Pilot/widget tests and replay.
 
-**Tech Stack:** Python 3.11+, Textual >=8.2.8,<9, pytest, pytest-textual-snapshot, asyncio.
+**Tech Stack:** Python 3.11+, Textual >=8.2.8,<9, pytest, asyncio.
 
 **Spec:** [arch.md](arch.md)
+
+> 执行记录（2026-10-27）：13 个 SVG 快照及其测试在本机 HEAD 已全部失败，已按用户要求删除；视觉与交互回归改由 Pilot/widget 测试和 replay 承担。首轮抽取完成时 `app.py` 163 行、全量 331 passed；`ChatScreen` 仍约 1,320 行，后续拆分见 arch 的“实施结果与后续”。
 
 ## Global Constraints
 
 - Only `apps/tui` changes. Do not modify Agent, Gateway, `packages/gateway_protocol`, EventBus, Plugin Runtime, or model-provider code.
 - No user-visible behavior, copy, keybinding, layout, queue semantics, or Session semantics changes. This is a behavior-preserving refactor.
-- Keep all 13 existing SVG snapshots unchanged. A snapshot diff means either a bug or an intentional visual change that needs separate approval.
+- Keep the existing behavior covered by the TUI test suite, Pilot/widget tests, and replay. The 13 SVG snapshots and their tests were removed on 2026-10-27 because they failed at HEAD and the user no longer needs them.
 - `services/**`, `gateway_client/**`, `chat_state.py`, `submission.py`, `commands.py`, and `event_pipeline/**` must not import Textual.
 - `widgets/**` must not import `gateway_client`, `services`, or `app`.
 - Only `Screen` / `Widget` create Textual workers. Services expose async methods and never call `run_worker`, `post_message`, `notify`, or `query_one`.
@@ -29,7 +31,7 @@
 1. After a transport error or reconnect, a queued message with an unknown outcome must retry with the same `submission_id` and must not duplicate the user message (Task 4 and Task 5 tests).
 2. Updates that arrive after submission but before task acceptance must be buffered and replayed in sequence order, not dropped or reordered (Task 3 and Task 4 tests).
 3. Switching or clearing a Session while a task is streaming must stop the old consumer and prevent old `task_id` updates from entering the new Session (Task 5 and Task 7 tests).
-4. Extracting the page into `ChatScreen` must preserve scroll-follow detachment, Composer draft/cursor, and focus across streaming updates (Task 7 tests and unchanged snapshots).
+4. Extracting the page into `ChatScreen` must preserve scroll-follow detachment, Composer draft/cursor, and focus across streaming updates (Task 7 tests and widget tests; SVG snapshots removed).
 5. Exit must cancel every worker, close the subscription/client, and discard only the empty Session it owns, without hanging or deleting a non-empty Session (Task 5 and Task 7 tests).
 
 ---
@@ -58,8 +60,8 @@
 | `apps/tui/test/services/*.py` (new) | Unit tests for each service using fake clients/subscriptions. |
 | `apps/tui/test/screens/test_chat_screen.py` (new) | Screen composition, routing, and shutdown with fake services. |
 | `apps/tui/test/test_layering.py` (new) | AST import-boundary assertions. |
-| `apps/tui/test/test_app.py` (modify) | Shrinks to integration tests; service tests move to `test/services/`. |
-| `apps/tui/test/test_app_snapshots.py` (modify) | Update App construction; snapshot assertions unchanged. |
+| `apps/tui/test/test_app.py` (modify) | Shrinks to integration tests; service tests move to `test/services/`. Snapshot tests were deleted on 2026-10-27. |
+| `apps/tui/test/test_app_snapshots.py` | Deleted on 2026-10-27 with its 13 failing SVG baselines; visual/interaction coverage uses Pilot/widget tests and replay. |
 | `apps/tui/README.md`, `apps/tui/docs/spec/2026-10-26-tui-structure/arch.md` (modify) | Reflect final structure and responsibilities. |
 
 ---
@@ -456,7 +458,7 @@ Do not commit.
 - Modify: `apps/tui/src/app.py`
 - Modify: `apps/tui/src/main.py`
 - Modify: `apps/tui/scripts/replay_events.py`
-- Modify: `apps/tui/test/test_app.py`, `apps/tui/test/test_app_snapshots.py`, `apps/tui/test/test_cli.py`
+- Modify: `apps/tui/test/test_app.py`, `apps/tui/test/test_cli.py`
 - Test: `apps/tui/test/screens/test_chat_screen.py`
 
 **Interfaces:**
@@ -495,17 +497,17 @@ Move `compose`, `on_mount`, `on_resize`, `_update_responsive_classes`, widget me
 
 - [ ] **Step 4: Update App construction sites**
 
-Change `main.py`, `scripts/replay_events.py`, `test_app.py`, `test_app_snapshots.py`, and `test_cli.py` to build `TuiConfig` and pass it. Update imports of moved messages to `messages.py`. Delete `RuntimeOutputReceived`, `DispatchFinished`, and other messages that no longer cross the new boundary.
+Change `main.py`, `scripts/replay_events.py`, `test_app.py`, and `test_cli.py` to build `TuiConfig` and pass it. (The snapshot test module was deleted on 2026-10-27.) Update imports of moved messages to `messages.py`. Delete `RuntimeOutputReceived`, `DispatchFinished`, and other messages that no longer cross the new boundary.
 
 - [ ] **Step 5: Run the ChatScreen and App tests**
 
 Run: `apps/tui/.venv/bin/python -m pytest apps/tui/test/screens/test_chat_screen.py apps/tui/test/test_app.py apps/tui/test/test_cli.py -q`
 Expected: PASS.
 
-- [ ] **Step 6: Run snapshots without updating**
+- [ ] **Step 6: Run interaction tests instead of deleted snapshots**
 
-Run: `apps/tui/.venv/bin/python -m pytest apps/tui/test/test_app_snapshots.py -q`
-Expected: PASS with all 13 snapshots unchanged. If a snapshot differs, inspect the rendered SVG before deciding whether it is a bug; do not run `--snapshot-update`.
+Run: `apps/tui/.venv/bin/python -m pytest apps/tui/test/screens apps/tui/test/widgets -q`
+Expected: PASS. SVG snapshots were removed; verify visual behavior with the replay shell and focused widget/screen tests instead.
 
 - [ ] **Step 7: Run the replay shell**
 
@@ -590,7 +592,7 @@ apps/tui/.venv/bin/python -m compileall -q apps/tui/src apps/tui/test packages
 git diff --check
 ```
 
-Expected: same failure set as the Task 1 baseline; no new failures; all snapshots unchanged.
+Expected: same failure set as the Task 1 baseline; no new failures. SVG snapshots no longer exist.
 
 - [ ] **Step 6: Stop for final review**
 
@@ -601,7 +603,7 @@ Report the before/after line counts for `app.py`, `screens/chat.py`, and each se
 ## Self-Review Notes
 
 - **Spec coverage:** config (Task 1), ports/types (Task 2), update stream (Task 3), dispatch (Task 4), session (Task 5), input/clipboard (Task 6), screen/App (Task 7), tests/docs/guards (Task 8). The non-goals (no Ink, no protocol changes, no widget rewrite) are enforced by Global Constraints.
-- **Behavior preservation:** each service task keeps App as a delegating adapter until Task 7; snapshots and `test_app.py` guard the transition.
+- **Behavior preservation:** each service task keeps App as a delegating adapter until Task 7; `test_app.py` and widget/screen tests guard the transition. SVG snapshots were removed on 2026-10-27.
 - **Type consistency:** `PreparedSession`, `SessionResult`, `DispatchOutcome`, `SubmissionPlan`, `UpdateStream` signatures are defined once and referenced by later tasks.
-- **Review Focus coverage:** queue/retry (Task 4), early updates (Task 3), Session switching/old task isolation (Tasks 5 and 7), scroll/draft/focus (Task 7 snapshots and widget tests), exit cleanup (Tasks 5 and 7).
+- **Review Focus coverage:** queue/retry (Task 4), early updates (Task 3), Session switching/old task isolation (Tasks 5 and 7), scroll/draft/focus (Task 7 widget tests; snapshots removed), exit cleanup (Tasks 5 and 7).
 - **Proportion:** tasks specify interfaces, test names, and move boundaries; they do not restate the implementation bodies.

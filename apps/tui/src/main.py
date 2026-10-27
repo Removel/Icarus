@@ -7,6 +7,7 @@ import sys
 from typing import Any
 
 from apps.tui.src.app import IcarusTextualApp
+from apps.tui.src.configs.config import build_config
 from packages.runtime_environment import get_icarus_data_dir
 
 
@@ -47,24 +48,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def run_app(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    workspace_path = Path.cwd().resolve()
-    resource_root = get_icarus_data_dir() / "incoming"
+    config = build_config(
+        cwd=Path.cwd(),
+        gateway_url=args.gateway_url,
+        session_id=args.session_id,
+        data_dir=get_icarus_data_dir(),
+    )
 
     async def runtime_factory(
         session_id: str | None, create_if_missing: bool
     ):
         return await _create_gateway_client(
-            workspace_path,
+            config.workspace_path,
             session_id,
-            args.gateway_url,
+            config.gateway_url,
             create_if_missing,
         )
 
     app = IcarusTextualApp(
+        config,
         runtime_factory=runtime_factory,
-        initial_session_id=args.session_id,
-        workspace_path=workspace_path,
-        resource_root=resource_root,
     )
     result = app.run()
     if isinstance(result, int):

@@ -1,8 +1,14 @@
 """TUI-owned draft image and pending submission models."""
 
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
 from uuid import uuid4
+
+from packages.gateway_protocol import ResourceRefModel
+
+
+logger = logging.getLogger("icarus.tui.submission")
 
 
 @dataclass(frozen=True)
@@ -60,3 +66,41 @@ def _without_markers(text: str, images: tuple[DraftImage, ...]) -> str:
     for image in images:
         result = result.replace(image.marker, "")
     return result
+
+
+def resource_id(image: DraftImage, resource_root: Path | None) -> str:
+    """Return the Gateway resource id for one draft image."""
+
+    if resource_root is None:
+        return image.path.name
+    try:
+        return image.path.resolve().relative_to(resource_root).as_posix()
+    except ValueError as error:
+        raise ValueError(
+            "Image is outside the controlled resource root"
+        ) from error
+
+
+def submission_resources(
+    submission: PendingMessage,
+    resource_root: Path | None,
+) -> tuple[ResourceRefModel, ...]:
+    return tuple(
+        ResourceRefModel(
+            resource_id=resource_id(image, resource_root),
+            media_type=None,
+        )
+        for image in submission.images
+    )
+
+
+def delete_submission_images(submission: PendingMessage) -> None:
+    """Delete temporary images after a submission is accepted."""
+
+    for image in submission.images:
+        if not image.owned_temporary_file:
+            continue
+        try:
+            image.path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Unable to remove accepted image resource")

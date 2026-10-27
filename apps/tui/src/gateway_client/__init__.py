@@ -8,6 +8,7 @@ from apps.tui.src.gateway_client.models import (
     TaskOperationResult,
     UpdateSubscription,
 )
+from apps.tui.src.gateway_client.ports import ClientFactory, RuntimeClient
 
 __all__ = [
     "GatewayClient",
@@ -16,4 +17,6 @@ __all__ = [
     "SubmitAccepted",
     "TaskOperationResult",
     "UpdateSubscription",
+    "ClientFactory",
+    "RuntimeClient",
 ]

@@ -1,12 +1,12 @@
 import pytest
 
-from apps.tui.src.chat_state import (
+from apps.tui.src.domain.chat_state import (
     ChatState,
     DispatchReservation,
     InterruptAction,
     RuntimePhase,
 )
-from apps.tui.src.submission import DraftImage, PendingMessage
+from apps.tui.src.domain.submission import DraftImage, PendingMessage
 
 
 def ready_state() -> ChatState:

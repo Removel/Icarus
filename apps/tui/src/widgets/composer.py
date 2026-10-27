@@ -8,7 +8,7 @@ from textual import events
 from textual.message import Message
 from textual.widgets import TextArea
 
-from apps.tui.src.submission import (
+from apps.tui.src.domain.submission import (
     DraftImage,
     PendingMessage,
     referenced_images,

@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Delayed import keeps transcript replay independent from Textual app startup.
     from apps.tui.src.app import IcarusTextualApp
+    from apps.tui.src.configs.config import TuiConfig
 
     service = ReplayRuntimeService(
         scenario, events_per_second=args.speed
@@ -52,8 +53,8 @@ def main(argv: list[str] | None = None) -> int:
         return service
 
     app = IcarusTextualApp(
+        TuiConfig(workspace_path=Path.cwd().resolve()),
         runtime_factory=runtime_factory,
-        workspace_path=Path.cwd().resolve(),
     )
     app.run()
     return app.return_code or 0

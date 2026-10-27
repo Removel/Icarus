@@ -5,7 +5,7 @@ from textual import events
 from textual.document._document import Selection
 
 from apps.tui.src.widgets.composer import PersistentComposer
-from apps.tui.src.submission import DraftImage, PendingMessage
+from apps.tui.src.domain.submission import DraftImage, PendingMessage
 
 
 class ComposerTestApp(App):
