@@ -1,0 +1,12 @@
+$icarus-background: #0c0c0e;
+$icarus-surface: #131315;
+$icarus-panel: #1c1c1f;
+$icarus-raised: #18181b;
+$icarus-border: #4b4b51;
+$icarus-muted: #97979e;
+$icarus-text: #f1f1f2;
+$icarus-user: #b8b8bf;
+$icarus-tool: #626269;
+$icarus-accent: #e0a8b6;
+$icarus-green: #75bd92;
+$icarus-red: #db737f;

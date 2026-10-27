@@ -15,11 +15,11 @@ from packages.gateway_protocol import (
 )
 from apps.tui.src.app import IcarusTextualApp
 from apps.tui.src.domain.chat_state import RuntimePhase
-from apps.tui.src.gateway_client.models import (
+from apps.tui.src.client.gateway.models import (
     SubmitAccepted,
     TaskOperationResult,
 )
-from apps.tui.src.widgets import ConversationView, WelcomeMessage
+from apps.tui.src.widgets.chat import ConversationView, WelcomeMessage
 
 
 WORKSPACE = "/workspace/icarus-demo"
@@ -160,9 +160,13 @@ def make_app(service: SnapshotService | None = None) -> IcarusTextualApp:
         del session_id, create_if_missing
         return service
 
+    from apps.tui.src.configs.config import TuiConfig
+    from apps.tui.src.services.attachments import AttachmentsService
+
     return IcarusTextualApp(
-        runtime_factory=runtime_factory,
-        workspace_path=WORKSPACE,
+        TuiConfig(workspace_path=Path(WORKSPACE)),
+        client_factory=runtime_factory,
+        attachments=AttachmentsService(None),
     )
 
 
@@ -176,11 +180,11 @@ async def wait_until(pilot, predicate: Callable[[], bool]) -> None:
 
 
 async def wait_ready(pilot) -> None:
-    conversation = pilot.app.query_one(ConversationView)
+    conversation = pilot.app.chat_screen.query_one(ConversationView)
     await wait_until(
         pilot,
         lambda: (
-            pilot.app.chat_state.phase == RuntimePhase.READY
+            pilot.app.chat_store.interaction.phase == RuntimePhase.READY
             and conversation.is_mounted
             and len(conversation.query(WelcomeMessage)) == 1
         ),

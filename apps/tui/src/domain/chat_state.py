@@ -131,18 +131,14 @@ class ChatState:
             raise ValueError("Pending message cannot be empty")
         self.pending.append(submission)
 
-    def begin_dispatch(
-        self, connection_epoch: int
-    ) -> DispatchReservation | None:
+    def begin_dispatch(self, connection_epoch: int) -> DispatchReservation | None:
         """Reserve the queue head with its current submit/steer route."""
 
         if not self.can_dispatch:
             return None
         if connection_epoch < 0:
             raise ValueError("connection_epoch cannot be negative")
-        mode: DispatchMode = (
-            "steer" if self.active_task_id is not None else "submit"
-        )
+        mode: DispatchMode = "steer" if self.active_task_id is not None else "submit"
         reservation = DispatchReservation(
             message=self.pending[0],
             mode=mode,
@@ -166,9 +162,7 @@ class ChatState:
         self.phase = RuntimePhase.RUNNING
         return message
 
-    def accept_steer(
-        self, reservation: DispatchReservation
-    ) -> PendingMessage:
+    def accept_steer(self, reservation: DispatchReservation) -> PendingMessage:
         self._require_reservation(reservation, mode="steer")
         message = self.pending.popleft()
         self.dispatch_reservation = None
@@ -187,9 +181,7 @@ class ChatState:
         if fatal:
             self.phase = RuntimePhase.FAILED
 
-    def block_dispatch(
-        self, reservation: DispatchReservation, reason: str
-    ) -> None:
+    def block_dispatch(self, reservation: DispatchReservation, reason: str) -> None:
         if not reason.strip():
             raise ValueError("blocked dispatch reason cannot be empty")
         self._require_reservation(reservation)

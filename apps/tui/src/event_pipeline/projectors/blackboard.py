@@ -1,7 +1,7 @@
 """Projection of non-visible Session and context RuntimeUpdate values."""
 
-from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import UiAction
+from packages.gateway_protocol import RuntimeUpdateModel
 
 
 class BlackboardProjector:

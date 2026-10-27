@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import UiAction
+from packages.gateway_protocol import RuntimeUpdateModel
 
 
 class UpdateProjector(Protocol):
@@ -44,12 +44,12 @@ class ProjectorRegistry:
         projector = self._projectors.get(update.type)
         if projector is None:
             self.unknown_update_count += 1
-            self._logger.debug(
-                "Ignoring unknown RuntimeUpdate: type=%s", update.type
-            )
+            self._logger.debug("Ignoring unknown RuntimeUpdate: type=%s", update.type)
             return ()
-        if not include_unrelated and update.task_id is not None and (
-            active_task_id is None or update.task_id != active_task_id
+        if (
+            not include_unrelated
+            and update.task_id is not None
+            and (active_task_id is None or update.task_id != active_task_id)
         ):
             self.unrelated_update_count += 1
             self._logger.debug(

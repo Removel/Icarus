@@ -2,13 +2,13 @@
 
 from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
-    AppendThinkingDelta,
     AppendError,
+    AppendThinkingDelta,
     AppendToolStarted,
-    AppendUserMessage,
     AppendUserCorrection,
-    CompleteThinking,
+    AppendUserMessage,
     CompleteAssistantMessage,
+    CompleteThinking,
     FinishTurn,
     SetRuntimeStatus,
     ShowNotification,

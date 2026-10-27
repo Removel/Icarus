@@ -1,0 +1,2 @@
+CommandMenu { height: auto; max-height: 7; padding: 0 1; border: solid $icarus-border; background: $icarus-surface; color: $icarus-text; }
+ChatScreen.-short CommandMenu { max-height: 4; overflow-y: auto; }

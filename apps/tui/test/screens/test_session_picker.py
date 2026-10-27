@@ -13,9 +13,7 @@ def summaries():
             session_id="1234567890abcdef",
             first_user_input="  first\nmessage   with spaces  ",
         ),
-        SessionSummaryModel(
-            session_id="short-id", first_user_input="second"
-        ),
+        SessionSummaryModel(session_id="short-id", first_user_input="second"),
     )
 
 
@@ -30,9 +28,7 @@ def test_session_picker展示摘要当前标记并返回完整id():
         async with app.run_test() as pilot:
             results = []
             await app.push_screen(
-                SessionPicker(
-                    summaries(), current_session_id="1234567890abcdef"
-                ),
+                SessionPicker(summaries(), current_session_id="1234567890abcdef"),
                 callback=results.append,
             )
             await pilot.pause()
@@ -40,9 +36,10 @@ def test_session_picker展示摘要当前标记并返回完整id():
             assert len(items) == 2
             assert items[0].has_class("is-current")
             assert items[0].session_id == "1234567890abcdef"
-            assert str(
-                items[0].query_one(".session-preview").render()
-            ) == "first message with spaces"
+            assert (
+                str(items[0].query_one(".session-preview").render())
+                == "first message with spaces"
+            )
             await pilot.press("down", "enter")
             await pilot.pause()
             return results[0]

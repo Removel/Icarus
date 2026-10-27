@@ -1,5 +1,6 @@
-from apps.tui.src.gateway_client.ports import ClientFactory, RuntimeClient
-from apps.tui.src.services.types import PreparedSession, SessionBusyError
+from apps.tui.src.client.gateway.ports import ClientFactory, RuntimeClient
+from apps.tui.src.services.chat.operations import PreparedSession
+from apps.tui.src.services.chat.session import SessionBusyError
 
 
 def test_runtime_ports_import_without_app_module() -> None:

@@ -14,6 +14,8 @@ class TuiConfig:
     gateway_url: str = "ws://127.0.0.1:8765/rpc"
     session_id: str | None = None
     resource_root: Path | None = None
+    app_version: str | None = None
+    reduced_motion: bool = False
 
 
 def build_config(

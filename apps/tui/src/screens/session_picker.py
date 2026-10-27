@@ -18,9 +18,7 @@ def abbreviate_session_id(session_id: str) -> str:
 
 
 class SessionListItem(ListItem):
-    def __init__(
-        self, summary: SessionSummaryModel, *, current: bool = False
-    ) -> None:
+    def __init__(self, summary: SessionSummaryModel, *, current: bool = False) -> None:
         self.session_id = summary.session_id
         preview = " ".join(summary.first_user_input.split())
         super().__init__(
@@ -60,9 +58,7 @@ class SessionPicker(ModalScreen[str | None]):
                     *(
                         SessionListItem(
                             summary,
-                            current=(
-                                summary.session_id == self.current_session_id
-                            ),
+                            current=(summary.session_id == self.current_session_id),
                         )
                         for summary in self.sessions
                     ),

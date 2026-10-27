@@ -1,0 +1,105 @@
+#conversation-shell {
+    height: 1fr;
+    layout: horizontal;
+}
+
+#conversation {
+    width: 1fr;
+    padding: 1 2;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $icarus-tool;
+    scrollbar-color-hover: $icarus-user;
+    scrollbar-background: $icarus-background;
+}
+
+#turn-rail {
+    width: 2;
+    height: 1fr;
+    background: $icarus-surface;
+    color: $icarus-muted;
+}
+
+#new-output {
+    display: none;
+    position: absolute;
+    overlay: screen;
+    layer: _tooltips;
+    offset: 0 2;
+    width: 17;
+    height: 3;
+    min-width: 0;
+    background: $icarus-panel;
+    color: $icarus-accent;
+    border: round $icarus-border;
+}
+
+#turn-rail-dots {
+    width: 2;
+    height: 1fr;
+    content-align: center middle;
+}
+
+#turn-rail-excerpts {
+    display: none;
+    position: absolute;
+    overlay: screen;
+    layer: _tooltips;
+    offset: -20 0;
+    width: 20;
+    height: auto;
+    max-height: 22;
+    background: $icarus-panel;
+    color: $icarus-user;
+    border: round $icarus-border;
+    text-overflow: ellipsis;
+}
+ChatScreen.-narrow #workspace-label {
+    display: none;
+}
+
+ChatScreen.-narrow #turn-rail {
+    display: none;
+}
+
+ChatScreen.-narrow #conversation {
+    padding: 0 1;
+}
+
+ChatScreen.-narrow #queue-panel,
+ChatScreen.-narrow #composer-shell {
+    margin: 0 1;
+}
+
+ChatScreen.-narrow .welcome-help {
+    display: none;
+}
+
+ChatScreen.-compact-logo .welcome-logo,
+ChatScreen.-short .welcome-logo {
+    display: none;
+}
+
+ChatScreen.-compact-logo .welcome-title,
+ChatScreen.-short .welcome-title {
+    display: block;
+}
+
+ChatScreen.-short #composer-shell {
+    max-height: 6;
+}
+
+ChatScreen.-short #composer {
+    max-height: 4;
+}
+
+ChatScreen.-short #queue-panel {
+    max-height: 3;
+}
+
+ChatScreen.-short #queue-items {
+    max-height: 1;
+}
+
+ChatScreen { padding: 0; }
+#conversation-shell { min-height: 3; }
+#new-output { height: 1; width: 17; border: none; offset: 0 0; }

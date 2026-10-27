@@ -2,9 +2,9 @@
 
 import base64
 import ctypes
-from dataclasses import dataclass
 import subprocess
 import sys
+from dataclasses import dataclass
 
 
 def read_clipboard_text() -> str | None:
@@ -59,7 +59,7 @@ class ClipboardImageReadError(RuntimeError):
     """The current platform supports image paste, but reading failed."""
 
 
-_MACOS_SCRIPT = r'''
+_MACOS_SCRIPT = r"""
 ObjC.import('AppKit');
 ObjC.import('Foundation');
 
@@ -108,7 +108,7 @@ ObjC.import('Foundation');
 
   return '';
 })()
-'''
+"""
 
 
 def read_clipboard_image() -> ClipboardImage | None:
@@ -140,9 +140,7 @@ def _read_macos_clipboard_image() -> ClipboardImage | None:
         ) from error
 
     if result.returncode != 0:
-        raise ClipboardImageReadError(
-            "macOS clipboard image could not be read"
-        )
+        raise ClipboardImageReadError("macOS clipboard image could not be read")
 
     output = result.stdout.strip()
     if not output:
@@ -160,15 +158,11 @@ def _read_macos_clipboard_image() -> ClipboardImage | None:
             "macOS clipboard returned invalid image data"
         ) from error
 
-    expected_extension = {"image/png": "png", "image/jpeg": "jpg"}.get(
-        media_type
-    )
+    expected_extension = {"image/png": "png", "image/jpeg": "jpg"}.get(media_type)
     if expected_extension is None:
         raise ClipboardImageReadError(
             "macOS clipboard returned an unsupported image type"
         )
     if extension != expected_extension or not data:
-        raise ClipboardImageReadError(
-            "macOS clipboard returned invalid image data"
-        )
+        raise ClipboardImageReadError("macOS clipboard returned invalid image data")
     return ClipboardImage(data, media_type, extension)

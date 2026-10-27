@@ -31,9 +31,10 @@ def test_run_app_使用启动目录透传session_id并返回textual结果(monkey
             self,
             config,
             *,
-            runtime_factory,
+            client_factory,
+            attachments,
         ):
-            captured["runtime_factory"] = runtime_factory
+            captured["runtime_factory"] = client_factory
             captured["app_workspace"] = config.workspace_path
             captured["initial_session_id"] = config.session_id
             captured["resource_root"] = config.resource_root

@@ -1,0 +1,20 @@
+.welcome-message {
+    border: round $icarus-border;
+    padding: 1 2;
+    background: $icarus-surface;
+}
+
+.welcome-logo {
+    width: auto;
+    height: 9;
+}
+
+.welcome-title {
+    display: none;
+    color: $icarus-accent;
+    text-style: bold;
+}
+
+.welcome-workspace, .welcome-help {
+    color: $icarus-muted;
+}
