@@ -1,3 +1,4 @@
+from test.navigation import follow_link
 import base64
 import re
 
@@ -244,7 +245,7 @@ def test_image_only_draft_protects_navigation_and_broken_history_is_readable(pag
     uploads(page)
     gateway(page)
     pick(page)
-    page.get_by_role('link', name='记忆', exact=True).first.click()
+    follow_link(page, '记忆')
     expect(page.get_by_role('dialog')).to_be_visible()
     page.get_by_role('button', name='继续编辑', exact=True).click()
     expect(page.locator('.chat-image-input')).to_have_count(1)

@@ -264,7 +264,7 @@ export default function MemoryDetail({
           {error || loadError}
         </p>
       )}
-      {(loading || busy) && <LoadingIndicator label={busy ? '正在保存' : '正在读取详情'} />}
+      {(loading || busy) && <LoadingIndicator overlay label={busy ? '正在保存' : '正在读取详情'} />}
       {shown &&
         (discard ? (
           <p className="danger-copy">修改尚未保存。放弃后将离开编辑，原内容不会改变。</p>

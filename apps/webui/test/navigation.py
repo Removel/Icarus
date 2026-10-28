@@ -17,11 +17,14 @@ def follow_link(page, name):
     if name == '对话' and page.get_by_role('link', name='返回对话', exact=True).is_visible():
         page.get_by_role('link', name='返回对话', exact=True).click()
         return
-    if name in ('记忆', '知识库'):
+    if name in ('记忆', '知识库', '人物'):
         open_navigation(page)
         trigger = page.get_by_role('button', name='展开会话列表', exact=True)
         if trigger.is_visible():
             trigger.click()
+        page.get_by_role('button', name='账户菜单', exact=True).click()
+        page.get_by_role('menuitem', name=name, exact=True).click()
+        return
     page.get_by_role('link', name=name, exact=True).click()
 
 

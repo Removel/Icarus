@@ -86,3 +86,22 @@ html[data-theme='dark'] .dswui .chat-tool[data-status='error'] .chat-tool-status
     animation: none;
   }
 }
+
+.chat-tool-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.chat-tool-person-link {
+  display: grid;
+  gap: 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--accent);
+}
+.chat-tool-person-link code {
+  font-size: 10px;
+  color: var(--muted);
+}

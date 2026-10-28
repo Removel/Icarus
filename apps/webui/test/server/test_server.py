@@ -22,13 +22,18 @@ AUTH = "Basic " + base64.b64encode(b"webui:test-password").decode()
 @pytest.fixture(scope="module")
 def production():
     # Build the actual deployed asset tree, also when this test runs on its own.
-    subprocess.run([shutil.which("pnpm"), "build"], cwd=ROOT, check=True, capture_output=True)
+    subprocess.run([shutil.which("pnpm"), "build"], cwd=ROOT, env={**os.environ, 'RELA_MEM_API_TOKEN': 'isolated-build-rela-token'}, check=True, capture_output=True)
 
     class Backend(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def do_GET(self):
             if self.headers.get("Upgrade") == "websocket":
+                if not getattr(self.server, 'gateway', False):
+                    self.send_response(400)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
                 accept = base64.b64encode(
                     hashlib.sha1(
                         (
@@ -66,7 +71,7 @@ def production():
                 {"path": self.path, "headers": dict(self.headers), "body": body,
                  "body_base64": base64.b64encode(body_bytes).decode('ascii')}
             ).encode()
-            self.send_response(200)
+            self.send_response(401 if self.path == '/v1/private' else 200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -77,6 +82,10 @@ def production():
 
     backend = ThreadingHTTPServer(("127.0.0.1", 0), Backend)
     threading.Thread(target=backend.serve_forever, daemon=True).start()
+    # Separate targets catch routing regressions that a shared all-protocol fixture masks.
+    gateway = ThreadingHTTPServer(("127.0.0.1", 0), Backend)
+    gateway.gateway = True
+    threading.Thread(target=gateway.serve_forever, daemon=True).start()
     with socket.socket() as candidate:
         candidate.bind(("127.0.0.1", 0))
         port = candidate.getsockname()[1]
@@ -91,7 +100,9 @@ def production():
         "ICARUS_WEBUI_PASSWORD": "test-password",
         "ICARUS_MEM0_ENDPOINT": endpoint,
         "ICARUS_OPENKB_ENDPOINT": endpoint,
-        "ICARUS_GATEWAY_ENDPOINT": endpoint,
+        "ICARUS_GATEWAY_ENDPOINT": f'http://127.0.0.1:{gateway.server_port}',
+        "ICARUS_RELATIONSHIP_ENDPOINT": endpoint,
+        "RELA_MEM_API_TOKEN": "test-rela-token",
         "ICARUS_MEM0_API_KEY": "test-mem0-key",
         "ICARUS_OPENKB_API_TOKEN": "test-openkb-token",
     }
@@ -123,6 +134,8 @@ def production():
         process.communicate(timeout=10)
         backend.shutdown()
         backend.server_close()
+        gateway.shutdown()
+        gateway.server_close()
 
 
 def request(production, method="GET", path="/", body=None, headers=None):
@@ -184,6 +197,22 @@ def test_http_proxy_injects_only_backend_credentials(production):
         if origin:
             headers["Origin"] = origin
         assert request(production, "POST", "/api/v1/init", "{}", headers)[0] == 403
+
+
+def test_rela_proxy_keeps_query_and_server_credentials(production):
+    status, _, body = request(production, path='/api/rela/v1/persons?query=%E7%8E%8B&cursor=abc%2Bdef',
+                             headers={'Authorization': AUTH, 'Cookie': 'private=yes', 'X-API-Key': 'untrusted'})
+    assert status == 200
+    value = json.loads(body)
+    assert value['path'] == '/v1/persons?query=%E7%8E%8B&cursor=abc%2Bdef'
+    headers = {key.lower(): value for key, value in value['headers'].items()}
+    assert headers['authorization'] == 'Bearer test-rela-token'
+    assert 'cookie' not in headers and 'x-api-key' not in headers
+    assert request(production, 'POST', '/api/rela/v1/persons', '{}', {'Authorization': AUTH})[0] == 403
+    assert request(production, path='/api/relationship/v1/persons', headers={'Authorization': AUTH})[0] == 404
+    assert request(production, path='/api/rela/v1/private', headers={'Authorization': AUTH})[0] == 401
+    status, _, body = request(production, path='/api/rela/v1/persons/p_%E7%8E%8B', headers={'Authorization': AUTH})
+    assert status == 200 and json.loads(body)['path'] == '/v1/persons/p_%E7%8E%8B'
 
 
 def test_websocket_proxy_auth_origin_and_forwarding(production):
@@ -256,6 +285,7 @@ def test_production_assets_exclude_demo_content(production):
         assert '工作台阅读体验访谈' not in content
         assert '知识检索与来源追溯实验' not in content
         assert '浏览示例' not in content
+        assert 'isolated-build-rela-token' not in content
 
 
 @pytest.mark.parametrize('accept,encoding', [

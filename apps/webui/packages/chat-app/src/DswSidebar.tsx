@@ -4,7 +4,7 @@ import { BrandMark } from '@icarus/ui';
 import type useChatSession from './useChatSession';
 import type { Session } from './gateway';
 import useChatPreference from './useChatPreference';
-import { BookOpen, Brain, Download, Pencil, Pin } from 'lucide-react';
+import { BookOpen, Brain, Download, Pencil, Pin, Users } from 'lucide-react';
 import type { ManagementPage } from './ChatSettings';
 import ChatDialog from './ChatDialog';
 import {
@@ -166,7 +166,7 @@ export default function DswSidebar({
       left: Math.max(8, Math.min(rect.left, innerWidth - 190)),
       top:
         id === 'profile'
-          ? rect.top - 56
+          ? Math.max(8, rect.top - 188)
           : Math.max(8, Math.min(rect.bottom + 4, innerHeight - 200)),
     });
     setMenu(id);
@@ -177,6 +177,7 @@ export default function DswSidebar({
   }
   useEffect(() => {
     if (!menu) return;
+    document.querySelector<HTMLElement>('.popup-menu [role="menuitem"]')?.focus();
     const close = () => setMenu('');
     window.addEventListener('resize', close);
     return () => window.removeEventListener('resize', close);
@@ -260,30 +261,6 @@ export default function DswSidebar({
               <span>开启新对话</span>
             </button>
           )}
-          <nav className="chat-management-links" aria-label="工作台入口">
-            {(
-              [
-                { id: 'knowledge', label: '知识库', icon: BookOpen },
-                { id: 'memory', label: '记忆', icon: Brain },
-              ] as const
-            ).map((item) => (
-              <a
-                className="new-chat"
-                key={item.id}
-                href={managementPaths[item.id]}
-                aria-current={managementPage === item.id ? 'page' : undefined}
-                onClick={(event) => {
-                  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-                  event.preventDefault();
-                  if (narrow) close();
-                  onOpenManagement(item.id);
-                }}
-              >
-                <item.icon size={16} />
-                <span>{item.label}</span>
-              </a>
-            ))}
-          </nav>
         </div>
         <div className={`session-region ${!chat.sessions.length ? 'empty' : ''}`}>
           <nav
@@ -506,22 +483,67 @@ export default function DswSidebar({
                 event.stopPropagation();
                 closeMenu();
               }
+              if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'Tab'].includes(event.key)) {
+                const items = [
+                  ...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+                ];
+                const current = items.indexOf(document.activeElement as HTMLElement);
+                const next =
+                  event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? items.length - 1
+                      : (current +
+                          (event.key === 'ArrowUp' || (event.key === 'Tab' && event.shiftKey)
+                            ? -1
+                            : 1) +
+                          items.length) %
+                        items.length;
+                event.preventDefault();
+                items[next]?.focus();
+              }
             }}
           >
             {menu === 'profile' ? (
-              <button
-                role="menuitem"
-                autoFocus
-                onClick={() => {
-                  closeMenu();
-                  if (narrow) close();
-                  requestAnimationFrame(onSettings);
-                }}
-                aria-label="打开设置"
-              >
-                <IconSettings />
-                系统设置
-              </button>
+              <>
+                {(
+                  [
+                    { id: 'knowledge', label: '知识库', icon: BookOpen },
+                    { id: 'memory', label: '记忆', icon: Brain },
+                    { id: 'people', label: '人物', icon: Users },
+                  ] as const
+                ).map((item, index) => (
+                  <a
+                    key={item.id}
+                    role="menuitem"
+                    autoFocus={index === 0}
+                    href={managementPaths[item.id]}
+                    aria-current={managementPage === item.id ? 'page' : undefined}
+                    onClick={(event) => {
+                      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                      event.preventDefault();
+                      closeMenu();
+                      if (narrow) close();
+                      onOpenManagement(item.id);
+                    }}
+                  >
+                    <item.icon size={16} />
+                    {item.label}
+                  </a>
+                ))}
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu();
+                    if (narrow) close();
+                    requestAnimationFrame(onSettings);
+                  }}
+                  aria-label="打开设置"
+                >
+                  <IconSettings />
+                  系统设置
+                </button>
+              </>
             ) : menuSession ? (
               <>
                 <button

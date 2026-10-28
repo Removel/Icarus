@@ -5,7 +5,7 @@ import { applyUpdate, emptyTranscript } from './updates';
 import useChatPreference from './useChatPreference';
 import useChatSession from './useChatSession';
 import ChatTranscript from './ChatTranscript';
-import ChatSettings, { type ChatSettingsProps } from './ChatSettings';
+import ChatSettings, { type ChatSettingsProps, type ManagementPage } from './ChatSettings';
 import ChatDialog from './ChatDialog';
 import DswSidebar, { titleOf } from './DswSidebar';
 import DswComposer from './DswComposer';
@@ -32,7 +32,7 @@ export default function ChatApp({
 }: {
   hash: string;
   active: boolean;
-  managementPage?: 'memory' | 'knowledge';
+  managementPage?: ManagementPage;
   managementContent?: ReactNode;
 } & ChatSettingsProps) {
   const chat = useChatSession(hash);

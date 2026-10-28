@@ -8,11 +8,25 @@ export default defineConfig(({ mode }) => {
   const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
   const env = loadEnv(mode, repoRoot, 'ICARUS_');
   const token = env.ICARUS_OPENKB_API_TOKEN;
+  const relaToken =
+    process.env.RELA_MEM_API_TOKEN || loadEnv(mode, repoRoot, 'RELA_MEM_').RELA_MEM_API_TOKEN;
   return {
     plugins: [react(), semiPlugin({ theme: '@semi-bot/semi-theme-universedesign' }), precompress()],
     base: './',
     server: {
       proxy: {
+        '^/api/rela(?:/|\\?|$)': {
+          target: env.ICARUS_RELATIONSHIP_ENDPOINT || 'http://127.0.0.1:8767',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/rela/, '') || '/',
+          configure: (proxy) => {
+            proxy.on('proxyReq', (request) => {
+              for (const header of ['authorization', 'cookie', 'x-api-key', 'proxy-authorization'])
+                request.removeHeader(header);
+              if (relaToken) request.setHeader('Authorization', `Bearer ${relaToken}`);
+            });
+          },
+        },
         '/api/mem0': {
           target: env.ICARUS_MEM0_ENDPOINT || 'http://127.0.0.1:8888',
           changeOrigin: true,

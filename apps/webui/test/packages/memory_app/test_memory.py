@@ -1,3 +1,4 @@
+from test.navigation import follow_link
 import re
 
 import pytest
@@ -128,8 +129,8 @@ def test_bulk_selection_is_cleared_when_context_changes(page, change):
     elif change == "tab":
         page.get_by_role("tab", name=re.compile("^已失效")).click()
     else:
-        page.get_by_role("link", name="知识库", exact=True).click()
-        page.get_by_role("link", name="记忆", exact=True).click()
+        follow_link(page, "知识库")
+        follow_link(page, "记忆")
     expect(page.get_by_role("button", name="多选", exact=True)).to_be_visible()
     page.get_by_role("button", name="多选", exact=True).click()
     expect(select_all).not_to_be_checked()

@@ -260,7 +260,7 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
           </div>
         )}
         {((!data.names && !data.listError) || data.loading) && (
-          <LoadingIndicator label="正在加载知识库" />
+          <LoadingIndicator overlay={Boolean(base)} label="正在加载知识库" />
         )}
         {invalidBase && (
           <EmptyState

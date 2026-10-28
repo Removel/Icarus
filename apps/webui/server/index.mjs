@@ -22,6 +22,12 @@ const origin = new URL(
 const root = await realpath(fileURLToPath(new URL('../apps/shell/dist/', import.meta.url)));
 const routes = [
   {
+    prefix: '/api/rela',
+    target: env.ICARUS_RELATIONSHIP_ENDPOINT || 'http://127.0.0.1:8767',
+    strip: true,
+    headers: env.RELA_MEM_API_TOKEN ? { authorization: `Bearer ${env.RELA_MEM_API_TOKEN}` } : {},
+  },
+  {
     prefix: '/api/mem0',
     target: env.ICARUS_MEM0_ENDPOINT || 'http://127.0.0.1:8888',
     strip: true,
@@ -221,7 +227,8 @@ server.on('upgrade', (request, socket, head) => {
   if (!allowed(request, true)) return reject('403 Forbidden');
   if (request.url !== '/rpc' || request.headers.upgrade?.toLowerCase() !== 'websocket')
     return reject('404 Not Found');
-  const proxy = upstream(request, routes[2], true);
+  const route = routes.find((item) => item.prefix === '/rpc');
+  const proxy = upstream(request, route, true);
   proxy.setTimeout(10000, () => proxy.destroy());
   proxy.on('upgrade', (incoming, peer, initial) => {
     peer.setTimeout(0);

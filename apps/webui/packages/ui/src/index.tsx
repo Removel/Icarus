@@ -2,13 +2,15 @@ import '@douyinfe/semi-ui/react19-adapter';
 import {
   cloneElement,
   isValidElement,
+  useRef,
+  useState,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { ArrowDown, Search, X, SearchX } from 'lucide-react';
+import { ArrowDown, Info, Search, X, SearchX } from 'lucide-react';
 import { flushSync } from 'react-dom';
-import { Button, Input, Modal as SemiModal, Spin } from '@douyinfe/semi-ui';
+import { Button, Input, Modal as SemiModal, Spin, Tooltip } from '@douyinfe/semi-ui';
 
 export {
   CodeHighlight,
@@ -28,6 +30,41 @@ export { navigate, useHashLocation, useUnsavedChanges } from './navigation';
 export { NavigationDrawer, useNarrowLayout } from './navigation-drawer';
 export { Select } from './Select';
 export { serviceFailure, taskFailure } from './serviceErrors';
+
+export function InfoTip({ label, content }: { label: string; content: string }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip
+      content={content}
+      trigger="custom"
+      visible={open}
+      onClickOutSide={() => setOpen(false)}
+      onEscKeyDown={() => setOpen(false)}
+      position="topLeft"
+      motion={false}
+      closeOnEsc
+      getPopupContainer={() => trigger.current?.closest('dialog') ?? document.body}
+    >
+      <button
+        ref={trigger}
+        type="button"
+        className="info-tip"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && open) {
+            event.stopPropagation();
+            setOpen(false);
+          }
+        }}
+      >
+        <Info size={14} aria-hidden="true" />
+      </button>
+    </Tooltip>
+  );
+}
 
 let layoutTransition: ViewTransition | undefined;
 
@@ -53,9 +90,19 @@ export function transitionLayout(update: () => void, animate = true) {
   void transition.finished.then(clear, clear);
 }
 
-export function LoadingIndicator({ label = '正在加载' }: { label?: string }) {
+export function LoadingIndicator({
+  label = '正在加载',
+  overlay = false,
+}: {
+  label?: string;
+  overlay?: boolean;
+}) {
   return (
-    <div className="loading-indicator" role="status" aria-label={label}>
+    <div
+      className={`loading-indicator${overlay ? ' is-overlay' : ''}`}
+      role="status"
+      aria-label={label}
+    >
       <Spin />
     </div>
   );
@@ -74,6 +121,7 @@ export function Modal({
   return (
     <SemiModal
       motion={false}
+      preventScroll
       {...props}
       centered={centered}
       className={['icarus-modal', className].filter(Boolean).join(' ')}

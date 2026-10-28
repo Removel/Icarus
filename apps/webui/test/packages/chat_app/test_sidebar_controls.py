@@ -118,11 +118,12 @@ def test_dswui_fields_navigation_and_settings_dropdown(page, theme):
     page.emulate_media(color_scheme=theme)
     _, emit = gateway(page, sessions=[dict(row) for row in SESSIONS])
     emit('user.message', {'text': '开始对话'})
-    links = page.locator('.chat-management-links a')
-    sizes = links.evaluate_all('(nodes) => nodes.map(el => ({width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height, radius: getComputedStyle(el).borderRadius}))')
-    assert sizes[0] == sizes[1]
-    assert sizes[0]['height'] == 40
-    assert sizes[0]['radius'] == page.locator('.sidebar-top > .new-chat').evaluate('el => getComputedStyle(el).borderRadius')
+    expect(page.locator('.chat-management-links')).to_have_count(0)
+    page.get_by_role('button', name='账户菜单', exact=True).click()
+    menu = page.get_by_role('menu')
+    for label in ('知识库', '记忆', '人物'):
+        expect(menu.get_by_role('menuitem', name=label, exact=True)).to_be_visible()
+    page.keyboard.press('Escape')
     assert page.locator('.session-region').evaluate('el => parseFloat(getComputedStyle(el).marginTop)') == 12
     expect(page.locator('.brand .icarus-brand-mark')).to_have_attribute('src', '/icarus.svg')
     expect(page.locator('.brand .icarus-wordmark')).to_have_attribute('src', '/icarus-wordmark.svg')

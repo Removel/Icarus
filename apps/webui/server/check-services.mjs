@@ -49,6 +49,17 @@ async function gatewayCheck() {
 }
 const checks = [
   [
+    'rela',
+    () =>
+      httpCheck(
+        'rela',
+        env.ICARUS_RELATIONSHIP_ENDPOINT || 'http://127.0.0.1:8767',
+        '/v1/persons?limit=1',
+        env.RELA_MEM_API_TOKEN ? { Authorization: `Bearer ${env.RELA_MEM_API_TOKEN}` } : {},
+        (body) => Array.isArray(body.items),
+      ),
+  ],
+  [
     'Mem0',
     () =>
       httpCheck(

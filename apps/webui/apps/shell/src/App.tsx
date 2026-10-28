@@ -4,25 +4,31 @@ import { LoadingIndicator, navigate, useHashLocation } from '@icarus/ui';
 import { useTheme } from './theme';
 const MemoryApp = lazy(() => import('@icarus/memory-app'));
 const KnowledgeApp = lazy(() => import('@icarus/knowledge-app'));
+const RelationshipApp = lazy(() => import('@icarus/relationship-app'));
 const ChatApp = lazy(() => import('@icarus/chat-app'));
 
 export default function App() {
   const [theme, setTheme] = useTheme();
   const hash = useHashLocation();
   const [memoryHeader, setMemoryHeader] = useState<HTMLDivElement | null>(null);
+  const [peopleHeader, setPeopleHeader] = useState<HTMLDivElement | null>(null);
   const requested = hash.split('?')[0].split('/')[1];
-  const route = requested === 'memory' || requested === 'knowledge' ? requested : 'chat';
+  const route =
+    requested === 'memory' || requested === 'knowledge' || requested === 'people'
+      ? requested
+      : 'chat';
   const visited = useRef(new Set([route]));
   visited.current.add(route);
   const paths = useRef({
     memory: '#/memory/all',
     knowledge: '#/knowledge/sources',
+    people: '#/people',
     chat: '#/chat',
   });
   if (hash && requested === route) paths.current[route] = hash;
   useEffect(() => {
-    if (!['chat', 'memory', 'knowledge'].includes(requested)) navigate('#/chat', true);
-    document.title = `Icarus · ${route === 'chat' ? '对话' : route === 'memory' ? '记忆' : '知识库'}`;
+    if (!['chat', 'memory', 'knowledge', 'people'].includes(requested)) navigate('#/chat', true);
+    document.title = `Icarus · ${route === 'chat' ? '对话' : route === 'memory' ? '记忆' : route === 'people' ? '人物' : '知识库'}`;
   }, [requested, route]);
   const knowledgeParams = new URLSearchParams(paths.current.knowledge.split('?')[1]);
   const knowledgeSection =
@@ -50,9 +56,12 @@ export default function App() {
           >
             <ArrowLeft size={16} />
           </a>
-          <span className="management-title">{route === 'memory' ? '记忆' : '知识库'}</span>
+          <span className="management-title">
+            {route === 'memory' ? '记忆' : route === 'people' ? '人物' : '知识库'}
+          </span>
         </div>
         <div className="management-header-slot" ref={setMemoryHeader} hidden={route !== 'memory'} />
+        <div className="management-header-slot" ref={setPeopleHeader} hidden={route !== 'people'} />
         <nav aria-label="知识库分类" hidden={route !== 'knowledge'}>
           {sections.map((item) => {
             const params = new URLSearchParams();
@@ -91,6 +100,17 @@ export default function App() {
           </Suspense>
         )}
       </div>
+      <div className="management-body" hidden={route !== 'people'}>
+        {visited.current.has('people') && (
+          <Suspense fallback={<LoadingIndicator label="正在加载人物" />}>
+            <RelationshipApp
+              active={route === 'people'}
+              hash={route === 'people' ? hash : paths.current.people}
+              headerContainer={peopleHeader}
+            />
+          </Suspense>
+        )}
+      </div>
       <div className="management-body" hidden={route !== 'knowledge'}>
         {visited.current.has('knowledge') && (
           <Suspense fallback={<LoadingIndicator label="正在加载知识库" />}>
@@ -124,7 +144,11 @@ export default function App() {
             onThemeChange={setTheme}
             managementPage={route === 'chat' ? undefined : route}
             managementContent={management}
-            managementPaths={{ memory: paths.current.memory, knowledge: paths.current.knowledge }}
+            managementPaths={{
+              memory: paths.current.memory,
+              knowledge: paths.current.knowledge,
+              people: paths.current.people,
+            }}
             onOpenManagement={(destination) => navigate(paths.current[destination])}
           />
         </Suspense>

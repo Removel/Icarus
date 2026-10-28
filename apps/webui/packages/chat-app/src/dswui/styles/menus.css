@@ -18,7 +18,8 @@
     0 0 4px rgba(0, 0, 0, 0.02),
     0 12px 32px rgba(0, 0, 0, 0.08);
 }
-.dswui .popup-menu button {
+.dswui .popup-menu button,
+.dswui .popup-menu a[role='menuitem'] {
   display: flex;
   align-items: center;
   width: 100%;
@@ -32,7 +33,8 @@
   white-space: nowrap;
   text-align: left;
 }
-.dswui .popup-menu button:is(:hover, :focus-visible) {
+.dswui .popup-menu button:is(:hover, :focus-visible),
+.dswui .popup-menu a[role='menuitem']:is(:hover, :focus-visible) {
   background: var(--hover);
   outline: none;
 }

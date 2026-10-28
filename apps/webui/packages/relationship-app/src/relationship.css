@@ -1,0 +1,802 @@
+.relationship-page {
+  position: relative;
+  container-type: inline-size;
+  color: var(--ink);
+}
+.rela-header-actions {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  transform: translateY(32px);
+}
+.rela-form-fields {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 0 0 16px;
+  margin: 0;
+  border: 0;
+}
+.rela-form-fields .form-field {
+  margin: 0;
+}
+.rela-form-fields .form-label {
+  margin-bottom: 6px;
+}
+.rela-form-fields .field-hint {
+  margin: 6px 0 0;
+}
+.rela-form-actions,
+.rela-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rela-inline-actions {
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+.rela-write-modal {
+  max-width: calc(100vw - 24px);
+}
+.rela-write-modal .semi-modal-body {
+  padding-top: 16px;
+  max-height: calc(100dvh - 180px);
+  overflow: auto;
+}
+.rela-person-picker {
+  display: grid;
+  gap: 8px;
+}
+.rela-person-options {
+  max-height: 240px;
+  overflow: auto;
+}
+.rela-person-options button {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.rela-person-options button:hover {
+  background: var(--subtle);
+}
+.rela-person-options small,
+.rela-person-options code {
+  color: var(--muted);
+  font-size: 11px;
+}
+.rela-picked-person {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  background: var(--subtle);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.rela-picked-person code {
+  color: var(--muted);
+  font-size: 11px;
+}
+@media (max-width: 1100px) {
+  .rela-header-actions {
+    grid-row: 2;
+    transform: none;
+  }
+}
+.rela-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.rela-filters .search-field {
+  flex: 1 1 240px;
+  max-width: 480px;
+}
+.rela-filters .icarus-select {
+  min-width: 130px;
+}
+.rela-caption {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.rela-caption h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 550;
+}
+.rela-caption > span,
+.rela-caption small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rela-caption small {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.people-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 280px);
+  gap: 16px;
+}
+@container (min-width: 600px) {
+  .people-grid {
+    grid-template-columns: repeat(2, minmax(0, 280px));
+  }
+}
+@container (min-width: 960px) {
+  .people-grid {
+    grid-template-columns: repeat(3, minmax(0, 280px));
+  }
+}
+.person-card {
+  --person-tone: var(--muted);
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--surface);
+  text-decoration: none;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
+}
+.person-card[data-kind='agent'] {
+  --person-tone: var(--accent);
+}
+.person-card:hover {
+  border-color: color-mix(in srgb, var(--strong-line) 55%, var(--line));
+  background: var(--raised);
+}
+.person-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.person-card-avatar {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--person-tone) 8%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--person-tone) 12%, transparent);
+  color: var(--person-tone);
+  font-size: 17px;
+}
+.person-card-copy {
+  min-width: 0;
+}
+.person-card-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-height: 24px;
+}
+.person-card-kind {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.person-card-kind > span {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--person-tone) 8%, var(--surface));
+  color: var(--person-tone);
+  font-size: 10px;
+  line-height: 16px;
+}
+.person-card-kind .rela-archived {
+  color: var(--danger);
+}
+.rela-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 16px;
+}
+.person-card-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+.rela-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.rela-badges > span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 11px;
+}
+.rela-badges .rela-archived {
+  color: var(--danger);
+}
+.person-card-aliases {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin-top: 6px;
+}
+.person-card-aliases > span {
+  color: var(--muted);
+  margin-right: 4px;
+}
+.person-card-id {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--muted);
+}
+.person-card-id small {
+  color: var(--muted);
+  font-size: 10px;
+  flex: none;
+}
+.person-card-id code {
+  font-family: var(--semi-font-family-regular);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.rela-pagination {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 20px 0 4px;
+}
+.rela-pagination .semi-button {
+  min-height: 30px;
+  height: 30px;
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 0 10px;
+}
+.rela-error {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--danger);
+}
+.rela-error > span {
+  flex: 1 1 200px;
+}
+.rela-circle-row {
+  --person-tone: var(--muted);
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  color: var(--ink);
+  text-decoration: none;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+.rela-circle-list {
+  display: grid;
+  grid-template-columns: minmax(0, 360px);
+  gap: 16px;
+}
+.rela-circle-row:hover {
+  border-color: var(--strong-line);
+  background: var(--raised);
+}
+.rela-circle-row h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.rela-circle-row code {
+  overflow-wrap: anywhere;
+}
+@container (min-width: 800px) {
+  .rela-circle-list {
+    grid-template-columns: repeat(2, minmax(0, 360px));
+  }
+}
+.rela-member-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding: 18px 0;
+}
+.rela-member-row > div:first-child {
+  min-width: 0;
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+.rela-member-row a {
+  font-size: 16px;
+  color: var(--accent);
+}
+.rela-member-row code,
+.rela-member-row p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rela-filters > .semi-input-wrapper {
+  width: 150px;
+}
+.rela-circle-owner {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.management-header .rela-header-tabs {
+  display: flex;
+  justify-content: center;
+}
+.rela-detail-modal {
+  --rela-gutter: 28px;
+  max-width: calc(100vw - 32px);
+}
+.rela-detail-modal .semi-button,
+.rela-detail-modal .semi-input-wrapper {
+  border-radius: 8px;
+}
+.rela-detail-modal .semi-input-wrapper {
+  background: var(--surface);
+}
+.rela-detail-modal .semi-modal-header {
+  display: none;
+}
+.rela-detail-modal .semi-modal-body {
+  padding: 0;
+  max-height: calc(100dvh - 96px);
+  overflow: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+.rela-detail-modal .semi-modal-content {
+  height: min(760px, calc(100dvh - 96px));
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+}
+.rela-detail-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px var(--rela-gutter) 0;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 12px;
+}
+.rela-detail-top > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rela-person-heading,
+.rela-detail-content {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 24px var(--rela-gutter);
+  border: 0;
+}
+.rela-person-heading {
+  --identity-tone: var(--muted);
+  padding-top: 16px;
+  background: var(--raised);
+}
+.rela-person-heading[data-kind='agent'] {
+  --identity-tone: var(--accent);
+}
+.rela-detail-modal .semi-modal-body > .rela-error {
+  margin: 16px var(--rela-gutter);
+}
+.rela-detail-content {
+  position: relative;
+  min-height: 200px;
+}
+.rela-field-history,
+.rela-resolver {
+  position: relative;
+}
+.rela-person-heading h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.rela-identity-heading {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+.rela-identity-heading > .rela-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--identity-tone);
+  background: color-mix(in srgb, var(--identity-tone) 8%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--identity-tone) 14%, transparent);
+  font-size: 20px;
+}
+.rela-identity-copy {
+  min-width: 0;
+}
+.rela-name-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.rela-name-row .rela-badges {
+  margin: 0;
+}
+.rela-person-heading .rela-badges > span {
+  color: var(--identity-tone);
+  background: color-mix(in srgb, var(--identity-tone) 9%, var(--surface));
+}
+.rela-person-heading .rela-badges .rela-archived {
+  color: var(--danger);
+}
+.rela-detail-aliases {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.rela-detail-modal .semi-button.rela-copy-id {
+  max-width: 100%;
+  min-height: 28px;
+  height: auto;
+  margin-top: 10px;
+  padding: 4px 8px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+  text-align: left;
+  white-space: normal;
+  font-size: 12px;
+  line-height: 20px;
+}
+.rela-copy-id .semi-button-content {
+  min-width: 0;
+  max-width: 100%;
+}
+.rela-copy-id code {
+  font-family: var(--semi-font-family-regular);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.rela-copy-id .semi-button-content > span {
+  flex: none;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10px;
+}
+.rela-copy-id svg {
+  flex: none;
+  color: var(--muted);
+}
+.rela-detail-tabs {
+  display: flex;
+  gap: 24px;
+  padding: 0 var(--rela-gutter);
+  background: var(--raised);
+}
+.rela-detail-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 12px 0;
+  cursor: pointer;
+}
+.rela-detail-tabs button[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.rela-detail-content h3 {
+  font-size: 15px;
+  font-weight: 550;
+  margin: 0 0 18px;
+}
+.rela-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.rela-section-heading > .semi-button:only-of-type {
+  margin-left: auto;
+}
+.rela-section-heading h3 {
+  margin: 0;
+}
+.rela-profile-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 20px;
+  justify-content: space-between;
+}
+.rela-detail-content .empty-state {
+  padding: 36px 20px;
+  min-height: 210px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--raised) 65%, var(--surface));
+}
+.rela-detail-content .empty-state h3 {
+  margin: 12px 0 8px;
+}
+.rela-detail-content .empty-state p {
+  max-width: 400px;
+  font-size: 12px;
+}
+.rela-profile-toolbar .semi-input-wrapper {
+  flex: 0 1 320px;
+  min-width: 0;
+  max-width: 100%;
+  border-color: var(--line);
+}
+.rela-profile-field {
+  padding: 20px 0;
+  border-top: 1px solid var(--line);
+}
+.rela-field-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.rela-field-heading code {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.rela-field-heading > span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.rela-value {
+  line-height: 1.85;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rela-value small {
+  margin-left: 10px;
+  color: var(--muted);
+}
+.rela-json,
+.rela-field-history pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--subtle);
+  font:
+    12px/1.85 ui-monospace,
+    monospace;
+}
+.rela-source {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 14px 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.rela-field-history {
+  padding: 16px;
+  margin-top: 12px;
+  border-left: 2px solid var(--line);
+}
+.rela-history-lookup {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 12px;
+}
+.rela-history-lookup summary {
+  cursor: pointer;
+}
+.rela-history-lookup[open] summary {
+  margin-bottom: 14px;
+}
+.rela-history-lookup .rela-filters {
+  margin-bottom: 0;
+}
+.rela-history-lookup .semi-input-wrapper {
+  flex: 1 1 180px;
+  width: auto;
+}
+.rela-field-history h4 {
+  font-weight: 500;
+  font-size: 13px;
+}
+.rela-field-history small {
+  color: var(--muted);
+}
+.rela-relation,
+.rela-membership {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.rela-relation-sentence {
+  font-size: 16px;
+  line-height: 1.8;
+}
+.rela-relation a,
+.rela-resolve-result a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.rela-membership h4 {
+  font-weight: 550;
+  margin: 0 0 8px;
+}
+.rela-membership p,
+.rela-membership code {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rela-alias-list > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.rela-alias-list strong {
+  font-weight: 500;
+}
+.rela-alias-list small {
+  color: var(--muted);
+}
+.rela-resolver {
+  display: grid;
+  gap: 12px;
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.rela-resolver h3 {
+  margin-bottom: 0;
+}
+.rela-resolver p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.rela-resolver label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rela-resolver > .semi-button {
+  justify-self: start;
+}
+@media (max-width: 767px) {
+  .rela-detail-modal {
+    --rela-gutter: 20px;
+  }
+  .rela-caption > span {
+    display: none;
+  }
+  .icarus-modal.rela-detail-modal .semi-modal {
+    width: 100% !important;
+    max-width: 100vw;
+    margin: 0;
+  }
+  .icarus-modal.rela-detail-modal .semi-modal-content {
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .rela-detail-modal .semi-modal-body {
+    max-height: 100dvh;
+  }
+  .rela-detail-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    padding: 0 var(--rela-gutter);
+  }
+  .rela-detail-tabs button {
+    min-width: 0;
+    padding: 12px 4px;
+    font-size: 12px;
+  }
+  .rela-section-heading {
+    flex-wrap: wrap;
+  }
+  .rela-identity-heading {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 12px;
+  }
+  .rela-identity-heading > .rela-avatar {
+    width: 40px;
+    height: 40px;
+  }
+  .rela-edit-person {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .rela-profile-toolbar .semi-input-wrapper {
+    flex: 1 1 160px;
+    min-width: 0;
+  }
+  .rela-alias-list > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+}

@@ -198,6 +198,9 @@ svg {
 .semi-button.semi-button-light:hover {
   background: var(--selected);
 }
+.semi-button.semi-button-light:not(.semi-button-disabled):is(:hover, :active, :focus-visible) {
+  border: 1px solid var(--line);
+}
 .semi-button.semi-button-borderless {
   color: var(--muted);
 }
@@ -262,6 +265,32 @@ html[data-theme='dark'] .icarus-brand-mark {
 }
 .search-field.semi-input-wrapper-focus {
   border-color: var(--strong-line);
+}
+.info-tip,
+.dswui .info-tip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  vertical-align: middle;
+  transform: translateY(1px);
+  cursor: pointer;
+}
+.info-tip:hover,
+.dswui .info-tip:hover {
+  background: var(--subtle);
+  color: var(--ink);
+}
+.info-tip:focus-visible {
+  outline: 2px solid var(--strong-line);
+  outline-offset: 2px;
 }
 /* DSWUI Select: one trigger and popup implementation for settings and management pages. */
 .icarus-select,
@@ -446,6 +475,7 @@ html[data-theme='dark'] .semi-modal-mask {
   color: var(--muted);
 }
 .icarus-modal .semi-modal-body {
+  position: relative;
   min-height: 0;
   margin: 0;
   padding: 24px;
@@ -902,6 +932,20 @@ kbd {
   justify-content: center;
   min-height: 120px;
   width: 100%;
+  visibility: hidden;
+  animation: loading-reveal 0s 180ms forwards;
+}
+.loading-indicator.is-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  min-height: 0;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+@keyframes loading-reveal {
+  to {
+    visibility: visible;
+  }
 }
 
 .navigation-drawer {

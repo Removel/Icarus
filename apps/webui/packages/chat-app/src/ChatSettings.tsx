@@ -8,7 +8,7 @@ import { Bot, SlidersHorizontal } from 'lucide-react';
 import { Select } from '@icarus/ui';
 
 export type ChatTheme = 'light' | 'dark' | 'system';
-export type ManagementPage = 'memory' | 'knowledge';
+export type ManagementPage = 'memory' | 'knowledge' | 'people';
 export type ChatSettingsProps = {
   theme: ChatTheme;
   onThemeChange: (theme: ChatTheme) => void;
