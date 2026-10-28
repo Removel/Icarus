@@ -11,10 +11,10 @@ Use this skill for work inside `apps/tui`. It encodes the project's Textual arch
 
 Before editing, inspect the smallest relevant set:
 
-- `apps/tui/src/app.py` — App shell, lifecycle, current orchestration
+- `apps/tui/src/app.py` — App-owned lifecycle, Workers and serial result application; `apps/tui/src/screens/chat/screen.py` — retained chat page
 - `apps/tui/src/widgets/` — visual components and local interaction
 - `apps/tui/src/screens/` — screens and modal screens
-- `apps/tui/src/styles.tcss` — shared layout and theme tokens
+- `apps/tui/src/styles/` — shared layout and theme tokens
 - `apps/tui/docs/spec/` — the feature's current architecture and decisions
 - `apps/tui/test/` — Pilot tests, widget tests, snapshots, fixtures
 
@@ -25,31 +25,34 @@ Architecture documents are derived from code. When code and docs disagree, trust
 Textual projects are organized by runtime unit, not by abstract clean-architecture layers:
 
 ```text
-App          process lifecycle, global bindings, theme, screen routing
-Screen       page layout, focus, child-message routing, page orchestration
+App          process lifecycle, screen routing, long-lived IO workers and serial results
+Screen       retained page layout, focus, child-message routing and view rendering
 Widget       local state, rendering, local interaction; emits Message upward
-Message      typed child -> parent event
-Service      plain Python for network/file/task I/O; no Textual imports
-Model        pure state machine / projection / data types; no Textual imports
-Config       immutable settings object
+Message      explicit intent/result delivery, no reflective App proxies
+Service      plain Python chat workflows and external IO; no Textual imports
+Store        owns ChatState and widget-free conversation facts
+ViewModel    pure read-only display derivation, no transcript copy or IO
+Config       immutable startup settings
 ```
 
 Dependency direction:
 
 ```text
-app.py -> screens/ -> widgets/
-   |          |          |
-   |          v          v
-   +-----> services/ -> models/
-   +-----> config.py
+app.py -> services/chat -> client/gateway
+   |           |
+   v           v
+screens/ -> stores/ <- viewmodels/
+   |
+widgets/chat -> domain/ + event_pipeline/
+configs/ and platform/ remain independent of UI
 ```
 
 Rules that keep this boundary real:
 
 - Keep `App` thin. It should answer "how does the app start, which global keys exist, which Screen is shown", not "how does a queued message get steered".
 - Put page-specific orchestration in a `Screen`, and feature behavior in a composite widget or a plain service.
-- Widgets own their local rendering state. They may import pure vocabulary such as `UiAction` or `RuntimePhase`; they must not import `gateway_client`, services, or `app`.
-- Services provide async methods. Only Screens/Widgets create Textual workers, because workers must stay owned and cancelled by the DOM node that started them.
+- Widgets own their local rendering state. They may import pure vocabulary such as `UiAction` or `RuntimePhase`; they must not import `client/gateway`, services, or `app`.
+- Services provide framework-free workflows and captured I/O results. App owns long-lived Textual workers; Screens/Widgets own view-only work. Apply runtime results serially in App, never by editing Widgets from I/O workers.
 - Use `Screen` when navigation changes the user's working context; use `ModalScreen` for short interruptions such as the Session picker.
 - Prefer nested `Message` classes for widget-local events (`PersistentComposer.Submitted`). Keep a shared `messages.py` only for events that cross screens, and keep it small.
 - One owner per piece of state. Local UI state uses `reactive` + `watch_*`; cross-page state lives in a service/model and is passed down.
@@ -61,11 +64,11 @@ If `app.py` is doing session lifecycle, dispatch, update consumption, and input 
 
 Read [references/tcss.md](references/tcss.md) before a non-trivial styling change. Core rules:
 
-- Define theme tokens once at the top of `styles.tcss` (the file already uses `$icarus-*` tokens). Use tokens, not repeated hex values.
-- Put page/shell layout in `styles.tcss`. Put a widget's intrinsic defaults in its `DEFAULT_CSS` only when the widget must look right in isolation.
+- Define theme tokens once in `styles/tokens.tcss`. App supplies the variables to every stylesheet; use tokens, not repeated hex values.
+- Put layout in `styles/screens/` and widget appearance in `styles/widgets/`; tokens are centralized in `styles/tokens.tcss` and supplied by App.get_css_variables to every file. Put a widget's intrinsic defaults in its `DEFAULT_CSS` only when the widget must look right in isolation.
 - Use IDs for stable test hooks and classes for variants/states. Avoid long descendant chains; style the component at its own boundary.
 - Prefer `1fr` for the flexible region and fixed rows for chrome. Give shrinking containers `min-width: 0` so text can ellipsize instead of forcing overflow.
-- Keep one scroll owner. Nested scrolling makes wheel, follow, and keyboard paging fight each other.
+- Keep one scroll owner per region. The execution log has a fixed-height scroller per Run with default latest-follow. Latest Thinking is below its frame and older Thinking archives inside. Assistant text is always fully expanded in the outer transcript, never a capped local scroller. Consume wheel only where that region can move, then hand off at its edge.
 - Style `:focus`, `:hover`, and `:focus-within` explicitly. Never rely on color alone to communicate state.
 - Implement responsive behavior with classes toggled in `on_resize` (the current app uses `-narrow`, `-compact-logo`, `-short`), not with duplicated widget trees.
 - Do not use inline `CSS` for feature work beyond a tiny default; it hides layout from the snapshot review and from the next maintainer.
@@ -91,7 +94,7 @@ Read [references/verification.md](references/verification.md). Minimum loop:
 3. For visual changes, replay deterministically and inspect the rendered snapshot; do not trust test pass/fail alone.
 4. Run `git diff --check`.
 
-Snapshot updates are intentional changes, not a way to make red tests green. If a snapshot changes, review the rendered output first, then update, then re-run the suite.
+The old 13 SVG baseline tests were removed at user request. Use Pilot/semantic tests and temporary real-App screenshots for visual inspection; do not require or recreate nonexistent baselines.
 
 ## Change checklist
 
@@ -108,7 +111,7 @@ Before calling TUI work done:
 ## Anti-patterns
 
 - Fat `App` that mixes lifecycle, protocol handling, queueing, and rendering.
-- Widgets importing `gateway_client` or reaching into global app state.
+- Widgets importing `client/gateway` or reaching into global app state.
 - Duplicating the same value in App, Screen, and Widget without one owner.
 - Styling by global widget type (for example, every `Static`) instead of by component ID/class.
 - Deep descendant selectors that break whenever the layout moves.

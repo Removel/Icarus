@@ -4,7 +4,7 @@ TCSS is Textual's CSS dialect. It styles the widget tree at runtime; changes are
 
 ## File and token structure
 
-- `apps/tui/src/styles.tcss` owns shell layout and color tokens.
+- `apps/tui/src/styles/tokens.tcss` owns tokens; base, screens and widgets own their respective rules. App.get_css_variables supplies the tokens to each stylesheet; file order alone does not share variables.
 - A widget's `DEFAULT_CSS` owns only what the widget needs to look right in isolation.
 - Declare tokens once at the top of the stylesheet:
 
@@ -131,7 +131,7 @@ Do not encode state with color alone. Pair color with a label, icon, or text wei
 - `scrollbar-color`, `scrollbar-color-hover`, `scrollbar-color-active`.
 - `scrollbar-background`, `scrollbar-background-hover`, `scrollbar-background-active`, `scrollbar-corner-color`.
 - `scrollbar-visibility: visible | hidden`.
-- Keep one scroll owner per region. Nested scrolling makes wheel, paging, and follow behavior ambiguous.
+- Keep one scroll owner per region. Tool/long-message inner regions are intentional; define wheel edge handoff and independent follow state.
 
 ## Focus and hover
 
@@ -185,4 +185,4 @@ Check at least: wide (120×40), narrow (70×24), very narrow (60×20), short (10
 1. Run the app with `textual run --dev` and use `textual console` for CSS errors.
 2. If a rule does not apply, inspect specificity, the widget's `DEFAULT_CSS`, and whether an inline `styles.*` assignment overrides it.
 3. Prefer `textual run --dev` over guessing; TCSS errors are reported at parse time.
-4. After a layout change, capture both wide and narrow snapshots and inspect them.
+4. After a layout change, capture actual App frames using scripts/capture_preview.py at wide/narrow/short sizes and inspect them; no maintained SVG baseline suite exists.

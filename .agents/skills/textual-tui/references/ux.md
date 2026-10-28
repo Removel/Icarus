@@ -89,4 +89,4 @@ Errors should appear near the failed action, identify what was preserved, and sa
 - What happens if the connection drops mid-operation?
 - Does the change move the user's reading position or clear their draft?
 - Is the error actionable, or only descriptive?
-- Does the change preserve the existing 13 visual snapshots, or is the visual delta intentional and reviewed?
+- Does actual Textual rendering match the approved demo? Inspect temporary screenshots; do not rely on removed SVG baselines.
