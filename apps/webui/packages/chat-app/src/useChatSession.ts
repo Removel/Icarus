@@ -10,6 +10,7 @@ import {
 } from './gateway';
 import { applyUpdate, emptyTranscript } from './updates';
 import useChatPreference from './useChatPreference';
+import useWorkspaceHistory from './useWorkspaceHistory';
 import { localClock, type RequestOptions } from './webSearch';
 import { deleteHistory, readHistory, saveHistory } from './historyCache';
 import useImageInputs from './useImageInputs';
@@ -31,6 +32,7 @@ export default function useChatSession(hash: string) {
   const workspace = params.get('workspace') ?? '';
   const sessionId = params.get('session') ?? '';
   const [path, setPath] = useState(workspace);
+  const { history: workspaceHistory, remember: rememberWorkspace } = useWorkspaceHistory();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [transcript, setTranscript] = useState(emptyTranscript);
   const transcriptRef = useRef(transcript);
@@ -161,6 +163,7 @@ export default function useChatSession(hash: string) {
         workspace_path: workspace,
       });
       if (stale) return;
+      rememberWorkspace(workspace);
       const created = createdSession.current;
       if (created && !list.sessions.some((row) => row.session_id === created.session_id))
         setSessions([created, ...list.sessions]);
@@ -178,7 +181,7 @@ export default function useChatSession(hash: string) {
       connection.close();
       if (client.current === connection) client.current = undefined;
     };
-  }, [workspace, version]);
+  }, [workspace, version, rememberWorkspace]);
 
   useLayoutEffect(() => {
     const cacheKey = workspace + '\u0000' + sessionId;
@@ -778,6 +781,7 @@ export default function useChatSession(hash: string) {
     sessionId,
     path,
     setPath,
+    workspaceHistory,
     sessions,
     transcript,
     connected,

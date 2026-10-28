@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { BrandMark, transitionLayout, useNarrowLayout } from '@icarus/ui';
+import { BrandMark, InfoTip, Select, transitionLayout, useNarrowLayout } from '@icarus/ui';
 import type { History, Session } from './gateway';
 import { applyUpdate, emptyTranscript } from './updates';
 import useChatPreference from './useChatPreference';
@@ -178,17 +178,33 @@ export default function ChatApp({
         chat.connectWorkspace();
       }}
     >
-      <label className="field">
-        <span>工作区路径</span>
-        <input
-          type="text"
-          aria-label="工作区路径"
-          placeholder="服务端工作区的绝对路径"
-          value={chat.path}
-          onChange={(event) => chat.setPath(event.target.value)}
-          disabled={chat.busy || chat.submitting}
-        />
-      </label>
+      <div className="field">
+        <div className="chat-workspace-label">
+          <label htmlFor="chat-workspace-path">工作区路径</label>
+          <InfoTip label="工作区历史记录说明" content="历史记录仅保存在此浏览器，最多 5 条。" />
+        </div>
+        <div className="chat-workspace-path-row">
+          <input
+            id="chat-workspace-path"
+            type="text"
+            aria-label="工作区路径"
+            placeholder="服务端工作区的绝对路径"
+            value={chat.path}
+            onChange={(event) => chat.setPath(event.target.value)}
+            disabled={chat.busy || chat.submitting}
+          />
+          {chat.workspaceHistory.length > 0 && (
+            <Select
+              className="chat-workspace-history"
+              aria-label="工作区历史记录"
+              value="历史记录"
+              optionList={chat.workspaceHistory.map((path) => ({ value: path, label: path }))}
+              onChange={chat.setPath}
+              disabled={chat.busy || chat.submitting}
+            />
+          )}
+        </div>
+      </div>
       <div className="setting-row">
         <span className="chat-connection-status" role="status">
           {chat.connected ? '已连接' : chat.workspace ? '未连接' : '选择工作区开始'}

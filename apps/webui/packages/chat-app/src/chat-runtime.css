@@ -135,6 +135,26 @@ html[data-theme='dark'] .dswui .icarus-wordmark {
 .dswui .chat-connection .field input {
   width: 100%;
 }
+.dswui .chat-workspace-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dswui .chat-workspace-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.dswui .chat-workspace-label label {
+  margin: 0;
+}
+.dswui .chat-workspace-path-row input {
+  flex: 1;
+  min-width: 0;
+}
+.dswui .chat-workspace-history {
+  flex: none;
+}
 .dswui .dswui-modal-host {
   border: 0;
   background: none;
