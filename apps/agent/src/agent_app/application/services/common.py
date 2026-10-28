@@ -72,8 +72,9 @@ def _submission_fingerprint(
     prompt: str,
     resources: tuple[ResourceRef, ...],
     display_text: str | None,
+    request_options: dict[str, object] | None = None,
 ) -> str:
-    payload = {
+    payload: dict[str, object] = {
         "prompt": prompt,
         "display_text": display_text,
         "resources": [
@@ -84,6 +85,8 @@ def _submission_fingerprint(
             for item in resources
         ],
     }
+    if request_options:
+        payload["request_options"] = request_options
     encoded = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")

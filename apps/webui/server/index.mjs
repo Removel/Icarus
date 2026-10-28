@@ -5,6 +5,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, relative, extname, isAbsolute } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
+import { acceptedEncodings } from './static-encoding.mjs';
 
 const env = process.env;
 const host = env.ICARUS_WEBUI_HOST || '127.0.0.1';
@@ -21,6 +22,12 @@ const origin = new URL(
 const root = await realpath(fileURLToPath(new URL('../apps/shell/dist/', import.meta.url)));
 const routes = [
   {
+    prefix: '/api/rela',
+    target: env.ICARUS_RELATIONSHIP_ENDPOINT || 'http://127.0.0.1:8767',
+    strip: true,
+    headers: env.RELA_MEM_API_TOKEN ? { authorization: `Bearer ${env.RELA_MEM_API_TOKEN}` } : {},
+  },
+  {
     prefix: '/api/mem0',
     target: env.ICARUS_MEM0_ENDPOINT || 'http://127.0.0.1:8888',
     strip: true,
@@ -34,6 +41,11 @@ const routes = [
       : {},
   },
   { prefix: '/rpc', target: env.ICARUS_GATEWAY_ENDPOINT || 'http://127.0.0.1:8765', headers: {} },
+  {
+    prefix: '/resources',
+    target: env.ICARUS_GATEWAY_ENDPOINT || 'http://127.0.0.1:8765',
+    headers: {},
+  },
 ].map((route) => ({ ...route, target: new URL(route.target) }));
 for (const route of routes)
   if (
@@ -164,15 +176,42 @@ const server = http.createServer(async (request, response) => {
     const child = relative(root, file);
     if (child.startsWith('..') || isAbsolute(child) || !(await stat(file)).isFile())
       return reply(response, 404, 'Not found');
+    let representation = file;
+    let encoding;
+    for (const candidate of acceptedEncodings(request.headers['accept-encoding'])) {
+      if (candidate === 'identity') {
+        encoding = 'identity';
+        break;
+      }
+      try {
+        const compressed = await realpath(file + (candidate === 'br' ? '.br' : '.gz'));
+        const compressedChild = relative(root, compressed);
+        if (
+          compressedChild.startsWith('..') ||
+          isAbsolute(compressedChild) ||
+          !(await stat(compressed)).isFile()
+        )
+          continue;
+        representation = compressed;
+        encoding = candidate;
+        break;
+      } catch {
+        /* An uncompressed build remains usable. */
+      }
+    }
+    if (!encoding) return reply(response, 406, 'No acceptable representation');
     response.writeHead(200, {
       'Content-Type': mime[extname(file)] || 'application/octet-stream',
+      Vary: 'Accept-Encoding',
+      ...(encoding !== 'identity' ? { 'Content-Encoding': encoding } : {}),
+      'Content-Length': (await stat(representation)).size,
       'Cache-Control': path.startsWith('/assets/')
         ? 'public, max-age=31536000, immutable'
         : 'no-cache',
     });
     if (request.method === 'HEAD') response.end();
     else {
-      const stream = createReadStream(file);
+      const stream = createReadStream(representation);
       stream.on('error', () => response.destroy());
       stream.pipe(response);
     }
@@ -188,7 +227,8 @@ server.on('upgrade', (request, socket, head) => {
   if (!allowed(request, true)) return reject('403 Forbidden');
   if (request.url !== '/rpc' || request.headers.upgrade?.toLowerCase() !== 'websocket')
     return reject('404 Not Found');
-  const proxy = upstream(request, routes[2], true);
+  const route = routes.find((item) => item.prefix === '/rpc');
+  const proxy = upstream(request, route, true);
   proxy.setTimeout(10000, () => proxy.destroy());
   proxy.on('upgrade', (incoming, peer, initial) => {
     peer.setTimeout(0);

@@ -1,0 +1,153 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* ============================================================
+   设计令牌 —— 取色与度量来自 chat.deepseek.com 线上产物
+   （--dsw-static-neutral-bluish-* / --sider-width / --message-list-max-width）
+   ============================================================ */
+.dswui {
+  --brand: #a45b70;
+  --brand-hover: #b96c83;
+  --brand-weak: #f9edf1;
+  --brand-border: #dfb8c5;
+  --brand-ring: rgba(164, 91, 112, 0.18);
+
+  --sider-width: 261px;
+  --header-height: 60px;
+  --message-max: 840px;
+  --msg-pad-x: 44px;
+
+  --radius-s: 8px;
+  --radius-m: 12px;
+  --radius-l: 16px;
+  --radius-xl: 22px;
+
+  --font-ui:
+    'IcarusDswInter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+  --font-code:
+    Menlo, Monaco, Consolas, 'Cascadia Mono', 'Ubuntu Mono', 'DejaVu Sans Mono', 'Liberation Mono',
+    'JetBrains Mono', 'Fira Code', Cousine, 'Roboto Mono', 'Courier New', Courier, monospace;
+
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur: 0.3s;
+}
+
+html[data-theme='light'] .dswui {
+  --bg-base: #ffffff;
+  --composer-fill: #ffffff;
+  --send-disabled: #e4c5cf;
+  --bg-layer-1: #ffffff;
+  --bg-layer-2: #faf8f9;
+  --bg-layer-3: #f1f3f5;
+  --bg-skeleton: #ebeef2;
+  --sidebar-fill: #faf8f9;
+  --label-primary: #0f1115;
+  --label-secondary: #61666b;
+  --label-tertiary: #81858c;
+  --label-dimmed: #adb2b8;
+  --border-l1: rgba(0, 0, 0, 0.04);
+  --border-l2: rgba(0, 0, 0, 0.1);
+  --border-l3: rgba(0, 0, 0, 0.12);
+  --hover: rgba(38, 49, 72, 0.06);
+  --hover-strong: rgba(38, 49, 72, 0.1);
+  --session-hover: #f1f3f5;
+  --session-active: #f3e3e9;
+  --bubble-user: #f9edf1;
+  --bubble-user-text: #0f1115;
+  --code-bg: #faf8f9;
+  --code-head: #faf8f9;
+  --inline-code-bg: #ebeef2;
+  --toast-bg: #1b1b1c;
+  --toast-text: #faf8f9;
+  --overlay: rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 8px 32px rgba(15, 17, 21, 0.12), 0 2px 8px rgba(15, 17, 21, 0.06);
+  --shadow-composer: 0 2px 12px rgba(15, 17, 21, 0.06);
+  --quote-mark: #e8cbd6;
+  color-scheme: light;
+}
+
+html[data-theme='dark'] .dswui {
+  --brand: #e0a8b6;
+  --brand-hover: #ecc0cb;
+  --brand-weak: #392630;
+  --brand-border: #724b5a;
+  --bg-base: #151517;
+  --composer-fill: #2c2c2e;
+  --send-disabled: #63404f;
+  --bg-layer-1: #1b1b1c;
+  --bg-layer-2: #232324;
+  --bg-layer-3: #2c2c2e;
+  --bg-skeleton: #2c2c2e;
+  --sidebar-fill: #1b1b1c;
+  --label-primary: #faf8f9;
+  --label-secondary: #adb2b8;
+  --label-tertiary: #9599a0;
+  --label-dimmed: #61666b;
+  --border-l1: rgba(255, 255, 255, 0.06);
+  --border-l2: rgba(255, 255, 255, 0.12);
+  --border-l3: rgba(255, 255, 255, 0.14);
+  --hover: rgba(255, 255, 255, 0.08);
+  --hover-strong: rgba(255, 255, 255, 0.12);
+  --session-hover: #2c2c2e;
+  --session-active: #353638;
+  --bubble-user: #392630;
+  --bubble-user-text: #faf8f9;
+  --code-bg: #1b1b1c;
+  --code-head: #232324;
+  --inline-code-bg: #2c2c2e;
+  --toast-bg: #f1f3f5;
+  --toast-text: #0f1115;
+  --overlay: rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-composer: 0 2px 12px rgba(0, 0, 0, 0.3);
+  --quote-mark: #62404e;
+  color-scheme: dark;
+}
+
+.dswui * {
+  box-sizing: border-box;
+}
+
+.dswui,
+.dswui,
+.dswui {
+  height: 100%;
+  margin: 0;
+}
+
+.dswui {
+  font-family: var(--font-ui);
+  background: var(--bg-base);
+  color: var(--label-primary);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dswui button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+.dswui input,
+.dswui textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+.dswui ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.dswui ::-webkit-scrollbar-thumb {
+  background: var(--border-l3);
+  border-radius: 8px;
+}
+.dswui ::-webkit-scrollbar-thumb:hover {
+  background: var(--label-dimmed);
+}
+.dswui ::-webkit-scrollbar-track {
+  background: transparent;
+}

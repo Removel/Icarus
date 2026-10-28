@@ -1,7 +1,10 @@
 import { useCallback, useLayoutEffect, useRef } from 'react';
 import ChatReasoning from './ChatReasoning';
 import ThinkingWave from './ThinkingWave';
+import { IconThinking, IconChevronDown } from './dswui/Icons';
 import type { ChatItem } from './updates';
+import ChatSearch from './ChatSearch';
+import ChatTool from './ChatTool';
 
 export default function ChatProcess({
   entries,
@@ -30,32 +33,37 @@ export default function ChatProcess({
     followedTop.current = node.scrollTop;
   }, []);
   const grow = useCallback(() => {
-    scrollLatest();
+    if (running && active) scrollLatest();
     onGrowth();
-  }, [scrollLatest, onGrowth]);
+  }, [scrollLatest, onGrowth, running, active]);
   useLayoutEffect(() => {
     if (active) grow();
   }, [entries, active, grow]);
   return (
     <details
-      className="chat-process"
+      className={`think chat-process ${running ? 'thinking' : ''}`}
       data-live={entries.some((entry) => entry.live) || undefined}
       onToggle={(event) => {
         if (event.target !== event.currentTarget) return;
         followedTop.current = viewport.current?.scrollTop ?? 0;
-        scrollLatest();
+        if (running) scrollLatest();
+        else if (viewport.current) viewport.current.scrollTop = 0;
       }}
     >
-      <summary>
-        思考与工具
+      <summary className="think-head">
+        <IconThinking className="think-icon" />
+        <span className="think-label">思考与工具</span>
         <span className="chat-process-status">
           {running && <ThinkingWave active={active && !loading} />}
           {running ? '进行中' : `${entries.length} 项`}
         </span>
+        <span className="caret">
+          <IconChevronDown width={14} height={14} />
+        </span>
       </summary>
       <div
         ref={viewport}
-        className="chat-process-items"
+        className="think-body chat-process-items"
         tabIndex={0}
         aria-label="思考与工具明细"
         onWheel={(event) => {
@@ -71,7 +79,13 @@ export default function ChatProcess({
         }}
       >
         {entries.map((entry) =>
-          entry.kind === 'thinking' ? (
+          entry.kind === 'search' && entry.search ? (
+            <ChatSearch
+              key={entry.id}
+              search={entry.search}
+              active={active && running && !loading}
+            />
+          ) : entry.kind === 'thinking' ? (
             <ChatReasoning
               key={entry.id}
               entry={entry}
@@ -81,10 +95,7 @@ export default function ChatProcess({
               onGrowth={grow}
             />
           ) : (
-            <details className={`chat-message chat-${entry.kind}`} key={entry.id} onToggle={grow}>
-              <summary>{`${entry.label} · ${entry.text}`}</summary>
-              <pre>{entry.detail}</pre>
-            </details>
+            <ChatTool key={entry.id} entry={entry} onGrowth={onGrowth} />
           ),
         )}
       </div>

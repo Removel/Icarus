@@ -27,6 +27,7 @@ RuntimeUpdateType: TypeAlias = Literal[
     "task.error",
     "context.compacted",
     "process.updated",
+    "web_search.updated",
 ]
 
 

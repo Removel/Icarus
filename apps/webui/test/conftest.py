@@ -39,7 +39,8 @@ def page(browser, request):
         socket.on_message(receive)
     page.route_web_socket('**/rpc', memory_context)
     page.mem0_rows = fake_mem0(page)
-    page.goto(os.environ.get("WEBUI_BASE_URL", "http://127.0.0.1:5173"), wait_until="domcontentloaded")
+    # Management fixtures start on their explicit route; homepage is now chat.
+    page.goto(os.environ.get("WEBUI_BASE_URL", "http://127.0.0.1:5173") + '/#/memory/all', wait_until="domcontentloaded")
     page.get_by_role("heading", name="记忆", exact=True).wait_for()
     page.locator('.memory-entry').first.wait_for()
     yield page

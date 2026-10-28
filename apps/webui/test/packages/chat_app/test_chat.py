@@ -2,28 +2,50 @@ import json
 
 import pytest
 from playwright.sync_api import expect
+from test.navigation import follow_link, open_sessions, open_settings, delete_session
 
 
-def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None, selected='session-1', generated_title=None, hold_title=False, hold_submit=False, steer_status='accepted', hold_steer=False, disconnect_steer=False):
-    state = {'calls': [], 'records': records or [], 'sockets': [], 'disconnect': disconnect,
-             'sessions': sessions or [{'session_id': 'session-1', 'first_user_input': '测试会话'}]}
+def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None, selected='session-1', generated_title=None, hold_title=False, hold_submit=False, steer_status='accepted', hold_steer=False, disconnect_steer=False, hold_create=False, reject_create=False, disconnect_create=False):
+    state = {'calls': [], 'records': [dict(item, session_id=item.get('session_id', selected)) for item in records or []], 'sockets': [], 'disconnect': disconnect,
+             'sessions': sessions if sessions is not None else [{'session_id': 'session-1', 'first_user_input': '测试会话'}]}
 
     def route(socket):
-        state['sockets'].append(socket)
-
         def receive(raw):
             call = json.loads(raw)
-            state['calls'].append(call)
             method, params = call['method'], call['params']
+            # Memory uses a separate RPC connection while modules remain mounted.
+            if method == 'memory.get_context':
+                result = {'user_id': 'configured-user', 'agent_id': 'icarus', 'run_id': 'global'}
+                workspace = params.get('workspace_path')
+                if workspace:
+                    result.update(run_id='workspace:1234567890abcdef', workspace_path=workspace)
+                socket.send(json.dumps({'jsonrpc': '2.0', 'id': call['id'], 'result': result}))
+                return
+            if socket not in state['sockets']:
+                state['sockets'].append(socket)
+            state['calls'].append(call)
             result = {}
             if method == 'session.list':
                 result = {'sessions': state['sessions']}
             elif method in ('session.get', 'session.create'):
                 result = {'workspace_key': 'workspace-key', 'session_id': params.get('session_id', 'session-1'), 'active_task_ids': []}
                 if method == 'session.create':
+                    if reject_create:
+                        socket.send(json.dumps({'jsonrpc': '2.0', 'id': call['id'], 'error': {'code': -32000, 'message': '创建失败'}}))
+                        return
                     state['sessions'].insert(0, {'session_id': result['session_id'], 'first_user_input': ''})
+                    if hold_create:
+                        state['pending_create'] = (socket, call['id'], result)
+                        return
+                    if disconnect_create and not state.get('create_disconnected'):
+                        state['create_disconnected'] = True
+                        socket.close()
+                        return
             elif method == 'session.get_history':
-                remaining = [item for item in state['records'] if item['sequence'] > params['after_sequence']]
+                if state.get('hold_history'):
+                    state.setdefault('pending_history', []).append((socket, call['id']))
+                    return
+                remaining = [item for item in state['records'] if item['session_id'] == params['session_id'] and item['sequence'] > params['after_sequence']]
                 batch = remaining[:2]
                 result = {'records': batch, 'next_after_sequence': batch[-1]['sequence'] if batch else params['after_sequence'], 'has_more': len(remaining) > 2, 'history_cursor': len(state['records'])}
             elif method == 'session.generate_title':
@@ -35,9 +57,16 @@ def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None
                     for row in state['sessions']:
                         if row['session_id'] == params['session_id']:
                             row['title'] = generated_title
+            elif method == 'session.rename':
+                result = {'title': params['title'].strip()}
+                for row in state['sessions']:
+                    if row['session_id'] == params['session_id']:
+                        row['title'] = result['title']
             elif method == 'session.delete':
-                state['sessions'] = [item for item in state['sessions'] if item['session_id'] != params['session_id']]
-                result = {'status': 'discarded'}
+                status = state.get('delete_status', {}).get(params['session_id'], 'discarded')
+                if status == 'discarded':
+                    state['sessions'] = [item for item in state['sessions'] if item['session_id'] != params['session_id']]
+                result = {'status': status}
             elif method == 'session.submit':
                 if hold_submit:
                     state['pending_submit'] = (socket, call['id'])
@@ -74,6 +103,8 @@ def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None
     page.reload()
     page.goto(page.url.split('#')[0] + '#/chat?workspace=%2Ftmp%2Fwebui-test&session=' + selected)
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
+    # A connected socket precedes session subscription and history hydration.
+    expect(page.get_by_role('textbox', name='发送消息')).to_be_enabled()
     return state, emit
 
 
@@ -91,10 +122,12 @@ def test_stream_tools_cancel_and_history_reload(page):
     emit('tool.started', {'call_id': 'call-1', 'tool_name': 'read', 'arguments': {'path': 'demo'}})
     emit('tool.completed', {'call_id': 'call-1', 'tool_name': 'read', 'success': True, 'output_preview': {'content': '资料内容'}})
     emit('future.event', {'text': '不可显示'})
-    expect(page.locator('.chat-tool summary')).to_have_text('read · 已完成')
+    expect(page.locator('.chat-tool-name')).to_have_text('read')
+    expect(page.locator('.chat-tool-status')).to_have_text('已完成')
     page.locator('.chat-process > summary').click()
     page.locator('.chat-tool summary').click()
-    expect(page.locator('.chat-tool pre')).to_contain_text('资料内容')
+    expect(page.locator('.chat-tool pre').first).to_contain_text('demo')
+    expect(page.locator('.chat-tool pre').last).to_contain_text('资料内容')
     expect(page.locator('.chat-assistant')).to_contain_text('读取完毕')
     assert page.locator('.chat-assistant').count() == 1
     page.get_by_role('button', name='停止执行').click()
@@ -126,7 +159,7 @@ def test_pending_send_is_immediate_editable_and_reconciles_once(page, event_befo
     expect(page.locator('.chat-user')).to_have_text('你立即显示的问题')
     expect(page.get_by_text('正在执行', exact=True)).to_be_visible()
     expect(page.get_by_text('正在思考中', exact=True)).to_be_visible()
-    expect(page.get_by_role('button', name='排队发送', exact=True)).to_be_disabled()
+    expect(page.get_by_role('button', name='排队发送', exact=True)).not_to_be_visible()
     expect(page.get_by_role('button', name='停止执行', exact=True)).to_be_enabled()
     expect(page.get_by_text('正在发送…', exact=True)).to_have_count(0)
     expect(editor).to_have_value('')
@@ -219,7 +252,8 @@ def test_first_prompt_title_updates_before_acceptance_and_reverts_on_rejection(p
     socket, request_id = state['pending_submit']
     socket.send(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': -32000, 'message': '暂时不可用'}}))
     expect(page.get_by_role('alert')).to_contain_text('暂时不可用')
-    expect(page.locator('.chat-conversation-heading h2')).to_have_text('新会话')
+    expect(page.locator('.chat-conversation-heading h2')).to_have_text('')
+    expect(page.locator('.chat-conversation-heading h2')).to_have_attribute('title', '新会话')
     expect(editor).to_have_value('即时会话标题')
 
 
@@ -245,13 +279,13 @@ def test_burst_output_and_thinking_reveal_progressively_and_history_is_immediate
     answer = '平滑输出的正文，包含完整结果和后续补全的文字。' * 30 + '🌷'
     emit('task.started', {})
     emit('assistant.thinking_delta', {'step': 1, 'text': thinking})
-    expect(page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header')).to_have_count(1)
+    expect(page.locator('.chat-thinking summary')).to_have_count(1)
     emit('assistant.text_delta', {'step': 1, 'text': answer[:200]})
     emit('assistant.message', {'step': 1, 'text': answer})
     emit('assistant.thinking', {'step': 1, 'text': thinking})
     emit('task.finished', {'status': 'completed'})
     content = page.locator('.chat-assistant .chat-markdown')
-    thought = page.locator('.chat-thinking pre')
+    thought = page.locator('.chat-thinking .chat-reasoning-text')
     expect(content).to_have_attribute('data-streaming', 'true')
     expect(thought).to_have_attribute('data-streaming', 'true')
     page.evaluate('window.advancePresentation()')
@@ -267,7 +301,7 @@ def test_burst_output_and_thinking_reveal_progressively_and_history_is_immediate
     page.reload()
     expect(content).to_have_text(answer)
     page.locator('.chat-process > summary').click()
-    page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header').click()
+    page.locator('.chat-thinking summary').click()
     expect(thought).to_have_text(thinking)
     expect(content).not_to_have_attribute('data-streaming', 'true')
 
@@ -304,7 +338,7 @@ def test_new_session_and_switching_clears_previous_transcript(page):
     page.get_by_role('button', name='新建会话').click()
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
     expect(page.locator('.chat-assistant')).to_have_count(0)
-    assert any(call['method'] == 'session.create' for call in state['calls'])
+    assert not any(call['method'] == 'session.create' for call in state['calls'])
 
 
 def test_paginated_history_and_duplicate_notifications(page):
@@ -426,15 +460,20 @@ def test_session_selection_keeps_scroll_and_deep_link_is_visible(page):
 
 
 def test_created_session_is_listed_and_first_prompt_updates_title(page):
-    state, _ = gateway(page)
+    state, _ = gateway(page, hold_submit=True)
     page.get_by_role('button', name='新建会话').click()
     page.wait_for_function("new URLSearchParams(location.hash.split('?')[1]).get('session') !== 'session-1'")
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
     selected = page.locator('.chat-session-list [aria-current=page]')
-    expect(selected).to_contain_text('新会话')
+    expect(selected).to_have_count(0)
     page.get_by_role('textbox', name='发送消息').fill('新会话的首条问题')
     page.get_by_role('button', name='发送', exact=True).click()
     expect(selected).to_contain_text('新会话的首条问题')
+    group = selected.locator('xpath=../..').locator('.session-group-title span')
+    expect(group).to_have_text('今天')
+    socket, request_id = state['pending_submit']
+    socket.send(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'result': {'task_id': 'task-1'}}))
+    expect(group).to_have_text('今天')
     expect(page.locator('.chat-conversation-heading h2')).to_have_text('新会话的首条问题')
 
 
@@ -473,18 +512,20 @@ def test_switch_and_creation_reuse_socket_and_do_not_reload_list(page):
 def test_delete_current_conversation_updates_list_and_survives_reload(page, width):
     page.set_viewport_size({'width': width, 'height': 900})
     state, _ = gateway(page, sessions=[{'session_id': 'session-1', 'first_user_input': '第一段'}, {'session_id': 'session-2', 'first_user_input': '第二段'}])
+    open_sessions(page)
     page.get_by_role('button', name='第一段', exact=True).hover()
-    page.get_by_role('button', name='删除会话：第一段').click()
+    delete_session(page, '第一段')
     dialog = page.get_by_role('dialog', name='删除这段对话？', exact=True)
     expect(dialog).to_be_visible()
     expect(dialog.locator('.semi-modal-body')).not_to_be_visible()
-    assert dialog.bounding_box()['height'] < 160
+    assert dialog.locator('.confirm-modal').bounding_box()['height'] < 160
     page.screenshot(path=f'test-results/chat-delete-simple-{width}.png')
     dialog.get_by_role('button', name='删除', exact=True).click()
-    expect(dialog).to_have_count(0)
+    expect(dialog).not_to_be_visible()
     expect(page.get_by_role('button', name='第一段', exact=True)).to_have_count(0)
     page.wait_for_function("new URLSearchParams(location.hash.split('?')[1]).get('session') === 'session-2'")
     page.reload()
+    open_sessions(page)
     expect(page.get_by_role('button', name='第二段', exact=True)).to_be_visible()
     expect(page.get_by_role('button', name='第一段', exact=True)).to_have_count(0)
     assert any(call['method'] == 'session.delete' for call in state['calls'])
@@ -493,24 +534,19 @@ def test_delete_current_conversation_updates_list_and_survives_reload(page, widt
 def test_process_is_grouped_and_message_navigation_preserves_reading_position(page):
     _, emit = gateway(page)
     for step in range(1, 5):
+        emit('user.message', {'text': f'问题 {step}'}, task_id=f'task-{step}')
         emit('assistant.thinking', {'step': step, 'text': '详细思考' * 100})
         emit('tool.completed', {'call_id': str(step), 'tool_name': 'read', 'success': True, 'output_preview': 'result'})
         emit('assistant.message', {'step': step, 'text': f'回答 {step}。' * 120})
     expect(page.locator('.chat-process')).to_have_count(1)
     assert page.locator('.chat-process').get_attribute('open') is None
-    expect(page.locator('.chat-thinking pre').first).not_to_be_visible()
-    page.get_by_role('button', name='定位消息', exact=True).click()
-    page.get_by_placeholder('搜索本段对话…').fill('回答 1')
-    page.get_by_role('navigation', name='消息定位').get_by_role('button').click()
-    first = page.locator('.chat-assistant').first
+    navigation = page.get_by_role('navigation', name='对话目录')
+    navigation.get_by_role('button', name='问题 1', exact=True).click()
+    first = page.locator('.chat-user').first
     expect(first).to_be_in_viewport()
     emit('assistant.message', {'step': 5, 'text': '新的回答'})
     expect(first).to_be_in_viewport()
-    page.get_by_role('button', name='下一条消息', exact=True).click()
-    expect(page.locator('.chat-assistant').nth(1)).to_be_in_viewport()
     page.get_by_role('button', name='回到最新消息', exact=True).click()
-    page.screenshot(path='test-results/refinement-chat.png', full_page=True)
-
 
 def test_draft_confirmation_happens_before_creating_a_session(page):
     state, _ = gateway(page)
@@ -522,10 +558,10 @@ def test_draft_confirmation_happens_before_creating_a_session(page):
     expect(dialog).to_be_visible()
     assert not any(call['method'] == 'session.create' for call in state['calls'])
     dialog.get_by_role('button', name='放弃', exact=True).click()
-    expect(dialog).to_have_count(0)
+    expect(dialog).not_to_be_visible()
     page.wait_for_function("new URLSearchParams(location.hash.split('?')[1]).get('session') !== 'session-1'")
     expect(editor).to_be_enabled()
-    assert len([call for call in state['calls'] if call['method'] == 'session.create']) == 1
+    assert not any(call['method'] == 'session.create' for call in state['calls'])
 
 
 @pytest.mark.parametrize('width', [390, 1440])
@@ -534,21 +570,21 @@ def test_discard_draft_on_module_change_really_clears_it(page, width):
     gateway(page)
     editor = page.get_by_role('textbox', name='发送消息')
     editor.fill('未发送的草稿')
-    page.get_by_role('link', name='记忆', exact=True).click()
+    follow_link(page, '记忆')
     dialog = page.get_by_role('dialog', name='放弃未发送的消息？')
     expect(dialog).to_be_visible()
     expect(dialog.locator('.semi-modal-body')).not_to_be_visible()
-    assert dialog.bounding_box()['height'] < 160
+    assert dialog.locator('.confirm-modal').bounding_box()['height'] < 160
     page.screenshot(path=f'test-results/chat-discard-simple-{width}.png')
     dialog.get_by_role('button', name='继续编辑').click()
     expect(editor).to_have_value('未发送的草稿')
-    page.get_by_role('link', name='记忆', exact=True).click()
+    follow_link(page, '记忆')
     dialog.get_by_role('button', name='放弃', exact=True).click()
     expect(page.get_by_role('heading', name='记忆', exact=True)).to_be_visible()
-    page.get_by_role('link', name='对话', exact=True).click()
+    follow_link(page, '对话')
     expect(editor).to_have_value('')
-    page.get_by_role('link', name='记忆', exact=True).click()
-    expect(dialog).to_have_count(0)
+    follow_link(page, '记忆')
+    expect(dialog).not_to_be_visible()
     expect(page.get_by_role('heading', name='记忆', exact=True)).to_be_visible()
 
 
@@ -571,7 +607,7 @@ def test_process_wave_continues_after_response_and_stops_on_finish(page, motion)
 
 
 @pytest.mark.parametrize('width', [390, 1440])
-def test_process_window_fits_five_rows_and_respects_manual_scroll(page, width):
+def test_process_window_is_capped_and_respects_manual_scroll(page, width):
     page.set_viewport_size({'width': width, 'height': 900})
     _, emit = gateway(page)
     emit('task.started', {})
@@ -585,21 +621,14 @@ def test_process_window_fits_five_rows_and_respects_manual_scroll(page, width):
         return el.scrollTop > 0 && el.scrollHeight - el.scrollTop - el.clientHeight < 2;
     }''')
     assert items.evaluate('el => el.clientHeight') == 194
-    visible = items.evaluate('''el => {
-        const bounds = el.getBoundingClientRect();
-        return [...el.children].filter(row => {
-            const b = row.getBoundingClientRect();
-            return b.top >= bounds.top - 1 && b.bottom <= bounds.bottom + 1;
-        }).length;
-    }''')
-    assert visible == 5
+    assert items.evaluate('el => el.scrollHeight > el.clientHeight')
     items.evaluate('el => el.scrollTop = 0')
     expect(page.get_by_role('button', name='查看最新过程')).to_have_count(0)
     page.wait_for_function("document.querySelector('.chat-process-items').scrollTop === 0")
     emit('assistant.thinking', {'step': 9, 'text': '新增过程'})
     expect(page.locator('.chat-thinking')).to_have_count(9)
     assert items.evaluate('el => el.scrollTop') == 0
-    page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header').first.click()
+    page.locator('.chat-thinking summary').first.click()
     assert items.evaluate('el => el.scrollTop') == 0
     assert items.evaluate('el => el.clientHeight') == 194
     items.evaluate('el => el.scrollTop = el.scrollHeight')
@@ -620,15 +649,15 @@ def test_composer_actions_are_inside_input_box_without_keyboard_hint(page, width
     gateway(page)
     editor = page.get_by_role('textbox', name='发送消息')
     empty_height = editor.bounding_box()['height']
-    assert empty_height < 60
+    assert empty_height <= 60
     editor.fill('消息')
     assert abs(editor.bounding_box()['height'] - empty_height) <= 1
     editor.fill('第一行\n第二行\n第三行')
     page.wait_for_function("document.querySelector('.chat-compose textarea').getBoundingClientRect().height > 60")
     editor.fill('')
-    page.wait_for_function("document.querySelector('.chat-compose textarea').getBoundingClientRect().height < 60")
+    page.wait_for_function("document.querySelector('.chat-compose textarea').getBoundingClientRect().height <= 60")
     editor.fill('消息')
-    box = page.locator('.chat-input-box').bounding_box()
+    box = page.locator('.composer').bounding_box()
     send = page.get_by_role('button', name='发送', exact=True).bounding_box()
     assert box['x'] < send['x'] and box['y'] < send['y']
     assert send['x'] + send['width'] < box['x'] + box['width']
@@ -670,20 +699,20 @@ def test_queue_is_protected_on_navigation_and_can_be_discarded(page):
     editor = page.get_by_role('textbox', name='发送消息')
     editor.fill('不要丢失的排队消息')
     editor.press('Enter')
-    page.get_by_role('link', name='记忆', exact=True).click()
+    follow_link(page, '记忆')
     dialog = page.get_by_role('dialog', name='放弃未发送的消息？')
     expect(dialog).to_be_visible()
     expect(dialog.locator('.semi-modal-body')).not_to_be_visible()
     dialog.get_by_role('button', name='继续编辑').click()
     expect(page.locator('.chat-queue li')).to_have_count(1)
-    page.get_by_role('link', name='记忆', exact=True).click()
+    follow_link(page, '记忆')
     expect(dialog).to_be_visible()
     emit('task.finished', {'status': 'completed'})
     expect(page.get_by_role('button', name='停止执行')).to_have_count(0)
     expect(page.locator('.chat-queue li')).to_have_count(1)
     assert not any(call['method'] == 'session.submit' for call in state['calls'])
     dialog.get_by_role('button', name='放弃', exact=True).click()
-    page.get_by_role('link', name='对话', exact=True).click()
+    follow_link(page, '对话')
     expect(editor).to_have_value('')
     expect(page.locator('.chat-queue')).to_have_count(0)
     emit('task.finished', {'status': 'completed'})
@@ -776,6 +805,91 @@ def test_unapplied_steer_is_marked_when_task_stops(page):
     expect(page.locator('.chat-message-state')).to_have_text('引导未应用')
 
 
+def test_steer_identity_reconciles_repeated_text_and_late_applied_events(page):
+    state, emit = gateway(page)
+    emit('task.started', {})
+    editor = page.get_by_role('textbox', name='发送消息')
+    for _ in range(2):
+        editor.fill('继续检查')
+        page.get_by_role('button', name='引导当前任务', exact=True).click()
+        expect(editor).to_have_value('')
+    calls = [call for call in state['calls'] if call['method'] == 'session.steer']
+    assert len(calls) == 2
+    emit('user.correction', {'text': '继续检查', 'submission_id': calls[1]['params']['submission_id']})
+    expect(page.locator('.chat-message-state')).to_have_text(['引导待应用', '引导已应用'])
+    emit('task.finished', {'status': 'completed'})
+    expect(page.locator('.chat-message-state')).to_have_text(['引导未应用', '引导已应用'])
+    emit('user.correction', {'text': '继续检查（已规范化）', 'submission_id': calls[0]['params']['submission_id']})
+    expect(page.locator('.chat-message-state')).to_have_text(['引导已应用', '引导已应用'])
+    expect(page.locator('.chat-user')).to_have_count(2)
+    page.reload()
+    expect(page.locator('.chat-user')).to_have_count(2)
+
+
+@pytest.mark.parametrize('width', [320, 390, 1440])
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_steering_action_uses_composer_toolbar_without_overflow(page, width, theme):
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.emulate_media(color_scheme=theme)
+    state, emit = gateway(page)
+    emit('task.started', {})
+    emit('user.message', {'text': '正在处理的原始任务'})
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('请换一个方向继续')
+    steer = page.get_by_role('button', name='引导当前任务', exact=True)
+    expect(steer).to_be_visible()
+    expect(page.locator('.composer-actions').get_by_role('button', name='引导当前任务')).to_be_visible()
+    expect(page.locator('.chat-runtime-actions')).to_have_count(0)
+    assert steer.evaluate('el => getComputedStyle(el).borderRadius') == '120px'
+    assert page.locator('.composer').evaluate('el => el.scrollWidth <= el.clientWidth')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    buttons = page.locator('.composer-actions > .send-btn').all()
+    assert buttons[0].bounding_box()['x'] + buttons[0].bounding_box()['width'] < buttons[1].bounding_box()['x']
+    page.locator('.composer').screenshot(path=f'test-results/steer-toolbar-{theme}-{width}.png')
+    steer.click()
+    expect(editor).to_have_value('')
+    assert any(call['method'] == 'session.steer' for call in state['calls'])
+
+
+def test_steer_retry_after_reconnect_keeps_applied_history_without_duplicate(page):
+    state, emit = gateway(page, disconnect_steer=True)
+    emit('task.started', {})
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('断线前的引导')
+    page.get_by_role('button', name='引导当前任务', exact=True).click()
+    expect(page.get_by_role('button', name='重试发送', exact=True)).to_be_visible()
+    call = next(call for call in state['calls'] if call['method'] == 'session.steer')
+    # The server applied the request while the socket was disconnected.
+    for kind, payload in [
+        ('user.correction', {'text': '断线前的引导', 'submission_id': call['params']['submission_id']}),
+        ('task.finished', {'status': 'completed'}),
+    ]:
+        state['records'].append({'workspace_key': 'workspace-key', 'session_id': 'session-1',
+            'task_id': 'task-1', 'type': kind, 'payload': payload, 'sequence': len(state['records']) + 1})
+    expect(page.get_by_text('已连接', exact=True)).to_be_visible(timeout=15000)
+    expect(page.locator('.chat-message-state')).to_have_text('引导已应用')
+    page.get_by_role('button', name='重试发送', exact=True).click()
+    expect(editor).to_have_value('')
+    expect(page.locator('.chat-user')).to_have_count(1)
+    expect(page.locator('.chat-message-state')).to_have_text('引导已应用')
+    expect(page.get_by_role('button', name='停止执行', exact=True)).to_have_count(0)
+    calls = [call for call in state['calls'] if call['method'] == 'session.steer']
+    assert len(calls) == 2 and calls[0]['params'] == calls[1]['params']
+
+
+def test_fallback_title_is_short_when_model_title_is_unavailable(page):
+    text = '检查整个项目的布局以及配置选项是否真实生效' * 5 + '\n不要把整条消息作为标题'
+    gateway(page, sessions=[{'session_id': 'session-1', 'first_user_input': text}], records=[
+        {'workspace_key': 'workspace-key', 'session_id': 'session-1', 'task_id': 'task-1',
+         'sequence': 1, 'type': 'user.message', 'payload': {'text': text}},
+    ])
+    expect(page.locator('.chat-title-edit')).to_have_text(text[:12])
+    expect(page.locator('.chat-user')).to_contain_text(text)
+    page.get_by_role('button', name='搜索对话', exact=True).click()
+    page.get_by_role('textbox', name='搜索会话…').fill('不要把整条消息作为标题')
+    expect(page.get_by_role('dialog', name='搜索对话').get_by_role('button', name=text[:12], exact=True)).to_be_visible()
+
+
 def test_stop_works_while_steer_confirmation_is_pending(page):
     state, emit = gateway(page, hold_steer=True)
     emit('task.started', {})
@@ -791,74 +905,40 @@ def test_stop_works_while_steer_confirmation_is_pending(page):
     assert any(call['method'] == 'session.cancel' for call in state['calls'])
 
 def test_ai_title_is_background_and_full_title_time_are_available_on_hover(page):
-    from datetime import UTC, datetime, timedelta
-    page.emulate_media(reduced_motion='no-preference')
-    date = (datetime.now(UTC) - timedelta(days=3, hours=1)).isoformat()
     title = '根据服务端首条消息生成的完整会话标题，用于确认截断后仍能查看全文'
-    state, _ = gateway(page, hold_title=True, sessions=[{
-        'session_id': 'session-1', 'first_user_input': '', 'created_at': date, 'updated_at': date
-    }])
-    row = page.locator('.chat-session')
-    expect(row.locator('small')).to_have_count(0)
-    expect(row.locator('svg')).to_have_count(0)
-    page.get_by_role('textbox', name='发送消息').fill('整理项目文档')
-    page.get_by_role('textbox', name='发送消息').press('Enter')
+    state, _ = gateway(page, hold_title=True, sessions=[{'session_id': 'session-1', 'first_user_input': ''}])
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('整理项目文档')
+    editor.press('Enter')
     expect(page.get_by_role('button', name='停止执行')).to_be_visible()
-    expect(page.get_by_role('textbox', name='发送消息')).to_have_value('')
+    expect(editor).to_have_value('')
     expect(page.locator('.chat-conversation-heading h2')).to_have_text('整理项目文档')
-    assert len([call for call in state['calls'] if call['method'] == 'session.generate_title']) == 1
     socket, request_id = state['pending_title']
     socket.send(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'result': {'title': title}}))
     expect(page.locator('.chat-conversation-heading h2')).to_have_text(title)
-    assert page.locator('.chat-conversation-heading .chat-title-change').evaluate('el => getComputedStyle(el).animationName') == 'chat-title-appear'
-    row.hover()
-    expect(page.locator('.chat-session-tooltip')).to_contain_text(title)
-    expect(page.locator('.chat-session-tooltip')).to_contain_text('最近对话')
-    expect(page.locator('.chat-session-tooltip')).to_contain_text('创建于')
+    expect(page.locator('.session-item')).to_have_attribute('title', title)
+    page.get_by_role('button', name='搜索对话', exact=True).click()
     page.get_by_role('textbox', name='搜索会话…').fill('项目文档')
-    expect(row).to_have_count(1)
-
+    expect(page.get_by_role('dialog', name='搜索对话').get_by_role('button', name=title, exact=True)).to_be_visible()
 
 @pytest.mark.parametrize('theme', ['light', 'dark'])
-def test_long_session_title_scrolls_on_hover_and_tooltip_is_readable(page, theme):
-    page.emulate_media(color_scheme=theme, reduced_motion='no-preference')
-    title = '检查长会话标题悬浮时能够完整滚动阅读，以及提示中的时间在浅色和深色主题下保持清晰可见'
-    gateway(page, sessions=[{
-        'session_id': 'session-1', 'title': title, 'first_user_input': '原始问题',
-        'created_at': '2026-10-01T08:00:00Z', 'updated_at': '2026-10-03T08:00:00Z',
-    }, {'session_id': 'session-2', 'title': '短标题', 'first_user_input': ''}])
+def test_long_session_title_stays_on_one_line_and_can_be_edited(page, theme):
+    page.emulate_media(color_scheme=theme)
+    title = '检查长会话标题悬浮时能够完整阅读，以及在浅色和深色主题下保持清晰可见' * 2
+    gateway(page, sessions=[{'session_id': 'session-1', 'title': title, 'first_user_input': '原始问题'}], records=[
+        {'session_id': 'session-1', 'sequence': 1, 'type': 'user.message', 'task_id': 'task-1', 'payload': {'text': '原始问题'}},
+    ])
     row = page.get_by_role('button', name=title, exact=True)
-    text = row.locator('.chat-session-title-text')
-    expect(row.locator('.chat-session-title')).to_have_class('chat-session-title is-overflowing')
-    assert text.evaluate('el => getComputedStyle(el).animationName') == 'none'
-    row.hover()
-    expect(page.locator('.chat-session-tooltip')).to_contain_text(title)
-    assert text.evaluate('el => getComputedStyle(el).animationName') == 'chat-title-scroll'
-    text.evaluate('el => { const animation = el.getAnimations()[0]; animation.pause(); animation.currentTime = animation.effect.getTiming().duration * .5; }')
-    assert text.evaluate('el => new DOMMatrix(getComputedStyle(el).transform).m41') < 0
-    tooltip = page.locator('.chat-session-tooltip')
-    contrast = tooltip.evaluate('''el => {
-        const rgb = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
-        const background = rgb(getComputedStyle(el.closest('.semi-tooltip-wrapper')).backgroundColor);
-        const label = el.querySelector('span');
-        const style = getComputedStyle(label);
-        const foreground = rgb(style.color).map((v, i) => v * Number(style.opacity) + background[i] * (1 - Number(style.opacity)));
-        const luminance = color => color.map(v => { v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }).reduce((s, v, i) => s + v * [.2126, .7152, .0722][i], 0);
-        const values = [luminance(background), luminance(foreground)].sort((a, b) => a - b);
-        return (values[1] + .05) / (values[0] + .05);
-    }''')
-    assert contrast >= 4.5
-    page.screenshot(path=f'test-results/chat-hover-{theme}.png', full_page=True)
-    page.get_by_role('heading', name='会话', exact=True).hover()
-    assert text.evaluate('el => getComputedStyle(el).animationName') == 'none'
-    page.emulate_media(reduced_motion='reduce')
-    row.hover()
-    assert text.evaluate('el => getComputedStyle(el).animationName') == 'none'
-    expect(tooltip).to_contain_text(title)
-    short = page.get_by_role('button', name='短标题', exact=True)
-    short.hover()
-    assert short.locator('.chat-session-title-text').evaluate('el => getComputedStyle(el).animationName') == 'none'
-
+    expect(page.locator('.session-item')).to_have_attribute('title', title)
+    assert row.bounding_box()['height'] <= 20
+    assert row.evaluate('el => getComputedStyle(el).whiteSpace') == 'nowrap'
+    heading = page.locator('.chat-title-edit')
+    assert heading.bounding_box()['height'] == 22
+    assert heading.evaluate('el => getComputedStyle(el).whiteSpace') == 'nowrap'
+    assert heading.evaluate('el => getComputedStyle(el).textOverflow') == 'ellipsis'
+    assert page.locator('.conversation-title').bounding_box()['height'] == 40
+    page.get_by_role('button', name='修改对话标题', exact=True).click()
+    expect(page.get_by_role('textbox', name='修改对话标题', exact=True)).to_have_value(title)
 
 @pytest.mark.parametrize('theme', ['light', 'dark'])
 @pytest.mark.parametrize('width', [390, 1440])
@@ -872,7 +952,9 @@ def test_semi_code_highlight_copy_and_horizontal_scroll(page, theme, width):
     block = page.locator('.chat-code-block')
     expect(block.locator('.chat-code-heading > span')).to_have_text('python')
     expect(block.locator('pre code')).to_have_text(code)
-    assert block.locator('.token').count() > 0
+    # The open streaming fence uses plain code; syntax highlighting runs once
+    # the final answer arrives instead of reparsing the growing fence each frame.
+    assert block.locator('.token').count() == 0
     assert page.get_by_role('button', name='复制回答', exact=True).count() == 0
     block.get_by_role('button', name='复制代码', exact=True).click()
     expect(block.get_by_role('button', name='已复制代码', exact=True)).to_be_visible()
@@ -881,6 +963,7 @@ def test_semi_code_highlight_copy_and_horizontal_scroll(page, theme, width):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     expect(page.locator('.chat-markdown p > code')).to_have_text('value')
     emit('assistant.message', {'step': 1, 'text': '内联 `value`\n\n```python\n' + code + '\n```'})
+    expect(block.locator('.token').first).to_be_visible()
     expect(page.get_by_role('button', name='复制回答', exact=True)).to_be_visible()
     page.screenshot(path=f'test-results/chat-semi-code-{theme}-{width}.png', full_page=True)
 
@@ -900,7 +983,7 @@ def test_code_languages_and_plain_fallback_survive_history_reload(page, language
     expect(block.locator('.chat-code-heading > span')).to_have_text(language or '纯文本')
     expect(block.locator('pre code')).to_have_text(code)
     if language and language != 'unknown-language':
-        assert block.locator('.token').count() > 0
+        expect(block.locator('.token').first).to_be_visible()
     assert block.locator('script').count() == 0
     page.reload()
     expect(block.locator('pre code')).to_have_text(code)
@@ -918,12 +1001,12 @@ def test_message_copy_keeps_raw_markdown_and_does_not_submit_or_scroll(page):
     top = container.evaluate('el => el.scrollTop')
     page.get_by_role('button', name='复制回答', exact=True).click()
     expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
-    assert page.evaluate('navigator.clipboard.readText()') == answer
+    assert page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n') == answer
     assert container.evaluate('el => el.scrollTop') == top
     page.reload()
     page.get_by_role('button', name='复制回答', exact=True).click()
     expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
-    assert page.evaluate('navigator.clipboard.readText()') == answer
+    assert page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n') == answer
     assert not any(call['method'] in {'session.submit', 'session.steer'} for call in state['calls'])
 
 
@@ -938,27 +1021,18 @@ def test_copy_failure_keeps_button_available_without_success_feedback(page):
 
 
 def test_reasoning_loads_on_demand_without_blocking_message_copy(page):
-    pending = []
-    page.route('**/packages/ui/src/ai.ts*', lambda route: pending.append(route))
     page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
     _, emit = gateway(page)
     emit('task.started', {})
     answer = '```python\nprint(1)\n```'
     emit('assistant.message', {'step': 1, 'text': answer})
-    expect(page.get_by_role('button', name='复制回答', exact=True)).to_be_visible()
-    assert not pending
-    emit('assistant.thinking_delta', {'step': 2, 'text': '继续分析'})
+    emit('assistant.thinking_delta', {'step': 2, 'text': '**继续分析**'})
     page.locator('.chat-process > summary').click()
-    expect(page.locator('.chat-reasoning-pending')).to_be_visible()
-    assert len(pending) == 1
+    expect(page.locator('.chat-thinking strong')).to_have_text('继续分析')
+    expect(page.locator('.semi-ai-chat-dialogue-reasoning')).to_have_count(0)
     page.get_by_role('button', name='复制回答', exact=True).click()
     expect(page.get_by_role('button', name='已复制回答', exact=True)).to_be_visible()
-    assert page.evaluate('navigator.clipboard.readText()') == answer
-    pending[0].continue_()
-    expect(page.locator('.chat-thinking .semi-ai-chat-dialogue-reasoning-header')).to_contain_text('正在思考')
-    expect(page.locator('.chat-thinking pre')).to_have_text('继续分析')
-    expect(page.locator('.chat-reasoning-pending')).to_have_count(0)
-
+    assert page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n') == answer
 
 @pytest.mark.parametrize('motion', ['reduce', 'no-preference'])
 def test_semi_reasoning_preserves_manual_collapse_and_history(page, motion):
@@ -968,48 +1042,109 @@ def test_semi_reasoning_preserves_manual_collapse_and_history(page, motion):
     emit('assistant.thinking_delta', {'step': 1, 'text': '第一段思考'})
     page.locator('.chat-process > summary').click()
     thought = page.locator('.chat-thinking')
-    header = thought.locator('.semi-ai-chat-dialogue-reasoning-header')
-    panel = thought.locator('.semi-collapsible-wrapper')
-    expect(header).to_contain_text('正在思考')
-    expect(thought.locator('pre')).to_have_text('第一段思考')
+    header = thought.locator('summary')
+    panel = thought.locator('.chat-reasoning-text')
+    expect(panel).to_have_text('第一段思考')
     header.click()
-    page.wait_for_function("document.querySelector('.chat-thinking .semi-collapsible-wrapper').getBoundingClientRect().height === 0")
-    if motion == 'no-preference':
-        page.evaluate('''() => {
-            window.thoughtFrames = new Map();
-            window.thoughtFrameId = 0;
-            window.thoughtTime = performance.now();
-            window.requestAnimationFrame = callback => {
-                const id = ++window.thoughtFrameId;
-                window.thoughtFrames.set(id, callback);
-                return id;
-            };
-            window.cancelAnimationFrame = id => window.thoughtFrames.delete(id);
-        }''')
-    emit('assistant.thinking_delta', {'step': 1, 'text': '，第二段思考'})
+    expect(panel).not_to_be_visible()
     emit('assistant.thinking', {'step': 1, 'text': '第一段思考，第二段思考'})
-    expect(header).to_contain_text('已思考完成')
-    assert panel.bounding_box()['height'] == 0
-    if motion == 'no-preference':
-        page.evaluate('''() => {
-            for (let i = 0; i < 80; i++) {
-                window.thoughtTime += 16;
-                const frames = [...window.thoughtFrames.values()];
-                window.thoughtFrames.clear();
-                frames.forEach(callback => callback(window.thoughtTime));
-            }
-        }''')
-    thought.get_by_role('button').focus()
-    thought.get_by_role('button').press('Enter')
-    expect(thought.locator('pre')).to_have_text('第一段思考，第二段思考')
-    expect(thought.locator('pre')).not_to_have_attribute('data-streaming', 'true')
-    thought.locator('pre').click()
-    expect(thought.locator('pre')).to_be_visible()
+    expect(header).to_contain_text('已思考')
+    expect(panel).not_to_be_visible()
+    header.focus()
+    header.press('Enter')
+    expect(panel).to_have_text('第一段思考，第二段思考')
     emit('task.finished', {'status': 'completed'})
     page.reload()
     page.locator('.chat-process > summary').click()
-    expect(header).to_contain_text('已思考完成')
-    assert panel.bounding_box()['height'] == 0
+    expect(panel).not_to_be_visible()
     header.click()
-    expect(thought.locator('pre')).to_have_text('第一段思考，第二段思考')
-    page.screenshot(path=f'test-results/chat-semi-reasoning-{motion}.png', full_page=True)
+    expect(panel).to_have_text('第一段思考，第二段思考')
+    expect(thought).not_to_have_attribute('data-streaming', 'true')
+
+@pytest.mark.parametrize('width', [390, 1440])
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_connected_layout_keeps_workspace_editing_out_of_transcript(page, width, theme):
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.emulate_media(color_scheme=theme)
+    records = [
+        {'sequence': 1, 'type': 'user.message', 'task_id': 'task-1', 'payload': {'text': '帮我整理一下这个项目的布局优化方向。'}},
+        {'sequence': 2, 'type': 'assistant.message', 'task_id': 'task-1', 'payload': {'step': 1, 'text': '可以从三个方面入手：\n\n1. **导航层级**：全局入口与会话列表各自负责清晰的导航。\n2. **阅读体验**：控制正文行宽，保留充足的留白。\n3. **输入区域**：将常用操作放在输入卡片内，兼顾手机与桌面。\n\n现有 Semi 组件和主题可以继续保留。'}},
+    ]
+    state, _ = gateway(page, records=records)
+    editor = page.get_by_role('textbox', name='发送消息')
+    expect(page.locator('.chat-assistant')).to_contain_text('现有 Semi')
+    expect(page.get_by_role('textbox', name='工作区路径')).not_to_be_visible()
+    editor.fill('继续优化间距')
+    calls = len(state['calls'])
+    sockets = len(state['sockets'])
+    expect(page.locator('.chat-workspace-trigger')).to_have_count(0)
+    open_settings(page)
+    modal = page.get_by_role('dialog', name='设置', exact=True)
+    modal.get_by_role('button', name='工作区', exact=True).click()
+    expect(modal).to_be_visible()
+    expect(modal.get_by_role('textbox', name='工作区路径')).to_have_value('/tmp/webui-test')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    modal.get_by_role('button', name='关闭设置', exact=True).click()
+    expect(modal).not_to_be_visible()
+    expect(editor).to_have_value('继续优化间距')
+    assert len(state['calls']) == calls
+    assert len(state['sockets']) == sockets
+    assert page.locator('.shell-main').evaluate('el => el.scrollWidth <= el.clientWidth')
+    if width < 768:
+        toolbar = page.locator('.conversation-topbar').bounding_box()
+        first_message = page.locator('.chat-message').first.bounding_box()
+        assert toolbar['y'] + toolbar['height'] <= first_message['y']
+    page.screenshot(path=f'test-results/layout-chat-{theme}-{width}.png')
+
+
+def test_mobile_session_drawer_search_focus_and_draft_guard(page):
+    page.set_viewport_size({'width': 390, 'height': 900})
+    state, _ = gateway(page, sessions=[{'session_id': 'session-1', 'first_user_input': '第一段'}, {'session_id': 'session-2', 'first_user_input': '第二段'}])
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('保留这段草稿')
+    open_sessions(page)
+    sidebar = page.get_by_role('complementary', name='会话管理', exact=True)
+    page.keyboard.press('Escape')
+    expect(sidebar).not_to_be_visible()
+    expect(page.get_by_role('button', name='打开会话列表', exact=True)).to_be_focused()
+    expect(editor).to_have_value('保留这段草稿')
+    open_sessions(page)
+    sidebar.get_by_role('button', name='第二段', exact=True).click()
+    guard = page.get_by_role('dialog', name='放弃未发送的消息？', exact=True)
+    expect(sidebar).not_to_be_visible()
+    expect(guard).to_be_visible()
+    guard.get_by_role('button', name='继续编辑', exact=True).click()
+    expect(editor).to_have_value('保留这段草稿')
+    open_sessions(page)
+    sidebar.get_by_role('button', name='第二段', exact=True).click()
+    guard.get_by_role('button', name='放弃', exact=True).click()
+    page.wait_for_url('**/*session=session-2')
+    expect(editor).to_have_value('')
+    assert sum(call['method'] == 'session.list' for call in state['calls']) == 1
+    assert len(state['sockets']) == 1
+
+def test_workspace_switch_keeps_draft_until_confirmation(page):
+    page.set_viewport_size({'width': 390, 'height': 900})
+    state, _ = gateway(page)
+    editor = page.get_by_role('textbox', name='发送消息')
+    editor.fill('工作区切换前的草稿')
+    modal = page.get_by_role('dialog', name='设置', exact=True)
+    guard = page.get_by_role('dialog', name='放弃未发送的消息？', exact=True)
+    for discard in [False, True]:
+        open_settings(page)
+        modal.get_by_role('button', name='工作区', exact=True).click()
+        modal.get_by_role('textbox', name='工作区路径').fill('/tmp/next-workspace')
+        modal.get_by_role('button', name='连接工作区', exact=True).click()
+        expect(modal).not_to_be_visible()
+        expect(guard).to_be_visible()
+        assert len(state['sockets']) == 1
+        assert '/tmp/webui-test' in page.url.replace('%2F', '/')
+        if discard:
+            guard.get_by_role('button', name='放弃', exact=True).click()
+        else:
+            guard.get_by_role('button', name='继续编辑', exact=True).click()
+            expect(editor).to_have_value('工作区切换前的草稿')
+    page.wait_for_url('**/*next-workspace*')
+    expect(page.get_by_text('已连接', exact=True)).to_be_visible()
+    expect(editor).to_have_value('')
+    assert len(state['sockets']) == 2

@@ -1,11 +1,6 @@
 import pytest
-
-
-def wait_for_sidebar_width(page, width):
-    page.wait_for_function(
-        "width => document.querySelector('.app-sidebar').getBoundingClientRect().width === width",
-        arg=width,
-    )
+from playwright.sync_api import expect
+from test.navigation import follow_link, open_navigation, open_settings
 
 
 @pytest.fixture
@@ -22,244 +17,179 @@ def knowledge_service(page):
 
 
 def test_navigation_preserves_changes_and_theme(page, knowledge_service):
-    page.get_by_role("textbox", name="搜索记忆…").fill("Semi")
-    page.get_by_role("link", name="知识库", exact=True).click()
-    page.get_by_role("link", name="原始资料", exact=True).click()
-    page.get_by_role("link", name="记忆", exact=True).click()
-    assert page.get_by_role("textbox", name="搜索记忆…").input_value() == "Semi"
-    page.get_by_role("link", name="知识库", exact=True).click()
-    assert page.get_by_role("link", name="原始资料", exact=True).get_attribute("aria-current") == "page"
-    assert page.get_by_role("link", name="设计规范", exact=True).count() == 0
-    assert page.locator("body").evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == "#a45b70"
-    assert page.locator("body").evaluate("el => getComputedStyle(el).getPropertyValue('--canvas').trim()") == "#f7f7f8"
-    assert page.locator(".app-dock").count() == 0
-    assert page.locator(".app-layout.semi-layout").count() == 1
-    assert page.get_by_role("banner").is_visible()
-    assert page.get_by_role("complementary", name="Icarus 导航").is_visible()
-    assert page.locator(".shell-main").evaluate("el => getComputedStyle(el).overflowY") == "auto"
+    page.get_by_role('textbox', name='搜索记忆…').fill('Semi')
+    follow_link(page, '知识库')
+    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '记忆')
+    expect(page.get_by_role('textbox', name='搜索记忆…')).to_have_value('Semi')
+    assert page.locator('body').evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == '#a45b70'
+    expect(page.get_by_role('complementary', name='会话管理')).to_be_visible()
+    expect(page.get_by_role('complementary', name='Icarus 导航')).to_have_count(0)
 
 
-@pytest.mark.parametrize("width", [390, 768, 1280])
+def test_filter_popup_closes_on_browser_navigation(page):
+    follow_link(page, '对话')
+    follow_link(page, '记忆')
+    select = page.get_by_role('combobox', name='筛选用户', exact=True)
+    select.click()
+    expect(page.get_by_role('listbox')).to_be_visible()
+    page.go_back()
+    expect(page.get_by_role('textbox', name='发送消息')).to_be_visible()
+    expect(page.get_by_role('listbox')).to_have_count(0)
+    expect(page.locator('.icarus-select-mask')).to_have_count(0)
+    page.go_forward()
+    expect(select).to_be_visible()
+    expect(select).to_have_attribute('aria-expanded', 'false')
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280])
 def test_narrow_layout_and_dialog(page, knowledge_service, width):
-    page.set_viewport_size({"width": width, "height": 844})
-    for name in ["记忆", "知识库"]:
-        page.get_by_role("link", name=name, exact=True).click()
-        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), name
-        assert page.locator(".shell-main").evaluate("el => el.scrollWidth <= el.clientWidth"), name
-    page.get_by_role("link", name="记忆", exact=True).click()
-    page.get_by_role("button", name="添加记忆", exact=True).click()
-    page.get_by_role("textbox", name="记忆内容", exact=True).wait_for()
-    assert page.get_by_role("button", name="保存记忆", exact=True).is_visible()
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.set_viewport_size({'width': width, 'height': 844})
+    for name in ['记忆', '知识库']:
+        follow_link(page, name)
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), name
+        assert page.locator('.management-body:visible').evaluate('el => el.scrollWidth <= el.clientWidth'), name
+        header = page.locator('.management-header').bounding_box()
+        navigation = page.get_by_role('tablist', name='记忆状态') if name == '记忆' else page.get_by_role('navigation', name='知识库分类')
+        box = navigation.bounding_box()
+        assert abs((box['x'] + box['width'] / 2) - (header['x'] + header['width'] / 2)) <= 1
+        assert page.locator('.management-title').bounding_box()['height'] <= 24
+        if width > 1100:
+            back = page.get_by_role('link', name='返回对话', exact=True).bounding_box()
+            assert box['y'] + box['height'] / 2 > back['y'] + back['height'] / 2
+        page.screenshot(path=f'test-results/dswui-management-{name}-{width}.png')
+    follow_link(page, '记忆')
+    page.get_by_role('button', name='添加记忆', exact=True).click()
+    page.get_by_role('textbox', name='记忆内容', exact=True).wait_for()
+    expect(page.get_by_role('button', name='保存记忆', exact=True)).to_be_visible()
 
 
-def test_shared_control_heights_and_optional_descriptions(page, knowledge_service):
-    assert page.locator(".page-heading-main > p:visible").count() == 0
-    search_height = page.locator(".memory-page .search-field").bounding_box()["height"]
-    button_height = page.get_by_role("button", name="添加记忆", exact=True).bounding_box()["height"]
-    assert search_height == button_height == 36
-    page.get_by_role("link", name="知识库", exact=True).click()
-    select_height = page.get_by_role("combobox", name="筛选内容类型").bounding_box()["height"]
-    assert select_height == 36
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_shared_control_heights_and_optional_descriptions(page, knowledge_service, theme):
+    page.emulate_media(color_scheme=theme)
+    assert page.locator('.page-heading-main > p:visible').count() == 0
+    assert page.locator('.memory-page .search-field').bounding_box()['height'] == 36
+    assert page.get_by_role('button', name='添加记忆', exact=True).bounding_box()['height'] == 36
+    filters = [page.locator('.memory-filters .search-field'), *[
+        page.get_by_role('combobox', name=label) for label in ['筛选记忆分类', '筛选用户', '筛选作用范围']
+    ]]
+    boxes = [control.bounding_box() for control in filters]
+    assert len({box['y'] for box in boxes}) == 1
+    assert all(left['x'] + left['width'] <= right['x'] for left, right in zip(boxes, boxes[1:]))
+    page.screenshot(path=f'test-results/dswui-memory-{theme}.png')
+    active = page.get_by_role('tab', name='全部 8', exact=True)
+    active.focus()
+    page.keyboard.press('ArrowRight')
+    expect(page.get_by_role('tab', name='生效中 6', exact=True)).to_have_attribute('aria-selected', 'true')
+    follow_link(page, '知识库')
+    assert page.get_by_role('combobox', name='筛选内容类型').bounding_box()['height'] == 36
+    page.screenshot(path=f'test-results/dswui-knowledge-{theme}.png')
+    follow_link(page, '记忆')
+    page.get_by_role('button', name='添加记忆', exact=True).click()
+    modal = page.get_by_role('dialog', name='添加记忆', exact=True)
+    scope = modal.get_by_role('combobox', name='记忆作用范围', exact=True)
+    scope.press('ArrowDown')
+    page.keyboard.press('End')
+    page.keyboard.press('Enter')
+    expect(modal.get_by_role('textbox', name='记忆工作区路径', exact=True)).to_be_visible()
+    scope.click()
+    page.screenshot(path=f'test-results/dswui-memory-select-{theme}.png')
+    page.keyboard.press('Escape')
+    expect(page.get_by_role('listbox')).to_have_count(0)
+    expect(modal).to_be_visible()
+    expect(scope).to_be_focused()
 
 
 def test_sidebar_collapse_preserves_page_state(page):
-    page.get_by_role("textbox", name="搜索记忆…").fill("Semi")
-    expanded_width = page.locator(".app-sidebar").bounding_box()["width"]
-    page.get_by_role("button", name="收起侧边栏", exact=True).click()
-    wait_for_sidebar_width(page, 64)
-    assert page.locator(".app-sidebar").bounding_box()["width"] == 64
-    assert page.get_by_role("link", name="记忆", exact=True).is_visible()
-    assert page.get_by_role("textbox", name="搜索记忆…").input_value() == "Semi"
-    # Semi debounces repeated clicks on the same control for 100 ms.
-    page.wait_for_timeout(120)
-    page.get_by_role("button", name="展开侧边栏", exact=True).click()
-    wait_for_sidebar_width(page, expanded_width)
-    assert page.locator(".app-sidebar").bounding_box()["width"] == expanded_width
+    page.get_by_role('textbox', name='搜索记忆…').fill('Semi')
+    page.get_by_role('button', name='收起会话列表', exact=True).click()
+    expect(page.get_by_role('complementary', name='会话管理')).not_to_be_visible()
+    page.get_by_role('button', name='展开会话列表', exact=True).click()
+    expect(page.get_by_role('complementary', name='会话管理')).to_be_visible()
+    expect(page.get_by_role('textbox', name='搜索记忆…')).to_have_value('Semi')
 
 
-@pytest.mark.parametrize("width", [390, 768, 1280])
+@pytest.mark.parametrize('width', [390, 768, 1280])
 def test_navigation_does_not_cover_content(page, width):
-    page.set_viewport_size({"width": width, "height": 844})
-    # Chromium can apply dynamic viewport units after the resize command returns.
-    page.wait_for_function(
-        "document.querySelector('.app-layout').getBoundingClientRect().height === 844"
-    )
-    header = page.get_by_role("banner").bounding_box()
-    sidebar = page.locator(".app-sidebar").bounding_box()
-    content = page.locator(".shell-main").bounding_box()
-    assert header["y"] + header["height"] <= sidebar["y"]
-    if width < 768:
-        assert sidebar["y"] + sidebar["height"] <= content["y"]
-    else:
-        assert sidebar["x"] + sidebar["width"] <= content["x"]
-    page.locator(".shell-main").evaluate("element => element.scrollTop = element.scrollHeight")
-    assert page.get_by_role("banner").bounding_box() == header
-    assert page.locator(".app-sidebar").bounding_box() == sidebar
+    page.set_viewport_size({'width': width, 'height': 844})
+    expect(page.locator('.management-body:visible')).to_be_visible()
+    # Read every box in a single layout pass. Separate bounding_box() calls can
+    # straddle a resize or font relayout and compare two different layouts.
+    boxes = page.evaluate('''() => {
+        const frame = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+        const read = () => {
+            const content = [...document.querySelectorAll('.management-body')]
+                .find(el => el.getClientRects().length);
+            const box = el => el.getBoundingClientRect().toJSON();
+            const sidebar = document.querySelector('aside[aria-label="会话管理"]');
+            return {
+                header: box(document.querySelector('.management-header')),
+                content: box(content),
+                sidebar: sidebar && sidebar.getClientRects().length ? box(sidebar) : null,
+            };
+        };
+        return (async () => {
+            let previous = read();
+            for (let attempt = 0; attempt < 20; attempt += 1) {
+                await frame();
+                const current = read();
+                if (JSON.stringify(current) === JSON.stringify(previous)) return current;
+                previous = current;
+            }
+            return previous;
+        })();
+    }''')
+    header, content = boxes['header'], boxes['content']
+    assert header['y'] + header['height'] <= content['y']
+    if width >= 768:
+        sidebar = boxes['sidebar']
+        assert sidebar, '会话管理侧栏在该宽度下应可见'
+        assert sidebar['x'] + sidebar['width'] <= content['x']
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
 
 
 def test_design_reference_is_not_an_application_route(page):
     page.goto(page.url.split('#')[0] + '#/design')
-    page.wait_for_url('**/#/memory/all')
-    assert page.get_by_role('heading', name='设计规范', exact=True).count() == 0
+    page.wait_for_url('**/#/chat')
+    expect(page.get_by_role('heading', name='设计规范', exact=True)).to_have_count(0)
 
 
-@pytest.mark.parametrize("width", [390, 768, 1280])
-def test_knowledge_tree_and_compact_shortcuts(page, knowledge_service, width):
-    page.set_viewport_size({"width": width, "height": 844})
-    submenu = page.get_by_role("navigation", name="知识库分类")
-    assert submenu.is_visible()
-    assert submenu.locator('[aria-current="page"]').count() == 0
-    submenu.get_by_role('link', name='原始资料', exact=True).click()
-    assert submenu.locator('.nav-category-label').count() == 0
-    assert page.locator(".nav-group-knowledge").get_by_role("navigation", name="知识库分类").is_visible()
-    knowledge = page.get_by_role("link", name="知识库", exact=True).bounding_box()
-    chat = page.get_by_role("link", name="对话", exact=True).bounding_box()
-    box = submenu.bounding_box()
-    if width >= 768:
-        assert knowledge["y"] + knowledge["height"] <= box["y"]
-        assert box["y"] + box["height"] <= chat["y"]
-    else:
-        assert knowledge["y"] == chat["y"]
-        assert box["y"] >= chat["y"] + chat["height"]
-        assert box["y"] + box["height"] <= page.locator(".shell-main").bounding_box()["y"]
-    for label in ["原始资料", "知识页面", "文档关联", "质量检查"]:
-        assert submenu.get_by_role("link", name=label, exact=True).is_visible()
-    page.get_by_role('banner').hover()
-    page.wait_for_function("getComputedStyle(document.querySelector('.nav-link.is-parent-active')).backgroundColor === 'rgba(0, 0, 0, 0)'")
-    page.screenshot(path=f'test-results/navigation-tree-{width}.png', full_page=True)
-    parent = page.get_by_role('link', name='知识库', exact=True)
-    assert parent.get_attribute('aria-current') is None
-    assert parent.evaluate('el => getComputedStyle(el).backgroundColor') == 'rgba(0, 0, 0, 0)'
-    assert submenu.evaluate('el => getComputedStyle(el).borderLeftWidth') == ('1px' if width == 1280 else '0px')
-    assert page.get_by_role('button', name='收起知识库分类', exact=True).count() == (1 if width == 1280 else 0)
-    assert page.get_by_role('button', name='展开知识库分类', exact=True).count() == 0
-    if width == 1280:
-        parent_icon = parent.locator('svg').bounding_box()
-        for link in submenu.get_by_role('link').all():
-            box = link.bounding_box()
-            icon = link.locator('svg').bounding_box()
-            assert icon['width'] == icon['height'] == parent_icon['width'] == 18
-            assert box['height'] == 40
-            assert icon['x'] > parent_icon['x']
-            assert link.evaluate('el => getComputedStyle(el).fontSize') == '14px'
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    if width == 1280:
-        page.get_by_role("button", name="收起侧边栏", exact=True).click()
-        wait_for_sidebar_width(page, 64)
-        assert page.locator(".app-sidebar").bounding_box()["width"] == 64
-        box = submenu.bounding_box()
-        assert box["y"] + box["height"] <= page.get_by_role("link", name="对话", exact=True).bounding_box()["y"]
-    if width >= 768:
-        parent_icon = parent.locator('svg').bounding_box()
-        axis = parent_icon['x'] + parent_icon['width'] / 2
-        sidebar = page.locator('.app-sidebar').bounding_box()
-        assert abs(axis - (sidebar['x'] + sidebar['width'] / 2)) <= 1
-        memory = page.get_by_role('link', name='记忆', exact=True).bounding_box()
-        knowledge = parent.bounding_box()
-        first_child = submenu.get_by_role('link', name='原始资料', exact=True).bounding_box()
-        last_child = submenu.get_by_role('link', name='质量检查', exact=True).bounding_box()
-        chat = page.get_by_role('link', name='对话', exact=True).bounding_box()
-        group = page.locator('.nav-group-knowledge').bounding_box()
-        assert group['y'] - (memory['y'] + memory['height']) == 14
-        assert first_child['y'] - (knowledge['y'] + knowledge['height']) == 9
-        assert chat['y'] - (group['y'] + group['height']) == 14
-        assert last_child['y'] + last_child['height'] < group['y'] + group['height']
-        second_child = submenu.get_by_role('link', name='知识页面', exact=True).bounding_box()
-        assert second_child['y'] - (first_child['y'] + first_child['height']) == 2
-        assert page.locator('.nav-group-knowledge').evaluate('el => getComputedStyle(el).boxShadow') != 'none'
-        assert submenu.evaluate('el => getComputedStyle(el).boxShadow') != 'none'
-        links = page.locator('#app-navigation .nav-link')
-        for link in links.all():
-            box = link.bounding_box()
-            icon = link.locator('svg').bounding_box()
-            assert box['width'] == box['height'] == 40
-            size = 16 if 'nav-child' in link.get_attribute('class') else 18
-            assert icon['width'] == icon['height'] == size
-            assert abs(icon['x'] + icon['width'] / 2 - axis) <= 0.5
-            assert abs(box['x'] + box['width'] / 2 - axis) <= 0.5
-            assert abs(icon['y'] + icon['height'] / 2 - (box['y'] + box['height'] / 2)) <= 0.5
-        if width == 1280:
-            toggle = page.get_by_role('button', name='展开侧边栏', exact=True).bounding_box()
-            assert toggle['width'] == toggle['height'] == 40
-            assert abs(toggle['x'] + toggle['width'] / 2 - axis) <= 0.5
-        page.screenshot(path=f'test-results/navigation-compact-aligned-{width}.png', full_page=True)
-    page.get_by_role("link", name="记忆", exact=True).click()
-    assert submenu.is_visible()
-    assert submenu.locator('[aria-current="page"]').count() == 0
-    page.screenshot(path=f'test-results/navigation-{width}.png', full_page=True)
+@pytest.mark.parametrize('width', [390, 1280])
+def test_knowledge_categories_keep_existing_routes(page, knowledge_service, width):
+    page.set_viewport_size({'width': width, 'height': 844})
+    follow_link(page, '知识库')
+    submenu = page.get_by_role('navigation', name='知识库分类')
+    for label in ['原始资料', '知识页面', '文档关联', '质量检查']:
+        expect(submenu.get_by_role('link', name=label, exact=True)).to_be_visible()
     submenu.get_by_role('link', name='知识页面', exact=True).click()
-    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('aria-current') == 'page'
-    page.get_by_role('link', name='对话', exact=True).click()
-    assert submenu.is_visible()
-    assert submenu.locator('[aria-current="page"]').count() == 0
-    submenu.get_by_role('link', name='原始资料', exact=True).click()
-    assert submenu.get_by_role('link', name='原始资料', exact=True).is_visible()
+    expect(submenu.get_by_role('link', name='知识页面', exact=True)).to_have_attribute('aria-current', 'page')
+    assert '#/knowledge/pages' in page.url
+    follow_link(page, '记忆')
+    follow_link(page, '知识库')
+    assert '#/knowledge/pages' in page.url
 
-
-def test_tree_toggle_preserves_navigation_and_compact_shortcuts(page, knowledge_service):
-    initial_url = page.url
-    page.get_by_role('textbox', name='搜索记忆…').fill('Semi')
-    submenu = page.locator('#knowledge-navigation')
-    toggle = page.get_by_role('button', name='收起知识库分类', exact=True)
-    assert toggle.get_attribute('aria-expanded') == 'true'
-    toggle.focus()
-    page.keyboard.press('Enter')
-    assert not submenu.is_visible()
-    toggle = page.get_by_role('button', name='展开知识库分类', exact=True)
-    assert toggle.get_attribute('aria-expanded') == 'false'
-    assert toggle.evaluate('el => el === document.activeElement')
-    assert page.url == initial_url
-    assert page.get_by_role('textbox', name='搜索记忆…').input_value() == 'Semi'
-    page.screenshot(path='test-results/navigation-tree-closed.png', full_page=True)
-
-    page.get_by_role('button', name='收起侧边栏', exact=True).click()
-    wait_for_sidebar_width(page, 64)
-    assert submenu.is_visible()
-    assert page.get_by_role('button', name='展开知识库分类', exact=True).count() == 0
-    submenu.get_by_role('link', name='知识页面', exact=True).click()
-    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('aria-current') == 'page'
-    page.get_by_role('button', name='展开侧边栏', exact=True).click()
-    wait_for_sidebar_width(page, 208)
-    assert not submenu.is_visible()
-    toggle = page.get_by_role('button', name='展开知识库分类', exact=True)
-    toggle.focus()
-    page.keyboard.press('Space')
-    assert submenu.is_visible()
-    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('aria-current') == 'page'
-    assert submenu.get_by_role('link', name='知识页面', exact=True).get_attribute('title') == '知识库 › 知识页面'
-
-    page.get_by_role('button', name='收起知识库分类', exact=True).click()
-    for width in [768, 390]:
-        page.set_viewport_size({'width': width, 'height': 844})
-        assert submenu.is_visible()
-        assert submenu.get_by_role('link').count() == 4
-        assert page.get_by_role('button', name='展开知识库分类', exact=True).count() == 0
-    page.set_viewport_size({'width': 1280, 'height': 844})
-    assert not submenu.is_visible()
-    page.get_by_role('button', name='展开知识库分类', exact=True).click()
-    page.get_by_role('link', name='记忆', exact=True).click()
-    assert page.get_by_role('textbox', name='搜索记忆…').input_value() == 'Semi'
 
 def test_theme_follows_system_and_remembers_explicit_choice(page):
-    from playwright.sync_api import expect
-    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
     page.emulate_media(color_scheme='dark')
     expect(page.locator('html')).to_have_attribute('data-theme', 'dark')
-    assert page.locator('body').evaluate("el => getComputedStyle(el).getPropertyValue('--canvas').trim()") == '#0c0c0e'
-    assert page.locator('body').evaluate("el => getComputedStyle(el).getPropertyValue('--semi-color-primary').trim()") == '#e0a8b6'
-    page.get_by_role('button', name='切换主题，当前跟随系统').click()
-    page.get_by_role('menuitem', name='浅色', exact=True).click()
+    open_settings(page)
+    page.get_by_role('button', name='浅色', exact=True).click()
+    page.keyboard.press('Escape')
     expect(page.locator('html')).to_have_attribute('data-theme', 'light')
     page.reload()
-    expect(page.get_by_role('button', name='切换主题，当前浅色')).to_be_visible()
     expect(page.locator('html')).to_have_attribute('data-theme', 'light')
-    page.get_by_role('button', name='切换主题，当前浅色').click()
-    page.get_by_role('menuitem', name='深色', exact=True).click()
-    page.emulate_media(color_scheme='light')
-    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')
-    page.get_by_role('button', name='切换主题，当前深色').click()
-    page.get_by_role('menuitem', name='跟随系统', exact=True).click()
-    expect(page.locator('html')).to_have_attribute('data-theme', 'light')
-    page.emulate_media(color_scheme='dark')
-    expect(page.locator('html')).to_have_attribute('data-theme', 'dark')
+
+
+def test_mobile_navigation_traps_focus_and_preserves_page_state(page, knowledge_service):
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.get_by_role('textbox', name='搜索记忆…').fill('Semi')
+    open_navigation(page)
+    sidebar = page.get_by_role('complementary', name='会话管理')
+    for _ in range(12):
+        page.keyboard.press('Tab')
+        assert sidebar.evaluate('el => el.contains(document.activeElement)')
+    page.keyboard.press('Escape')
+    expect(sidebar).not_to_be_visible()
+    follow_link(page, '知识库')
+    follow_link(page, '记忆')
+    expect(page.get_by_role('textbox', name='搜索记忆…')).to_have_value('Semi')

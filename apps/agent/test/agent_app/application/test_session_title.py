@@ -7,7 +7,15 @@ from agent_app.application.session_title import generate_title
 from icarus.core.models.messages import LLMResponse, Message, TextPart
 
 
-@pytest.mark.parametrize('output, expected', [('“整理项目文档”\n解释', '整理项目文档'), ('x' * 100, 'x' * 80)])
+@pytest.mark.parametrize('output, expected', [
+    ('“整理项目文档”\n解释', '整理项目文档'),
+    ('x' * 100, 'x' * 40),
+    ('很长的中文标题' * 10, ('很长的中文标题' * 10)[:12]),
+    ('one two three four five six seven eight nine ten', 'one two three four five six'),
+    ('标题： “整理项目文档”', '整理项目文档'),
+    ('## Title: Review the project', 'Review the project'),
+    ('Review 项目 ' * 10, ('Review 项目 ' * 10)[:12].rstrip()),
+])
 def test_generate_title_uses_provider_and_closes_client(monkeypatch, output, expected):
     state = {}
     class Model:

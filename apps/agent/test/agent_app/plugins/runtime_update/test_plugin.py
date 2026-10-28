@@ -135,6 +135,7 @@ def test_runtime_update_plugin只投影已应用steer并保留图片引用():
 
     assert updates[0].type == "user.correction"
     assert updates[0].payload == {
+        "submission_id": "request",
         "text": "look [#image1]",
         "resources": [
             {"resource_id": "assets/image.png", "media_type": "image/png"}

@@ -45,7 +45,7 @@ export class Gateway {
     );
     this.ready = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error('连接 Agent 超时。'));
+        reject(new Error('连接对话服务超时，请确认 Gateway 服务已启动后重试。'));
         this.socket.close();
       }, 10000);
       this.socket.addEventListener(
@@ -60,7 +60,7 @@ export class Gateway {
         'close',
         () => {
           clearTimeout(timer);
-          reject(new Error('无法连接 Agent，请检查 Gateway 服务。'));
+          reject(new Error('无法连接对话服务，请检查网络和 Gateway 服务状态。'));
         },
         { once: true },
       );
@@ -87,7 +87,13 @@ export class Gateway {
         this.pending.delete(value.id);
         clearTimeout(request.timer);
         if (value.error)
-          request.reject(new RpcError(String(value.error.message ?? 'Agent 请求失败')));
+          request.reject(
+            new RpcError(
+              value.error.code === -32601
+                ? '当前 Gateway 尚未加载此功能，请重启 Gateway 服务后重试。'
+                : String(value.error.message ?? 'Agent 请求失败'),
+            ),
+          );
         else request.resolve(value.result);
       } catch {
         this.socket.close(4002, 'Invalid gateway response');
@@ -109,7 +115,7 @@ export class Gateway {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error('Agent 响应超时，操作结果尚未确认。'));
+        reject(new Error('对话服务响应超时，操作结果尚未确认；恢复连接后请先核对历史。'));
       }, 30000);
       this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
       this.socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));

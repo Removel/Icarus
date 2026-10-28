@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { navigate, useUnsavedChanges } from '@icarus/ui';
 import {
   Gateway,
@@ -9,6 +9,12 @@ import {
   type RuntimeUpdate,
 } from './gateway';
 import { applyUpdate, emptyTranscript } from './updates';
+import useChatPreference from './useChatPreference';
+import useWorkspaceHistory from './useWorkspaceHistory';
+import { localClock, type RequestOptions } from './webSearch';
+import { deleteHistory, readHistory, saveHistory } from './historyCache';
+import useImageInputs from './useImageInputs';
+import type { ImageResource } from './imageResources';
 
 type Submission = {
   id: string;
@@ -17,6 +23,8 @@ type Submission = {
   session: string;
   taskId?: string;
   cancelRequested?: boolean;
+  requestOptions?: RequestOptions;
+  resources?: ImageResource[];
 };
 
 export default function useChatSession(hash: string) {
@@ -24,8 +32,15 @@ export default function useChatSession(hash: string) {
   const workspace = params.get('workspace') ?? '';
   const sessionId = params.get('session') ?? '';
   const [path, setPath] = useState(workspace);
+  const { history: workspaceHistory, remember: rememberWorkspace } = useWorkspaceHistory();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [transcript, setTranscript] = useState(emptyTranscript);
+  const transcriptRef = useRef(transcript);
+  transcriptRef.current = transcript;
+  const historyCache = useRef(new Map<string, ReturnType<typeof emptyTranscript>>());
+  const deletedHistory = useRef(new Set<string>());
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [gateway, setGateway] = useState<Gateway>();
@@ -34,20 +49,36 @@ export default function useChatSession(hash: string) {
   selection.current = { workspace, sessionId };
   const createdStatus = useRef<SessionStatus | undefined>(undefined);
   const [error, setError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
   const [draft, setDraft] = useState('');
+  const attachments = useImageInputs();
+  const { clear: clearImages, restore: restoreImages, consume: consumeImages } = attachments;
+  const imagesReady = attachments.images.every((image) => image.resource && !image.error);
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [version, setVersion] = useState(0);
   const [unknown, setUnknown] = useState(false);
   const [queue, setQueue] = useState<Submission[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
+  const [webSearch, setWebSearch] = useChatPreference('icarus.chat.webSearch', false);
+  const [deepSearch, setDeepSearch] = useChatPreference('icarus.chat.deepSearch', false);
   const client = useRef<Gateway | undefined>(undefined);
   const pending = useRef<Submission | undefined>(undefined);
   const working = useRef(false);
   const listedWorkspace = useRef('');
   const createdSession = useRef<Session | undefined>(undefined);
+  const firstCreate = useRef<{ workspace: string; id: string; verify: boolean } | undefined>(
+    undefined,
+  );
+  const transfer = useRef<
+    { workspace: string; sessionId: string; submission?: Submission } | undefined
+  >(undefined);
+  const autoFirst = useRef<Submission | undefined>(undefined);
+  const readySelection = useRef('');
   const titleRequests = useRef(new Set<string>());
-  const guard = useUnsavedChanges(Boolean(draft) || queue.length > 0);
+  const guard = useUnsavedChanges(
+    Boolean(draft) || attachments.images.length > 0 || queue.length > 0,
+  );
   const requestTitle = useCallback(
     (connection: Gateway, session: string, targetWorkspace: string) => {
       const key = targetWorkspace + '\u0000' + session;
@@ -80,17 +111,29 @@ export default function useChatSession(hash: string) {
   }
   useEffect(() => {
     setPath(workspace);
+    const moving = transfer.current;
+    transfer.current = undefined;
+    if (moving?.workspace === workspace && moving.sessionId === sessionId) {
+      if (moving.submission) clearImages();
+      autoFirst.current = moving.submission;
+      return;
+    }
+    firstCreate.current = undefined;
+    autoFirst.current = undefined;
     setDraft('');
+    clearImages();
     setUnknown(false);
     setQueue([]);
     setQueuePaused(false);
     pending.current = undefined;
-  }, [workspace, sessionId]);
+  }, [workspace, sessionId, clearImages]);
   useEffect(() => {
+    readySelection.current = '';
     setConnected(false);
     setError('');
     setGateway(undefined);
     if (listedWorkspace.current !== workspace) {
+      historyCache.current.clear();
       setSessions([]);
       listedWorkspace.current = workspace;
       createdSession.current = undefined;
@@ -106,7 +149,7 @@ export default function useChatSession(hash: string) {
       () => {
         if (stale) return;
         setConnected(false);
-        setError('Agent 连接已断开，正在重连并恢复历史。');
+        setError('对话连接已断开，正在重连并恢复历史。若持续无法连接，请检查 Gateway 服务。');
         reconnect = setTimeout(() => setVersion((value) => value + 1), 2000);
       },
     );
@@ -120,6 +163,7 @@ export default function useChatSession(hash: string) {
         workspace_path: workspace,
       });
       if (stale) return;
+      rememberWorkspace(workspace);
       const created = createdSession.current;
       if (created && !list.sessions.some((row) => row.session_id === created.session_id))
         setSessions([created, ...list.sessions]);
@@ -137,10 +181,12 @@ export default function useChatSession(hash: string) {
       connection.close();
       if (client.current === connection) client.current = undefined;
     };
-  }, [workspace, version]);
+  }, [workspace, version, rememberWorkspace]);
 
-  useEffect(() => {
-    setTranscript(emptyTranscript());
+  useLayoutEffect(() => {
+    const cacheKey = workspace + '\u0000' + sessionId;
+    const cached = historyCache.current.get(cacheKey);
+    setTranscript(cached ?? emptyTranscript());
     receive.current = undefined;
     setLoading(Boolean(workspace && sessionId));
     if (!gateway || client.current !== gateway || !sessionId) return;
@@ -148,6 +194,10 @@ export default function useChatSession(hash: string) {
     let ready = false;
     let key = '';
     const buffered: RuntimeUpdate[] = [];
+    if (!cached)
+      void readHistory(cacheKey).then((persisted) => {
+        if (!stale && !ready && persisted) setTranscript(persisted);
+      });
     receive.current = (update) => {
       if (
         stale ||
@@ -160,6 +210,7 @@ export default function useChatSession(hash: string) {
       else setTranscript((previous) => applyUpdate(previous, update, true));
     };
     async function load() {
+      const started = performance.now();
       const fresh =
         createdStatus.current?.session_id === sessionId ? createdStatus.current : undefined;
       const status =
@@ -172,8 +223,8 @@ export default function useChatSession(hash: string) {
       key = status.workspace_key;
       await gateway!.request('session.subscribe', { workspace_key: key, session_id: sessionId });
       if (stale) return;
-      let state = emptyTranscript();
-      let cursor = 0;
+      let state = cached ?? emptyTranscript();
+      let cursor = [...state.seen].reduce((max, value) => Math.max(max, value), 0);
       if (!fresh)
         while (!stale) {
           const history = await gateway!.request<History>('session.get_history', {
@@ -190,23 +241,44 @@ export default function useChatSession(hash: string) {
         }
       if (stale) return;
       createdStatus.current = undefined;
-      state.tasks = status.active_task_ids.filter((id) => !state.finished.has(id));
+      state = { ...state, tasks: status.active_task_ids.filter((id) => !state.finished.has(id)) };
       for (const update of buffered)
         if (update.workspace_key === key) state = applyUpdate(state, update);
       ready = true;
+      readySelection.current = workspace + '\u0000' + sessionId;
       setTranscript(state);
+      void saveHistory(cacheKey, state);
       setLoading(false);
       setError('');
-      if (state.items.some((item) => item.kind === 'user'))
+      performance.clearMeasures('icarus.chat.history');
+      performance.measure('icarus.chat.history', {
+        start: started,
+        detail: { records: state.seen.size, memoryCache: Boolean(cached) },
+      });
+      if (
+        !sessionsRef.current.find((item) => item.session_id === sessionId)?.title &&
+        state.items.some((item) => item.kind === 'user')
+      )
         requestTitle(gateway!, sessionId, workspace);
     }
     load().catch((error) => {
       if (!stale) {
+        if (!cached) setTranscript(emptyTranscript());
         setLoading(false);
         setError(error instanceof Error ? error.message : '加载失败');
       }
     });
     return () => {
+      if (ready && !deletedHistory.current.has(cacheKey)) {
+        void saveHistory(cacheKey, transcriptRef.current);
+        historyCache.current.delete(cacheKey);
+        historyCache.current.set(cacheKey, {
+          ...transcriptRef.current,
+          items: transcriptRef.current.items.map((item) => ({ ...item, live: false })),
+        });
+        if (historyCache.current.size > 12)
+          historyCache.current.delete(historyCache.current.keys().next().value!);
+      }
       stale = true;
       receive.current = undefined;
       if (key)
@@ -216,67 +288,169 @@ export default function useChatSession(hash: string) {
     };
   }, [gateway, workspace, sessionId, version, requestTitle]);
 
-  async function createSession() {
+  useEffect(() => {
+    if (
+      loading ||
+      !sessionId ||
+      !workspace ||
+      transcript.tasks.length ||
+      deletedHistory.current.has(workspace + '\u0000' + sessionId)
+    )
+      return;
+    const timer = setTimeout(() => {
+      void saveHistory(workspace + '\u0000' + sessionId, transcript);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [transcript, loading, workspace, sessionId]);
+
+  async function createSession(firstText?: string, resources: ImageResource[] = []) {
     if (!client.current || working.current) return;
     working.current = true;
     setBusy(true);
     setError('');
     const gateway = client.current;
+    const attempt =
+      firstCreate.current?.workspace === workspace
+        ? firstCreate.current
+        : { workspace, id: crypto.randomUUID(), verify: false };
+    firstCreate.current = attempt;
     try {
-      const session = await gateway.request<SessionStatus>('session.create', {
-        workspace_path: workspace,
-        session_id: crypto.randomUUID(),
-        load_runtime: false,
-      });
-      if (client.current !== gateway) return;
-      createdStatus.current = session;
+      let session: SessionStatus | undefined;
+      if (attempt.verify) {
+        const list = await gateway.request<{ sessions: Session[] }>('session.list', {
+          workspace_path: workspace,
+        });
+        if (list.sessions.some((item) => item.session_id === attempt.id))
+          session = await gateway.request<SessionStatus>('session.get', {
+            workspace_path: workspace,
+            session_id: attempt.id,
+          });
+      }
+      if (!session) {
+        // A lost reply is reconciled against this ID on an explicit retry.
+        attempt.verify = true;
+        session = await gateway.request<SessionStatus>('session.create', {
+          workspace_path: workspace,
+          session_id: attempt.id,
+          load_runtime: false,
+        });
+        createdStatus.current = session;
+      }
+      if (
+        client.current !== gateway ||
+        selection.current.workspace !== workspace ||
+        selection.current.sessionId !== sessionId
+      )
+        return;
       const fresh = {
         session_id: session.session_id,
         first_user_input: '',
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       };
       createdSession.current = fresh;
       setSessions((previous) => [
         fresh,
         ...previous.filter((item) => item.session_id !== session.session_id),
       ]);
+      transfer.current = {
+        workspace,
+        sessionId: session.session_id,
+        submission:
+          firstText || resources.length
+            ? {
+                id: crypto.randomUUID(),
+                text: firstText ?? '',
+                resources,
+                workspace,
+                session: session.session_id,
+                requestOptions: { web_search: webSearch, deep_search: deepSearch },
+              }
+            : undefined,
+      };
+      firstCreate.current = undefined;
+      guard.markSaved();
       go({ workspace, session: session.session_id });
     } catch (error) {
-      setError(error instanceof Error ? error.message : '创建失败');
+      if (selection.current.workspace === workspace && selection.current.sessionId === sessionId)
+        setError(
+          error instanceof RpcError
+            ? error.message
+            : '创建结果尚未确认。重连后点击发送，将核对同一会话，不会自动发送或另建会话。',
+        );
     } finally {
       working.current = false;
       setBusy(false);
     }
   }
-  async function deleteSession(id: string) {
-    if (!client.current || working.current) return false;
+  async function deleteSessions(ids: string[]) {
+    if (!client.current || working.current) return [];
+    if (
+      ids.includes(sessionId) &&
+      (transcript.tasks.length > 0 || draft || attachments.images.length > 0 || queue.length > 0)
+    ) {
+      setDeleteError('当前会话正在执行或有未发送的内容，请处理后再删除。');
+      return [];
+    }
     working.current = true;
     setBusy(true);
     setError('');
+    setDeleteError('');
     const connection = client.current;
+    const deleted: string[] = [];
     try {
-      const result = await connection.request<{ status: string }>('session.delete', {
-        workspace_path: workspace,
-        session_id: id,
-      });
-      if (client.current !== connection) return false;
-      if (result.status === 'busy') throw new Error('会话正在执行，请停止后再删除。');
-      if (!['discarded', 'not_found'].includes(result.status))
-        throw new Error('删除失败，请重试。');
-      const remaining = sessions.filter((item) => item.session_id !== id);
-      setSessions(remaining);
-      if (createdSession.current?.session_id === id) createdSession.current = undefined;
-      if (createdStatus.current?.session_id === id) createdStatus.current = undefined;
-      if (sessionId === id)
-        go({ workspace, ...(remaining[0] ? { session: remaining[0].session_id } : {}) });
-      return true;
+      for (const id of new Set(ids)) {
+        const result = await connection.request<{ status: string }>('session.delete', {
+          workspace_path: workspace,
+          session_id: id,
+        });
+        if (client.current !== connection) break;
+        if (result.status === 'busy') throw new Error('会话正在执行，请停止后再删除。');
+        if (!['discarded', 'not_found'].includes(result.status))
+          throw new Error('删除失败，请重试。');
+        deleted.push(id);
+        deletedHistory.current.add(workspace + '\u0000' + id);
+        historyCache.current.delete(workspace + '\u0000' + id);
+        void deleteHistory(workspace + '\u0000' + id);
+        setSessions((items) => items.filter((item) => item.session_id !== id));
+        if (createdSession.current?.session_id === id) createdSession.current = undefined;
+        if (createdStatus.current?.session_id === id) createdStatus.current = undefined;
+      }
     } catch (error) {
-      setError(error instanceof Error ? error.message : '删除失败');
-      return false;
+      const message = error instanceof Error ? error.message : '删除失败';
+      setError(message);
+      setDeleteError(message);
     } finally {
+      if (client.current === connection && deleted.includes(sessionId)) {
+        const remaining = sessions.filter((item) => !deleted.includes(item.session_id));
+        go({ workspace, ...(remaining[0] ? { session: remaining[0].session_id } : {}) });
+      }
       working.current = false;
       setBusy(false);
+    }
+    return deleted;
+  }
+  async function deleteSession(id: string) {
+    return (await deleteSessions([id])).includes(id);
+  }
+
+  async function renameSession(id: string, title: string) {
+    const connection = client.current;
+    if (!connection || !title.trim()) return false;
+    try {
+      const result = await connection.request<{ title: string }>('session.rename', {
+        workspace_path: workspace,
+        session_id: id,
+        title: title.trim(),
+      });
+      if (client.current !== connection) return false;
+      setSessions((items) =>
+        items.map((item) => (item.session_id === id ? { ...item, title: result.title } : item)),
+      );
+      setError('');
+      return true;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '重命名失败');
+      return false;
     }
   }
 
@@ -303,27 +477,39 @@ export default function useChatSession(hash: string) {
         : unknown && draft.startsWith(submission.text + '\n')
           ? draft.slice(submission.text.length + 1)
           : '';
-      if (!nextDraft && queue.length <= (fromQueue ? 1 : 0)) guard.markSaved();
+      const remainingImages = attachments.images.some(
+        (image) =>
+          fromQueue ||
+          !submission.resources?.some(
+            (resource) => resource.resource_id === image.resource?.resource_id,
+          ),
+      );
+      if (!nextDraft && !remainingImages && queue.length <= (fromQueue ? 1 : 0)) guard.markSaved();
       if (fromQueue) setQueue((items) => items.filter((item) => item.id !== submission.id));
-      else setDraft(nextDraft);
+      else {
+        setDraft(nextDraft);
+        consumeImages(submission.resources ?? []);
+      }
       setSessions((previous) =>
         previous.map((item) =>
           item.session_id === submission.session
-            ? { ...item, first_user_input: item.first_user_input || submission.text }
+            ? { ...item, first_user_input: item.first_user_input || submission.text || '[Image]' }
             : item,
         ),
       );
       setTranscript((previous) => ({
         ...previous,
-        items: previous.items.some((item) => item.id === optimisticId)
+        items: previous.items.some((item) => item.submissionId === submission.id)
           ? previous.items
           : [
               ...previous.items,
               {
                 id: optimisticId,
+                submissionId: submission.id,
                 taskId: submission.taskId,
                 kind: 'user',
                 text: submission.text,
+                resources: submission.resources,
                 final: true,
                 pending: true,
                 label: submission.taskId ? '引导待应用' : undefined,
@@ -332,6 +518,11 @@ export default function useChatSession(hash: string) {
       }));
       const gateway = client.current;
       try {
+        if (!submission.taskId) {
+          submission.requestOptions ??= { web_search: false, deep_search: false };
+          if (!submission.requestOptions.local_time)
+            Object.assign(submission.requestOptions, localClock());
+        }
         const result = await gateway.request<{ task_id: string; status?: string }>(
           submission.taskId ? 'session.steer' : 'session.submit',
           {
@@ -339,7 +530,9 @@ export default function useChatSession(hash: string) {
             session_id: submission.session,
             prompt: submission.text,
             submission_id: submission.id,
+            ...(submission.resources?.length ? { resources: submission.resources } : {}),
             ...(submission.taskId ? { task_id: submission.taskId } : {}),
+            ...(!submission.taskId ? { request_options: submission.requestOptions } : {}),
           },
         );
         if (
@@ -361,7 +554,15 @@ export default function useChatSession(hash: string) {
         setTranscript((previous) => ({
           ...previous,
           items: previous.items.map((item) =>
-            item.id === optimisticId ? { ...item, taskId: result.task_id } : item,
+            item.id === optimisticId
+              ? {
+                  ...item,
+                  taskId: result.task_id,
+                  ...(submission.taskId && previous.finished.has(result.task_id)
+                    ? { pending: false, label: '引导未应用' }
+                    : {}),
+                }
+              : item,
           ),
           tasks: previous.finished.has(result.task_id)
             ? previous.tasks
@@ -372,7 +573,7 @@ export default function useChatSession(hash: string) {
             item.session_id === submission.session
               ? {
                   ...item,
-                  first_user_input: item.first_user_input || submission.text,
+                  first_user_input: item.first_user_input || submission.text || '[Image]',
                   updated_at: new Date().toISOString(),
                 }
               : item,
@@ -415,6 +616,7 @@ export default function useChatSession(hash: string) {
             ),
           );
         setDraft((current) => (current ? submission.text + '\n' + current : submission.text));
+        restoreImages(submission.resources ?? [], submission.workspace, submission.session);
         setTranscript((previous) => ({
           ...previous,
           items: previous.items.filter((item) => item.id !== optimisticId),
@@ -441,8 +643,30 @@ export default function useChatSession(hash: string) {
       guard,
       queue.length,
       requestTitle,
+      attachments.images,
+      consumeImages,
+      restoreImages,
     ],
   );
+
+  useEffect(() => {
+    const first = autoFirst.current;
+    if (
+      !first ||
+      !connected ||
+      loading ||
+      busy ||
+      submitting ||
+      error ||
+      working.current ||
+      readySelection.current !== workspace + '\u0000' + sessionId ||
+      first.workspace !== workspace ||
+      first.session !== sessionId
+    )
+      return;
+    autoFirst.current = undefined;
+    void dispatch(first);
+  }, [connected, loading, busy, submitting, error, workspace, sessionId, dispatch]);
 
   useEffect(() => {
     if (
@@ -474,7 +698,22 @@ export default function useChatSession(hash: string) {
   ]);
 
   async function send(steer = false) {
-    if (!client.current || !connected || loading || busy || !sessionId || !draft.trim()) return;
+    if (
+      !client.current ||
+      !connected ||
+      loading ||
+      busy ||
+      !imagesReady ||
+      (!draft.trim() && !attachments.images.length)
+    )
+      return;
+    const resources = attachments.images.flatMap((image) =>
+      image.resource ? [image.resource] : [],
+    );
+    if (!sessionId) {
+      if (!working.current && !steer) await createSession(draft.trim(), resources);
+      return;
+    }
     if (unknown) {
       if (pending.current && !working.current) await dispatch(pending.current);
       return;
@@ -483,13 +722,16 @@ export default function useChatSession(hash: string) {
     const submission: Submission = {
       id: crypto.randomUUID(),
       text: draft.trim(),
+      resources,
       workspace,
       session: sessionId,
+      requestOptions: { web_search: webSearch, deep_search: deepSearch },
       ...(steer ? { taskId: transcript.tasks[0] } : {}),
     };
     if (!steer && (submitting || transcript.tasks.length || queue.length)) {
       setQueue((items) => [...items, submission]);
       setDraft('');
+      clearImages();
     } else await dispatch(submission);
   }
 
@@ -539,6 +781,7 @@ export default function useChatSession(hash: string) {
     sessionId,
     path,
     setPath,
+    workspaceHistory,
     sessions,
     transcript,
     connected,
@@ -546,11 +789,17 @@ export default function useChatSession(hash: string) {
     error,
     draft,
     setDraft,
+    attachments,
+    imagesReady,
     busy,
     submitting,
     unknown,
     queue,
     queuePaused,
+    webSearch,
+    setWebSearch,
+    deepSearch,
+    setDeepSearch,
     resumeQueue: () => setQueuePaused(false),
     removeQueued: (id: string) => setQueue((items) => items.filter((item) => item.id !== id)),
     editQueued: (id: string) => {
@@ -559,24 +808,44 @@ export default function useChatSession(hash: string) {
       setQueuePaused(true);
       setQueue((items) => items.filter((item) => item.id !== id));
       setDraft((current) => (current ? current + '\n' + item.text : item.text));
+      restoreImages(item.resources ?? [], item.workspace, item.session);
     },
     guard,
     go,
+    connectWorkspace: () => {
+      const destination = path.trim();
+      if (!destination || busy || submitting) return;
+      if (!workspace && !sessionId) {
+        transfer.current = { workspace: destination, sessionId: '' };
+        guard.markSaved();
+      }
+      go({ workspace: destination });
+    },
     createSession,
     deleteSession,
+    deleteSessions,
+    deleteError,
+    renameSession,
+    gateway,
     send,
     cancel,
     reconnect: () => setVersion((value) => value + 1),
     clearDraft: () => {
+      firstCreate.current = undefined;
+      autoFirst.current = undefined;
       pending.current = undefined;
       setUnknown(false);
       guard.markSaved();
       setDraft('');
+      clearImages();
     },
     discardDraft: () => {
+      firstCreate.current = undefined;
+      autoFirst.current = undefined;
       pending.current = undefined;
       setUnknown(false);
       setDraft('');
+      clearImages();
       setQueue([]);
       setQueuePaused(false);
       guard.discardChanges();

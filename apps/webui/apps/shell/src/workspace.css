@@ -11,20 +11,27 @@ body,
 }
 .app-header {
   display: flex;
-  flex: 0 0 64px;
-  height: 64px;
+  flex: 0 0 56px;
+  height: 56px;
   align-items: center;
-  gap: 32px;
+  gap: 12px;
   padding: 0 24px;
   border-bottom: 1px solid var(--line);
-  background: var(--canvas);
+  background: var(--surface);
+}
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  margin-bottom: 16px;
+  padding-inline: 8px;
 }
 .brand {
   display: inline-flex;
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
-  width: 160px;
+  min-width: 0;
   color: var(--accent);
 }
 .brand > span {
@@ -60,14 +67,23 @@ body,
   min-height: 0;
   min-width: 0;
 }
+.workspace-panel.semi-layout {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 8px 8px 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
 .app-sidebar {
   display: flex;
   flex-direction: column;
   flex: 0 0 208px;
   width: 208px;
   min-width: 0;
-  padding: 16px 12px 12px;
-  border-right: 1px solid var(--line);
+  padding: 8px 12px 12px;
   background: var(--canvas);
 }
 .app-sidebar > .semi-layout-sider-children {
@@ -220,7 +236,7 @@ body,
 }
 .page {
   width: min(1440px, 100%);
-  min-height: calc(100dvh - 64px);
+  min-height: calc(100dvh - 74px);
   margin: 0 auto;
   padding: 28px 32px 40px;
   background: var(--surface);
@@ -230,6 +246,7 @@ body,
   width: 64px;
   padding-inline: 8px;
 }
+.is-collapsed .brand > span,
 .is-collapsed .nav-link > span,
 .is-collapsed .sidebar-footer .semi-button-content > span {
   display: none;
@@ -240,6 +257,10 @@ body,
   margin: 6px 0 0;
   padding: 0;
   border-left: 0;
+}
+.is-collapsed .sidebar-brand {
+  justify-content: center;
+  padding-inline: 0;
 }
 .is-collapsed .nav-link,
 .is-collapsed .sidebar-footer .semi-button {
@@ -299,6 +320,29 @@ body,
 .shell-main.is-chat {
   overflow: hidden;
 }
+.chat-shell .app-header {
+  display: none;
+}
+.chat-shell .workspace-panel.semi-layout {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.workspace-chat-return {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.workspace-chat-return:hover {
+  color: var(--accent);
+}
+.workspace-chat-return:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
 .shell-main.is-chat > div:not([hidden]),
 .shell-main.is-chat > div > .loading-indicator {
   height: 100%;
@@ -320,9 +364,14 @@ body,
     width: 64px;
     padding-inline: 8px;
   }
+  .brand > span,
   .nav-link > span,
   .sidebar-footer {
     display: none;
+  }
+  .sidebar-brand {
+    justify-content: center;
+    padding-inline: 0;
   }
   .nav-link {
     justify-content: center;
@@ -356,73 +405,213 @@ body,
   }
 }
 @media (max-width: 767px) {
+  .workspace-panel.semi-layout {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
   .app-header {
-    flex-basis: 56px;
-    height: 56px;
-    padding: 0 16px;
+    padding: 0 12px;
   }
-  .brand {
-    width: auto;
+  .workspace-location {
+    gap: 8px;
   }
-  .workspace-location,
+  .workspace-location > span:first-child,
+  .workspace-location > span[aria-hidden] {
+    display: none;
+  }
+  .theme-switch > .semi-button-content > span {
+    display: none;
+  }
+  .app-sidebar {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    padding: 12px;
+    background: var(--surface);
+  }
+  .sidebar-brand,
   .sidebar-footer {
     display: none;
   }
-  .workspace-layout.semi-layout {
-    flex-direction: column;
-  }
-  .app-sidebar,
-  .is-collapsed .app-sidebar {
-    flex: 0 0 auto;
-    width: 100%;
-    padding: 6px 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .app-sidebar #app-navigation {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .nav-group {
-    display: contents;
-  }
   .nav-group-heading {
-    grid-row: 1;
+    display: flex;
+    align-items: center;
   }
-  .nav-link,
-  .is-collapsed .nav-link {
-    justify-content: center;
-    min-height: 38px;
-    padding: 8px;
-    gap: 7px;
-    font-size: 13px;
+  .nav-group-heading > .nav-link {
+    flex: 1;
+    min-width: 0;
   }
-  .is-collapsed .nav-link > span {
-    display: inline;
-  }
-  .app-sidebar .knowledge-subnav,
-  .is-collapsed .app-sidebar .knowledge-subnav {
-    grid-row: 2;
-    grid-column: 1 / -1;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
-    margin: 2px 0 0;
-    padding: 6px 0 0;
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-  .knowledge-subnav .nav-child {
-    padding: 8px 4px;
-    min-height: 36px;
-    font-size: 13px;
-  }
-  .knowledge-subnav .nav-child > svg {
-    display: none;
+  .nav-toggle {
+    display: flex;
   }
   .page {
     width: 100%;
-    min-height: calc(100dvh - 107px);
+    min-height: calc(100dvh - 56px);
     padding: 24px 18px 32px;
   }
+}
+
+.unified-workspace > main {
+  height: 100%;
+  min-width: 0;
+  outline: none;
+}
+.chat-management-root {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+}
+.chat-management-root[hidden] {
+  display: none;
+}
+.management-header {
+  min-height: 96px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 46px;
+}
+.management-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1;
+  grid-row: 1;
+}
+.management-header-slot {
+  display: contents;
+}
+.management-header .content-tabs {
+  grid-column: 2;
+  grid-row: 1;
+  transform: translateY(32px);
+}
+.memory-header-actions {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  transform: translateY(32px);
+}
+.management-header a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 18px;
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.management-header a:hover {
+  background: var(--subtle);
+}
+.management-header a[aria-current] {
+  background: var(--subtle);
+  color: var(--ink);
+}
+.management-heading > a {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  flex: 0 0 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 8px;
+}
+.management-title {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.management-header nav {
+  display: flex;
+  gap: 4px;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  transform: translateY(32px);
+}
+.management-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  scrollbar-width: auto;
+}
+.management-body .page {
+  width: min(1200px, 100%);
+  min-height: 100%;
+  padding: 24px 32px 40px;
+  background: var(--canvas);
+}
+.management-body .knowledge-page.is-graph {
+  width: 100%;
+}
+.sidebar-is-collapsed > .management-header > .management-heading {
+  margin-left: 188px;
+}
+@media (max-width: 1100px) {
+  .management-header {
+    grid-template-rows: 40px auto;
+    row-gap: 20px;
+    padding-bottom: 10px;
+  }
+  .management-header nav,
+  .management-header .content-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: center;
+    transform: none;
+  }
+  .memory-header-actions {
+    grid-row: 2;
+    transform: none;
+  }
+  .memory-header-actions .semi-button {
+    width: 36px;
+    padding: 0;
+  }
+  .memory-header-actions .memory-create-label {
+    display: none;
+  }
+}
+@media (max-width: 767px) {
+  .management-header {
+    gap: 4px;
+    row-gap: 16px;
+    padding-inline: 12px;
+    grid-template-rows: 40px auto;
+  }
+  .sidebar-is-collapsed > .management-header > .management-heading {
+    margin-left: 178px;
+  }
+  .management-header nav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    gap: 0;
+  }
+  .management-header nav a {
+    justify-content: center;
+    gap: 4px;
+    padding-inline: 0;
+    font-size: 12px;
+  }
+  .management-body .page {
+    padding: 20px 16px;
+  }
+}
+
+.unified-workspace > .shell-main {
+  padding: 0;
+  display: block;
+  overflow: hidden;
+  max-width: none;
 }

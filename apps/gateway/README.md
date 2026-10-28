@@ -4,8 +4,13 @@
 AgentRuntime，并向 TUI、WebUI 和未来 Backend 推送公共 RuntimeUpdate。WebUI 通过其 Node
 同源代理连接 `/rpc`，不直接读取 Agent 的持久化目录。
 
-Gateway 只负责连接、协议校验、调用路由和消息分发，不承担用户、权限、文件上传、Memory、知识库
+Gateway 负责连接、协议校验、调用路由、消息分发及图片资源传输，不承担用户、权限、Memory、知识库
 存储或其他产品业务。当前 Gateway 与 AgentRuntime 在同一进程运行。
+
+`POST /resources` 接收单张图片原始字节，校验类型和 20 MiB 上限后写入既有 incoming 目录，
+返回 session.submit/steer 已支持的 ResourceRef。`GET /resources` 用于读取上传暂存图或指定会话的
+历史图片。WebUI 通过同源代理访问，Agent 导入与模型转换逻辑不变。
+接口、路径边界和暂存生命周期见 [图片资源架构](docs/spec/2026-10-24-image-resources/arch.md)。
 
 `memory.get_context` 接受可选的绝对 `workspace_path`，委托 AgentRuntime 返回配置中的
 `user_id`、`agent_id`、`run_id` 及规范化工作区路径；不创建 Session、不返回服务地址或凭据。
@@ -67,6 +72,7 @@ icarus-gateway
 ```text
 GET http://127.0.0.1:8765/health
 WS  ws://127.0.0.1:8765/rpc
+POST/GET http://127.0.0.1:8765/resources
 ```
 
 第一阶段默认只监听本机地址，不提供远程认证。

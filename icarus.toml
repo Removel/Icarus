@@ -70,6 +70,10 @@ endpoint_env = "ICARUS_MEM0_ENDPOINT"
 required = false
 endpoint_env = "ICARUS_OPENKB_ENDPOINT"
 
+[components.webui.requires.rela-mem]
+required = false
+endpoint_env = "ICARUS_RELATIONSHIP_ENDPOINT"
+
 [components.mem0]
 kind = "app"
 provisioning = "compose"

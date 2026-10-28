@@ -1,3 +1,4 @@
+from test.navigation import follow_link
 import re
 
 import pytest
@@ -42,11 +43,10 @@ def test_filter_empty_and_reset(page):
 def pick_option(page, combobox_label, option_text):
     combobox = page.get_by_role("combobox", name=combobox_label)
     combobox.click()
-    option = page.locator(".semi-select-option").filter(has_text=re.compile(f"^{re.escape(option_text)}$"))
+    option = page.get_by_role("option", name=option_text, exact=True)
     option.wait_for(state="visible")
     option.click()
-    # 面板关闭与列表重渲染有一拍延迟，先等所选值落到控件上再返回。
-    page.locator(".semi-select-option:visible").first.wait_for(state="detached")
+    expect(page.get_by_role("listbox")).to_have_count(0)
     expect(combobox).to_contain_text(option_text)
 
 
@@ -129,8 +129,8 @@ def test_bulk_selection_is_cleared_when_context_changes(page, change):
     elif change == "tab":
         page.get_by_role("tab", name=re.compile("^已失效")).click()
     else:
-        page.get_by_role("link", name="知识库", exact=True).click()
-        page.get_by_role("link", name="记忆", exact=True).click()
+        follow_link(page, "知识库")
+        follow_link(page, "记忆")
     expect(page.get_by_role("button", name="多选", exact=True)).to_be_visible()
     page.get_by_role("button", name="多选", exact=True).click()
     expect(select_all).not_to_be_checked()
@@ -197,17 +197,19 @@ def test_card_grid_global_sort_and_return_context(page):
     assert first['height'] < 220
     page.get_by_role("button", name="更新时间：从新到旧", exact=True).click()
     assert entries.all_text_contents() == list(reversed(original))
-    page.set_viewport_size({"width": 1280, "height": 480})
+    # Compact cards fit at 480px; force overflow to exercise scroll restoration.
+    page.set_viewport_size({"width": 1280, "height": 320})
     entry = page.locator(".memory-entry-open").last
     entry.scroll_into_view_if_needed()
-    position = page.locator(".shell-main").evaluate("element => element.scrollTop")
+    scroll = page.locator('.management-body:visible')
+    position = scroll.evaluate("element => element.scrollTop")
     assert position > 0
     entry.click()
     page.get_by_role("dialog").wait_for()
     page.keyboard.press("Escape")
     page.get_by_role("dialog").wait_for(state="hidden")
     expect(entry).to_be_focused()
-    assert abs(page.locator(".shell-main").evaluate("element => element.scrollTop") - position) <= 1
+    assert abs(scroll.evaluate("element => element.scrollTop") - position) <= 1
 
 
 def test_unsaved_escape_and_browser_back_require_confirmation(page):

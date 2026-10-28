@@ -3,6 +3,8 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "icarus"))
 from lifecycle import Lifecycle
 from probes import ProbeResult
@@ -61,6 +63,19 @@ def make(components, *, down=()):
         return ProbeResult(ok, "reachable" if ok else "unreachable", "test probe")
     return Lifecycle(registry, compose=compose, process=process, probe_func=probe, output=lambda *a: None,
                      readiness_timeout=.1), compose, process
+
+
+def test_readiness_stops_when_callers_working_directory_becomes_unavailable(monkeypatch):
+    component = Component("worker", "app", "local", "compose")
+    lifecycle, _, _ = make([component])
+
+    def unavailable():
+        raise OSError(5, "Input/output error")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "cwd", unavailable)
+        with pytest.raises(RuntimeError, match="current working directory.*cd /"):
+            lifecycle._wait(component)
 
 
 def test_embedded_preflight_environment_and_required_branch_failure_continue():

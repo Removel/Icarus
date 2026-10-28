@@ -238,6 +238,14 @@ class Lifecycle:
         progress = self.progress_interval if self.progress_interval > 0 else None
         next_progress = started + progress if progress is not None else None
         while True:
+            try:
+                Path.cwd()
+            except OSError:
+                raise RuntimeError(
+                    f"{component.name}: current working directory became unavailable; "
+                    "run 'cd /', then re-enter the project using its absolute path and retry; "
+                    "the service may already be running"
+                ) from None
             row = self._raw_status(component)
             if row.state in {"running", "external", "reachable"}:
                 # Bundled services are supplied atomically by owner Compose, not prestarted.
