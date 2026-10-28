@@ -31,7 +31,8 @@ def test_launcher_loads_server_only_rela_values_and_honors_process(monkeypatch, 
 
 
 @pytest.mark.parametrize('status', [200, 401])
-def test_diagnostic_checks_rela_auth_without_printing_token_or_records(status):
+@pytest.mark.parametrize('gateway', ['http-rejected', 'reentrant-error'])
+def test_diagnostic_checks_rela_auth_without_printing_token_or_records(status, gateway, tmp_path):
     calls = []
     class Backend(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -57,10 +58,41 @@ def test_diagnostic_checks_rela_auth_without_printing_token_or_records(status):
     threading.Thread(target=backend.serve_forever, daemon=True).start()
     endpoint = f'http://127.0.0.1:{backend.server_port}'
     env = {**os.environ, **{key: endpoint for key in ('ICARUS_RELATIONSHIP_ENDPOINT', 'ICARUS_MEM0_ENDPOINT', 'ICARUS_OPENKB_ENDPOINT', 'ICARUS_GATEWAY_ENDPOINT')}, 'RELA_MEM_API_TOKEN': 'private-diagnostic-token'}
+    command = [shutil.which('node')]
+    if gateway == 'reentrant-error':
+        # Node 22 can emit another error synchronously when a failed handshake
+        # is closed. Reproduce that behavior on newer Node versions as well.
+        preload = tmp_path / 'gateway-error.mjs'
+        preload.write_text('''
+globalThis.WebSocket = class extends EventTarget {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = WebSocket.CONNECTING;
+  closeCalls = 0;
+  constructor() {
+    super();
+    queueMicrotask(() => this.dispatchEvent(new Event('error')));
+  }
+  close() {
+    if (++this.closeCalls > 1) throw new Error('Gateway socket closed twice');
+    this.dispatchEvent(new Event('error'));
+    this.readyState = WebSocket.CLOSED;
+    this.dispatchEvent(new Event('close'));
+  }
+};
+''', encoding='utf-8')
+        command.extend(['--import', preload.as_uri()])
+    command.append('server/check-services.mjs')
     try:
-        result = subprocess.run([shutil.which('node'), 'server/check-services.mjs'], cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(command, cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, text=True, timeout=15)
         output = result.stdout + result.stderr
-        assert ('rela: ready' if status == 200 else 'rela: unavailable (rela: HTTP 401)') in output
+        assert ('rela: ready' if status == 200 else 'rela: unavailable (rela: HTTP 401)') in output, output
+        assert 'Mem0: ready' in output
+        assert 'OpenKB: ready' in output
+        assert 'Gateway: unavailable (Gateway: connection failed)' in output
+        assert 'Exception' not in output
+        assert 'Error:' not in output
         assert ('/v1/persons?limit=1', 'Bearer private-diagnostic-token') in calls
         assert 'private-diagnostic-token' not in output
         assert 'private-diagnostic-record' not in output
