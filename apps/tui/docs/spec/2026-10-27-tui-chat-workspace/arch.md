@@ -28,11 +28,11 @@ OperationScope 包含 generation、epoch、client identity、operation_id；派�
 
 ## 页面与展示
 
-欢迎、聊天、slash suggestions 是同一个 ChatScreen 的状态。Hero 为正文前导，首窗口可重建且不计导航 turn。InputDock 是持久对象；菜单在 Composer 下方展开，改变对话可用高度而不重建输入控件。
+欢迎、聊天、slash suggestions 是同一个 ChatScreen 的状态。Hero 为正文前导，首窗口可重建且不计导航 turn。InputDock 是持久对象；菜单在 Composer 下方展开，改变对话可用高度而不重建输入控件。消息角色通过标题行 `❯ You` / `✦ Icarus` 与正文缩进区分，不使用贯穿全文的纯色竖条；追加消息同样使用 `❯` 标识，用户/追加正文保留低对比底色，执行记录边框独立保留。
 
-纠偏投影为同一 turn 的顶层 correction，保留 task/step，不生成新任务/轮次。每个 Run 只有一个执行记录区，Assistant 完成/纠偏不会将记录切成多段。所有 Assistant 文本（包括中途输出、未完成文本）保留在外层，不降级为 progress 或设内层滚动。
+纠偏投影为同一 turn 的顶层 correction，保留 task/step，不生成新任务/轮次。执行记录按 Assistant 消息分组：CompleteAssistantMessage 封闭当前 segment，后续工具/Thinking 创建新 segment；纠偏本身不切段。快照中的 run_card.completed 表示该分组已封闭，重建时不将其注册为当前可追加分组。所有 Assistant 文本（包括中途输出、未完成文本）保留在外层，不降级为 progress 或设内层滚动。
 
-工具条目默认折叠，ToolRecords 是固定 8 行（short 3 行）的本轮执行记录区，有滑块并默认跟随最新。最大 step 的 Thinking 放在记录边框下方；旧 Thinking 在新 step 到来时归档进记录区，迟到完成仍按原 step 更新。Thinking 折叠时不解析正文，运行动画由本地 Timer 管理，完成/隐藏/卸载/减少动效暂停。AI 正文没有 LocalScroll 或高度上限；仅用户超长文本保留 LocalScroll。QueuePanel 只有一个滚动拥有者，外层正文仍有历史窗口化和右侧轮次栏。
+工具条目默认折叠，首次工具条目到达才显示执行记录边框；无工具时 Thinking 独立显示，不预留空框。ToolRecords 随内容高度增长，最多 8 行（short 3 行，不含标题/边框），超过上限显示滚动条，默认跟随最新；用户上滚暂停局部跟随。每组最大 step 的 Thinking 放在记录边框下方；旧 Thinking 在新 step 到来时归档，有工具时位于该组记录区，否则保留在无边框的 Thinking 历史区；首个工具到达时迁入记录区。迟到完成仍按原 task/step 或 call_id 更新，不挪到新组。Thinking 折叠时不解析正文，运行动画由本地 Timer 管理，完成/隐藏/卸载/减少动效暂停。AI 正文没有 LocalScroll 或高度上限；仅用户超长文本保留 LocalScroll。QueuePanel 只有一个滚动拥有者，外层正文仍有历史窗口化和右侧轮次栏。
 
 跨页保留同一个聊天页面/Composer；网络在 App 中继续处理，被遮挡时不持续挂载新的 Markdown。同 generation 且缓存完整时，返回页面或连续更新积压均按修订顺序补齐动作，不销毁现有消息、展开项和滚动容器。首次渲染、generation 替换、未完成渲染或缓存过期才重建窗口；重建使用 App.batch_update 抑制中间帧绘制，不将对话区设为 hidden，避免黑帧和中断后残留隐藏状态。多轮补齐用 task_id 定位各 turn，不把积压消息都绑定到投影的最后一轮。历史导航重建与 Screen 绘制共享 ConversationView 的 render_lock；导航替换递增 window_generation，页面发现窗口代次变化便使用快照校准，不将已被导航快照消费的 delta 再次追加。绘制开始即标 dirty，成功确认修订后才清除，协程取消后的下一次刷新因此重建而非重复应用部分动作。其他真实业务页面尚未新增，仅测试 SecondaryScreen 验证这种生命周期。
 

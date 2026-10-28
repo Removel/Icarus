@@ -128,3 +128,19 @@ apps/tui/.venv/bin/python apps/tui/scripts/capture_preview.py --out /tmp/icarus-
 ChatStore 现在有界保留最近 512 次变更（包括纯状态修订），同 generation 按序补齐；reset、缓存过期和未完成渲染仍使用窗口快照。快照重建由 App.batch_update 保持上一帧，不再隐藏对话区。原有历史原子展示测试改为检查批量抑制绘制；用户消息故障注入改为拦截真实增量 append 入口，而非依赖不必要的快照重建。
 
 首轮专项 **8 passed**，首轮 `make test-tui` **364 passed in 128.72s**（含 compileall）。后续独立复核新增两项 RED 测试，分别确认导航快照已消费的 delta 被重复追加，以及取消部分增量更新后重试重复追加；修复为共享 render_lock、window_generation 失效校准和 await 前置 dirty 标记。全量回归进一步发现快照重建缺失 detached 状态，补齐后“回到最新”行为恢复。最终专项 **10 passed**，完整 `make test-tui` **366 passed in 127.77s**（含 compileall），staged/unstaged `git diff --check` 通过。真实 App 离线回放在 120×40、100×32、70×24、58×24、100×12 生成各四张临时 SVG；浏览器 SVG 转换有中文字体压缩，不能将其作为终端中文排版结论。tmux 100×32 原生启动、提交 hello、完成离线回放、PageUp/Ctrl+End 和 slash 菜单已实际驱动并检查 capture-pane；中文正文在原生输出中完整。没有调用真实模型，没有修改“执行记录”样式。代码与测试提交为 `82acd54`；按用户确认另行提交文档，不加 coauthor，不推送。
+
+## AI 消息分组与执行记录自适应高度（2026-10-28）
+
+本节取代 2026-10-27 的“每个 Run 一个固定高度执行记录”约定。Assistant 完成后封闭当前执行组，下一批工具/Thinking 属于下一条 Assistant；无工具时不显示执行记录框，Thinking 保留独立展示。内容高度由记录数量和展开详情决定，普通最多 8 行、short 最多 3 行（标题/边框另计），达到上限后滚动；用户上滚暂停局部跟随。
+
+先补测试，首轮 **7 failed, 1 passed**，分别复现跨 Assistant 混组、纯 Thinking 空框和一条记录占满固定高度；修复后相关 Widget/Store/历史重建测试 **67 passed**。完整 `make test-tui` **371 passed in 139.98s**（含 compileall），最终专项 **10 passed in 7.28s**，额外 compileall 与 `git diff --check` 通过。
+
+独立只读复核未发现阻断问题，并验证真实工具事件顺序、迟到归档 Thinking、首工具迁移、展开状态和实际鼠标上滚。追加详情展开/收起断言后，一次 70×24 专项暴露了延迟 scroll_end 回调在 following 已关闭后仍跳底的竞态；回调改为执行时再次检查 following。修复后专项 **10 passed in 7.41s**，消息组专项再次 **5 passed in 5.74s**，相关测试再次 **67 passed in 36.02s**；最终全量重跑 `make test-tui` **371 passed in 136.43s**（含 compileall），`git diff --check` 通过。
+
+真实 App 离线回放在 120×40、100×32、70×24、58×24、100×12 各生成四张临时 SVG；另用真实 App 构造两条 Assistant，各自单条工具记录高度为 1 行，后续 12 条记录的组高度封顶 8 行并出现滚动条，截图已检查。临时证据位于 `/tmp/icarus-execution-<尺寸>/` 和 `/tmp/icarus-execution-groups/`，不维护为基线。浏览器转换存在中文字体压缩，未当作终端中文排版证据；tmux 100×32 原生启动、提交 hello、PageUp/Ctrl+End、capture-pane 验证中文正文和执行框正常，并经 Ctrl+C 退出。无真实模型/Gateway 调用，未提交或推送。
+
+## 消息去除全高色条（2026-10-28）
+
+按 demo 的轻量标题标识调整用户、Assistant 和追加消息：移除整段消息的 thick 左边框，改用 `❯ You` / `✦ Icarus` / `❯ Added by you…` 标题及正文缩进，用户/追加正文保留低对比底色。执行记录框与滚动规则不变。
+
+新增三尺寸长消息回归首轮 **3 failed**，修复后 **3 passed**；相关测试 **53 passed in 35.67s**，完整 `make test-tui` **374 passed in 144.68s**（含 compileall），`git diff --check` 通过。120×40、70×24、100×12 真实 App 回放截图已检查，另生成 61 行 Assistant 正文截图确认全文不裁剪、无全高色条；临时图片在 `/tmp/icarus-borderless-<尺寸>/`。浏览器 SVG 中文字体压缩仍属于转换限制，原生 tmux 100×32 已提交离线 hello、Ctrl+End 检查正文/追加标识和执行记录框并正常退出。未调用真实模型，未提交或推送。

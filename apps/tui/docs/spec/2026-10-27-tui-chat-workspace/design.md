@@ -23,7 +23,7 @@
 
 ### 本设计的工程取舍
 
-最新用户校正优先：AI 消息全文在外层对话展开，不使用消息内部滚动或降级为 progress；每轮 Run 一个固定高度执行记录区（普通 8 行、矮屏 3 行），默认跟随最新且有滑块。当前最新 Thinking 位于执行记录边框下方，旧 Thinking 随新 step 出现归档到该 Run 的记录区，折叠选择与完整文本仍保留。保持现有主题、键位和任务主输入导航轮次；未知元信息明确显示未知。
+最新用户校正（2026-10-28）优先：AI 消息全文在外层对话展开，不使用消息内部滚动或降级为 progress；同一 Run 内按 AI 消息分执行记录组，Assistant 完成后封闭当前组。执行记录框只在有工具记录时显示，高度随内容增长到上限（普通 8 行、矮屏 3 行），再转为内部滚动，默认跟随最新。每组最新 Thinking 位于记录框下方，旧 Thinking 保留在组内；无工具时 Thinking 独立显示，不出现空框。保持现有主题、键位和任务主输入导航轮次；未知元信息明确显示未知。
 
 ## 2. 当前实现事实与待解决问题
 
@@ -200,19 +200,19 @@ App 在运行期间只创建一个 ChatSession 和 ChatStore。ChatScreen 是保
 - Conversation 主区 `1fr`，InputDock `auto`；展开菜单只挤占可用高度，不 destroy/recompose Composer。
 - 宽屏 120×40、普通 100×32、窄屏 70×24 与 58×24、短屏 100×12 为验收尺寸。
 - 保留现有阈值：width<=70 为 narrow，width<=88 为 compact-logo，height<=12 为 short。类只加在 ChatScreen，不污染后续页面。
-- Composer 普通最多 8 行，short 最多 4；命令普通最多 5 个可见候选、short 最多 2；执行记录列表固定 8 行，short 固定 3 行；AI 消息全文显示，不设正文最大高度或内层滚动。用户超长文本仍可独立浏览。均为逻辑行，不使用原型像素数。
+- Composer 普通最多 8 行，short 最多 4；命令普通最多 5 个可见候选、short 最多 2；执行记录列表随内容增长到最多 8 行，short 最多 3 行，超出后滚动；AI 消息全文显示，不设正文最大高度或内层滚动。用户超长文本仍可独立浏览。均为逻辑行，不使用原型像素数。
 - 保证上述验收尺寸下外层对话至少 3 行、Composer 至少 1 行、任务状态和 metadata 各 1 行。高度不足时先压缩队列摘要/菜单/Composer 上限，不挤掉输入；小于验收尺寸不承诺完整信息，但不能出现未捕获异常。
 - narrow 隐藏次级 workspace/思考说明，metadata 按优先级截断（模型、会话、context、workspace）；short 使用紧凑 Hero。完整值可通过可聚焦内容/后续详情页获取，不横向撑破布局。
 
 ### 8.2 消息、执行区域与纠偏
 
-每个 task/Run 只保留一个执行记录区，持续收集该 Run 的工具与旧 Thinking；不再因 Assistant 完成或用户纠偏新建记录区。Assistant 的各 step 文本按外层消息顺序完整呈现，未完成文本不降级塞进工具区。
+每个 Assistant 消息对应此前尚未归属其他 Assistant 的执行记录组。消息视觉按 demo 的轻量角色标题与缩进呈现：`❯ You` / `✦ Icarus`，不在用户、Assistant 或追加消息左侧绘制贯穿全文的色条。用户与追加正文使用低对比底色；执行记录边框保留。Assistant 完成后封闭当前组，后续执行内容创建新组，与下一条 Assistant 配对；同一 task/Run 可有多个组。无工具记录不显示执行记录框；只有 Thinking 时独立展示。Assistant 的各 step 文本按外层消息顺序完整呈现，未完成文本不降级塞进工具区。
 
 工具详情默认折叠，展示工具名、参数摘要、运行/完成/失败标签，展开只显示已有安全 preview。`full_result_available` 不是自动下载权限，不新增完整结果端点。列表追随最新，用户上滚后暂停局部跟随。
 
-纠偏为顶层 UserCorrection 消息样式，标注追加已应用，仍保留原 task/step，不创建新导航 turn。纠偏不关闭或分割该 Run 的执行记录区；live 与窗口重建一致。
+纠偏为顶层 UserCorrection 消息样式，标注追加已应用，仍保留原 task/step，不创建新导航 turn。纠偏不关闭或分割当前执行记录组；live 与窗口重建一致。
 
-Thinking 摘要默认折叠、按需解析正文；每 step 保留文本。该 Run 最大 step 的 Thinking 单独显示于记录框下方，出现新 step 时把旧 Thinking 移入固定记录区，不丢弃正文或改变 task/step；旧 step 的迟到 complete 只更新归档内容，不替换最新 Thinking。Spinner 用 Textual LoadingIndicator 或等宽字符帧；只在实际活跃 thinking 时运行，complete/task finished/隐藏/卸载后停止 Timer。历史重建按投影中的真实 completed/status 渲染，不因为 historical=True 就把活跃任务假装完成。减少动效配置关闭旋转但保留运行文案。
+Thinking 摘要默认折叠、按需解析正文；每 step 保留文本。每组最大 step 的 Thinking 单独显示于记录框下方，出现新 step 时把旧 Thinking 归档到该组；有工具时进入有高度上限的记录区，否则在无边框的 Thinking 历史区显示，不丢弃正文或改变 task/step；旧 step 的迟到 complete 只更新归档内容，不替换最新 Thinking。Spinner 用 Textual LoadingIndicator 或等宽字符帧；只在实际活跃 thinking 时运行，complete/task finished/隐藏/卸载后停止 Timer。历史重建按投影中的真实 completed/status 渲染，不因为 historical=True 就把活跃任务假装完成。减少动效配置关闭旋转但保留运行文案。
 
 外层和各局部区有各自滚动 owner，事件只由最内层可消费者处理；到达边缘后向外层传递。外层脱离跟随时 token 更新不跳底；工具局部脱离不隐式改变外层锚点；PageUp/PageDown 保持现有外层浏览语义，Ctrl+End 回到底部。
 
