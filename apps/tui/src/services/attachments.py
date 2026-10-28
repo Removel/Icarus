@@ -8,7 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from apps.tui.src.domain.submission import DraftImage, PendingMessage
-from apps.tui.src.platform.clipboard import read_clipboard_image, read_clipboard_text
+from apps.tui.src.platform.clipboard import (
+    ClipboardUnavailableError,
+    read_clipboard_content,
+    read_clipboard_image,
+    read_clipboard_text,
+    read_image_file,
+    validate_clipboard_image,
+)
 from packages.gateway_protocol import ResourceRefModel
 
 
@@ -23,20 +30,38 @@ class AttachmentsService:
         self,
         resource_root: Path | None,
         *,
-        read_image=read_clipboard_image,
-        read_text=read_clipboard_text,
+        read_image=None,
+        read_text=None,
+        read_content=None,
     ):
         self.root = Path(resource_root).resolve() if resource_root else None
         self._read_image = read_image
         self._read_text = read_text
+        self._read_content = read_content or (
+            read_clipboard_content if read_image is None and read_text is None else None
+        )
         self._directory = None
         self._reads: set[asyncio.Task] = set()
         self._closing = False
 
     def _read(self) -> ClipboardRead:
-        image = self._read_image()
-        if image is None:
-            return ClipboardRead(text=self._read_text())
+        if self._read_content is not None:
+            content = self._read_content()
+            if content.kind == "text":
+                return ClipboardRead(text=content.text)
+            if content.kind == "file":
+                if len(content.files) != 1:
+                    raise ClipboardUnavailableError("multiple or empty file clipboard")
+                image = read_image_file(content.files[0])
+            elif content.image is not None:
+                image = validate_clipboard_image(content.image)
+            else:
+                raise ClipboardUnavailableError("unsupported: missing clipboard image")
+        else:
+            # Preserve explicit legacy reader injection for existing callers.
+            image = (self._read_image or read_clipboard_image)()
+            if image is None:
+                return ClipboardRead(text=(self._read_text or read_clipboard_text)())
         if self._closing:
             return ClipboardRead()
         if self._directory is None:

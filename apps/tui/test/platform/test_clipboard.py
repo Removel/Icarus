@@ -12,9 +12,9 @@ from apps.tui.src.platform.clipboard import (
 )
 
 
-def test非windows文本使用内部剪贴板(monkeypatch):
-    monkeypatch.setattr(clipboard.sys, "platform", "linux")
-    assert clipboard.read_clipboard_text() is None
+def test非windows文本使用系统剪贴板(monkeypatch):
+    monkeypatch.setattr(clipboard, "read_clipboard_content", lambda: ClipboardContent("text", text="系统文本"))
+    assert clipboard.read_clipboard_text() == "系统文本"
 
 
 @pytest.mark.parametrize("failure", [None, "open", "format", "data", "lock", "decode"])
@@ -23,7 +23,9 @@ def test_windows文本剪贴板读取并释放资源(monkeypatch, failure):
     user32 = SimpleNamespace(
         OpenClipboard=Mock(return_value=failure != "open"),
         CloseClipboard=Mock(),
-        IsClipboardFormatAvailable=Mock(return_value=failure != "format"),
+        IsClipboardFormatAvailable=Mock(side_effect=lambda fmt: fmt == 13 and failure != "format"),
+        RegisterClipboardFormatW=Mock(return_value=49152),
+        CountClipboardFormats=Mock(return_value=0),
         GetClipboardData=Mock(return_value=0 if failure == "data" else 123),
     )
     kernel32 = SimpleNamespace(
@@ -44,7 +46,7 @@ def test_windows文本剪贴板读取并释放资源(monkeypatch, failure):
             ctypes, "wstring_at", Mock(side_effect=ValueError("decode"))
         )
     if failure in {"open", "data", "lock", "decode"}:
-        with pytest.raises((OSError, ValueError)):
+        with pytest.raises((ClipboardUnavailableError, ValueError)):
             clipboard.read_clipboard_text()
     else:
         assert clipboard.read_clipboard_text() == (
@@ -54,13 +56,11 @@ def test_windows文本剪贴板读取并释放资源(monkeypatch, failure):
     assert kernel32.GlobalUnlock.call_count == (1 if failure in {None, "decode"} else 0)
 
 
-def test_read_clipboard_image只在macos分发(monkeypatch):
+def test_read_clipboard_image使用统一内容分发(monkeypatch):
     expected = ClipboardImage(b"image", "image/png", "png")
-    monkeypatch.setattr(clipboard.sys, "platform", "darwin")
-    monkeypatch.setattr(clipboard, "_read_macos_clipboard_image", lambda: expected)
+    monkeypatch.setattr(clipboard, "read_clipboard_content", lambda: ClipboardContent("image", image=expected))
     assert clipboard.read_clipboard_image() == expected
-
-    monkeypatch.setattr(clipboard.sys, "platform", "linux")
+    monkeypatch.setattr(clipboard, "read_clipboard_content", lambda: ClipboardContent("text", text="plain"))
     assert clipboard.read_clipboard_image() is None
 
 
@@ -79,7 +79,7 @@ def test_read_macos_clipboard_image解析固定脚本结果(monkeypatch):
             stderr="",
         )
 
-    monkeypatch.setattr(clipboard.subprocess, "run", run)
+    monkeypatch.setattr(clipboard, "_run_bounded_capture", run)
 
     result = clipboard._read_macos_clipboard_image()
 
@@ -91,7 +91,7 @@ def test_read_macos_clipboard_image解析固定脚本结果(monkeypatch):
         "-e",
     ]
     assert captured["kwargs"]["timeout"] == 3
-    assert captured["kwargs"]["check"] is False
+    assert captured["kwargs"]["maximum"] > 20 * 1024 * 1024
     script = captured["command"][4]
     assert "board.isNil()" in script
     assert "public.tiff" in script
@@ -102,8 +102,8 @@ def test_read_macos_clipboard_image解析固定脚本结果(monkeypatch):
 def test_read_macos_clipboard_image拒绝未转换的tiff(monkeypatch):
     encoded = base64.b64encode(b"tiff-bytes").decode("ascii")
     monkeypatch.setattr(
-        clipboard.subprocess,
-        "run",
+        clipboard,
+        "_run_bounded_capture",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=0,
             stdout=(
@@ -119,8 +119,8 @@ def test_read_macos_clipboard_image拒绝未转换的tiff(monkeypatch):
 
 def test_read_macos_clipboard_image没有图片返回none(monkeypatch):
     monkeypatch.setattr(
-        clipboard.subprocess,
-        "run",
+        clipboard,
+        "_run_bounded_capture",
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="\n", stderr=""),
     )
     assert clipboard._read_macos_clipboard_image() is None
@@ -130,7 +130,7 @@ def test_read_macos_clipboard_image超时转为领域错误(monkeypatch):
     def timeout(*args, **kwargs):
         raise clipboard.subprocess.TimeoutExpired(args[0], timeout=3)
 
-    monkeypatch.setattr(clipboard.subprocess, "run", timeout)
+    monkeypatch.setattr(clipboard, "_run_bounded_capture", timeout)
 
     with pytest.raises(ClipboardImageReadError):
         clipboard._read_macos_clipboard_image()
@@ -154,7 +154,7 @@ def test_read_macos_clipboard_image超时转为领域错误(monkeypatch):
     ],
 )
 def test_read_macos_clipboard_image失败转为领域错误(monkeypatch, result):
-    monkeypatch.setattr(clipboard.subprocess, "run", lambda *args, **kwargs: result)
+    monkeypatch.setattr(clipboard, "_run_bounded_capture", lambda *args, **kwargs: result)
     with pytest.raises(ClipboardImageReadError):
         clipboard._read_macos_clipboard_image()
 
@@ -192,6 +192,7 @@ def test_read_content文件引用优先于图片和文本(monkeypatch):
     # Single .png file reference wins over text and image representations.
     # WSL host helper reports file references via its JSON payload.
     monkeypatch.setattr(clipboard, "is_wsl", lambda: True)
+    monkeypatch.setattr(clipboard, "windows_path_to_local", lambda path: __import__("pathlib").Path(path))
     _patch_host(
         monkeypatch,
         lambda argv, **kw: SimpleNamespace(
@@ -246,19 +247,33 @@ def test_read_content图片表示选择(monkeypatch):
 
 
 def test_read_content纯文本(monkeypatch):
+    monkeypatch.setattr(clipboard, "_run_bounded_capture", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(clipboard.sys, "platform", "darwin")
-    monkeypatch.setattr(
-        clipboard.subprocess, "run", _fake_run(stdout="hello clipboard")
-    )
+    def run(argv, **kwargs):
+        if argv == ["pbpaste"]:
+            return SimpleNamespace(returncode=0, stdout="hello clipboard", stderr="")
+        if argv[-1] == clipboard._MACOS_FILES_SCRIPT:
+            return SimpleNamespace(returncode=0, stdout='{"files":[]}', stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(clipboard.subprocess, "run", run)
     content = read_clipboard_content()
     assert content.kind == "text"
     assert content.text == "hello clipboard"
 
 
 def test_read_content空剪贴板与工具缺失区分(monkeypatch):
+    monkeypatch.setattr(clipboard, "_run_bounded_capture", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(clipboard.sys, "platform", "darwin")
-    # Empty clipboard: exit 1 with empty stdout.
-    monkeypatch.setattr(clipboard.subprocess, "run", _fake_run(returncode=1))
+    # Only pbpaste exit 1 is the empty-text result; format probes must succeed.
+    def run(argv, **kwargs):
+        if argv == ["pbpaste"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        if argv[-1] == clipboard._MACOS_FILES_SCRIPT:
+            return SimpleNamespace(returncode=0, stdout='{"files":[]}', stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(clipboard.subprocess, "run", run)
     content = read_clipboard_content()
     assert content.kind == "text" and content.text == ""
 
@@ -332,12 +347,14 @@ def test_windows文本写入句柄释放(monkeypatch):
 
     user32 = SimpleNamespace(
         OpenClipboard=Mock(return_value=True),
+        CreateWindowExW=Mock(return_value=789), DestroyWindow=Mock(),
         EmptyClipboard=Mock(),
         SetClipboardData=Mock(return_value=123),
         CloseClipboard=Mock(side_effect=lambda: calls.__setitem__("close", calls["close"] + 1)),
     )
     kernel32 = SimpleNamespace(
         GlobalAlloc=Mock(return_value=456),
+        GlobalFree=Mock(),
         GlobalLock=Mock(return_value=789),
         GlobalUnlock=Mock(side_effect=lambda h: calls.__setitem__("unlock", calls["unlock"] + 1)),
     )

@@ -3,3 +3,4 @@ python-dotenv
 rich>=14.2,<15
 textual>=8.2.8,<9
 websockets
+Pillow>=11.3,<13

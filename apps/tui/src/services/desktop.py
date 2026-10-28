@@ -7,29 +7,7 @@ from typing import Callable
 
 from apps.tui.src.platform.clipboard import write_clipboard_text
 
-_HTTP_SCHEMES = ("http://", "https://")
-
-
-def validate_http_url(url: str) -> str:
-    """Return the URL if it is a structurally valid http(s) target; else raise."""
-
-    if not isinstance(url, str) or not url:
-        raise ValueError("URL is empty")
-    if any(character in url for character in "\x00\n\r\t") or any(
-        ord(character) < 0x20 for character in url
-    ):
-        raise ValueError("URL contains control characters")
-    stripped = url.strip()
-    if not stripped or any(character.isspace() for character in stripped):
-        raise ValueError("URL contains whitespace")
-    if not stripped.lower().startswith(_HTTP_SCHEMES):
-        raise ValueError(f"URL scheme not allowed: {stripped.split(':', 1)[0][:20]}")
-    remainder = stripped[len(stripped.split("://", 1)[0]) + 3 :]
-    if not remainder or remainder.startswith("/"):
-        raise ValueError("URL has no host")
-    if "//" in remainder:
-        raise ValueError("URL has empty host segment")
-    return stripped
+from apps.tui.src.platform.opener import validate_http_url
 
 
 class DesktopService:
@@ -43,16 +21,39 @@ class DesktopService:
     ):
         self._write_text = write_text
         self._open_url = open_url
+        self._write_lock = asyncio.Lock()
+        self._operations: set[asyncio.Task] = set()
+        self._closing = False
+
+    async def _run(self, operation) -> None:
+        if self._closing:
+            raise RuntimeError("Desktop service is closing")
+        task = asyncio.create_task(operation())
+        self._operations.add(task)
+        task.add_done_callback(self._finished)
+        # Cancelling a Textual Worker must not cancel the real system write or
+        # release serialization while its thread is still touching the clipboard.
+        await asyncio.shield(task)
+
+    def _finished(self, task) -> None:
+        self._operations.discard(task)
+        if not task.cancelled():
+            task.exception()  # Retrieve exceptions even if the caller was cancelled.
 
     async def copy_text(self, text: str) -> None:
-        """Write text to the system clipboard in a worker thread."""
-
-        await asyncio.to_thread(self._write_text, text)
+        """Serialize real writes, including operations whose callers cancel."""
+        async def write():
+            async with self._write_lock:
+                await asyncio.to_thread(self._write_text, text)
+        await self._run(write)
 
     async def open_link(self, url: str) -> None:
-        """Validate and open the URL through the injected opener."""
-
         validated = validate_http_url(url)
         if self._open_url is None:
             raise ValueError("no URL opener is wired")
-        await asyncio.to_thread(self._open_url, validated)
+        await self._run(lambda: asyncio.to_thread(self._open_url, validated))
+
+    async def close(self) -> None:
+        self._closing = True
+        while self._operations:
+            await asyncio.shield(asyncio.gather(*self._operations, return_exceptions=True))
