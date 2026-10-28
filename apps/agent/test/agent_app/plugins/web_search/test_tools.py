@@ -34,6 +34,11 @@ def test_factory_registers_search_and_fetch_without_prefetch(tmp_path):
                 request_options={"web_search": True}))
             assert len(events) == 1 and isinstance(events[0], ContextContributionEvent)
             assert "当前时间" in events[0].context_blocks[0].content
+            guidance = events[0].context_blocks[0].content
+            assert 'tool_search(query="web-search")' in guidance
+            assert 'tool_execute(name="web_search", arguments={"query":' in guidance
+            assert 'tool_execute(name="web_fetch", arguments={"url":' in guidance
+            assert "新 Run" in guidance
         finally:
             await plugin.stop()
     asyncio.run(run())
