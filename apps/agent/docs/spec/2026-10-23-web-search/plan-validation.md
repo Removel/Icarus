@@ -3,6 +3,34 @@
 日期：2026-10-26。实现基线：`0cb13f8`，工作分支保持 `feat/webui`。
 与 [计划](plan.md)、[当前架构](arch.md) 配套阅读。
 
+## 2026-10-28：动态工具加载集成适配
+
+合入工具面延迟加载后，默认 Session 只暴露常驻九工具；本插件不再直接出现在模型 tools 列表。
+任务级 User Prompt 现在指向当前插件身份的 `tool_search(query="web-search")`，再通过
+`tool_execute(name, arguments)` 搜索/读页，每个新 Run 重新发现。稳定 System Prompt、插件
+业务参数、任务身份校验和预算不变，不在 ReActAgent 或 Plugin Runtime 增加搜索特判。
+
+原生产图集成测试有 15 项仍使用直接调用和常驻工具断言，因此在合并工作树复现失败。
+已将假 LLM 序列迁移到真实 discovery/execute 桥，保留启用/关闭/缺密钥、Search→Fetch→补搜、
+超时/取消、停止重建与持久化 sequence/引用回放断言，并补充冻结 tools、新 Run 未加载拒绝后
+重新发现可执行的验证。发现本身不发送 HTTP，也不绕过当前任务的联网开关。
+
+- WebSearch 专项：**75 passed**（12.14s）；与通用 discovery/execute/catalog 回归组合：**88 passed**（12.02s）。
+- 标准 Agent 全套：**1195 passed, 2 failed**（61.32s）；仅余原 feature 已复现的
+  `knowledge/test_service_config.py::test_openkb_compose停止不依赖agent环境或完整运行配置` 与
+  `memory/test_service_config.py::test_mem0_compose停止不依赖agent环境或完整运行配置`。
+  两项受本地配置读取影响，未改动这些无关测试/代码。在独立清除 credential 环境变量、
+  不设置全局 envfile 的子进程中，单独重跑这两项得到 **2 passed**（0.22s），说明失败还受
+  完整套件运行期间的配置/环境状态影响；不将单独通过冒充完整套件通过。
+- 显式空 `ICARUS_ENV_FILE` 试验：**1191 passed, 6 failed**（61.91s）；该全局变量覆盖
+  服务脚本测试自己的临时 env 文件，额外引出 knowledge/memory 的 env 解析和缺 Docker
+  两类用例失败，不能据此声称全套已隔离通过。web_search 在两次全套运行中均通过。
+- Gateway：**50 passed**（10.66s），1 条 anyio 弃用警告；Agent mypy：**274 个源文件通过**。
+- 本轮不执行真实模型/搜索服务调用，不将离线 HTTP fixture 当成外部接口验收。
+
+以下内容保留 2026-10-26 原交付的历史验证范围和结果，不替代上述当前动态工具调用契约。
+
+
 ## 交付范围
 
 主 Agent 现在通过插件注册的 `web_search(query)`、`web_fetch(url)` 按需检索、直接

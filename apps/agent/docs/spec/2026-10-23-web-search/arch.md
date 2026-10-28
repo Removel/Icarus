@@ -7,12 +7,18 @@
 
 ## 组件与依赖
 
-`agent_app.plugins.web_search` 是独立业务插件，提供两个常驻工具：
+`agent_app.plugins.web_search` 是独立业务插件，在完整 ToolRegistry 中注册两个延迟工具：
 
 | 工具 | 业务参数 | 结果 |
 | --- | --- | --- |
 | `web_search` | `query`，去除首尾空白后 1–128 字符 | 本次结果总数、来源摘要、稳定编号及剩余预算；不自动抓取 |
 | `web_fetch` | `url`，最长 8192 字符，通过本地 URL 策略 | 非空正文节选、完整长度、截断标记、稳定编号及剩余预算；允许直接抓取 |
+
+默认 Session Run 仅向模型暴露 [工具面延迟加载](../2026-10-21-tool-surface-lazy-loading/arch.md)
+的常驻九工具。联网插件工具通过 `tool_search(query="web-search")` 发现，再由
+`tool_execute(name="web_search", arguments={"query": ...})` 或
+`tool_execute(name="web_fetch", arguments={"url": ...})` 调用；每个新 Run 必须重新加载，
+加载不改变冻结的模型 tools 定义。通用桥接保留目标工具的任务身份、执行预算、观测与结果处理。
 
 `tools.py` 提供工具 schema 与同步/异步入口；`plugin.py` 管理任务身份、权限、预算、
 进度和生命周期；`sources.py` 管理任务内编号及深拷贝快照；`pipeline.py` 只保留纯
@@ -36,7 +42,9 @@ SessionRuntime 保留 `web-search` 为 required context source 的等待关系�
 
 执行入口要求插件仍接纳工作、任务快照存在且有效、TaskChannel 为 RUNNING、
 本轮 `web_search is True`、搜索 Key 已配置。未知、结束、取消或关闭的任务均拒绝，
-不借用“最近任务”。工具常驻可见，关闭时 User Prompt 明确提示调用会失败。
+不借用“最近任务”。发现或加载工具不代表启用联网；即使加载成功，关闭开关或缺少 Key 仍在
+业务执行入口拒绝，且不发送 HTTP。User Prompt 在启用时给出当前插件 scope 与桥接调用方式，
+关闭时明确提示调用会失败。
 该开关仅约束这两个联网工具；Bash 等其它工具的网络权限不由此控制。
 
 两个业务 schema 均拒绝额外参数。ToolExecutor 先解析并剥离合法的 `_execution`

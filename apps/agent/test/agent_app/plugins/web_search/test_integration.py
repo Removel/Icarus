@@ -12,6 +12,7 @@ from agent_app.plugins.persistence import SessionIdentity
 from agent_app.plugins.memory.models import MemoryRecallResult
 from agent_app.plugins.web_search.http_backend import SearchHttpBackend
 from icarus.core.models.messages import LLMStreamChunk, ToolCall, Usage
+from icarus.core.tools.tool_surface import RESIDENT_TOOLS
 from apps.agent.test.agent_app.application.test_session_runtime import make_config
 from apps.agent.test.icarus.core.agents.test_react_agent_stream import StreamQueueLLM
 
@@ -19,6 +20,20 @@ from apps.agent.test.icarus.core.agents.test_react_agent_stream import StreamQue
 def tool_step(name, arguments, index):
     return [LLMStreamChunk(tool_calls=[ToolCall(f"call-{index}", name, arguments)],
         usage=Usage(10, 2), finish_reason="tool_call")]
+
+
+def load_web_tools(index):
+    return tool_step("tool_search", {"query": "web-search"}, index)
+
+
+def web_tool_step(name, arguments, index):
+    return tool_step("tool_execute", {"name": name, "arguments": arguments}, index)
+
+
+def assert_frozen_tool_surface(calls):
+    surface = calls[0][1]
+    assert {definition.name for definition in surface} == set(RESIDENT_TOOLS)
+    assert all(definitions == surface for _, definitions in calls)
 
 
 @pytest.mark.parametrize("mode", ["off", "skip", "missing-key", "timeout", "on", "direct", "search-failed", "empty", "fetch-failed", "cancel-search", "cancel-fetch"])
@@ -62,14 +77,16 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
             plugin.deadline_seconds = .05
         final = [LLMStreamChunk(text_delta="回答 [1]。", usage=Usage(10, 2), finish_reason="stop")]
         if mode in {"direct", "fetch-failed", "cancel-fetch"}:
-            steps = [tool_step("web_fetch", {"url": "https://example.com/a"}, 1)]
+            steps = [web_tool_step("web_fetch", {"url": "https://example.com/a"}, 1)]
         elif mode == "skip":
             steps = []
         else:
-            steps = [tool_step("web_search", {"query": "first query"}, 1)]
+            steps = [web_tool_step("web_search", {"query": "first query"}, 1)]
         if mode == "on":
-            steps += [tool_step("web_fetch", {"url": "https://example.com/a"}, 2),
-                tool_step("web_search", {"query": "followup"}, 3)]
+            steps += [web_tool_step("web_fetch", {"url": "https://example.com/a"}, 2),
+                web_tool_step("web_search", {"query": "followup"}, 3)]
+        if steps:
+            steps.insert(0, load_web_tools("load"))
         llm = StreamQueueLLM(steps + [final])
         # Keep production AgentAssembly, Observable wrappers, ReActAgent and ToolExecutor.
         runtime.runtime_host.get_plugin("agent").agent_factory.llm_factory.create_llm = lambda **kwargs: llm
@@ -86,7 +103,13 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
             await asyncio.wait_for(finished(), 8)
             progress = [u for u in updates if u.type == "web_search.updated"]
             assert {"web_search", "web_fetch"} <= set(runtime.tool_registry.names())
-            assert any("web_search" == t.name for t in llm.calls[0][1])
+            assert_frozen_tool_surface(llm.calls)
+            if mode != "skip":
+                loaded = next(m for m in llm.calls[1][0] if m.role == "tool")
+                loaded_result = json.loads(loaded.content[0].text)
+                assert loaded_result["success"]
+                assert "web_search" in loaded_result["output"]
+                assert "web_fetch" in loaded_result["output"]
             assert llm.calls[0][0][0].content[0].text == system
             user = llm.calls[0][0][-1].content[0].text
             assert "2026-10-26 20:00:00+08:00" in user
@@ -118,21 +141,30 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
             assert not any(u.type == "task.error" and u.payload.get("fatal") for u in updates)
             # Tool messages really return to the next model step, rather than prefilled User Prompt.
             if mode == "on":
-                assert len(llm.calls) == 4
-                assert any(m.role == "tool" for m in llm.calls[1][0])
-                assert "body facts" in str(llm.calls[2][0])
+                assert len(llm.calls) == 5
+                assert any(m.role == "tool" for m in llm.calls[2][0])
+                assert "body facts" in str(llm.calls[3][0])
                 assert "body facts" not in user
                 # Reuse the actual session, with a new task and different options.
                 for enabled in (False, True):
                     call_offset = len(llm.calls)
-                    llm.streams.extend([tool_step("web_fetch", {"url": "https://example.com/new"}, 4), final])
+                    llm.streams.extend([
+                        web_tool_step("web_fetch", {"url": "https://example.com/new"}, "before-load"),
+                        load_web_tools("reload"),
+                        web_tool_step("web_fetch", {"url": "https://example.com/new"}, 4),
+                        final,
+                    ])
                     before = len(requests)
                     accepted = await runtime.submit("next", request_options={"web_search": enabled})
                     await asyncio.wait_for(finished(), 8)
                     current = [u.payload for u in updates if u.type == "web_search.updated" and u.task_id == accepted.task_id]
                     assert len(requests) == before + int(enabled)
                     calls = llm.calls[call_offset:]
+                    assert_frozen_tool_surface(calls)
                     assert calls[0][0][0].content[0].text == system
+                    rejected = json.loads(next(m for m in reversed(calls[1][0]) if m.role == "tool").content[0].text)
+                    assert rejected["success"] is False
+                    assert "not loaded in this Run" in rejected["error"]
                     result = json.loads(next(m for m in reversed(calls[-1][0]) if m.role == "tool").content[0].text)
                     assert result["success"] is enabled
                     if enabled:
@@ -173,7 +205,7 @@ def test_session_rebuild_cannot_publish_late_response_from_stopped_plugin(tmp_pa
             return httpx.Response(200, json={"results": [{"url": "https://example.com/old", "title": "Old"}]})
         plugin.backend = SearchHttpBackend("https://search.example", "fixture", transport=httpx.MockTransport(transport))
         plugin.STOP_TIMEOUT = .02
-        llm = StreamQueueLLM([tool_step("web_search", {"query": "old"}, 1)])
+        llm = StreamQueueLLM([load_web_tools("load"), web_tool_step("web_search", {"query": "old"}, 1)])
         old.runtime_host.get_plugin("agent").agent_factory.llm_factory.create_llm = lambda **kwargs: llm
         task = await old.submit("old task", request_options={"web_search": True})
         await asyncio.wait_for(entered.wait(), 5)
@@ -213,11 +245,12 @@ def test_application_persists_citations_and_cancel_order_with_real_sequences(tmp
                 await asyncio.Event().wait()
             return httpx.Response(200, json={"results": [{"url": "https://example.com/a", "title": "A"}]}
                 if request.url.path.endswith("search") else {"title": "A", "content": "body facts"})
-        steps = [tool_step("web_fetch", {"url": "https://example.com/a"}, 1)] if mode == "cancel-fetch" else [
-            tool_step("web_search", {"query": "first"}, 1)]
+        steps = [web_tool_step("web_fetch", {"url": "https://example.com/a"}, 1)] if mode == "cancel-fetch" else [
+            web_tool_step("web_search", {"query": "first"}, 1)]
         if mode == "complete":
-            steps += [tool_step("web_fetch", {"url": "https://example.com/a"}, 2),
-                tool_step("web_search", {"query": "followup"}, 3)]
+            steps += [web_tool_step("web_fetch", {"url": "https://example.com/a"}, 2),
+                web_tool_step("web_search", {"query": "followup"}, 3)]
+        steps.insert(0, load_web_tools("load"))
         llm = StreamQueueLLM(steps + [[LLMStreamChunk(text_delta="answer [1]", usage=Usage(10, 2), finish_reason="stop")]])
         class PreparedRuntime(SessionRuntime):
             async def start(self):

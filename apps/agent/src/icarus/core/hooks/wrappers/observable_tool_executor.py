@@ -9,6 +9,7 @@ from icarus.core.hooks.hook_dispatcher import (
 from icarus.core.tools.tool_executor import (
     BaseToolExecutor, ToolExecutor,
 )
+from icarus.core.tools.tool_execute import ToolExecuteTool
 from icarus.core.tools.types import ToolExecutionResult
 from icarus.core.models.messages import ToolCall, ToolDefinition
 from icarus.core.tools.prepared import PreparedToolCall
@@ -70,14 +71,23 @@ class ObservableToolExecutor(BaseToolExecutor):
     def _prepare_call(self, call):
         if isinstance(call, PreparedToolCall):
             return call
+        if self._is_tool_execute(call):
+            return PreparedToolCall(call.id, call.name, call.arguments)
         value = self._dispatcher.trigger("tool.execute", "before", call, data={})
         return PreparedToolCall(value.id, value.name, value.arguments)
 
     async def _aprepare_call(self, call):
         if isinstance(call, PreparedToolCall):
             return call
+        if self._is_tool_execute(call):
+            return PreparedToolCall(call.id, call.name, call.arguments)
         value = await self._dispatcher.atrigger("tool.execute", "before", call, data={})
         return PreparedToolCall(value.id, value.name, value.arguments)
+
+    def _is_tool_execute(self, call: ToolCall) -> bool:
+        return isinstance(self._executor, ToolExecutor) and isinstance(
+            self._executor.registry.get(call.name), ToolExecuteTool
+        )
 
     def definitions(
         self,
@@ -143,6 +153,8 @@ class ObservableToolExecutor(BaseToolExecutor):
         **execution: Any,
     ) -> ToolExecutionResult:
         tool_call = self._prepare_call(tool_call)
+        if self._is_tool_execute(tool_call):
+            return self._executor.execute(tool_call, **execution)
         tool_execution_id = uuid4().hex
         self._dispatcher.record(
             "tool.execute",
@@ -178,6 +190,8 @@ class ObservableToolExecutor(BaseToolExecutor):
         **execution: Any,
     ) -> ToolExecutionResult:
         tool_call = await self._aprepare_call(tool_call)
+        if self._is_tool_execute(tool_call):
+            return await self._executor.aexecute(tool_call, **execution)
         tool_execution_id = uuid4().hex
         await self._dispatcher.arecord(
             "tool.execute",

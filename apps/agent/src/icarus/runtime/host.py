@@ -187,11 +187,11 @@ class PluginRuntimeHost:
                     )
             await self.graph.cascade_runtime_unavailable(disabled)
             self.state.refresh_state_store()
-            if self.before_ready is not None:
-                await self.before_ready(self)
             self.graph_snapshot = self.graph.build_snapshot(
                 self.workspace_path, self.session_id, disabled
             )
+            if self.before_ready is not None:
+                await self.before_ready(self)
             self.tool_registry.freeze()
             await self.plugin_manager.start()
             self.status = "ready"

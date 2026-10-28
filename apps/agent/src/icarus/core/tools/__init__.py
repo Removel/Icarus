@@ -17,6 +17,9 @@ from icarus.core.tools.tool_executor import (
     ToolExecutor,
 )
 from icarus.core.tools.tool_registry import ToolRegistry
+from icarus.core.tools.tool_execute import ToolExecuteTool
+from icarus.core.tools.tool_search import ToolSearchTool
+from icarus.core.tools.tool_surface import RESIDENT_TOOLS, ToolSurfaceCatalog
 from icarus.core.tools.result_store import (
     StoredToolResult,
     ToolResultStore,
@@ -34,8 +37,12 @@ __all__ = [
     "ToolContextBudgetExceededError",
     "ToolExecutionPolicy",
     "ToolExecutionRequest",
+    "ToolExecuteTool",
     "ToolExecutor",
     "ToolRegistry",
+    "ToolSearchTool",
+    "ToolSurfaceCatalog",
+    "RESIDENT_TOOLS",
     "StoredToolResult",
     "ToolResultStore",
 ]
