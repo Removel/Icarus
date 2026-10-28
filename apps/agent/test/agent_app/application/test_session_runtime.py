@@ -76,6 +76,9 @@ def test_default_system_prompt保留通用约束而不绑定业务插件():
     assert "不伪造" in DEFAULT_SYSTEM_PROMPT
     assert "长期记忆" not in DEFAULT_SYSTEM_PROMPT
     assert "memory_recall" not in DEFAULT_SYSTEM_PROMPT
+    assert "tool_search" in DEFAULT_SYSTEM_PROMPT
+    assert "tool_execute(name, arguments)" in DEFAULT_SYSTEM_PROMPT
+    assert "新 Run" in DEFAULT_SYSTEM_PROMPT
 
 
 def test_default_system_prompt要求普通聊天简短自然():
@@ -306,12 +309,44 @@ def test_session_runtime无mcp_server时仍注册稳定入口(tmp_path):
     assert "mcp_tool_list" in names
     assert "mcp_tool_search" in names
     assert "mcp_tool_execute" in names
+    assert "tool_search" in names
+    assert "tool_execute" in names
     assert "blackboard_list" in names
     assert "blackboard_read" in names
     assert {
         "knowledge_query", "knowledge_list", "knowledge_read",
         "knowledge_upload", "knowledge_recompile",
     }.issubset(names)
+
+
+def test_session_runtime_ready前绑定工具面catalog和全量registry(tmp_path):
+    async def run():
+        runtime = SessionRuntime(
+            SessionIdentity.create(tmp_path, "session-tool-surface"),
+            config=make_config(tmp_path / "data"),
+            publish_update=lambda update: asyncio.sleep(0),
+        )
+        await runtime.start()
+        search = runtime.tool_registry.get("tool_search")
+        execute = runtime.tool_registry.get("tool_execute")
+        description = search.definition.description
+        blackboard = search.invoke({"query": "blackboard"})
+        resident = search.invoke({"query": "builtin-tools"})
+        snapshot = runtime.runtime_host.graph_snapshot
+        await runtime.stop("test", timeout=1)
+        return description, blackboard, resident, execute, runtime, snapshot
+
+    description, blackboard, resident, execute, runtime, snapshot = asyncio.run(run())
+    assert "blackboard(2): blackboard_list, blackboard_read" in description
+    assert blackboard.success is True
+    assert blackboard.metadata["tools_loaded"] == [
+        "blackboard_list",
+        "blackboard_read",
+    ]
+    assert "tools_loaded" not in resident.metadata
+    assert execute._registry is runtime.tool_registry
+    assert snapshot is not None
+    assert ("blackboard_list", "blackboard") in snapshot.tools
 
 
 def test_session_runtime配置mcp后注册三个固定工具(tmp_path):

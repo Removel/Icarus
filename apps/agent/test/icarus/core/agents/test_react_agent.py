@@ -15,6 +15,9 @@ from icarus.core.tools import (
     ToolExecutor,
     ToolRegistry,
 )
+from icarus.core.tools.tool_execute import ToolExecuteTool
+from icarus.core.tools.tool_search import ToolSearchTool
+from icarus.core.tools.tool_surface import ToolSurfaceCatalog
 from icarus.core.llm import BaseLLM, InvalidToolCallArgumentsError
 from icarus.core.models.messages import (
     ImagePart,
@@ -99,6 +102,163 @@ def final_response(text="done"):
         usage=Usage(8, 3),
         finish_reason="stop",
     )
+
+
+def make_surface_agent(responses, dispatch=None):
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    catalog = ToolSurfaceCatalog.build([("echo", "alpha")], registry)
+    registry.register(ToolSearchTool(catalog))
+    dispatch = dispatch or ToolExecuteTool(registry)
+    registry.register(dispatch)
+    llm = QueueLLM(responses)
+    agent = ReActAgent("thinking", llm, ToolExecutor(registry))
+    return agent, llm, dispatch
+
+
+def surface_response(call_id, name, arguments):
+    return LLMResponse(
+        message=Message(
+            "assistant",
+            [],
+            tool_calls=[ToolCall(call_id, name, arguments)],
+        ),
+        finish_reason="tool_call",
+    )
+
+
+def run_surface_agent(agent, method):
+    arguments = {
+        "system_prompt": "",
+        "history_messages": [],
+        "input_prompt": "hello",
+        "tools": ["tool_search", "tool_execute"],
+    }
+    if method == "invoke":
+        return agent.invoke(**arguments)
+    return asyncio.run(agent.ainvoke(**arguments))
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+def test_react_agent搜索后分发执行且定义数组冻结(method):
+    agent, llm, _ = make_surface_agent(
+        [
+            surface_response("search-1", "tool_search", {"query": "alpha"}),
+            surface_response(
+                "execute-1",
+                "tool_execute",
+                {"name": "echo", "arguments": {"value": "hello"}},
+            ),
+            final_response(),
+        ]
+    )
+
+    result = run_surface_agent(agent, method)
+
+    assert result.message.content == [TextPart("done")]
+    assert len(llm.calls) == 3
+    for _, definitions in llm.calls:
+        assert [definition.name for definition in definitions] == [
+            "tool_search",
+            "tool_execute",
+        ]
+    tool_messages = [
+        message for message in llm.calls[-1][0] if message.role == "tool"
+    ]
+    assert json.loads(tool_messages[0].content[0].text)["success"] is True
+    assert json.loads(tool_messages[1].content[0].text)["output"] == {
+        "echo": "hello"
+    }
+
+
+def test_react_agent未加载工具被硬门拒绝():
+    agent, llm, _ = make_surface_agent(
+        [
+            surface_response(
+                "execute-1",
+                "tool_execute",
+                {"name": "echo", "arguments": {"value": "hello"}},
+            ),
+            final_response(),
+        ]
+    )
+
+    run_surface_agent(agent, "invoke")
+
+    tool_message = llm.calls[-1][0][-1]
+    result = json.loads(tool_message.content[0].text)
+    assert result["success"] is False
+    assert "tool_search('<scope>')" in result["error"]
+
+
+def test_react_agent加载名单不跨run继承():
+    agent, llm, _ = make_surface_agent(
+        [
+            surface_response("search-1", "tool_search", {"query": "alpha"}),
+            surface_response(
+                "execute-1",
+                "tool_execute",
+                {"name": "echo", "arguments": {"value": "first"}},
+            ),
+            final_response("first"),
+            surface_response(
+                "execute-2",
+                "tool_execute",
+                {"name": "echo", "arguments": {"value": "second"}},
+            ),
+            final_response("second"),
+        ]
+    )
+
+    run_surface_agent(agent, "invoke")
+    run_surface_agent(agent, "invoke")
+
+    second_run_tool = llm.calls[-1][0][-1]
+    result = json.loads(second_run_tool.content[0].text)
+    assert result["success"] is False
+    assert "tool_search('<scope>')" in result["error"]
+
+
+def test_react_agent加载名与可执行全集求交并保序去重():
+    class SearchTool(ToolSearchTool):
+        def invoke(self, arguments):
+            return ToolExecutionResult(
+                True,
+                "loaded",
+                metadata={"tools_loaded": ["echo", "missing", "echo"]},
+            )
+
+    class RecordingExecuteTool(ToolExecuteTool):
+        def __init__(self):
+            super().__init__()
+            self.loaded = []
+
+        def invoke(self, arguments, **execution):
+            self.loaded.append(list(execution["loaded_tools"]))
+            return super().invoke(arguments, **execution)
+
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    registry.register(SearchTool())
+    dispatch = RecordingExecuteTool()
+    dispatch.bind_registry(registry)
+    registry.register(dispatch)
+    llm = QueueLLM(
+        [
+            surface_response("search-1", "tool_search", {"query": "alpha"}),
+            surface_response(
+                "execute-1",
+                "tool_execute",
+                {"name": "echo", "arguments": {"value": "hello"}},
+            ),
+            final_response(),
+        ]
+    )
+    agent = ReActAgent("thinking", llm, ToolExecutor(registry))
+
+    agent.invoke("", [], "hello", tools=["tool_search", "tool_execute"])
+
+    assert dispatch.loaded == [["echo"]]
 
 
 def test_react_agent_完成toolcall回填并继续对话():

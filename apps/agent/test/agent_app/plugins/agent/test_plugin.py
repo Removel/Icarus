@@ -39,6 +39,7 @@ from icarus.core.models.messages import (
     ToolCall,
     Usage,
 )
+from icarus.core.tools.tool_surface import RESIDENT_TOOLS
 from icarus.core.tools import (
     ToolContextBudgetExceededError,
     ToolExecutionResult,
@@ -156,6 +157,7 @@ def test_agent_plugin_只消费context并原样发布stream_event():
     factory, sources, events = asyncio.run(run())
 
     assert factory.roles == ["thinking"]
+    assert factory.agent.calls[0]["tools"] == list(RESIDENT_TOOLS)
     assert factory.closed is True
     assert sources == ["agent", "agent", "agent"]
     assert factory.agent.calls[0]["system_prompt"] == "system"

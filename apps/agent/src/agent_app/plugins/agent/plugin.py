@@ -52,6 +52,7 @@ from icarus.core.run_control import (
 from icarus.core.tools import (
     ToolContextBudgetExceededError,
 )
+from icarus.core.tools.tool_surface import RESIDENT_TOOLS
 from icarus.core.models.messages import (
     ImageAssetUnavailableError,
     ImagePart,
@@ -321,7 +322,7 @@ class AgentPlugin(BasePlugin):
                 history_messages=list(event.history_messages),
                 input_prompt=event.input_prompt,
                 input_images=list(event.input_images),
-                tools=None if event.tools is None else list(event.tools),
+                tools=list(RESIDENT_TOOLS),
                 run_control=channel,
             ):
                 if isinstance(stream_event, AgentThinkingDeltaEvent):

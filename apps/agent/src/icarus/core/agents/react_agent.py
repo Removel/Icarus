@@ -48,6 +48,7 @@ class _RunState:
     task_message_start: int
     tool_executor: BaseToolExecutor
     tool_definitions: list[ToolDefinition]
+    loaded_tools: list[str] = field(default_factory=list)
     usage: Usage = field(default_factory=lambda: Usage(0, 0))
     has_usage: bool = False
     last_usage: Usage | None = None
@@ -103,9 +104,10 @@ class ReActAgent(BaseAgent):
                 self._checkpoint_state(state, run_control)
                 return self._build_response(response, state)
 
-            self._execute_tool_group(
+            finalized = self._execute_tool_group(
                 state, response.message.tool_calls, run_control
             )
+            self._collect_loaded_tools(state, response.message.tool_calls, finalized)
             self._checkpoint_state(state, run_control)
 
     async def ainvoke(
@@ -139,9 +141,10 @@ class ReActAgent(BaseAgent):
                 self._checkpoint_state(state, run_control)
                 return self._build_response(response, state)
 
-            await self._aexecute_tool_group(
+            finalized = await self._aexecute_tool_group(
                 state, response.message.tool_calls, run_control
             )
+            self._collect_loaded_tools(state, response.message.tool_calls, finalized)
             self._checkpoint_state(state, run_control)
 
     def stream(
@@ -229,6 +232,8 @@ class ReActAgent(BaseAgent):
                     run_control,
                     state.steps,
                     state.task_message_start,
+                    state.loaded_tools,
+                    self._tool_executor,
                 )
                 for tool_call, result in state.tool_executor.iter_completed(
                     batch, **execution
@@ -242,10 +247,13 @@ class ReActAgent(BaseAgent):
                 run_control,
                 state.steps,
                 state.task_message_start,
+                state.loaded_tools,
+                self._tool_executor,
             )
             finalized = state.tool_executor.finalize_group(
                 tool_calls, results_by_id, **execution
             )
+            self._collect_loaded_tools(state, tool_calls, finalized)
             self._append_tool_results(state.messages, tool_calls, finalized)
             self._checkpoint_state(state, run_control)
             for tool_call in tool_calls:
@@ -340,6 +348,8 @@ class ReActAgent(BaseAgent):
                     run_control,
                     state.steps,
                     state.task_message_start,
+                    state.loaded_tools,
+                    self._tool_executor,
                 )
                 async for tool_call, result in state.tool_executor.aiter_completed(
                     batch, **execution
@@ -353,10 +363,13 @@ class ReActAgent(BaseAgent):
                 run_control,
                 state.steps,
                 state.task_message_start,
+                state.loaded_tools,
+                self._tool_executor,
             )
             finalized = state.tool_executor.finalize_group(
                 tool_calls, results_by_id, **execution
             )
+            self._collect_loaded_tools(state, tool_calls, finalized)
             self._append_tool_results(state.messages, tool_calls, finalized)
             self._checkpoint_state(state, run_control)
             for tool_call in tool_calls:
@@ -382,6 +395,8 @@ class ReActAgent(BaseAgent):
                 run_control,
                 state.steps,
                 state.task_message_start,
+                state.loaded_tools,
+                self._tool_executor,
             )
             batch_results = {
                 tool_call.id: result
@@ -398,6 +413,8 @@ class ReActAgent(BaseAgent):
             run_control,
             state.steps,
             state.task_message_start,
+            state.loaded_tools,
+            self._tool_executor,
         )
         finalized = state.tool_executor.finalize_group(
             tool_calls, results_by_id, **execution
@@ -421,6 +438,8 @@ class ReActAgent(BaseAgent):
                 run_control,
                 state.steps,
                 state.task_message_start,
+                state.loaded_tools,
+                self._tool_executor,
             )
             batch_results: dict[str, ToolExecutionResult] = {}
             async for tool_call, result in state.tool_executor.aiter_completed(
@@ -436,6 +455,8 @@ class ReActAgent(BaseAgent):
             run_control,
             state.steps,
             state.task_message_start,
+            state.loaded_tools,
+            self._tool_executor,
         )
         finalized = state.tool_executor.finalize_group(
             tool_calls, results_by_id, **execution
@@ -549,6 +570,8 @@ class ReActAgent(BaseAgent):
         run_control: AgentRunControl | None,
         step: int,
         task_message_start: int,
+        loaded_tools: list[str],
+        tool_executor: BaseToolExecutor,
     ) -> dict[str, object]:
         return {
             "task_id": (
@@ -561,7 +584,34 @@ class ReActAgent(BaseAgent):
             "task_messages": tuple(
                 deepcopy(messages[task_message_start:])
             ),
+            "loaded_tools": loaded_tools,
+            "tool_executor": tool_executor,
         }
+
+    def _collect_loaded_tools(
+        self,
+        state: _RunState,
+        tool_calls: list[ToolCall],
+        finalized: dict[str, ToolExecutionResult],
+    ) -> None:
+        executable_names: set[str] | None = None
+        for tool_call in tool_calls:
+            loaded = finalized[tool_call.id].metadata.get("tools_loaded", [])
+            if not isinstance(loaded, list):
+                continue
+            if loaded and executable_names is None:
+                executable_names = {
+                    definition.name
+                    for definition in self._tool_executor.definitions()
+                }
+            for name in loaded:
+                if (
+                    isinstance(name, str)
+                    and executable_names is not None
+                    and name in executable_names
+                    and name not in state.loaded_tools
+                ):
+                    state.loaded_tools.append(name)
 
     @staticmethod
     def _tool_result_message(

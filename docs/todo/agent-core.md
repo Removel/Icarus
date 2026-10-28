@@ -258,8 +258,8 @@ Request Assembler 与 Wire Budget → Redirect → HITL 与 Effect Journal → �
   SessionRuntime 启动后生效。
 - [x] 明确快照持有本次 Run 允许的 Tool 定义和执行对象；第一阶段 Runtime 运行中不支持
   Plugin 卸载或重启，名称冲突在 READY 前处理，资源由所属 Plugin 在退出阶段清理。
-- [x] 当前不实现同一个 Run 内的 Tool 热加载、热卸载和替换；未来只有在出现明确场景后
-  才重新评估。
+- [x] 当前不实现同一个 Run 内的 Registry 热加载、热卸载和替换；`tool_search` / `tool_execute`
+  只调整延迟工具的 Run 内执行门控，不改变冻结的 Tool 定义数组或 Runtime 拓扑。
 - [x] 完成 Tool 名称冲突和基础形式校验、Runtime READY 前冻结、单次 Run Tool 快照与显式
   allowlist，并支持按 Tool 声明组织并发批次、保持结果顺序、传播异步取消和清理 Bash 子进程。
 - [ ] 根据真实调用方继续补齐通用 Tool 权限与安全策略、全局并发/资源上限，以及无法强制终止的

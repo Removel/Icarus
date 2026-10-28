@@ -23,6 +23,9 @@ from icarus.core.tools import (
     ToolExecutor,
     ToolRegistry,
 )
+from icarus.core.tools.tool_execute import ToolExecuteTool
+from icarus.core.tools.tool_search import ToolSearchTool
+from icarus.core.tools.tool_surface import ToolSurfaceCatalog
 from icarus.core.llm import BaseLLM, InvalidToolCallArgumentsError
 from icarus.core.models.messages import (
     LLMStreamChunk,
@@ -114,6 +117,70 @@ def final_stream():
             finish_reason="stop",
         ),
     ]
+
+
+def make_surface_agent(streams):
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    catalog = ToolSurfaceCatalog.build([("echo", "alpha")], registry)
+    registry.register(ToolSearchTool(catalog))
+    registry.register(ToolExecuteTool(registry))
+    llm = StreamQueueLLM(streams)
+    return ReActAgent("thinking", llm, ToolExecutor(registry)), llm
+
+
+def surface_stream(call_id, name, arguments):
+    return [
+        LLMStreamChunk(
+            tool_calls=[ToolCall(call_id, name, arguments)],
+            finish_reason="tool_call",
+        )
+    ]
+
+
+def run_surface_agent(agent, method):
+    arguments = {
+        "system_prompt": "",
+        "history_messages": [],
+        "input_prompt": "hello",
+        "tools": ["tool_search", "tool_execute"],
+    }
+    if method == "stream":
+        return list(agent.stream(**arguments))
+
+    async def collect():
+        return [event async for event in agent.astream(**arguments)]
+
+    return asyncio.run(collect())
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+def test_stream搜索后分发执行且定义数组冻结(method):
+    agent, llm = make_surface_agent(
+        [
+            surface_stream("search-1", "tool_search", {"query": "alpha"}),
+            surface_stream(
+                "execute-1",
+                "tool_execute",
+                {"name": "echo", "arguments": {"value": "hello"}},
+            ),
+            final_stream(),
+        ]
+    )
+
+    events = run_surface_agent(agent, method)
+
+    completed = [
+        event for event in events if isinstance(event, AgentToolCompletedEvent)
+    ]
+    assert completed[0].result.success is True
+    assert completed[1].result.output == {"echo": "hello"}
+    assert len(llm.calls) == 3
+    for _, definitions in llm.calls:
+        assert [definition.name for definition in definitions] == [
+            "tool_search",
+            "tool_execute",
+        ]
 
 
 def test_stream_完成多轮工具调用且将reasoning作为专用事件流出():

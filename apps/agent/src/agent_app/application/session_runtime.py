@@ -15,6 +15,9 @@ from icarus.core.run_control import TaskChannelRegistry
 from icarus.runtime.assets import PersistenceRuntime
 from icarus.core.identity import SessionIdentity
 from icarus.core.tools import ToolRegistry
+from icarus.core.tools.tool_execute import ToolExecuteTool
+from icarus.core.tools.tool_search import ToolSearchTool
+from icarus.core.tools.tool_surface import ToolSurfaceCatalog
 from agent_app.config import ConfigModel
 from icarus.core.models.messages import Message
 from icarus.core.runtime_update import RuntimeUpdate
@@ -58,6 +61,9 @@ class SessionRuntime(SessionHost):
         )
         self.task_channels = TaskChannelRegistry(max_steps=config.agent.max_steps)
         self.tool_registry = ToolRegistry()
+        self.tool_search = ToolSearchTool()
+        self.tool_execute = ToolExecuteTool()
+        self.tool_registry.register_many([self.tool_search, self.tool_execute])
         self.plugin_manager = PluginManager(
             hook_dispatcher=HookDispatcher(self.hook_registry),
         )
@@ -196,6 +202,13 @@ class SessionRuntime(SessionHost):
     async def _finalize_links(self, host):
         from agent_app.plugins.blackboard.plugin import BlackboardPlugin
         from agent_app.plugins.prompt.plugin import PromptPlugin
+        if host.graph_snapshot is None:
+            raise RuntimeError("Runtime graph snapshot is unavailable")
+        catalog = ToolSurfaceCatalog.build(
+            host.graph_snapshot.tools, self.tool_registry
+        )
+        self.tool_search.bind_catalog(catalog)
+        self.tool_execute.bind_registry(self.tool_registry)
         active = set(host.graph.registrations)
         prompt = next(r.plugin for r in host.graph.registrations.values() if isinstance(r.plugin, PromptPlugin))
         boards = [r.plugin for r in host.graph.registrations.values() if isinstance(r.plugin, BlackboardPlugin)]

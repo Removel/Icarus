@@ -27,6 +27,7 @@ from icarus.core.tools.result_budget import (
 )
 from icarus.core.tools.result_store import ToolResultStore
 from icarus.core.tools.tool_registry import ToolRegistry
+from icarus.core.tools.tool_execute import ToolExecuteTool
 from icarus.core.tools.types import ToolExecutionResult
 from icarus.core.models.messages import Message, ToolCall, ToolDefinition
 
@@ -380,6 +381,8 @@ class ToolExecutor(BaseToolExecutor):
         run_id: str | None = None,
         step: int | None = None,
         task_messages: tuple[Message, ...] = (),
+        loaded_tools: list[str] | None = None,
+        tool_executor: BaseToolExecutor | None = None,
     ) -> ToolExecutionResult:
         try:
             prepared = self.policy.prepare(tool_call.arguments)
@@ -406,6 +409,13 @@ class ToolExecutor(BaseToolExecutor):
                 task_messages=_copy_messages(task_messages),
                 timeout_seconds=prepared.budget.timeout_seconds,
             )
+            if isinstance(tool, ToolExecuteTool):
+                execution.update(
+                    loaded_tools=loaded_tools,
+                    tool_executor=tool_executor,
+                    tool_call_id=tool_call.id,
+                    execution_control=tool_call.arguments.get("_execution"),
+                )
             result = tool.invoke(prepared.arguments, **execution)
         except Exception as error:
             logger.exception(
@@ -416,7 +426,12 @@ class ToolExecutor(BaseToolExecutor):
             result = ToolExecutionResult(success=False, error=str(error))
 
         normalized = self._normalize_result(tool_call, result)
-        if self.result_transform is not None and normalized.metadata.get("disposition") not in {"timed_out", "budget_exhausted"}:
+        if (
+            not isinstance(tool, ToolExecuteTool)
+            and self.result_transform is not None
+            and normalized.metadata.get("disposition")
+            not in {"timed_out", "budget_exhausted"}
+        ):
             normalized = self.result_transform(normalized)
         return self._with_budget_metadata(
             normalized,
@@ -432,6 +447,8 @@ class ToolExecutor(BaseToolExecutor):
         run_id: str | None = None,
         step: int | None = None,
         task_messages: tuple[Message, ...] = (),
+        loaded_tools: list[str] | None = None,
+        tool_executor: BaseToolExecutor | None = None,
     ) -> ToolExecutionResult:
         try:
             prepared = self.policy.prepare(tool_call.arguments)
@@ -460,6 +477,13 @@ class ToolExecutor(BaseToolExecutor):
                 task_messages=_copy_messages(task_messages),
                 timeout_seconds=prepared.budget.timeout_seconds,
             )
+            if isinstance(tool, ToolExecuteTool):
+                execution.update(
+                    loaded_tools=loaded_tools,
+                    tool_executor=tool_executor,
+                    tool_call_id=tool_call.id,
+                    execution_control=tool_call.arguments.get("_execution"),
+                )
             if use_sync_implementation:
                 result = await asyncio.to_thread(
                     tool.invoke, prepared.arguments, **execution
@@ -499,7 +523,11 @@ class ToolExecutor(BaseToolExecutor):
             result = ToolExecutionResult(success=False, error=str(error))
 
         normalized = self._normalize_result(tool_call, result)
-        if normalized.metadata.get("disposition") not in {"timed_out", "budget_exhausted"}:
+        if (
+            not isinstance(tool, ToolExecuteTool)
+            and normalized.metadata.get("disposition")
+            not in {"timed_out", "budget_exhausted"}
+        ):
             if self.async_result_transform is not None:
                 normalized = await self.async_result_transform(normalized)
             elif self.result_transform is not None:
