@@ -11,8 +11,12 @@
 }
 
 .user-message {
-    border-left: thick $icarus-user;
-    padding-left: 1;
+    padding: 0;
+}
+
+.user-message .message-body-scroll {
+    background: $icarus-surface;
+    padding: 0 2;
 }
 
 .user-message .message-label {
@@ -20,8 +24,7 @@
 }
 
 .assistant-message {
-    border-left: thick $icarus-accent;
-    padding-left: 1;
+    padding: 0;
 }
 
 .assistant-message .message-label {
@@ -108,7 +111,8 @@
 
 .correction-content {
     color: $icarus-user;
-    padding-left: 2;
+    background: $icarus-surface;
+    padding: 0 2;
 }
 
 .error-message {

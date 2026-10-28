@@ -16,7 +16,7 @@ class UserMessage(Vertical):
         self.message_text = text
 
     def compose(self) -> ComposeResult:
-        yield Label("You", classes="message-label")
+        yield Label("❯ You", classes="message-label")
         with LocalScroll(classes="message-body-scroll"):
             yield Static(self.message_text, markup=False, classes="message-content")
 
@@ -79,7 +79,7 @@ class AssistantMessage(_StreamingMessage):
         super().__init__(classes="message assistant-message")
 
     def compose(self) -> ComposeResult:
-        yield Label("Icarus", classes="message-label")
+        yield Label("✦ Icarus", classes="message-label")
         yield StreamingMarkdown("", classes="assistant-markdown")
 
 
@@ -101,7 +101,7 @@ class UserCorrectionBlock(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            f"Added by you before step {self.applied_before_step}",
+            f"❯ Added by you before step {self.applied_before_step}",
             markup=False,
             classes="correction-label",
         )
