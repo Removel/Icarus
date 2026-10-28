@@ -36,6 +36,21 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def environment_file(repo_root: Path, environ: Mapping[str, str]) -> Path:
+    """An explicit envfile replaces (never supplements) the repository dotenv."""
+    explicit = environ.get("ICARUS_ENV_FILE")
+    path = Path(explicit).expanduser() if explicit else repo_root / ".env"
+    if not path.is_absolute():
+        path = repo_root / path
+    if explicit and not path.is_file():
+        raise ValueError("ICARUS_ENV_FILE does not name a readable file")
+    return path
+
+
+def merged_environment(repo_root: Path, environ: Mapping[str, str]) -> dict[str, str]:
+    return {**read_env_file(environment_file(repo_root, environ)), **environ}
+
+
 def expand_braced_variables(value: str, values: Mapping[str, str]) -> str:
     """Expand ${NAME} references while leaving unknown references visible."""
 

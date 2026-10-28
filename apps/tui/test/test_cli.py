@@ -92,9 +92,12 @@ def test_parse_args_help不初始化runtime(monkeypatch, capsys):
 def test_import_main首帧模块边界不加载agent与provider重依赖():
     project_root = Path(__file__).resolve().parents[3]
     forbidden = [
-        "apps.agent.src.application.agent_runtime_service",
-        "apps.agent.src.application.agent_runtime",
-        "apps.agent.src.agent_orchestration.agent_factory",
+        "agent_app",
+        "icarus",
+        "agent_app.application.controllers.session_api",
+        "agent_app.application.agent_runtime_service",
+        "agent_app.application.agent_runtime",
+        "agent_app.assembly",
         "openai",
         "anthropic",
         "onnxruntime",

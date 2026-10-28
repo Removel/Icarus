@@ -24,3 +24,4 @@ fi
 "$app_dir/.venv/bin/python" -m pip install \
   -r "$agent_requirements" \
   -r "$requirements"
+"$app_dir/.venv/bin/python" -m pip install --no-deps -e "$app_dir/../agent"

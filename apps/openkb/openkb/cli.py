@@ -1336,14 +1336,17 @@ def _resolve_doc_identifier(registry, identifier: str) -> list[tuple[str, dict]]
     """Find registry entries matching ``identifier``.
 
     Match precedence (returns immediately on the first non-empty bucket):
-      1. Exact match on ``metadata['name']`` (the original filename).
-      2. Exact match on ``metadata['doc_name']`` (the slug).
-      3. Case-insensitive substring match on either field.
+      1. Exact registry hash (stable document ID).
+      2. Exact match on ``metadata['name']`` (the original filename).
+      3. Exact match on ``metadata['doc_name']`` (the slug).
+      4. Case-insensitive substring match on either field.
 
     Returns ``[(file_hash, metadata), ...]``. Callers handle the empty,
     single, and multi-match cases.
     """
     entries = registry.all_entries()
+    if identifier in entries:
+        return [(identifier, entries[identifier])]
 
     exact_name = [(h, m) for h, m in entries.items() if m.get("name") == identifier]
     if exact_name:
@@ -3669,6 +3672,8 @@ def get_kb_list(kb_dir: Path) -> dict[str, Any]:
             {
                 "hash": file_hash,
                 "name": meta.get("name", "unknown"),
+                "doc_name": meta.get("doc_name") or Path(meta.get("name", "unknown")).stem,
+                "source_path": meta.get("source_path"),
                 "type": raw_type,
                 "display_type": _display_type(raw_type),
                 "pages": pages if pages not in ("", 0) else None,

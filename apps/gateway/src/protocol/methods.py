@@ -8,10 +8,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, ValidationError
+from pydantic import Field, StrictStr, ValidationError
 
-from apps.agent.src.application import (
+from agent_app.application import (
     AgentRuntime,
+    PromptError,
     AgentRuntimeStoppingError,
     ConversationHistoryCorruptError,
     InvalidResourceError,
@@ -21,6 +22,7 @@ from apps.agent.src.application import (
     SessionNotFoundError,
     SubmissionConflictError,
 )
+from apps.gateway.src.protocol.responses import SessionStatusModel, TaskStatusModel, UnloadResultModel
 from apps.gateway.src.protocol.errors import (
     BUSINESS_ERROR,
     INTERNAL_ERROR,
@@ -36,6 +38,7 @@ from apps.gateway.src.protocol.models import (
 from packages.gateway_protocol import (
     DiscardEmptySessionResultModel,
     SessionListModel,
+    SessionHistoryModel,
     SessionSummaryModel,
 )
 
@@ -44,11 +47,17 @@ class WorkspaceParams(StrictModel):
     workspace_path: str = Field(min_length=1, pattern=r".*\S.*")
 
 
+class MemoryContextParams(StrictModel):
+    workspace_path: str | None = Field(default=None, min_length=1, pattern=r".*\S.*")
+
+
 class SessionParams(WorkspaceParams):
     session_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9._-]+$")
 
 
 class CreateSessionParams(WorkspaceParams):
+    instructions: StrictStr | None = None
+    load_runtime: bool = True
     session_id: str | None = Field(
         default=None, min_length=1, pattern=r"^[A-Za-z0-9._-]+$"
     )
@@ -107,10 +116,13 @@ class GatewayMethods:
         subscriptions: set[tuple[str, str]],
     ) -> Any:
         handlers = {
+            "memory.get_context": self._memory_context,
             "runtime.get_status": self._runtime_status,
             "session.create": self._session_create,
             "session.list": self._session_list,
+            "session.generate_title": self._session_generate_title,
             "session.discard_empty": self._session_discard_empty,
+            "session.delete": self._session_delete,
             "session.get": self._session_get,
             "session.submit": self._session_submit,
             "session.steer": self._session_steer,
@@ -134,6 +146,8 @@ class GatewayMethods:
             return await handler(params)
         except GatewayRpcError:
             raise
+        except PromptError as error:
+            raise _business(error.code, str(error)) from None
         except SessionNotFoundError as error:
             raise _business("session_not_found", "Session is not found") from error
         except SessionAlreadyExistsError as error:
@@ -149,8 +163,20 @@ class GatewayMethods:
         except KeyError as error:
             raise _business("task_status_unavailable", "Task status is unavailable") from error
         except Exception as error:
+            cause = error.__cause__
+            while cause is not None:
+                if isinstance(cause, PromptError):
+                    raise _business(cause.code, str(cause)) from None
+                cause = cause.__cause__
             self.logger.exception("Gateway method failed: method=%s", method)
             raise GatewayRpcError(INTERNAL_ERROR, "Internal error") from error
+
+    async def _memory_context(self, params):
+        value = self._validate(MemoryContextParams, params)
+        try:
+            return self.runtime.get_memory_context(value.workspace_path)
+        except ValueError as error:
+            raise GatewayRpcError(INVALID_PARAMS, str(error)) from error
 
     async def _runtime_status(self, params):
         self._validate(StrictModel, params)
@@ -158,12 +184,17 @@ class GatewayMethods:
 
     async def _session_create(self, params):
         value = self._validate(CreateSessionParams, params)
+        try:
+            self.runtime.validate_session_instructions(value.instructions)
+        except PromptError:
+            raise GatewayRpcError(INVALID_PARAMS, "Invalid session instructions") from None
         session_id = await self.runtime.create_session(
-            value.workspace_path, value.session_id
+            value.workspace_path, value.session_id, load_runtime=value.load_runtime,
+            instructions=value.instructions,
         )
-        return _wire(
+        return SessionStatusModel.model_validate(
             await self.runtime.get_session_status(value.workspace_path, session_id)
-        )
+        ).model_dump(mode="json")
 
     async def _session_list(self, params):
         value = self._validate(WorkspaceParams, params)
@@ -177,6 +208,12 @@ class GatewayMethods:
         )
         return result.model_dump(mode="json")
 
+    async def _session_generate_title(self, params):
+        value = self._validate(SessionParams, params)
+        return {"title": await self.runtime.generate_session_title(
+            value.workspace_path, value.session_id
+        )}
+
     async def _session_discard_empty(self, params):
         value = self._validate(SessionParams, params)
         result = await self.runtime.discard_empty_session(
@@ -188,11 +225,14 @@ class GatewayMethods:
 
     async def _session_get(self, params):
         value = self._validate(SessionParams, params)
-        return _wire(
-            await self.runtime.get_session_status(
-                value.workspace_path, value.session_id
-            )
-        )
+        return SessionStatusModel.model_validate(
+            await self.runtime.get_session_status(value.workspace_path, value.session_id)
+        ).model_dump(mode="json")
+
+    async def _session_delete(self, params):
+        value = self._validate(SessionParams, params)
+        result = await self.runtime.delete_session(value.workspace_path, value.session_id)
+        return DiscardEmptySessionResultModel.from_domain(result).model_dump(mode="json")
 
     async def _session_submit(self, params):
         value = self._validate(SubmitParams, params)
@@ -254,40 +294,28 @@ class GatewayMethods:
 
     async def _session_unload(self, params):
         value = self._validate(SessionParams, params)
-        return _wire(
-            await self.runtime.unload_session(
-                value.workspace_path, value.session_id
-            )
-        )
+        return UnloadResultModel.model_validate(
+            await self.runtime.unload_session(value.workspace_path, value.session_id)
+        ).model_dump(mode="json")
 
     async def _task_get(self, params):
         value = self._validate(TaskParams, params)
-        return _wire(
-            self.runtime.get_task_status(
-                value.workspace_path, value.session_id, value.task_id
-            )
-        )
+        return TaskStatusModel.model_validate(
+            self.runtime.get_task_status(value.workspace_path, value.session_id, value.task_id)
+        ).model_dump(mode="json")
 
     async def _session_history(self, params):
         value = self._validate(HistoryParams, params)
-        records, cursor = await self.runtime.get_session_history(
-            value.workspace_path,
-            value.session_id,
-            after_sequence=value.after_sequence,
+        page = await self.runtime.get_session_history_page(
+            value.workspace_path, value.session_id,
+            after_sequence=value.after_sequence, limit=value.limit,
         )
-        page = records[: value.limit]
-        next_after_sequence = (
-            page[-1].sequence if page else value.after_sequence
-        )
-        return {
-            "records": [
-                RuntimeUpdateModel.from_domain(item).model_dump(mode="json")
-                for item in page
-            ],
-            "history_cursor": cursor,
-            "next_after_sequence": next_after_sequence,
-            "has_more": len(records) > len(page),
-        }
+        return SessionHistoryModel(
+            records=tuple(RuntimeUpdateModel.from_domain(item) for item in page.records),
+            history_cursor=page.history_cursor,
+            next_after_sequence=page.next_after_sequence,
+            has_more=page.has_more,
+        ).model_dump(mode="json")
 
     @staticmethod
     def _validate(model, params):

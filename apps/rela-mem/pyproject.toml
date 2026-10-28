@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "icarus-rela-mem"
+version = "0.1.0"
+description = "Standalone person profile and relationship memory service for Icarus"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.8",
+    "uvicorn==0.34.0",
+    "pydantic==2.10.6",
+    "sqlalchemy[asyncio]==2.0.38",
+    "asyncpg==0.30.0",
+    "falkordb==1.4.0",
+    "python-dotenv==1.0.1",
+    "python-ulid==3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx==0.28.1",
+    "pytest==8.3.5",
+    "pytest-asyncio==0.25.3",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["main", "config", "errors"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["api*", "schemas*", "domain*", "repositories*", "utils*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: requires isolated FalkorDB and PostgreSQL instances"]

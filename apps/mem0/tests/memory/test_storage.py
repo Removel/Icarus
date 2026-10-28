@@ -84,6 +84,7 @@ class TestSQLiteManager:
             "is_deleted",
             "actor_id",
             "role",
+            "changes",
         }
         assert columns == expected_columns
 
@@ -299,3 +300,32 @@ class TestSQLiteManager:
         assert msg_count == 0
         assert hist_count == 0
         mgr2.close()
+
+
+def test_history_preserves_attribute_changes(tmp_path):
+    db = SQLiteManager(str(tmp_path / "history.db"))
+    changes = {"expiration_date": {"before": None, "after": "1970-01-01"}}
+    db.add_history("m1", "same", "same", "UPDATE", changes=changes)
+    assert db.get_history("m1")[0]["changes"] == changes
+    reopened = SQLiteManager(str(tmp_path / "history.db"))
+    assert reopened.get_history("m1")[0]["changes"] == changes
+    reopened.close()
+    db.close()
+
+
+def test_attribute_column_migration_keeps_existing_history(tmp_path):
+    path = str(tmp_path / "legacy.db")
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE history (id TEXT PRIMARY KEY, memory_id TEXT, old_memory TEXT, "
+                           "new_memory TEXT, event TEXT, created_at DATETIME, updated_at DATETIME, "
+                           "is_deleted INTEGER, actor_id TEXT, role TEXT)")
+        connection.execute("INSERT INTO history (id, memory_id, new_memory, event) VALUES (?, ?, ?, ?)",
+                           ("original", "m1", "keep this", "ADD"))
+    db = SQLiteManager(path)
+    rows = db.get_history("m1")
+    assert rows[0]["id"] == "original"
+    assert rows[0]["new_memory"] == "keep this"
+    assert rows[0]["changes"] is None
+    db.add_history("m1", "keep this", "keep this", "UPDATE", changes={})
+    assert len(db.get_history("m1")) == 2
+    db.close()

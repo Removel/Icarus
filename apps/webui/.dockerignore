@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/.venv
+test-results
+.env*
+**/*.pem
+**/*.key
+**/*.local.*
+docs
+test

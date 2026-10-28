@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "plugin_id": "agent",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.agent.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [
+    {
+      "capability_id": "task.control",
+      "version": "1.0.0"
+    }
+  ],
+  "provided_tools": [],
+  "published_events": [
+    "agent.text_delta",
+    "agent.thinking_delta",
+    "agent.thinking_completed",
+    "agent.message_completed",
+    "agent.tool_started",
+    "agent.tool_completed",
+    "agent.completed",
+    "task.error",
+    "agent.cancelled",
+    "task.context_input_result",
+    "task.steer_applied",
+    "task.cancel_result"
+  ],
+  "consumed_events": [
+    "context.ready",
+    "task.context_input",
+    "task.cancel_requested"
+  ],
+  "state_scopes": [],
+  "tier": "base",
+  "required_config": [],
+  "optional_consumed_events": [
+    "task.context_input"
+  ]
+}

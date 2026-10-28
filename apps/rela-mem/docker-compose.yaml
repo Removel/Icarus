@@ -1,0 +1,35 @@
+name: icarus-rela-mem
+services:
+  rela-mem:
+    image: ${RELA_MEM_IMAGE:-rela-mem:dev}
+    build: .
+    ports:
+      - "${RELA_MEM_BIND_ADDRESS:-127.0.0.1}:${RELA_MEM_PORT:-8767}:8767"
+    environment:
+      RELA_MEM_CONFIG: /app/config/settings.json
+      RELA_MEM_API_TOKEN: ${RELA_MEM_API_TOKEN:?Set RELA_MEM_API_TOKEN}
+      RELA_MEM_FALKORDB_PASSWORD: ${RELA_MEM_FALKORDB_PASSWORD:?Set RELA_MEM_FALKORDB_PASSWORD}
+      RELA_MEM_PG_PASSWORD: ${RELA_MEM_PG_PASSWORD:?Set RELA_MEM_PG_PASSWORD}
+      RELA_MEM_PG_HOST: ${RELA_MEM_PG_HOST:?Set RELA_MEM_PG_HOST}
+      RELA_MEM_PG_PORT: ${RELA_MEM_PG_PORT:?Set RELA_MEM_PG_PORT}
+      RELA_MEM_PG_DATABASE: ${RELA_MEM_PG_DATABASE:?Set RELA_MEM_PG_DATABASE}
+      RELA_MEM_PG_USER: ${RELA_MEM_PG_USER:?Set RELA_MEM_PG_USER}
+      RELA_MEM_PG_SCHEMA: ${RELA_MEM_PG_SCHEMA:?Set RELA_MEM_PG_SCHEMA}
+      RELA_MEM_FALKORDB_HOST: ${RELA_MEM_FALKORDB_HOST:?Set RELA_MEM_FALKORDB_HOST}
+      RELA_MEM_FALKORDB_PORT: ${RELA_MEM_FALKORDB_PORT:?Set RELA_MEM_FALKORDB_PORT}
+      RELA_MEM_FALKORDB_GRAPH: ${RELA_MEM_FALKORDB_GRAPH:?Set RELA_MEM_FALKORDB_GRAPH}
+    volumes:
+      - type: bind
+        source: ${RELA_MEM_SETTINGS_FILE:-./settings.example.json}
+        target: /app/config/settings.json
+        read_only: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/healthz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [icarus]
+networks:
+  icarus:
+    name: ${ICARUS_NETWORK:-icarus}
+    external: true

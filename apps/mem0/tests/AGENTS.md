@@ -1,24 +1,23 @@
-# Python SDK tests (`tests/`)
+# Python SDK tests
 
-pytest suite for the `mem0/` package.
+This retained pytest suite covers the local `mem0/` package and self-hosted server.
+Use the app's private environment; do not install optional providers into the root.
 
-## Commands
+From the Icarus root:
 
 ```bash
-make install_all    # optional deps; several tests need them
-make test           # pytest tests/
-make test-py-3.9    # pin a Python version (3.9 through 3.12)
-
-pytest tests/llms/test_openai.py::test_generate_response   # single test
+icarus install mem0 --dev
+make test-mem0        # offline memory contracts and script regressions
+make test-mem0-full   # complete retained suite; reports actual failures
 ```
 
-## Conventions
+Optional-provider/server prerequisites are described in [README](../README.md).
+Missing imports are an incomplete environment, not a passing suite. The migration
+regression uses `fixtures/oss-to-platform-migrate.sh` with temporary test data only.
 
-- Files are named `test_<module>.py`.
-- Provider tests mirror the source tree: `tests/<category>/<provider_name>/`.
-- pytest-mock for mocks, pytest-asyncio for the async surface.
-- Ruff line length **120**, matching `mem0/`. See [`../mem0/AGENTS.md`](../mem0/AGENTS.md).
-- Mock the provider SDK, never the code under test. A test that asserts the implementation back at itself is worse than no test.
-- Bug fixes need a regression test that fails without the fix. Write it first and watch it fail.
-
-Tests for other packages live with those packages: `mem0-ts/` (jest), `cli/python/tests/` (pytest), `cli/node/` (vitest), and each directory under `integrations/`.
+- Name files `test_<module>.py` and mirror provider source categories.
+- Use pytest-mock and pytest-asyncio where needed and native assertions.
+- Match the SDK's Ruff line length 120 and [local conventions](../mem0/AGENTS.md).
+- Mock external provider SDKs, not the behavior under test.
+- Bug fixes require a regression test observed failing before the fix.
+- Keep existing full-suite assertions; compare failures with the same baseline/environment.

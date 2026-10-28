@@ -208,3 +208,16 @@ TUI 通过 `/resume` 恢复目标 Session 前会读取 `SessionStatus`。AgentRu
 - 空 Session 只能通过受控接口在无工作时软删除；
 - 原有创建、恢复、提交、卸载和历史读取行为不变；
 - 不向 ReActAgent、Blackboard 或 Plugin Runtime 引入 Session UI 语义。
+
+
+## WebUI 新建与普通会话删除
+
+`create_session` 增加关键字参数 `load_runtime: bool = True`。默认加载行为保持不变；`False` 只创建 SessionStore 记录与 unloaded Entry，首次 submit 复用现有 single-flight 加载机制，避免打开空白对话时等待插件初始化。
+
+`delete_session(workspace_path, session_id)` 与 `discard_empty_session` 复用 `_delete_session`、mutation_lock 和 discarding 保护，前者允许非空会话。正在加载、卸载或 snapshot.has_work 的会话返回 busy。已加载且空闲的会话先正常停止，随后写入 SessionStore Tombstone 并移除 Registry Entry。记录和文件保留，后续列表、历史与 submit 按已删除会话处理；并发等待中的 submit 不会复活 Entry。存储层 `soft_delete_session` 在事务内设置 deleted_at/delete_reason，`soft_delete_empty_session` 通过 only_empty=True 保留原空会话检查。
+
+## 会话标题与时间
+
+SessionSummary 增加可选 title、created_at、updated_at；first_user_input 保留首条用户输入摘要。标题使用独立 session_titles 表，与现有 sessions 复合外键关联；启动 create_all 为旧数据库增加新表，无需修改既有列。列表通过 outer join 读取标题，仍按公共活动时间排序。
+
+generate_session_title 在应用层使用每会话 title_lock 合并并发生成请求，复用已保存标题。首次生成只读取首条持久化用户文本，通过 session_title 组件与 LLMFactory 的 perception 模型调用统一 ainvoke，20 秒超时，始终关闭客户端。输入截取 4000 字符，输出仅取首行并限制 80 字符；空输入不生成，失败返回 None，客户端可继续显示原摘要。标题保存不会增加 Conversation 记录或改变对话时间，不加载 SessionRuntime、不修改 ReActAgent 或 Plugin。

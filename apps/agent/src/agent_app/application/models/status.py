@@ -1,0 +1,85 @@
+"""Read-only application runtime status projections."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal, TypeAlias
+from icarus.core.session import SessionRuntimeSnapshot as SessionRuntimeSnapshot
+
+
+SessionLifecycle: TypeAlias = Literal[
+    "loading",
+    "ready",
+    "running",
+    "unloading",
+    "unloaded",
+    "failed",
+]
+
+
+@dataclass(frozen=True)
+class SessionStatus:
+    workspace_key: str
+    session_id: str
+    lifecycle: SessionLifecycle
+    active_task_ids: tuple[str, ...] = ()
+    queued_task_count: int = 0
+    pending_event_count: int = 0
+    pending_plugin_event_count: int = 0
+    background_work_count: int = 0
+    last_activity_at: datetime | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    session_id: str
+    first_user_input: str
+    title: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+DiscardSessionStatus: TypeAlias = Literal[
+    "discarded",
+    "not_empty",
+    "busy",
+    "not_found",
+]
+
+
+@dataclass(frozen=True)
+class DiscardSessionResult:
+    workspace_key: str
+    session_id: str
+    status: DiscardSessionStatus
+
+
+@dataclass(frozen=True)
+class UnloadResult:
+    workspace_key: str
+    session_id: str
+    status: Literal["unloaded", "already_unloaded", "busy", "not_found"]
+
+
+TaskLifecycle: TypeAlias = Literal[
+    "accepted",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+]
+
+
+@dataclass(frozen=True)
+class TaskStatus:
+    workspace_key: str
+    session_id: str
+    task_id: str
+    lifecycle: TaskLifecycle
+    queue_position: int | None = None
+    run_id: str | None = None
+    error_code: str | None = None
+    updated_at: datetime | None = None

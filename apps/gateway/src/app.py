@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from icarus.runtime.fanout import DEFAULT_QUEUE_CAPACITY
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
 
-from apps.agent.src.application import AgentRuntime
+from agent_app.application import AgentRuntime
 from apps.gateway.src.connection import (
     ConnectionHub,
     GatewayConnection,
@@ -18,7 +20,7 @@ from apps.gateway.src.protocol.methods import GatewayMethods
 def create_app(
     runtime: AgentRuntime | None = None,
     *,
-    connection_queue_capacity: int = 4096,
+    connection_queue_capacity: int | None = None,
 ) -> FastAPI:
     runtime = runtime or AgentRuntime()
     hub = ConnectionHub()
@@ -47,7 +49,9 @@ def create_app(
     @app.websocket("/rpc")
     async def rpc(websocket: WebSocket):
         connection = GatewayConnection(
-            websocket, methods, send_capacity=connection_queue_capacity
+            websocket, methods, send_capacity=(connection_queue_capacity
+                if connection_queue_capacity is not None
+                else getattr(runtime, "update_queue_capacity", DEFAULT_QUEUE_CAPACITY))
         )
         hub.add(connection)
         try:

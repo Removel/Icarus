@@ -1,5 +1,10 @@
 # Plugin Runtime Current State｜插件运行时当前状态与事件流
 
+> 2026-10-17：本文中的插件对象能力、旧目录与观测Hook路径已被框架业务解耦替代；当前结构见
+> [框架业务解耦当前架构](../2026-10-16-framework-business-decoupling/arch.md)。
+> 普通Event按来源订阅、串行worker、RuntimeUpdate对外投影及模型/展示历史分工仍保留。
+> 下文图中的旧服务名称和工具/插件清单不应作为当前装配入口。
+
 > 本文的 Runtime 内部 EventBus 与 Plugin 拓扑仍是当前实现事实；其中 AgentRuntimeService 和
 > OutputBridge 对外链路属于迁移前历史。当前应用入口是 AgentRuntime，内部 Event 由
 > RuntimeUpdatePlugin 投影为公共 RuntimeUpdate，Gateway 和 TUI 不直接消费 Plugin Event。

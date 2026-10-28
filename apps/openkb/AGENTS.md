@@ -6,14 +6,14 @@ humans steer, agents execute. Optimize changes for agent legibility.
 
 ## Read next
 - `docs/golden-principles.md` — mechanical rules to follow (enforced where possible).
-- `docs/internal/superpowers/{specs,plans}/` — design history & plans *(maintainer-local, not in git)*.
+- `docs/spec/` — Icarus feature design and implementation plans.
 - `README.md` — user-facing overview and commands.
 
 ## Dev commands
-- Install: `pip install -e ".[dev]"`  (or `uv sync --extra dev` — plain `uv sync` skips the dev tools)
-- Run CLI: `openkb <command>`  (entry point: `openkb.cli:cli`)
-- Test: `pytest`
-- Lint/format/types: `ruff check .` · `ruff format .` · `mypy openkb`
+- Install: `icarus install openkb --dev` from the Icarus root (private locked environment).
+- Run CLI: `.venv/bin/openkb <command>` from this App, or use managed Compose exec.
+- Test: `make test-openkb` / `make test-openkb-full` from the Icarus root.
+- Lint/format/types: `.venv/bin/ruff check .` · `.venv/bin/ruff format --check .` · `.venv/bin/mypy openkb`.
 
 ## Module map (openkb/)
 - `cli.py` — Click CLI entry point & command wiring *(large; see tech-debt)*.

@@ -1,0 +1,9 @@
+{
+  "server": {"host": "0.0.0.0", "port": 8767},
+  "identity": {
+    "user": {"person_id": "p_user", "display_name": "我"},
+    "agent": {"person_id": "icarus", "display_name": "Icarus"}
+  },
+  "falkordb": {"host": "127.0.0.1", "port": 16379, "graph": "rela_mem"},
+  "postgres": {"host": "127.0.0.1", "port": 15432, "database": "rela_mem", "user": "rela_mem", "schema": "rela_mem"}
+}

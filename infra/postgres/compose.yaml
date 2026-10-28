@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${ICARUS_POSTGRES_USER:?Set ICARUS_POSTGRES_USER}
+      POSTGRES_DB: ${ICARUS_POSTGRES_DATABASE:?Set ICARUS_POSTGRES_DATABASE}
+      POSTGRES_PASSWORD: ${RELA_MEM_PG_PASSWORD:?Set RELA_MEM_PG_PASSWORD}
+    ports:
+      - "${ICARUS_POSTGRES_BIND_HOST:-127.0.0.1}:${ICARUS_POSTGRES_PORT:?Set ICARUS_POSTGRES_PORT}:5432"
+    volumes:
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/rela-mem/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [icarus]
+networks:
+  icarus:
+    name: ${ICARUS_NETWORK:-icarus}
+    external: true

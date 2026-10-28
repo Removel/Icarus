@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "plugin_id": "skill",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.skill.factory:create_plugin",
+  "python_requires": [
+    "PyYAML>=6,<7"
+  ],
+  "required_capabilities": [
+    {
+      "capability_id": "state.store",
+      "version_spec": ">=1,<2"
+    },
+    {
+      "capability_id": "conversation.read",
+      "version_spec": ">=1,<2"
+    }
+  ],
+  "provided_capabilities": [],
+  "provided_tools": [
+    "skills_list",
+    "skill_search",
+    "skill_produce",
+    "skill_evolve",
+    "skill_job_status"
+  ],
+  "published_events": [
+    "task.context_input"
+  ],
+  "consumed_events": [
+    "task.context_input_result"
+  ],
+  "state_scopes": [
+    "workspace",
+    "session"
+  ],
+  "workspace_state_version": 1,
+  "session_state_version": 1,
+  "tier": "core",
+  "required_config": []
+}

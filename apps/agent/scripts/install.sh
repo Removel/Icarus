@@ -21,3 +21,4 @@ if [ ! -x "$app_dir/.venv/bin/python" ]; then
 fi
 
 "$app_dir/.venv/bin/python" -m pip install -r "$requirements"
+"$app_dir/.venv/bin/python" -m pip install --no-deps -e "$app_dir"

@@ -1,0 +1,50 @@
+{
+  "schema_version": 2,
+  "plugin_id": "blackboard",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.blackboard.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [
+    {
+      "capability_id": "prompt.read",
+      "version_spec": ">=1,<2"
+    },
+    {
+      "capability_id": "state.store",
+      "version_spec": ">=1,<2"
+    }
+  ],
+  "provided_capabilities": [
+    {
+      "capability_id": "conversation.read",
+      "version": "1.0.0"
+    }
+  ],
+  "provided_tools": [
+    "blackboard_list",
+    "blackboard_read"
+  ],
+  "published_events": [
+    "context.ready",
+    "context.compacted",
+    "task.error"
+  ],
+  "consumed_events": [
+    "context.contribution",
+    "input.user_input",
+    "input.finished",
+    "context.region_updated",
+    "agent.completed",
+    "task.error",
+    "agent.cancelled"
+  ],
+  "state_scopes": [
+    "session"
+  ],
+  "session_state_version": 1,
+  "tier": "base",
+  "required_config": [],
+  "optional_consumed_events": [
+    "context.region_updated"
+  ]
+}

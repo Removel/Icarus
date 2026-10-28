@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "plugin_id": "persistence",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.persistence.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [
+    {
+      "capability_id": "state.store",
+      "version": "1.0.0"
+    }
+  ],
+  "provided_tools": [],
+  "published_events": [],
+  "consumed_events": [],
+  "state_scopes": [],
+  "tier": "base",
+  "required_config": []
+}

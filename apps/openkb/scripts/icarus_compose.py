@@ -14,18 +14,17 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "icarus"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from environment import read_env_file
+from environment import environment_file, merged_environment
 
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[3]
-    env_file = repo_root / ".env"
+    env_file = environment_file(repo_root, os.environ)
     compose_file = repo_root / "apps" / "openkb" / "docker-compose.yaml"
-    values = read_env_file(env_file)
-    environment = {**os.environ, **values}
+    environment = merged_environment(repo_root, os.environ)
     action = sys.argv[1] if len(sys.argv) > 1 else ""
     passive = action in {
-        "build", "down", "stop", "logs", "ps", "kill", "rm"
+        "build", "pull", "down", "stop", "logs", "ps", "kill", "rm"
     }
     if passive:
         environment["ICARUS_DATA_DIR"] = environment.get(
@@ -91,11 +90,10 @@ def _run_compose(
         raise SystemExit("OpenKB requires Docker with the compose plugin.")
     command = [compose] if compose is not None else [docker, "compose"]
     env_args = ["--env-file", str(env_file) if env_file.is_file() else os.devnull]
+    scope = ["-p", environment.get("COMPOSE_PROJECT_NAME", "openkb-dev"),
+             "-f", environment.get("COMPOSE_FILE", str(compose_file))]
     completed = subprocess.run(
-        [
-            *command, *env_args, "-f",
-            str(compose_file), *sys.argv[1:],
-        ],
+        [*command, *env_args, *scope, *sys.argv[1:]],
         env=environment,
         check=False,
     )

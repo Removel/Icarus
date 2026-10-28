@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "plugin_id": "runtime-update",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.runtime_update.factory:create_plugin",
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [],
+  "provided_tools": [],
+  "published_events": [],
+  "consumed_events": [
+    "input.queued",
+    "input.started",
+    "input.finished",
+    "context.compacted",
+    "task.steer_applied",
+    "agent.text_delta",
+    "agent.thinking_delta",
+    "agent.thinking_completed",
+    "agent.message_completed",
+    "agent.tool_started",
+    "agent.tool_completed",
+    "agent.completed",
+    "task.error",
+    "process.updated"
+  ],
+  "state_scopes": [],
+  "tier": "base",
+  "required_config": [],
+  "optional_consumed_events": [
+    "process.updated"
+  ]
+}

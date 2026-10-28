@@ -180,6 +180,16 @@ flowchart TD
 
 一轮 LLM 返回 ToolCall 后，只表示当前 LLM 对话轮次暂停，不表示整个 Agent 调用结束。Agent 执行本地工具、写回结果后，再发起下一轮 LLM 对话。
 
+### 工具暴露与冻结快照
+
+当前实现只在每次 Run 的 `_create_run_state` 中调用一次 `ToolExecutor.snapshot(tools)` 并生成
+`tool_definitions`，后续 LLM Step 复用这份定义。工具面延迟加载设计将这一行为明确强化为
+**单次 Run 内冻结快照**：不得因工具结果、加载状态或上下文变化而重建、增删或重排定义数组。
+
+默认 Session 的延迟加载通过 `tool_search` / `tool_execute` 双桥调整 Run 内执行门控，
+不改变冻结数组；可见性变化也不等于 Registry 可执行性变化。详见
+[Tool Surface Lazy Loading Architecture](apps/agent/docs/spec/2026-10-21-tool-surface-lazy-loading/arch.md)。
+
 ### 多 ToolCall
 
 同一轮返回的多个 ToolCall 默认并发执行。

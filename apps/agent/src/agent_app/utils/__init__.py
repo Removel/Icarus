@@ -1,0 +1,1 @@
+"""Shared stateless application utilities."""

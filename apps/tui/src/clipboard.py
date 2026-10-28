@@ -1,9 +1,51 @@
-"""Platform-dispatched clipboard image reading for the TUI."""
+"""Platform-dispatched clipboard reading for the TUI."""
 
 import base64
+import ctypes
 from dataclasses import dataclass
 import subprocess
 import sys
+
+
+def read_clipboard_text() -> str | None:
+    """Read Windows Unicode text; None retains the Textual clipboard fallback."""
+    if sys.platform != "win32":
+        return None
+
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+    user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    kernel32.GlobalLock.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+    if not user32.OpenClipboard(None):
+        raise OSError("Windows clipboard is currently unavailable")
+    try:
+        if not user32.IsClipboardFormatAvailable(13):  # CF_UNICODETEXT
+            return ""
+        handle = user32.GetClipboardData(13)
+        if not handle:
+            raise OSError("Unable to read Windows clipboard text")
+        pointer = kernel32.GlobalLock(handle)
+        if not pointer:
+            raise OSError("Unable to lock Windows clipboard text")
+        try:
+            return ctypes.wstring_at(pointer).replace("\r\n", "\n")
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
 
 
 @dataclass(frozen=True)

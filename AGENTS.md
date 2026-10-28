@@ -27,6 +27,12 @@ enters Git and keep the filename stable afterward. If a cross-application requir
 into app-owned parts, keep each part in the corresponding application's docs instead. Do not put a
 single-application spec in the root `spec/`.
 
+Repository-owned infrastructure that does not belong to an application uses
+`docs/spec/YYYY-MM-DD-<feature>/` with the same `arch.md`, `plan.md`, and optional
+`plan-<phase-or-purpose>.md` convention. Root cross-application specs keep only shared
+requirements, boundaries, dependencies, and links to the owning feature documents; do
+not duplicate application implementation details in the root entry.
+
 Architecture documents describe the current source-code architecture and system design. They are
 derived from the implementation and do not constrain how source code may evolve. Before changing or
 writing architecture documentation, inspect the relevant code and tests. When implementation and
@@ -39,7 +45,7 @@ corresponding document. Explicit repository rules in this file still apply.
 - Model-vendor differences stay in `model_provider`; upper layers must not branch on OpenAI, Anthropic, or other provider protocols.
 - ReActAgent remains stateless and must not depend on Plugin Runtime, Blackboard, UI, TTS, or domain plugins.
 - Plugin Runtime is generic infrastructure. It routes by source Plugin identity and must not interpret concrete Event types or import domain plugins.
-- Event is the business communication mechanism. Hook is only for persistence, observability, and supervision; Hook must not replace EventBus or change main-flow behavior.
+- Event is the business communication mechanism. Hooks may rewrite values only at declared value-passing points, with explicit priority and validated input/output. Hooks must not trigger downstream plugins, change routing identities, or determine control-flow direction. Recording and logging belong to runtime infrastructure and plugin backends, not Hooks.
 - Blackboard is a Plugin, not the EventBus.
 - AgentPlugin publishes the raw execution stream. Styling, TTS, emotion, action, Skill, Memory, and similar processing belong to independent plugins.
 - Do not implement nested child plugins. Helpers inside a Plugin are ordinary component objects and do not register with PluginRegistry.
@@ -54,8 +60,10 @@ corresponding document. Explicit repository rules in this file still apply.
 Tests stay inside the corresponding application and mirror the source layer:
 
 ```text
-apps/agent/src/agent_orchestration/plugins/
-apps/agent/test/agent_orchestration/plugins/
+apps/agent/src/agent_app/plugins/
+apps/agent/test/agent_app/plugins/
+apps/agent/src/icarus/
+apps/agent/test/icarus/
 
 apps/tui/
 apps/tui/test/
@@ -80,8 +88,24 @@ Add focused tests for model, Agent, Tool, stream, Event, or Plugin changes. When
 
 Do not fix unrelated failures in a focused change.
 
+## Repository infrastructure
+
+See `CONTRIBUTING.md` for development, dependency, CI, and SDD entry points.
+Development skill references live in `.agents/skills/`; production baseline skill
+sources belong in `skills/`. Neither directory changes runtime discovery automatically.
+App-owned build files, dependencies, locks, and environments stay in the application.
+
 ## Git
 
+- `feat/<app-name>` branches contain application work and target `feature` for integration.
+- Before starting application work, synchronize with the intended remote's `feature`; before
+  opening a PR, verify that the branch contains that baseline and identify the target remote.
+  Do not assume `origin/feature` and `upstream/feature` are the same.
+- `feature` is the development integration branch; `dev` prepares the next release; the production
+  branch holds the deployed release. The current remotes name the production branch `main`
+  (the role also referred to as `master`); verify the actual name instead of creating or renaming it.
+- Promote application work through `feat/<app-name>` -> `feature` -> `dev` -> `main`.
+  These conventions do not authorize automatic merges or other Git mutations.
 - Split commits by logical feature or architectural layer.
 - Keep implementation and its tests together.
 - Keep documentation-only changes separate when practical.

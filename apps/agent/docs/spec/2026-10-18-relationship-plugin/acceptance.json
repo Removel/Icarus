@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-19",
+  "scope": "Agent relationship plugin; isolated acceptance only",
+  "unit_and_regression": {
+    "agent": "971 passed",
+    "relationship": "68 passed",
+    "gateway": "34 passed; one existing deprecation warning",
+    "rela_mem_with_real_databases": "49 passed; existing upstream deprecation warnings",
+    "typecheck": "248 source files; no issues",
+    "compileall": "passed",
+    "diff_check": "passed"
+  },
+  "packaging": {
+    "standard_check_package_agent": "blocked: isolated build dependency download failed with PyPI TLS EOF",
+    "offline_fallback": "wheel built with installed build dependencies; reinstalled in disposable environment; verified 13 manifests, relationship modules, installed imports and five tool registration"
+  },
+  "real_rest": {
+    "status": "passed",
+    "backend": "actual rela-mem HTTP process plus dedicated FalkorDB/PostgreSQL containers",
+    "checks": ["five tools", "exact identity", "name confirmation and sequential reuse", "unique exact name", "fuzzy no write", "new identity with old name confirmation", "full name alias evidence beyond first ten", "conflicting identity no profile write", "circle.name context", "one-way and two-way relations", "profile tombstones and source_ref", "relation invalidation", "bounded context"]
+  },
+  "real_model_online": {
+    "status": "passed",
+    "model": "deepseek-flash",
+    "chain": "WebSocket RPC -> production Gateway -> AgentRuntime -> actual model provider -> five relationship tools -> actual REST/databases",
+    "calls_in_successful_final_run": 4,
+    "task_terminal_status": "completed",
+    "successful_tools": ["relationship_find", "relationship_remember", "relationship_context", "relationship_forget", "relationship_relate"],
+    "database_assertions": ["camera_preference active history contains requested value", "latest entry is deleted tombstone", "target relation status invalid"]
+  },
+  "real_model_offline": {
+    "status": "passed",
+    "model": "deepseek-flash",
+    "calls_in_successful_run": 2,
+    "checks": ["new Session starts with service stopped", "relationship_find safely fails", "independent read tool succeeds", "task completes normally"]
+  },
+  "earlier_attempts": [
+    "First online two-turn flow and database checks passed; following offline task failed. Full failure trace was not retained, so exact cause is unproven.",
+    "Second online trace shows all five tools successful, but six-call budget stopped the final summary request; task terminal status failed due explicit acceptance budget guard.",
+    "User authorized two bounded extensions; final single-task run completed in four calls. No more model calls executed afterward."
+  ],
+  "limitations": [
+    "No cross-session exactly-once guarantee for name-only creation; no cross-request transaction or automatic write retries.",
+    "Candidate alias lists are bounded summaries; precise alias truncation metadata is deferred. Write selection fetches complete person evidence separately.",
+    "Circle membership alias and identity_label are not exposed in current safe projection; circle.name, role and IDs are available.",
+    "Remote feature freshness could not be checked due Git TLS failure; known origin/feature is an ancestor. No Git integration mutations performed.",
+    "User data, production service configuration and databases were not used or modified."
+  ]
+}

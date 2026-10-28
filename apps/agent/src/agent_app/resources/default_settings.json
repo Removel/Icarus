@@ -1,0 +1,93 @@
+{
+  "openai_base_url": "https://api.deepseek.com",
+  "anthropic_base_url": "https://api.deepseek.com/anthropic",
+  "skill": {
+    "allow_produce": false,
+    "allow_evolve": false
+  },
+  "agent": {
+    "max_steps": 1024,
+    "tool_execution": {
+      "default_timeout_seconds": 120.0,
+      "default_output_tokens": 3000
+    }
+  },
+  "runtime": {
+    "plugin_dirs": [],
+    "plugin_config": {
+      "prompt": {
+        "max_prompt_tokens": 12288,
+        "max_section_tokens": 8192,
+        "required_contributors": ["persona"]
+      },
+      "persona": {
+        "jev_enabled": false,
+        "relationship_enabled": false
+      },
+      "memory": {
+        "user_id": "removel",
+        "agent_id": "icarus"
+      },
+      "relationship": {
+        "endpoint": "http://127.0.0.1:8767",
+        "timeout_seconds": 10
+      },
+      "knowledge": {
+        "knowledge_base": "icarus-project"
+      }
+    },
+    "required_plugin_ids": [
+      "persistence",
+      "prompt",
+      "builtin-tools",
+      "agent",
+      "user-input",
+      "skill",
+      "blackboard",
+      "runtime-update",
+      "mcp",
+      "memory",
+      "knowledge",
+      "process",
+      "persona"
+    ]
+  },
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.80",
+        "--headless",
+        "--isolated",
+        "--browser",
+        "chrome"
+      ]
+    }
+  },
+  "model_settings": [
+    {
+      "model_name": "deepseek-flash",
+      "context_window": 1000000,
+      "max_tokens": 9192,
+      "temperature": 0.9,
+      "default_think_level": "high",
+      "name": "thinking"
+    },
+    {
+      "model_name": "deepseek-v4-flash",
+      "context_window": 1000000,
+      "max_tokens": 9192,
+      "temperature": 0.6,
+      "default_think_level": "high",
+      "name": "perception"
+    }
+  ],
+  "use_protocol": "openai",
+  "model_roles": {
+    "agent": "thinking",
+    "compaction": "thinking",
+    "skill_generation": "thinking",
+    "title": "perception"
+  }
+}

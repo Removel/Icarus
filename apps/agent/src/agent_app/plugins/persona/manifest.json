@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "plugin_id": "persona",
+  "plugin_version": "1.0.0",
+  "entrypoint": "agent_app.plugins.persona.factory:create_plugin",
+  "tier": "core",
+  "required_config": [],
+  "python_requires": ["typesafe-sdk>=0.7.2,<0.8"],
+  "required_capabilities": [],
+  "provided_capabilities": [],
+  "provided_tools": ["persona_evolve"],
+  "published_events": ["prompt.contribution"],
+  "consumed_events": ["input.user_input", "agent.completed"],
+  "state_scopes": []
+}

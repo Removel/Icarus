@@ -1,0 +1,14 @@
+.venv
+.git
+.env
+**/.env
+**/*.env
+**/*.pem
+**/*.key
+settings.json
+*.local.json
+__pycache__
+.pytest_cache
+*.egg-info
+test
+docs

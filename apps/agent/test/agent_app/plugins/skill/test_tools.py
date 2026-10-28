@@ -1,0 +1,96 @@
+import asyncio
+
+from agent_app.plugins.skill.plugin import SkillOperationError
+from agent_app.plugins.skill.tools import create_skill_tools
+from icarus.core.models.messages import Message, TextPart
+
+
+class PluginStub:
+    default_page_size = 50
+    max_page_size = 200
+
+    def list_skills(self, scope, *, page_num=1, page_size=50):
+        return {
+            "skills": [{"name": scope}],
+            "page_num": page_num,
+            "page_size": page_size,
+            "total": 1,
+            "has_more": False,
+            "next_page_num": None,
+        }
+    def search(self, keywords, *, limit=50):
+        return [{"name": keywords[0], "limit": limit}]
+    async def produce(self, **kwargs):
+        self.produce_call = kwargs
+        return {"job_id": "produce", "status": "queued"}
+    async def evolve(self, **kwargs):
+        self.evolve_call = kwargs
+        return {"job_id": "evolve", "status": "queued"}
+    def job_status(self, job_id):
+        if job_id == "missing":
+            raise SkillOperationError("job_not_found", "missing")
+        return {"job_id": job_id, "status": "running"}
+
+
+def by_name():
+    plugin = PluginStub()
+    tools = {tool.definition.name: tool for tool in create_skill_tools(plugin)}
+    return plugin, tools
+
+
+def test_tool_names_schemas_and_parallel_contract():
+    _, tools = by_name()
+    assert list(tools) == [
+        "skills_list", "skill_search", "skill_produce", "skill_evolve", "skill_job_status"
+    ]
+    assert all(tool.definition.input_schema["additionalProperties"] is False for tool in tools.values())
+    assert [tools[name].can_run_parallel({}) for name in tools] == [True, True, False, False, True]
+
+
+def test_read_tools_validate_and_return_structured_results():
+    _, tools = by_name()
+    assert tools["skills_list"].invoke({}).output == {
+        "skills": [{"name": "all"}],
+        "page_num": 1,
+        "page_size": 50,
+        "total": 1,
+        "has_more": False,
+        "next_page_num": None,
+    }
+    assert tools["skill_search"].invoke({"keywords": ["python"]}).output == {
+        "skills": [{"name": "python", "limit": 50}]
+    }
+    assert tools["skill_search"].invoke(
+        {"keywords": ["python"], "limit": 12}
+    ).output == {"skills": [{"name": "python", "limit": 12}]}
+    assert tools["skill_search"].invoke(
+        {"keywords": ["python"], "limit": 201}
+    ).success is False
+    assert tools["skill_search"].invoke({"keywords": "python"}).success is False
+    assert tools["skills_list"].invoke({"scope": "bad"}).success is False
+    assert tools["skill_job_status"].invoke({"job_id": "missing"}).error.startswith("job_not_found:")
+
+
+def test_write_tools_forward_execution_context_without_copying_messages():
+    plugin, tools = by_name()
+    messages = (Message("user", [TextPart("current")]),)
+    execution = {"task_id": "task", "run_id": "run", "step": 3, "task_messages": messages}
+
+    produced = asyncio.run(tools["skill_produce"].ainvoke(
+        {"name": "new", "scope": "workspace", "instructions": "create"}, **execution
+    ))
+    evolved = asyncio.run(tools["skill_evolve"].ainvoke(
+        {"name": "old", "instructions": "improve"}, **execution
+    ))
+
+    assert produced.success is evolved.success is True
+    assert plugin.produce_call["task_messages"] is messages
+    assert plugin.evolve_call["task_messages"] is messages
+    assert plugin.produce_call["scope"] == "workspace"
+
+
+def test_tools_reject_unknown_missing_and_empty_arguments():
+    _, tools = by_name()
+    assert tools["skills_list"].invoke({"extra": True}).success is False
+    assert tools["skill_produce"].invoke({"name": "x"}).success is False
+    assert tools["skill_evolve"].invoke({"name": " ", "instructions": "x"}).success is False

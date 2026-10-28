@@ -1,0 +1,175 @@
+# Public topology only. Secrets and ICARUS_DATA_DIR belong in .env / process environment.
+# Copy icarus.local.toml.example to ignored icarus.local.toml for machine overrides.
+version = 1
+
+[components.gateway]
+kind = "app"
+provisioning = "process"
+default_stack = true
+endpoint = "http://127.0.0.1:8765"
+workdir = "."
+start_command = ["bash", "{repo_root}/apps/gateway/scripts/start.sh", "--host", "{host}", "--port", "{port}"]
+install_command = ["bash", "{repo_root}/apps/gateway/scripts/install.sh"]
+dev_install_command = ["bash", "{repo_root}/apps/gateway/scripts/install.sh", "--dev"]
+process_markers = ["apps.gateway.src.main", "apps/gateway/scripts/start.sh"]
+probe = { type = "http", path = "/health", expect_body = { status = "ready" } }
+[components.gateway.requires.agent]
+required = true
+
+[components.agent]
+kind = "app"
+provisioning = "embedded"
+owner = "gateway"
+default_stack = true
+install_command = ["bash", "{repo_root}/apps/agent/scripts/install.sh"]
+dev_install_command = ["bash", "{repo_root}/apps/agent/scripts/install.sh", "--dev"]
+[components.agent.requires.mem0]
+required = true
+endpoint_env = "ICARUS_MEM0_ENDPOINT"
+[components.agent.requires.openkb]
+required = true
+endpoint_env = "ICARUS_OPENKB_ENDPOINT"
+[components.agent.requires.rela-mem]
+required = false
+endpoint_env = "ICARUS_RELATIONSHIP_ENDPOINT"
+
+[components.tui]
+kind = "app"
+provisioning = "foreground"
+default_stack = true
+workdir = "."
+start_command = ["bash", "{repo_root}/apps/tui/scripts/start.sh"]
+install_command = ["bash", "{repo_root}/apps/tui/scripts/install.sh"]
+dev_install_command = ["bash", "{repo_root}/apps/tui/scripts/install.sh", "--dev"]
+process_markers = ["apps.tui.src.main", "apps/tui/scripts/start.sh"]
+endpoint_args = { "--gateway-url" = "gateway" }
+[components.tui.requires.gateway]
+required = true
+
+[components.webui]
+kind = "app"
+provisioning = "process"
+default_stack = true
+endpoint = "http://127.0.0.1:8080"
+workdir = "apps/webui"
+host_env = "ICARUS_WEBUI_HOST"
+port_env = "ICARUS_WEBUI_PORT"
+start_command = ["bash", "{repo_root}/apps/webui/scripts/start.sh"]
+install_command = ["bash", "{repo_root}/apps/webui/scripts/install.sh"]
+dev_install_command = ["bash", "{repo_root}/apps/webui/scripts/install.sh", "--dev"]
+process_markers = ["server/index.mjs", "scripts/start.sh"]
+probe = { type = "http", path = "/health" }
+# The shell/proxy remains useful when an upstream is down.
+[components.webui.requires.gateway]
+required = false
+endpoint_env = "ICARUS_GATEWAY_ENDPOINT"
+[components.webui.requires.mem0]
+required = false
+endpoint_env = "ICARUS_MEM0_ENDPOINT"
+[components.webui.requires.openkb]
+required = false
+endpoint_env = "ICARUS_OPENKB_ENDPOINT"
+
+[components.mem0]
+kind = "app"
+provisioning = "compose"
+default_stack = true
+endpoint = "http://127.0.0.1:8888"
+host_env = "ICARUS_MEM0_BIND_HOST"
+port_env = "ICARUS_MEM0_PORT"
+endpoint_env = "ICARUS_MEM0_ENDPOINT"
+compose = "apps/mem0/server/docker-compose.yaml"
+compose_project = "mem0-dev"
+compose_command = ["bash", "apps/mem0/scripts/icarus-compose.sh"]
+expected_containers = 1
+data_dir = "services/mem0"
+dev_install_command = ["bash", "{repo_root}/apps/mem0/scripts/install.sh", "--dev"]
+probe = { type = "http", path = "/docs" }
+# The external PostgreSQL/pgvector endpoint is required; no bundled database is shipped.
+secret_env = { ICARUS_MEM0_POSTGRES_PASSWORD = "ICARUS_MEM0_POSTGRES_PASSWORD", ICARUS_MEM0_JWT_SECRET = "ICARUS_MEM0_JWT_SECRET" }
+
+[components.openkb]
+kind = "app"
+provisioning = "compose"
+default_stack = true
+endpoint = "http://127.0.0.1:7566"
+host_env = "ICARUS_OPENKB_BIND_HOST"
+port_env = "ICARUS_OPENKB_PORT"
+compose = "apps/openkb/docker-compose.yaml"
+compose_project = "openkb-dev"
+compose_command = ["bash", "apps/openkb/scripts/icarus-compose.sh"]
+expected_containers = 1
+data_dir = "services/openkb"
+dev_install_command = ["bash", "{repo_root}/apps/openkb/scripts/install.sh", "--dev"]
+secret_env = { ICARUS_OPENKB_API_TOKEN = "ICARUS_OPENKB_API_TOKEN" }
+probe = { type = "http", path = "/openapi.json", token_env = "ICARUS_OPENKB_API_TOKEN" }
+
+[components.rela-mem]
+kind = "app"
+provisioning = "compose"
+default_stack = true
+endpoint = "http://127.0.0.1:8767"
+host_env = "RELA_MEM_BIND_ADDRESS"
+port_env = "RELA_MEM_PORT"
+compose = "apps/rela-mem/docker-compose.yaml"
+compose_project = "icarus-rela-mem"
+expected_containers = 1
+shared_network = true
+data_dir = "services/rela-mem"
+secret_env = { RELA_MEM_API_TOKEN = "RELA_MEM_API_TOKEN", RELA_MEM_PG_PASSWORD = "RELA_MEM_PG_PASSWORD", RELA_MEM_FALKORDB_PASSWORD = "RELA_MEM_FALKORDB_PASSWORD" }
+probe = { type = "http", path = "/healthz" }
+[components.rela-mem.requires.postgres]
+required = true
+[components.rela-mem.requires.postgres.connection]
+host_env = "RELA_MEM_PG_HOST"
+port_env = "RELA_MEM_PG_PORT"
+database_env = "RELA_MEM_PG_DATABASE"
+user_env = "RELA_MEM_PG_USER"
+schema_env = "RELA_MEM_PG_SCHEMA"
+password_env = "RELA_MEM_PG_PASSWORD"
+database = "rela_mem"
+user = "rela_mem"
+schema = "rela_mem"
+[components.rela-mem.requires.falkordb]
+required = true
+[components.rela-mem.requires.falkordb.connection]
+host_env = "RELA_MEM_FALKORDB_HOST"
+port_env = "RELA_MEM_FALKORDB_PORT"
+graph_env = "RELA_MEM_FALKORDB_GRAPH"
+password_env = "RELA_MEM_FALKORDB_PASSWORD"
+graph = "rela_mem"
+
+[components.postgres]
+kind = "middleware"
+provisioning = "compose"
+host = "127.0.0.1"
+port = 15432
+host_env = "ICARUS_POSTGRES_BIND_HOST"
+port_env = "ICARUS_POSTGRES_PORT"
+network_host = "postgres"
+network_port = 5432
+shared_network = true
+compose = "infra/postgres/compose.yaml"
+compose_project = "icarus-postgres"
+image_action = "pull"
+data_dir = "services/rela-mem/postgres"
+env = { ICARUS_POSTGRES_USER = "rela_mem", ICARUS_POSTGRES_DATABASE = "rela_mem" }
+secret_env = { RELA_MEM_PG_PASSWORD = "RELA_MEM_PG_PASSWORD" }
+probe = { type = "tcp" }
+
+[components.falkordb]
+kind = "middleware"
+provisioning = "compose"
+host = "127.0.0.1"
+port = 16379
+host_env = "ICARUS_FALKORDB_BIND_HOST"
+port_env = "ICARUS_FALKORDB_PORT"
+network_host = "falkordb"
+network_port = 6379
+shared_network = true
+compose = "infra/falkordb/compose.yaml"
+compose_project = "icarus-falkordb"
+image_action = "pull"
+data_dir = "services/rela-mem/falkordb"
+secret_env = { RELA_MEM_FALKORDB_PASSWORD = "RELA_MEM_FALKORDB_PASSWORD" }
+probe = { type = "tcp" }

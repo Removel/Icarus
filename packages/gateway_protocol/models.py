@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
-    from apps.agent.src.runtime_update import RuntimeUpdate
-    from apps.agent.src.application.runtime_status import (
+    from icarus.core.runtime_update import RuntimeUpdate
+    from agent_app.application.models.status import (
         DiscardSessionResult,
         SessionSummary,
     )
@@ -56,12 +56,18 @@ class SessionHistoryModel(StrictWireModel):
 class SessionSummaryModel(StrictWireModel):
     session_id: str
     first_user_input: str
+    title: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @classmethod
     def from_domain(cls, summary: "SessionSummary") -> "SessionSummaryModel":
         return cls(
             session_id=summary.session_id,
             first_user_input=summary.first_user_input,
+            title=summary.title,
+            created_at=summary.created_at,
+            updated_at=summary.updated_at,
         )
 
 
