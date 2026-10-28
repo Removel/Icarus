@@ -10,6 +10,39 @@
 
 **Spec:** `apps/tui/docs/spec/2026-10-28-tui-desktop-integration/design.md`（本文从该设计出发，执行者须同时阅读）
 
+## 执行状态（2026-10-29）
+
+平台阶段及后续桌面 UI 开发均已在本地 `feat/tui` 实现，当前处于最终回归与用户实机验收交接。
+**Task 8 的真实桌面验收由用户保留；不把自动化测试写成实机通过。**
+
+- Task 1：原 spike 错误推断已更正；以实际 Pilot 拖选、渲染文字、流式及历史窗口语义测试重新验证，采用局部稳定端点/片段快照。
+- Task 2：跨平台类型化系统剪贴板、单文件图片受控快照、限额/资源释放与平台审查修复已完成。
+- Task 3：DesktopService 线程 I/O、串行写入、取消后排空、URL 校验、App 生命周期已接线。
+- Task 4：聊天正文选择、阅读顺序拼接、排除装饰/折叠内容、跨窗口/流式稳定、高亮重映射、键盘选择与 Ctrl+C 优先复制已实现。
+- Task 5：Composer 复制与安全剪切快照、写入成功后删除/撤销、编辑/提交/会话/选区过期保护已实现。
+- Task 6：用户/助手裸 URL 与 Markdown 目标、代码排除、点击/拖选/双击仲裁、键盘消息→URL picker、平台宿主打开已接线。
+- Task 7：App 完成消息、失败提示、关闭排空、欢迎说明、架构/验证记录已完成；原四态中断和 slash Escape 行为保留。
+- Task 8：真实 Windows Terminal/外部编辑器/系统截图/宿主浏览器验收 **等待用户执行**，各平台条目仍是“未验证”；本地离线终端驱动和宽/窄/短实际 App capture 已运行。
+- 最终完整回归：**501 passed（173.10s）**；平台/service/新桌面交互组合 **176 passed**，含反向鼠标跨窗扩选与展开工具链接更新。compileall / diff check 通过。真实条件与证据见 [validation.md](validation.md)。
+- 依赖：app-owned `Pillow>=11.3,<13`，已获安装授权。WSL URL 使用固定 PowerShell + UTF-8 stdin，不经 cmd 解释 URL。
+- Git：agent 已按授权合入远端 feature；当前本地 feat/tui 吸收该基线。**用户于 2026-10-29 授权本地提交 TUI 修正与新交互；不推送、不合入 feature，真实使用验收仍待用户完成。**
+- 平台历史分段清单见 [plan-platform.md](plan-platform.md)，当前源码架构见 [arch.md](arch.md)。
+
+
+## 开发交付清单
+
+- [x] Task 1：替换错误 spike 推断，重新验证正文选择/流式/窗口/链接交互，采用稳定端点适配。
+- [x] Task 2：跨平台剪贴板类型化读写、文件优先级、图片校验、资源释放。
+- [x] Task 3：线程化桌面 service、URL 校验、写入顺序与关闭排空。
+- [x] Task 4：聊天选择、阅读顺序、中文/emoji、跨窗口和流式稳定、复制优先级。
+- [x] Task 5：输入框复制与写入成功后安全剪切、撤销、过期结果拒绝、系统/终端粘贴分离。
+- [x] Task 6：用户/助手/展开正文 URL、代码排除、点击/双击/拖选仲裁、键盘 picker 与宿主打开。
+- [x] Task 7：App 消息/Worker、通知、完整关闭、帮助、架构记录与独立审查修复。
+- [ ] Task 8：按用户要求保留真实桌面使用验收；不在自动化完成标记中冒充实机通过。
+
+以下逐步任务为原实施模板，保留原始文件/命令与约定便于追溯；当前交付以本节及执行状态/validation 为准。
+原模板的 Git commit 步骤不覆盖仓库授权规则；本轮仅按用户 2026-10-29 的明确授权本地提交，不 push。
+
 ## Global Constraints
 
 - 范围：macOS、Windows、Linux 本机、WSL；SSH 不支持；单次粘贴仅一张图片。

@@ -1,37 +1,52 @@
-# 跨消息选区 Spike 结论（Task 1 / design §5.1）
+# 跨消息选区 Spike：证据更正
 
-- 日期：2026-10-28。
-- 测试：`apps/tui/test/spikes/test_selection_spike.py`（Textual 8.2.8，Pilot 转发 MouseDown/Move/Up 至 Screen，`Screen.get_selected_text()` 提取）。
-- 环境：WSL2 (Linux 6.6)，headless Pilot，`apps/tui/.venv`。
-- 性质：可丢弃验证；按 design §5.1，本文件只记录实测行为，不声称生产功能完成。
+日期：2026-10-28。环境：WSL2、Textual 8.2.8、headless Pilot。
 
-## 逐场景结果
+本次 platform 任务中发现此前 Task 1 的实验测试和结论存在证据不足问题。
+原始运行确为 `2 failed, 4 passed`，但不能把其余四项直接解释为目标语义已满足。
 
-| # | 场景 | 结果 | 实际行为 |
-| --- | --- | --- | --- |
-| 1 | 跨用户/助手消息拖选 | FAIL | MouseUp 后 `Screen.selections` 为空、`get_selected_text()` 返回 `""`；拖选过程中虽能跨 widget 建立选区，但释放即失效。拖选期间提取文本包含角色装饰（` You`、`✦ Icarus` 标签行被一并选中）。 |
-| 2 | CJK+emoji 逐字符提取 | PASS | 选区内含「中文😀测试ABC」时提取无 U+FFFD，宽字符按字符而非 cell 切断（`StreamingMarkdown` 的 `_CJKMarkdownParagraph` + Content 机制已保证）。 |
-| 3 | 流式 append 后选区保留 | PASS | 建立选区后 `AppendAssistantDelta` 追加，选区文本不变；`StreamingMarkdown.append` 对旧尾块关闭 `ALLOW_SELECT`、完成后恢复，未冲掉既有选区。 |
-| 4 | Markdown 末块替换后提取 | PASS | `CompleteAssistantMessage` 替换尾块后，对同一区域重新提取非空（返回替换后文本），无崩溃、无失效引用异常。 |
-| 5 | `page_up` 跨 24 轮窗口切换后选区存活 | FAIL | 切窗 `_render_window` 卸载并重挂所有消息 widget，原生选区持有旧 widget 引用；切窗后 `get_selected_text()` 返回 `""`。选区起点（`question 6`）文本完全丢失。 |
-| 6 | 从链接 widget 起拖不触发打开 | PASS | 在 Markdown 链接上 MouseDown 后拖离 MouseUp，未触发 `LinkClicked` / `open_url`（拖选优先于单击，Textual 原生仲裁已正确）。 |
+## 实际观察与边界
 
-复现：`apps/tui/.venv/bin/python -m pytest apps/tui/test/spikes/test_selection_spike.py -q`
-当前输出：`2 failed, 4 passed`（场景 1、5 失败，即跨消息拖选与窗口切换）。
+| 场景 | 观察 | 可以得出的结论 |
+| --- | --- | --- |
+| 跨消息拖选 | 在原测试给定坐标下，MouseUp 后提取为 `一个问题\n✦ Icarus\nas` | 存在跨节点选择且包含装饰。开始坐标略过了首字，结束坐标只选了助手开头；原测试期望完整两条消息是不正确的。**不能得出 MouseUp 清空选区的结论。** |
+| CJK / emoji | 包含断言通过，未发现 U+FFFD | 没有精确端点与完整期望文本断言，不能据此保证宽字符选择完全正确。 |
+| 流式追加 | 某个用户区域选区前后字符串相等 | 没有证明选择流式尾段时稳定，也没有验证阅读位置。 |
+| Markdown 替换 | 替换前后提取非空 | 未证明同一正文语义端点保持；可能只是另一个选中节点仍非空。 |
+| 窗口切换 | 原实验选择的内容实为 ` You`，切窗后变为空串 | 说明原生选择引用与卸载节点有关，但没有正确选中 `question 6`，因此不足以作为完整跨历史正文选择验收。 |
+| 链接拖选 | 没有记录浏览器调用 | 起点落在用户消息，而用户消息是非 Markdown Static；没有证明真的从助手链接命中处起拖。 |
 
-## 分叉结论（Task 4 的输入）
+完整套件复现结果为 `457 passed, 2 failed`；两个失败来自该实验本身。
+按照 plan Task 1 允许丢弃 spike 的约定，现移除其测试文件，避免把非交付实验混入回归套件；
+日志和实验副本保留在此 plan 的 gitignored 执行目录中。本次不修改生产选区代码。
 
-**结论 B：原生 Screen 选区不足，需稳定端点。**
+## 2026-10-29 补充：重新验证与实现分叉
 
-原生选区在「跨消息拖选后提取」与「跨 24 轮窗口切换后存活」两个场景均不达标：
+原错误记录保留在下文，避免把最初的粗糙实验变成可信结论。后续不再使用失败实验作为依据，
+改用生产 Widget 的语义回归与真实 Pilot 指针事件：
 
-1. 需要的稳定端点映射：`<(turn_index, unit_key), start/end 文字偏移>`——
-   - 消息身份沿用 `ConversationView._unit_key(unit, ordinal)`（task_id/kind/step/call_id/segment/ordinal）；
-   - 文字偏移相对各显示单元的挂载文本（Static 的 `message_text` / Markdown 段落纯文本），鼠标事件在 MouseDown/Move 时换算；
-   - 提取时按语义端点从当前挂载文本（切窗后经 `ConversationProjection` 快照重挂）重新解析，选区起点在窗口外时按 design §5.2 记录文字片段快照以便提示（不建全文 Store）。
-2. 另需独立修复的两点（Task 4 范围）：
-   - MouseUp 即丢失选区：原生 MouseUp 后 `selections` 清空，提取必须在拖选期间持续维护语义快照，不依赖 MouseUp 后的原生状态；
-   - 装饰过滤：提取必须按 widget 类别排除 `message-label`（`❯ You` / `✦ Icarus`）等界面元素，只取 `message-content` / 正文段落。
-3. 场景 2/3/4/6 说明底层文本提取（CJK、流式、替换、链接仲裁）可直接复用原生 Content/Selection 机制，无需重做渲染。
+| 场景 | 新证据 |
+| --- | --- |
+| 跨消息拖选 | `test_desktop_selection.py` 真实 mouse_down/hover/mouse_up，精确得到 `中文😀问题\n\nanswer`，不含角色标签。 |
+| CJK / emoji | 实际 cell 端点映射后精确得到 `文😀问`，不直接按屏幕列切 Unicode。 |
+| 流式 append | `test_selection_boundaries.py` 选中末段后追加，原文和 scroll_y 均不变，停止追尾。 |
+| Markdown 替换 | 选择强调渲染后的 `answer`，完整替换保留相同渲染文字片段。 |
+| 历史窗口 | 55 轮历史键盘扩选至第 0 轮，DOM 始终 24 轮；直接 remount 仍有正文高亮。 |
+| 链接拖选/双击 | `test_desktop_navigation.py` 真实单击延迟后恰好打开一次；拖选/双击不打开。 |
 
-风险记录：本 spike 在 headless Pilot 下验证；真实终端的鼠标事件路由一致性在 Task 8 实机验收复核。
+**分叉 B：保留 Screen 交互/高亮，增加 ConversationView 局部渲染字符端点与已选片段快照。**
+原生节点引用不足以跨 remount；新增适配不复制全文、不将状态塞入 ChatState。
+身份与 DOM 阅读顺序分离，折叠已选正文必须失效，窗口卸载选择则保留。
+单元身份排除 Welcome 等界面节点，避免首次渲染与重挂时序号偏移。
+
+上述对应测试与独立审查修复均已运行；最终完整 TUI 501 passed。
+这仍不替代用户真实 Windows Terminal 验收。
+
+## 后续 Task 4 前置条件（历史记录，已由上文重新验证替代）
+
+Task 1 **不能继续标记为验收完成**。需使用 Pilot 原生 mouse_down / mouse_up 和正确正文节点坐标，
+为六场景各写具体期望文本；先验证节点可见及真实链接命中，再决定稳定端点映射。
+
+源码中的窗口替换确会卸载节点，因此稳定端点仍是合理候选，但目前只是待验证设计方向，
+不是实验已证实的完整方案。不要依据原文增加所谓 MouseUp 清空选区修复，也不要直接采用
+包含窗口相关 ordinal 的 `_unit_key` 作为跨窗口稳定身份而不验证其稳定性。
