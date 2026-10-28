@@ -14,10 +14,12 @@ from apps.tui.src.domain.commands import create_default_command_registry
 from apps.tui.src.event_pipeline import create_default_projector_registry
 from apps.tui.src.screens.chat.messages import (
     ChatChanged,
+    DesktopCompleted,
     OperationCompleted,
     RuntimeOutputReceived,
     SubscriptionFailed,
 )
+from apps.tui.src.platform.opener import open_url
 from apps.tui.src.screens.chat.screen import ChatScreen
 from apps.tui.src.services.chat.operations import PreparedSession, execute
 from apps.tui.src.services.chat.session import ChatSession
@@ -53,7 +55,7 @@ class IcarusTextualApp(App[int]):
         super().__init__()
         self.config = config
         self.attachments = attachments
-        self.desktop = DesktopService()
+        self.desktop = DesktopService(open_url=open_url)
         self.commands = commands or create_default_command_registry()
         self.chat_store = ChatStore(
             workspace_path=config.workspace_path,
@@ -176,6 +178,31 @@ class IcarusTextualApp(App[int]):
         if message.scope == self.chat_session.scope and self._cleanup_task is None:
             self._advance(self.chat_session.reconnect(message.error))
 
+    def on_copy_text_requested(self, message):
+        self._desktop_worker("copy", message.text, message.generation, message.snapshot)
+
+    def on_open_link_requested(self, message):
+        self._desktop_worker("open", message.url, self.chat_store.generation)
+
+    def _desktop_worker(self, kind, value, generation, snapshot=None):
+        if self._cleanup_task is not None:
+            return
+        async def execute_desktop():
+            error = None
+            try:
+                if kind == "copy":
+                    await self.desktop.copy_text(value)
+                else:
+                    await self.desktop.open_link(value)
+            except Exception as caught:
+                error = caught
+            self.post_message(DesktopCompleted(kind, generation, snapshot, error))
+        self._io_workers.add(self.run_worker(execute_desktop(), name=f"desktop-{kind}", exit_on_error=False))
+
+    def on_desktop_completed(self, message):
+        if self._cleanup_task is None:
+            self.chat_screen.deliver_desktop(message)
+
     def on_submit_requested(self, message):
         self._advance(self.chat_session.submit(message.submission))
         if self.chat_session.rejected:
@@ -233,6 +260,7 @@ class IcarusTextualApp(App[int]):
                 pass
             except Exception:
                 return_code = return_code or 1
+        await self.desktop.close()
         errors = await self.chat_session.close()
         self.exit(
             result=return_code or int(bool(errors)),
@@ -241,6 +269,7 @@ class IcarusTextualApp(App[int]):
 
     async def on_unmount(self):
         if self._cleanup_task is None:
+            await self.desktop.close()
             await self.chat_session.close()
         elif not self._cleanup_task.done():
             await asyncio.shield(self._cleanup_task)

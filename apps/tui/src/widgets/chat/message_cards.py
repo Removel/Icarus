@@ -6,6 +6,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Label, Markdown, Static
 
+from apps.tui.src.widgets.chat.links import LinkText, url_ranges
 from apps.tui.src.widgets.chat.local_scroll import LocalScroll
 from apps.tui.src.widgets.chat.markdown import StreamingMarkdown
 
@@ -15,10 +16,13 @@ class UserMessage(Vertical):
         super().__init__(classes="message user-message")
         self.message_text = text
 
+    def link_targets(self):
+        return [url for _, _, url in url_ranges(self.message_text)]
+
     def compose(self) -> ComposeResult:
         yield Label("❯ You", classes="message-label")
         with LocalScroll(classes="message-body-scroll"):
-            yield Static(self.message_text, markup=False, classes="message-content")
+            yield LinkText(self.message_text, markup=False, classes="message-content")
 
 
 class _StreamingMessage(Vertical):

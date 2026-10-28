@@ -15,6 +15,15 @@ from apps.tui.src.domain.submission import (
 )
 
 
+@dataclass(frozen=True)
+class CutSnapshot:
+    text: str
+    start: tuple[int, int]
+    end: tuple[int, int]
+    text_version: int
+    draft_token: int
+
+
 class PersistentComposer(TextArea):
     """A TextArea where Enter submits and modified Enter inserts a line."""
 
@@ -37,10 +46,16 @@ class PersistentComposer(TextArea):
         images: tuple[DraftImage, ...]
 
     @dataclass
+    class CopyTextRequested(Message):
+        text: str
+        snapshot: CutSnapshot | None = None
+
+    @dataclass
     class ImagePasteRequested(Message):
         pass
 
     def __init__(self, *, id: str | None = None) -> None:
+        self._text_version = 0
         super().__init__(
             soft_wrap=True,
             tab_behavior="indent",
@@ -56,6 +71,56 @@ class PersistentComposer(TextArea):
         self._submission_id: str | None = None
         self.draft_token = 0
         self.key_handler = None
+
+    def load_text(self, text):
+        self._text_version += 1
+        return super().load_text(text)
+
+    def undo(self):
+        self._text_version += 1
+        return super().undo()
+
+    def redo(self):
+        self._text_version += 1
+        return super().redo()
+
+    def edit(self, edit):
+        result = super().edit(edit)
+        self._text_version += 1
+        return result
+
+    def get_selection_text(self) -> str | None:
+        return self.selected_text if self.selection.start != self.selection.end else None
+
+    def begin_cut(self) -> CutSnapshot | None:
+        text = self.get_selection_text()
+        if self.read_only or text is None:
+            return None
+        start, end = sorted(self.selection)
+        return CutSnapshot(text, start, end, self._text_version, self.draft_token)
+
+    def apply_cut(self, snapshot: CutSnapshot) -> bool:
+        if (self.read_only or snapshot.draft_token != self.draft_token
+                or snapshot.text_version != self._text_version
+                or tuple(sorted(self.selection)) != (snapshot.start, snapshot.end)
+                or self.get_selection_text() != snapshot.text):
+            return False
+        result = self.replace("", snapshot.start, snapshot.end, maintain_selection_offset=False)
+        self.move_cursor(result.end_location)
+        return True
+
+    def action_copy_selection(self) -> None:
+        text = self.get_selection_text()
+        if text is not None:
+            self.post_message(self.CopyTextRequested(text))
+
+    def action_copy(self) -> None:
+        self.action_copy_selection()
+
+    def action_cut(self) -> None:
+        snapshot = self.begin_cut()
+        if snapshot is not None:
+            self.post_message(self.CopyTextRequested(snapshot.text, snapshot))
 
     def on_mount(self) -> None:
         self._sync_height()

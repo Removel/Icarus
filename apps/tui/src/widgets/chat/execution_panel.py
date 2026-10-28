@@ -13,6 +13,7 @@ from textual.events import Click
 from textual.message import Message
 from textual.widgets import Markdown, Static
 
+from apps.tui.src.widgets.chat.links import LinkText
 from apps.tui.src.widgets.chat.markdown import StreamingMarkdown
 
 
@@ -223,7 +224,7 @@ class ToolBlock(Vertical):
             markup=False,
             classes="disclosure-summary tool-summary",
         )
-        details = Static(self._details_text(), markup=False, classes="tool-details")
+        details = LinkText(self._details_text(), markup=False, classes="tool-details")
         details.display = self.expanded
         yield details
 

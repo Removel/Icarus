@@ -15,6 +15,8 @@ from textual.widgets import Button
 
 from apps.tui.src.event_pipeline import SetRuntimeStatus, ShowNotification
 from apps.tui.src.screens.chat.messages import (
+    CopyTextRequested,
+    OpenLinkRequested,
     ImagesReleased,
     InterruptRequested,
     PasteRequested,
@@ -39,6 +41,9 @@ class ChatScreen(Screen):
         Binding("pageup", "page_up", show=False, priority=True),
         Binding("pagedown", "page_down", show=False, priority=True),
         Binding("ctrl+end", "latest", show=False, priority=True),
+        Binding("escape", "cancel_selection", show=False, priority=True),
+        Binding("ctrl+shift+s", "select_chat", show=False, priority=True),
+        Binding("ctrl+shift+o", "open_links", show=False, priority=True),
     ]
 
     def __init__(self, store, commands):
@@ -84,6 +89,7 @@ class ChatScreen(Screen):
 
         for thinking in self.query(ThinkingBlock):
             thinking.set_activity(False)
+        self.query_one(ConversationView).action_cancel_selection()
         self._active = False
         self.activity_token += 1
         self.query_one(ConversationView).render_valid = lambda: False
@@ -143,6 +149,7 @@ class ChatScreen(Screen):
                 self._render_dirty = True
             revision, generation = self.store.revision, self.store.generation
             if generation != self.rendered_generation:
+                view.action_cancel_selection()
                 self.query_one(PersistentComposer).draft_token += 1
                 if self._clipboard and self._clipboard[0] != generation:
                     old_value = self._clipboard[2]
@@ -274,6 +281,36 @@ class ChatScreen(Screen):
             if self.store.revision > self.rendered_revision:
                 self.call_later(self.refresh_chat)
 
+    def on_conversation_view_selection_started(self, message):
+        message.stop()
+        composer = self.query_one(PersistentComposer)
+        composer.move_cursor(composer.cursor_location)
+
+    def on_text_area_selection_changed(self, message):
+        if isinstance(message.text_area, PersistentComposer) and message.selection.start != message.selection.end:
+            self.query_one(ConversationView).action_cancel_selection()
+
+    def on_text_area_changed(self, message):
+        if isinstance(message.text_area, PersistentComposer) and message.text_area.has_focus:
+            self.query_one(ConversationView).action_cancel_selection()
+
+    def on_persistent_composer_copy_text_requested(self, message):
+        message.stop()
+        self.app.post_message(CopyTextRequested(message.text, message.snapshot, self.store.generation))
+
+    def deliver_desktop(self, message):
+        if message.error is not None:
+            self.notify("Desktop operation failed; retry when the clipboard/browser is available.", severity="warning")
+            return
+        if message.kind == "open":
+            return
+        if message.snapshot is not None:
+            current = self._active and message.generation == self.store.generation
+            applied = current and self.query_one(PersistentComposer).apply_cut(message.snapshot)
+            self.notify("Cut" if applied else "Copied; input changed, not cut")
+        else:
+            self.notify("Copied")
+
     def on_persistent_composer_submitted(self, message):
         message.stop()
         self.app.post_message(SubmitRequested(message.submission))
@@ -343,9 +380,58 @@ class ChatScreen(Screen):
             self.action_latest()
 
     def action_context_interrupt(self):
-        self.app.post_message(
-            InterruptRequested(self.query_one(PersistentComposer).has_draft)
-        )
+        composer = self.query_one(PersistentComposer)
+        if composer.get_selection_text() is not None:
+            composer.action_copy_selection()
+            return
+        view = self.query_one(ConversationView)
+        selected = view.get_selected_text()
+        if selected is not None:
+            self.app.post_message(CopyTextRequested(selected, generation=self.store.generation))
+            return
+        self.app.post_message(InterruptRequested(composer.has_draft))
+
+    def on_streaming_markdown_open_link_requested(self, message):
+        message.stop()
+        self.app.post_message(OpenLinkRequested(message.url))
+
+    def on_link_text_open_link_requested(self, message):
+        message.stop()
+        self.app.post_message(OpenLinkRequested(message.url))
+
+    def action_cancel_selection(self):
+        composer = self.query_one(PersistentComposer)
+        if composer.key_handler is not None and composer.key_handler(events.Key("escape", None)):
+            return
+        self.query_one(ConversationView).action_cancel_selection()
+        composer.move_cursor(composer.cursor_location)
+
+    def action_select_chat(self):
+        self.query_one(ConversationView).begin_keyboard_selection()
+
+    def action_open_links(self):
+        from apps.tui.src.screens.link_picker import LinkPicker
+
+        view = self.query_one(ConversationView)
+        messages = []
+        from apps.tui.src.widgets.chat.markdown import StreamingMarkdown
+        from apps.tui.src.widgets.chat.links import LinkText
+        for widget in view.children:
+            targets = []
+            for text in widget.query(LinkText):
+                if all(parent.display for parent in (text, *text.ancestors)):
+                    targets.extend(text.link_targets())
+            for markdown in widget.query(StreamingMarkdown):
+                if all(parent.display for parent in (markdown, *markdown.ancestors)):
+                    targets.extend(markdown.link_targets())
+            if targets:
+                messages.append((widget, list(dict.fromkeys(targets))))
+        visible = [(widget, urls) for widget, urls in messages if widget.region.overlaps(view.region)]
+        if not visible:
+            self.notify("No links in the current reading area")
+            return
+        self.app.push_screen(LinkPicker([(f"Message {i + 1}", urls) for i, (_, urls) in enumerate(visible)]),
+            lambda url: self.app.post_message(OpenLinkRequested(url)) if url else None)
 
     def action_eof(self):
         composer = self.query_one(PersistentComposer)

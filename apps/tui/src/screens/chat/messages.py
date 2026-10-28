@@ -53,5 +53,25 @@ class InterruptRequested(Message):
 
 
 @dataclass
+class CopyTextRequested(Message):
+    text: str
+    snapshot: object = None
+    generation: int = 0
+
+
+@dataclass
+class OpenLinkRequested(Message):
+    url: str
+
+
+@dataclass
+class DesktopCompleted(Message):
+    kind: str
+    generation: int
+    snapshot: object = None
+    error: Exception | None = None
+
+
+@dataclass
 class ViewFailed(Message):
     error: Exception

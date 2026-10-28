@@ -35,6 +35,9 @@ from apps.tui.src.widgets.chat.message_cards import (
     UserCorrectionBlock,
     UserMessage,
 )
+from textual.selection import Selection
+from textual.geometry import Offset
+from apps.tui.src.widgets.chat.selection import ConversationSelection
 from apps.tui.src.widgets.chat.welcome import WelcomeMessage
 
 
@@ -81,6 +84,223 @@ class ConversationView(VerticalScroll):
         self._restoring_history = False
         self._following = True
         self._reading_offsets = {}
+        self._selection = ConversationSelection()
+
+
+    def _selection_bodies(self):
+        from textual.widgets import Static
+        from textual.widgets._markdown import MarkdownBlock
+
+        # MarkdownBlock._content is the rendered Content. Public Markdown source
+        # cannot represent emphasis/code/table display offsets; keep this adapter
+        # local to the pinned Textual 8.x renderer rather than slicing source.
+        groups = self._visible_turns or [(0, list(self.children))]
+        for turn, widgets in groups:
+            unit_counts = {}
+            for root in widgets:
+                if isinstance(root, WelcomeMessage):
+                    continue
+                unit_kind = type(root).__name__
+                ordinal = unit_counts.get(unit_kind, 0)
+                unit_counts[unit_kind] = ordinal + 1
+                unit_index = (unit_kind, ordinal)
+                body_ordinals = {}
+                for widget in root.walk_children():
+                    if not widget.display or not widget.visible or any(not parent.display for parent in widget.ancestors):
+                        continue
+                    text = None
+                    if isinstance(widget, MarkdownBlock):
+                        content = getattr(widget, "_content", None)
+                        if content is not None and content.plain:
+                            text = content.plain
+                    elif isinstance(widget, Static) and any(widget.has_class(name) for name in ("message-content", "correction-content", "tool-details")):
+                        value = widget.get_selection(Selection(None, None))
+                        text = value[0] if value else None
+                    if text is None:
+                        continue
+                    identity = ("body", 0, "")
+                    for parent in (widget, *widget.ancestors):
+                        if isinstance(parent, ThinkingBlock):
+                            identity = ("thinking", parent.step, "")
+                            break
+                        if isinstance(parent, ToolBlock):
+                            identity = ("tool", 0, parent.call_id)
+                            break
+                    ordinal = body_ordinals.get(identity, 0)
+                    body_ordinals[identity] = ordinal + 1
+                    yield (turn, unit_index, identity, ordinal), widget, text
+
+    def _capture_selection(self):
+        if not self.is_mounted:
+            return
+        bodies = list(self._selection_bodies())
+        mounted_turns = {turn for turn, _ in self._visible_turns}
+        visible_keys = {key for key, _, _ in bodies}
+        hidden = {key for key in self._selection.fragments if key[0] in mounted_turns and key not in visible_keys}
+        if hidden:
+            for key in hidden:
+                self._selection.fragments.pop(key, None)
+            if self._selection.anchor and self._selection.anchor[0] in hidden:
+                self._selection.anchor = None
+                self._selection.focus = None
+                self._selection.keyboard = False
+            self._selection._native_signature = tuple((id(widget), value) for widget, value in self.screen.selections.items())
+        if not self._selection.keyboard and not self._selection.dragging:
+            self._selection.capture(bodies, self.screen.selections)
+        if self._selection.active:
+            self._set_reading_history(True)
+
+    def _body_at_pointer(self, event):
+        widget, offset = self.screen.get_widget_and_offset_at(event.screen_x, event.screen_y)
+        bodies = list(self._selection_bodies())
+        for key, body, text in bodies:
+            if widget is body or (widget is not None and body in widget.ancestors):
+                from apps.tui.src.widgets.chat.selection import offset_index
+                return bodies, key, offset_index(text, offset)
+        return None
+
+    def on_mouse_down(self, event):
+        if event.button != 1:
+            return
+        # Screen has already created its native pointer anchor. Clear only the
+        # semantic state here; clearing Screen would disable edge auto-scroll.
+        self._selection.clear()
+        found = self._body_at_pointer(event)
+        if found:
+            bodies, key, index = found
+            self._selection.anchor = (key, index)
+            self._selection.focus = (key, index)
+            self._selection.dragging = True
+            self._set_reading_history(True)
+            self.post_message(self.SelectionStarted())
+
+    def on_mouse_move(self, event):
+        if not self._selection.dragging:
+            return
+        found = self._body_at_pointer(event)
+        if found:
+            bodies, key, index = found
+            self._selection._remember_order(bodies)
+            anchor = self._selection.anchor
+            if anchor is not None and (self._selection.order[key], index) >= (self._selection.order[anchor[0]], anchor[1]):
+                index += 1
+            self._selection.extend(bodies, key, index)
+        if self._window_start > 0 and event.screen_y <= self.region.y + 1 and not self._window_loading:
+            self.run_worker(self._page_window(-8), group="selection-page", exclusive=True)
+        elif self._window_end < self.turn_count and event.screen_y >= self.region.bottom - 2 and not self._window_loading:
+            self.run_worker(self._page_window(8), group="selection-page", exclusive=True)
+
+    def on_mouse_up(self, event):
+        if self._selection.dragging:
+            self._selection.dragging = False
+            self.call_after_refresh(self._restore_selection_highlights)
+
+    class SelectionStarted(Message):
+        pass
+
+    def begin_keyboard_selection(self):
+        bodies = list(self._selection_bodies())
+        visible = [entry for entry in bodies if entry[1].region.overlaps(self.region)]
+        if not visible:
+            return
+        self.action_cancel_selection()
+        key, widget, text = visible[0]
+        self._selection.keyboard = True
+        self._selection.anchor = (key, 0)
+        self._selection.extend(bodies, key, min(1, len(text)))
+        self._set_reading_history(True)
+        self.focus()
+        self.post_message(self.SelectionStarted())
+        self._restore_selection_highlights()
+
+    async def on_key(self, event):
+        if not self._selection.keyboard or event.key not in {
+            "left", "right", "up", "down", "shift+left", "shift+right", "shift+up", "shift+down", "pageup", "pagedown", "shift+pageup", "shift+pagedown"}:
+            return
+        event.stop()
+        event.prevent_default()
+        backwards = event.key.endswith(("left", "up", "pageup"))
+        bodies = list(self._selection_bodies())
+        keys = [key for key, _, _ in bodies]
+        focus_key, index = self._selection.focus
+        if focus_key not in keys:
+            return
+        position = keys.index(focus_key)
+        text = bodies[position][2]
+        step = 1 if event.key.endswith(("left", "right")) else max(1, min(len(text), self.size.width))
+        index += -step if backwards else step
+        if index < 0 and position == 0 and self._window_start:
+            await self._page_window(-8)
+            bodies = list(self._selection_bodies())
+            keys = [key for key, _, _ in bodies]
+            position = keys.index(focus_key)
+        elif index > len(text) and position == len(bodies) - 1 and self._window_end < self.turn_count:
+            await self._page_window(8)
+            bodies = list(self._selection_bodies())
+            keys = [key for key, _, _ in bodies]
+            position = keys.index(focus_key)
+        if index < 0 and position:
+            position -= 1
+            focus_key, widget, text = bodies[position]
+            index = len(text)
+        elif index > len(text) and position + 1 < len(bodies):
+            position += 1
+            focus_key, widget, text = bodies[position]
+            index = 0
+        index = max(0, min(len(text), index))
+        if not event.key.startswith("shift+"):
+            self._selection.anchor = (focus_key, index)
+        self._selection.extend(bodies, focus_key, index)
+        self.scroll_to_widget(bodies[position][1], animate=False, immediate=True)
+        self._restore_selection_highlights()
+
+    def has_selection(self) -> bool:
+        self._capture_selection()
+        return self._selection.active
+
+    def get_selected_text(self) -> str | None:
+        self._capture_selection()
+        return self._selection.text()
+
+    def action_cancel_selection(self):
+        self._selection.clear()
+        if self.is_mounted:
+            self.screen.clear_selection()
+
+    def _restore_selection_highlights(self):
+        if not self._selection.active:
+            return
+        selections = {}
+        for key, widget, text in self._selection_bodies():
+            body = self._selection.fragments.get(key)
+            if body is not None and text.startswith(body.text[:body.end]):
+                def location(index):
+                    prefix = text[:index]
+                    return Offset(len(prefix.rsplit("\n", 1)[-1]), prefix.count("\n"))
+                selections[widget] = Selection(location(body.start), location(body.end))
+        self.screen.selections = selections
+        self._selection._native_signature = tuple((id(widget), value) for widget, value in selections.items())
+        if self._selection.dragging:
+            self._remap_native_drag_anchor()
+
+    def _remap_native_drag_anchor(self):
+        from textual.selection import SelectStart, SelectState
+
+        if self._selection.anchor is None:
+            return
+        key, index = self._selection.anchor
+        for body_key, widget, text in self._selection_bodies():
+            if body_key != key:
+                continue
+            prefix = text[:index]
+            offset = Offset(len(prefix.rsplit("\n", 1)[-1]), prefix.count("\n"))
+            pointer = widget.content_region.offset
+            start = SelectStart(widget.parent, pointer - widget.parent.region.offset,
+                widget.parent.region.offset, widget.parent.scroll_offset,
+                content_widget=widget, content_offset=offset)
+            self.screen._select_state = SelectState(pointer, start)
+            break
+
 
     async def apply_change(self, change):
         for action in change.actions:
@@ -152,10 +372,12 @@ class ConversationView(VerticalScroll):
 
     async def on_mount(self) -> None:
         await self.mount(WelcomeMessage(self.workspace_path))
+        self.watch(self.screen, "selections", self._capture_selection, init=False)
 
     async def reset(self) -> None:
         """Replace the current Session projection with an empty one."""
 
+        self.action_cancel_selection()
         await self._finish_all_streams()
         self._window_start = self._window_end = 0
         self._window_widgets.clear()
@@ -194,7 +416,7 @@ class ConversationView(VerticalScroll):
         if index is None:
             index = self.turn_count - 1
         if len(self._visible_turns) >= 24:
-            if self._reading_history:
+            if self._reading_history or self._selection.active or self._selection.dragging:
                 self._set_detached_window(True)
                 return
             old_index, old_widgets = self._visible_turns.pop(0)
@@ -321,6 +543,7 @@ class ConversationView(VerticalScroll):
         return self._window_start, self._window_end
 
     async def jump_to_turn(self, index: int) -> None:
+        self.action_cancel_selection()
         if self._history_worker is not None and not self._history_worker.is_finished:
             await self._history_worker.wait()
         if not 0 <= index < self.turn_count:
@@ -358,10 +581,12 @@ class ConversationView(VerticalScroll):
             self.scroll_to_widget(user, animate=False, immediate=True)
 
     async def _render_window(self, start: int, end: int) -> None:
+        self._capture_selection()
         async with self.render_lock:
             self.window_generation += 1
             with self.app.batch_update():
                 await self._replace_window(start, end)
+        self.call_after_refresh(self._restore_selection_highlights)
 
     async def _replace_window(self, start: int, end: int) -> None:
         from copy import deepcopy
@@ -445,7 +670,10 @@ class ConversationView(VerticalScroll):
             await self._reconcile_window(snapshot)
 
     async def _reconcile_window(self, snapshot):
+        from copy import deepcopy
+        saved_selection = deepcopy(self._selection)
         await self.reset()
+        self._selection = saved_selection
         if self._closing or not self.is_attached:
             return
         await self.remove_children()
@@ -472,6 +700,7 @@ class ConversationView(VerticalScroll):
         self._set_detached_window(snapshot.end < self.turn_count)
         self._rendered_turn = snapshot.end - 1 if snapshot.end else None
         self.call_after_refresh(self.restore_reading_offsets)
+        self.call_after_refresh(self._restore_selection_highlights)
 
     async def _mount_unit(self, unit: DisplayUnit):
         if not self.render_valid():
@@ -562,6 +791,7 @@ class ConversationView(VerticalScroll):
         return widget
 
     async def apply_action(self, action: UiAction) -> bool:
+        self._capture_selection()
         if self._restoring_history:
             if isinstance(action, AppendUserMessage) and self.turn_count >= 23:
                 self._history_deferred = True
@@ -691,6 +921,8 @@ class ConversationView(VerticalScroll):
                         widgets.append(widget)
         if not self._restoring_history:
             self._activate_anchor_after_layout()
+        if self._selection.active:
+            self.call_after_refresh(self._restore_selection_highlights)
         return True
 
     async def _ensure_run_card(self, task_id: str) -> RunCard:

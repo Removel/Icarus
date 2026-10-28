@@ -15,6 +15,7 @@ from textual.selection import Selection
 from textual.style import Style
 from textual.widgets import Markdown
 from textual.widgets._markdown import MarkdownParagraph
+from apps.tui.src.widgets.chat.links import DesktopLinkClick, url_ranges
 
 _CJK_TEXT = re.compile(
     "[\u2e80-\u2fff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]"
@@ -191,10 +192,18 @@ class _CJKWrappingContent(Content):
         return output_lines
 
 
-class _CJKMarkdownParagraph(MarkdownParagraph):
+class _CJKMarkdownParagraph(DesktopLinkClick, MarkdownParagraph):
     """Markdown paragraph that keeps CJK wrapping out of source content."""
 
     def set_content(self, content: Content) -> None:
+        from rich.style import Style as RichStyle
+
+        # Inline code and explicit links already carry spans. Linkify only prose
+        # outside those spans, preserving declared Markdown link destinations.
+        for start, end, url in url_ranges(content.plain):
+            if not any(span.start < end and span.end > start for span in content.spans):
+                content = content.stylize(Style.from_rich_style(RichStyle(
+                    underline=True, meta={"@click": f"link({url!r})"})), start, end)
         super().set_content(
             _CJKWrappingContent(
                 content.plain,
@@ -208,7 +217,51 @@ class _CJKMarkdownParagraph(MarkdownParagraph):
 class StreamingMarkdown(Markdown):
     """Keep stale blocks out of Textual's mouse-selection path."""
 
-    BLOCKS = {**Markdown.BLOCKS, "paragraph_open": _CJKMarkdownParagraph}
+    # Every prose block can contain a Markdown link (headings/table cells too).
+    # The shared click arbiter prevents its first click opening before a second
+    # click establishes text selection. Fences remain plain selectable code.
+    BLOCKS = {
+        name: type(f"Desktop{block.__name__}", (DesktopLinkClick, block), {})
+        for name, block in Markdown.BLOCKS.items()
+        if name not in {"fence", "code_block", "paragraph_open"}
+    }
+    BLOCKS.update({"fence": Markdown.BLOCKS["fence"], "code_block": Markdown.BLOCKS["code_block"], "paragraph_open": _CJKMarkdownParagraph})
+
+    def __init__(self, *args, **kwargs):
+        kwargs["open_links"] = False
+        super().__init__(*args, **kwargs)
+
+    class OpenLinkRequested(Message):
+        def __init__(self, url):
+            super().__init__()
+            self.url = url
+
+    def on_markdown_link_clicked(self, event):
+        event.stop()
+        if not self.screen.get_selected_text():
+            self.post_message(self.OpenLinkRequested(event.href))
+
+    def link_targets(self):
+        # Parse tokens to avoid fenced/inline code; never expose source offsets
+        # as rendered selection offsets. This list is keyboard navigation only.
+        from markdown_it import MarkdownIt
+
+        urls = []
+        for token in MarkdownIt().parse(self._markdown):
+            if token.type != "inline":
+                continue
+            depth = 0
+            for child in token.children or ():
+                if child.type == "link_open":
+                    depth += 1
+                    href = child.attrGet("href") or ""
+                    if href.lower().startswith(("http://", "https://")):
+                        urls.append(href)
+                elif child.type == "link_close":
+                    depth -= 1
+                elif child.type == "text" and not depth:
+                    urls.extend(url for _, _, url in url_ranges(child.content))
+        return list(dict.fromkeys(urls))
 
     class ContentAppended(Message):
         """The streamed fragment has been rendered into Markdown blocks."""
