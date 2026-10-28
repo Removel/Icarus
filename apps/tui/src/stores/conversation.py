@@ -155,6 +155,9 @@ class ConversationProjection:
                 self._ensure_candidate(*key).text = action.text
                 self._ensure_candidate(*key).completed = True
                 self._candidate_completed.add(key)
+                card = self._run_cards.pop(action.task_id, None)
+                if card is not None:
+                    card.completed = True
         elif isinstance(action, AppendThinkingDelta):
             key = action.task_id, action.step
             if key not in self._completed_thinking:

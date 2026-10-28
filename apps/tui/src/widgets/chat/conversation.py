@@ -495,7 +495,8 @@ class ConversationView(VerticalScroll):
         elif unit.kind == "run_card":
             widget = RunCard(unit.task_id)
             await self.mount(widget)
-            self._run_cards[unit.task_id] = widget
+            if not unit.completed:
+                self._run_cards[unit.task_id] = widget
             for child in unit.children:
                 if not self.render_valid():
                     return widget
@@ -522,6 +523,9 @@ class ConversationView(VerticalScroll):
                         arguments_json=child.arguments_json,
                     )
                     await widget.mount_record(tool)
+                    self._thinking.update(
+                        {(unit.task_id, step): block for step, block in widget.thinking.items()}
+                    )
                     self._tools[(unit.task_id, child.call_id)] = tool
                     if child.status in {"completed", "failed"}:
                         tool.complete(
@@ -590,6 +594,7 @@ class ConversationView(VerticalScroll):
             await assistant.complete_text(action.text)
             await assistant.finish()
             self._candidate_completed.add(key)
+            self._run_cards.pop(action.task_id, None)
         elif isinstance(action, AppendThinkingDelta):
             key = (action.task_id, action.step)
             if key not in self._completed_thinking:
@@ -622,6 +627,9 @@ class ConversationView(VerticalScroll):
             )
             self._tools[(action.task_id, action.call_id)] = tool
             await card.mount_record(tool)
+            self._thinking.update(
+                {(action.task_id, step): block for step, block in card.thinking.items()}
+            )
         elif isinstance(action, UpdateToolCompleted):
             key = (action.task_id, action.call_id)
             tool = self._tools.get(key)
@@ -633,6 +641,9 @@ class ConversationView(VerticalScroll):
                 )
                 self._tools[key] = tool
                 await card.mount_record(tool)
+                self._thinking.update(
+                    {(action.task_id, step): block for step, block in card.thinking.items()}
+                )
             tool.complete(
                 success=action.success,
                 error=action.error,

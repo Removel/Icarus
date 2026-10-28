@@ -1,4 +1,4 @@
-"""The Run is the only local scrolling owner; Assistant output is never clipped."""
+"""Execution groups follow assistant messages and grow up to a scroll limit."""
 
 import asyncio
 
@@ -27,7 +27,7 @@ from apps.tui.src.widgets.chat.message_cards import AssistantMessage
 from apps.tui.test.services.chat.test_runtime import Client
 
 
-def test_one_execution_record_per_run_despite_assistant_and_correction():
+def test_execution_records_split_after_each_assistant_not_after_correction():
     store = ChatStore()
     actions = (
         AppendUserMessage("t", "q"),
@@ -42,7 +42,12 @@ def test_one_execution_record_per_run_despite_assistant_and_correction():
         FinishTurn("t", "completed"),
     )
     store.apply_actions(actions)
-    assert len([u for u in store.conversation.units if u.kind == "run_card"]) == 1
+    cards = [u for u in store.conversation.units if u.kind == "run_card"]
+    assert len(cards) == 2
+    assert [[c.call_id for c in u.children if c.kind == "tool"] for u in cards] == [
+        ["a"], ["b"],
+    ]
+    assert [u.segment for u in cards] == [0, 1]
     assert [u.text for u in store.conversation.units if u.kind == "assistant"] == [
         "first answer",
         "full intermediate output",
@@ -87,7 +92,7 @@ def test_latest_thinking_below_fixed_records_old_thinking_archived_and_rebuild_s
             assert current.step == 2 and current.markdown_text == "new thinking"
             archived = records.query_one(ThinkingBlock)
             assert archived.step == 1 and archived.markdown_text == "old thinking"
-            assert records.region.height == fixed_height
+            assert records.region.height == fixed_height + 1
             assert current.region.y >= records.region.bottom
             app.chat_screen.rendered_revision = 0
             await app.chat_screen.refresh_chat()

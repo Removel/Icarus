@@ -133,12 +133,12 @@
     color: $icarus-muted;
 }
 
-.tool-records { height: 8; min-height: 8; max-height: 8; scrollbar-size-vertical: 1; scrollbar-gutter: stable; overflow-y: scroll; }
-ChatScreen.-short .tool-records { height: 3; min-height: 3; max-height: 3; }
+.tool-records { height: auto; max-height: 8; scrollbar-size-vertical: 1; scrollbar-size-horizontal: 0; scrollbar-gutter: stable; overflow-y: auto; }
+ChatScreen.-short .tool-records { max-height: 3; }
 .tool-block { margin-top: 0; border-left: none; padding: 0; background: $icarus-surface; }
 .run-card { border: none; padding: 0; background: $icarus-background; }
 .execution-records-frame { height: auto; border: solid $icarus-border; padding: 0 1; background: $icarus-surface; }
-.current-thinking { height: auto; padding: 0 1; }
+.current-thinking, .thinking-history { height: auto; padding: 0 1; }
 .run-card-label { color: $icarus-muted; }
 .thinking-block { margin-top: 0; }
 

@@ -41,7 +41,7 @@ def test_archived_thinking_accepts_late_complete_without_replacing_current(tmp_p
             await apply(AppendThinkingDelta("t", 2, "latest"))
             await apply(CompleteThinking("t", 1, "complete old"))
             card = app.chat_screen.query_one(RunCard)
-            archived = card.query_one(ToolRecords).query_one(ThinkingBlock)
+            archived = card.query_one(".thinking-history").query_one(ThinkingBlock)
             assert archived.markdown_text == "complete old"
             assert archived.completed
             assert (
@@ -55,7 +55,7 @@ def test_archived_thinking_accepts_late_complete_without_replacing_current(tmp_p
     asyncio.run(run())
 
 
-def test_run_record_height_constant_and_default_follows_newest(tmp_path):
+def test_run_record_height_grows_to_limit_and_default_follows_newest(tmp_path):
     async def run():
         client = Client()
 
@@ -82,7 +82,8 @@ def test_run_record_height_constant_and_default_follows_newest(tmp_path):
                 await app.chat_screen.refresh_chat()
             await pilot.pause()
             records = app.chat_screen.query_one(ToolRecords)
-            assert records.region.height == height == 8
+            assert height == 1
+            assert records.region.height == 8
             assert records.is_vertical_scroll_end
             assert records.show_vertical_scrollbar
             app.request_shutdown()

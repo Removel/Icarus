@@ -337,18 +337,22 @@ class ToolRecords(VerticalScroll):
 
 
 class RunCard(Vertical):
-    """One run: fixed-height archived execution log, then latest Thinking."""
+    """One assistant's execution group; hide the frame until tools arrive."""
 
     def __init__(self, task_id: str) -> None:
         super().__init__(classes="message run-card")
         self.task_id = task_id
         self.thinking: dict[int, ThinkingBlock] = {}
         self.latest_thinking: ThinkingBlock | None = None
+        self.has_tools = False
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="execution-records-frame"):
+        frame = Vertical(classes="execution-records-frame")
+        frame.display = False
+        with frame:
             yield Static("执行记录", markup=False, classes="run-card-label")
             yield ToolRecords()
+        yield Vertical(classes="thinking-history")
         yield Vertical(classes="current-thinking")
 
     async def _copy_thinking(self, source, parent):
@@ -368,10 +372,19 @@ class RunCard(Vertical):
 
     async def mount_record(self, widget):
         records = self.query_one(ToolRecords)
+        history = self.query_one(".thinking-history", Vertical)
+        if isinstance(widget, ToolBlock) and not self.has_tools:
+            self.has_tools = True
+            self.query_one(".execution-records-frame").display = True
+            for thinking in list(history.children):
+                archived = await self._copy_thinking(thinking, records)
+                archived.archived = True
+                archived.set_activity(False)
+        archive = records if self.has_tools else history
         if isinstance(widget, ThinkingBlock):
             latest = self.latest_thinking
             if latest is not None and widget.step > latest.step:
-                archived = await self._copy_thinking(latest, records)
+                archived = await self._copy_thinking(latest, archive)
                 archived.archived = True
                 archived.set_activity(False)
                 self.latest_thinking = None
@@ -380,7 +393,7 @@ class RunCard(Vertical):
                 self.latest_thinking = widget
             else:
                 widget.archived = True
-                await records.mount(widget)
+                await archive.mount(widget)
                 widget.set_activity(False)
             self.thinking[widget.step] = widget
         else:
@@ -388,6 +401,7 @@ class RunCard(Vertical):
         if records.following:
             records.call_after_refresh(
                 lambda: records.scroll_end(animate=False, immediate=True)
+                if records.following else None
             )
 
 

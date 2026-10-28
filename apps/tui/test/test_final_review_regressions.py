@@ -129,8 +129,8 @@ def test_snapshot_run_log_collects_next_tool_without_clipping_assistant(tmp_path
                 type(n).__name__
                 for n in view.children
                 if isinstance(n, (RunCard, AssistantMessage))
-            ] == ["RunCard", "AssistantMessage"]
-            assert len(list(view.query(RunCard))) == 1
+            ] == ["RunCard", "AssistantMessage", "RunCard"]
+            assert len(list(view.query(RunCard))) == 2
             assert [tool.call_id for tool in view.query(ToolBlock)] == ["a", "b"]
             app.request_shutdown()
 

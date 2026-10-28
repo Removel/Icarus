@@ -742,7 +742,7 @@ def test_conversation完整中间消息在后续tool开始后保持对话样式(
                 len(view.query(AssistantProgressBlock)),
                 len(cards),
                 direct_children,
-                view.query_one(ToolBlock) in cards[0].query(ToolBlock),
+                view.query_one(ToolBlock) in cards[1].query(ToolBlock),
             )
 
     (
@@ -759,11 +759,12 @@ def test_conversation完整中间消息在后续tool开始后保持对话样式(
     assert text == "This is useful context before I inspect the repo."
     assert at_top_level is True
     assert progress_count == 0
-    assert card_count == 1
+    assert card_count == 2
     assert order == [
         "WelcomeMessage",
         "RunCard",
         "AssistantMessage",
+        "RunCard",
     ]
     assert tool_in_second_card is True
 
