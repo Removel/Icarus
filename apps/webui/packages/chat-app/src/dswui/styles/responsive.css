@@ -1,0 +1,41 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* 移动端 */
+.dswui .mobile-only {
+  display: none;
+}
+@media (max-width: 767px) {
+  .dswui .mobile-only {
+    display: grid;
+  }
+  .dswui .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    transform: translateX(0);
+    box-shadow: var(--shadow-pop);
+  }
+  .dswui .sidebar.collapsed {
+    margin-left: 0;
+    transform: translateX(-100%);
+  }
+  .dswui .side-mask {
+    position: fixed;
+    inset: 0;
+    background: var(--overlay);
+    z-index: 39;
+  }
+  .dswui .msg-user .bubble {
+    max-width: 88%;
+  }
+  .dswui .welcome h1 {
+    font-size: 22px;
+  }
+  .dswui .new-chat kbd {
+    display: none;
+  }
+  .dswui .search-overlay {
+    padding-top: 68px;
+  }
+}

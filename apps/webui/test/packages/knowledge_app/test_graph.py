@@ -3,6 +3,7 @@ import os
 
 import pytest
 from playwright.sync_api import expect
+from test.navigation import follow_link
 
 from test_knowledge import fake_openkb, open_knowledge
 
@@ -10,7 +11,7 @@ from test_knowledge import fake_openkb, open_knowledge
 def open_network(page, **kwargs):
     calls = fake_openkb(page, **kwargs)
     open_knowledge(page)
-    page.get_by_role('link', name='文档关联', exact=True).click()
+    follow_link(page, '文档关联')
     expect(page.locator('.react-flow__node').first).to_be_visible()
     return calls
 

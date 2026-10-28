@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# A WSL drive remount can leave an existing terminal in a detached directory.
+# Check before Python imports or path resolution hide the actual I/O failure.
+if ! pwd -P >/dev/null 2>&1; then
+  echo "Icarus cannot access the current working directory. Run 'cd /', then re-enter the project using its absolute path and retry." >&2
+  exit 1
+fi
+
 script_path=$0
 while [ -L "$script_path" ]; do
   script_dir=$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)
@@ -18,9 +25,18 @@ if ! command -v "$python_bin" >/dev/null 2>&1; then
   echo "Icarus requires Python 3.11 or newer" >&2
   exit 1
 fi
-if ! "$python_bin" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
-  echo "Icarus requires Python 3.11 or newer" >&2
-  exit 1
-fi
+python_check_status=0
+"$python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 42)' || python_check_status=$?
+case "$python_check_status" in
+  0) ;;
+  42)
+    echo "Icarus requires Python 3.11 or newer" >&2
+    exit 1
+    ;;
+  *)
+    echo "Icarus Python failed to start. Check the interpreter and current working directory; this does not establish that Python is too old." >&2
+    exit 1
+    ;;
+esac
 
 exec "$python_bin" "$repo_root/scripts/icarus/main.py" "$@"

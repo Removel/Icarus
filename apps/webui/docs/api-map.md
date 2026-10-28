@@ -54,7 +54,7 @@
 | 订阅 | `session.subscribe` | 传状态返回的 workspace_key 与 session_id |
 | 恢复历史 | `session.get_history` | 每页最多 500，使用 after_sequence 游标；先订阅并缓存通知，再加载历史 |
 | 提交 | `session.submit` | 文本 prompt 与 submission_id；明确失败保留草稿，未知结果不自动重发 |
-| 引导 | `session.steer` | 当前 task_id、prompt 与 submission_id；accepted 表示已接收，user.correction 表示已应用。已结束或正在取消时恢复草稿，不自动创建新任务 |
+| 引导 | `session.steer` | 当前 task_id、prompt 与 submission_id；accepted 表示已接收，user.correction 表示已应用，其 payload.submission_id 对应原提交。按标识核对相同文本和断线恢复，旧事件无标识时按文本兼容。已结束或正在取消时恢复草稿，不自动创建新任务 |
 | 排队 | 本页队列 + `session.submit` | 执行或等待确认时 Enter 入队；前一任务结束且历史同步成功后依次提交。停止、发送失败或未知结果暂停队列；编辑、删除与继续由用户操作 |
 | 取消 | `session.cancel` | 逐个取消当前会话的 active_task_ids，等待 finished 通知更新状态 |
 | 实时更新 | `runtime.update` 通知 | 支持 user、assistant text/thinking、tool started/completed、task error/finished；未知类型忽略 |

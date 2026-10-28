@@ -1,382 +1,499 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Pencil, Plus, Send, Trash2 } from 'lucide-react';
-import { Button, Input, TextArea, Modal, SearchField, Tooltip } from '@icarus/ui';
-import type { Session } from './gateway';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { BrandMark, InfoTip, Select, transitionLayout, useNarrowLayout } from '@icarus/ui';
+import type { History, Session } from './gateway';
+import { applyUpdate, emptyTranscript } from './updates';
+import useChatPreference from './useChatPreference';
 import useChatSession from './useChatSession';
 import ChatTranscript from './ChatTranscript';
-import './chat.css';
+import ChatSettings, { type ChatSettingsProps, type ManagementPage } from './ChatSettings';
+import ChatDialog from './ChatDialog';
+import DswSidebar, { titleOf } from './DswSidebar';
+import DswComposer from './DswComposer';
+import { IconClose, IconSearch } from './dswui/Icons';
+import { pickWelcomeMessage } from './dswui/welcomeMessages';
+import './dswui/styles/index.css';
+import './chat-runtime.css';
+import { imageUrl, type ImageResource } from './imageResources';
 
-const titleOf = (session: Session) => session.title || session.first_user_input || '新会话';
-function sessionTime(date?: string | null) {
-  if (!date || !Number.isFinite(Date.parse(date))) return '';
-  const days = Math.max(0, Math.floor((Date.now() - Date.parse(date)) / 86400000));
-  return days === 0 ? '今天' : days === 1 ? '1 天前' : `${days} 天前`;
+function readEnterPreference() {
+  try {
+    return localStorage.getItem('icarus.chat.enterToSend') !== 'false';
+  } catch {
+    return true;
+  }
 }
 
-function SessionTitle({ title }: { title: string }) {
-  const viewport = useRef<HTMLSpanElement>(null);
-  const [distance, setDistance] = useState(0);
-  useEffect(() => {
-    const node = viewport.current;
-    if (!node) return;
-    const measure = () => setDistance(Math.max(0, node.scrollWidth - node.clientWidth));
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    measure();
-    return () => observer.disconnect();
-  }, [title]);
-  return (
-    <span
-      ref={viewport}
-      className={`chat-session-title${distance > 0 ? ' is-overflowing' : ''}`}
-      style={
-        {
-          '--title-travel': `-${distance}px`,
-          '--title-duration': `${Math.max(2.8, distance / 70 + 1.5)}s`,
-        } as CSSProperties
-      }
-    >
-      <span className="chat-session-title-text">
-        <span className="chat-title-change" key={title}>
-          {title}
-        </span>
-      </span>
-    </span>
-  );
-}
-
-export default function ChatApp({ hash, active }: { hash: string; active: boolean }) {
+export default function ChatApp({
+  hash,
+  active,
+  managementPage,
+  managementContent,
+  ...settings
+}: {
+  hash: string;
+  active: boolean;
+  managementPage?: ManagementPage;
+  managementContent?: ReactNode;
+} & ChatSettingsProps) {
   const chat = useChatSession(hash);
-  const [search, setSearch] = useState('');
-  const [deleting, setDeleting] = useState<Session>();
-  const {
-    workspace,
-    sessionId,
-    path,
-    setPath,
-    sessions,
-    transcript,
-    connected,
-    loading,
-    error,
-    draft,
-    setDraft,
-    busy,
-    submitting,
-    unknown,
-    guard,
-  } = chat;
+  const narrow = useNarrowLayout();
+  const [sidebarOpen, setSidebarOpen] = useState(() => !matchMedia('(max-width: 767px)').matches);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [connectionOpen, setConnectionOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [deleting, setDeleting] = useState<Session[]>([]);
+  const [greeting] = useState(() => pickWelcomeMessage());
+  const [enterToSend, setEnterPreference] = useState(readEnterPreference);
+  const [fontSize, setFontSize] = useChatPreference('icarus.chat.fontSize', 16);
+  const [wide, setWide] = useChatPreference('icarus.chat.wide', false);
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [exportError, setExportError] = useState('');
+  const setEnterToSend = (value: boolean) => {
+    setEnterPreference(value);
+    try {
+      localStorage.setItem('icarus.chat.enterToSend', String(value));
+    } catch {
+      /* Session only. */
+    }
+  };
   useEffect(() => {
-    setDeleting(undefined);
-  }, [workspace]);
-  const filtered = sessions.filter((session) =>
-    (titleOf(session) + ' ' + session.first_user_input)
-      .toLowerCase()
-      .includes(search.trim().toLowerCase()),
+    if (narrow) setSidebarOpen(false);
+  }, [narrow]);
+  useEffect(() => {
+    if (!active) {
+      setSettingsOpen(false);
+      setSearchOpen(false);
+      setConnectionOpen(false);
+      if (narrow) setSidebarOpen(false);
+    }
+  }, [active, narrow]);
+  useEffect(() => {
+    setDeleting([]);
+    setRenaming(false);
+  }, [chat.workspace]);
+  useEffect(() => {
+    setRenaming(false);
+  }, [chat.sessionId]);
+  const selected = chat.sessions.find((session) => session.session_id === chat.sessionId);
+  const empty = !chat.transcript.items.length && !chat.loading && !chat.submitting;
+  const newChat = () => {
+    if (chat.busy || chat.submitting) return;
+    if (narrow) setSidebarOpen(false);
+    chat.guard.requestLeave(() => {
+      chat.clearDraft();
+      chat.go({ workspace: chat.workspace });
+    });
+  };
+  const setDraft = chat.setDraft;
+  const restoreImages = chat.attachments.restore;
+  const compose = useCallback(
+    (text: string, resources?: ImageResource[]) => {
+      setDraft((current) => (current ? current + '\n' + text : text));
+      if (resources?.length) restoreImages(resources, chat.workspace, chat.sessionId);
+      requestAnimationFrame(() =>
+        document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus(),
+      );
+    },
+    [setDraft, restoreImages, chat.workspace, chat.sessionId],
   );
-  const selected = sessions.find((session) => session.session_id === sessionId);
-  const sessionList = useRef<HTMLElement>(null);
+  async function exportSession(session: Session) {
+    if (!chat.gateway) return;
+    setExportError('');
+    try {
+      let state = emptyTranscript();
+      let cursor = 0;
+      for (;;) {
+        const history = await chat.gateway.request<History>('session.get_history', {
+          workspace_path: chat.workspace,
+          session_id: session.session_id,
+          after_sequence: cursor,
+          limit: 500,
+        });
+        for (const update of history.records) state = applyUpdate(state, update);
+        if (!history.has_more) break;
+        if (history.next_after_sequence <= cursor) throw new Error('历史读取失败');
+        cursor = history.next_after_sequence;
+      }
+      const markdown =
+        '# ' +
+        titleOf(session) +
+        '\n\n' +
+        state.items
+          .filter((item) => item.kind === 'user' || item.kind === 'assistant')
+          .map(
+            (item) =>
+              `## ${item.kind === 'user' ? '你' : 'Icarus'}\n\n${item.text}${(item.resources ?? []).map((image) => `\n\n![图片](${new URL(imageUrl(image, chat.workspace, session.session_id), location.origin).href})`).join('')}`,
+          )
+          .join('\n\n');
+      const url = URL.createObjectURL(
+        new Blob([markdown], { type: 'text/markdown;charset=utf-8' }),
+      );
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download =
+        Array.from(titleOf(session), (char) =>
+          char.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(char) ? '_' : char,
+        ).join('') + '.md';
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : '导出失败');
+    }
+  }
   useEffect(() => {
     if (!active) return;
-    const list = sessionList.current;
-    const current = list?.querySelector<HTMLElement>('[aria-current="page"]');
-    if (!list || !current) return;
-    const bounds = list.getBoundingClientRect();
-    const item = current.getBoundingClientRect();
-    if (
-      item.top < bounds.top ||
-      item.bottom > bounds.bottom ||
-      item.left < bounds.left ||
-      item.right > bounds.right
-    )
-      current.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [active, sessionId, sessions, search]);
-  return (
-    <section className="page chat-page" aria-label="Agent 对话">
-      <form
-        className="chat-connection"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (path.trim()) chat.go({ workspace: path.trim() });
-        }}
-      >
-        <Input
-          aria-label="工作区路径"
-          placeholder="服务端工作区的绝对路径"
-          value={path}
-          onChange={setPath}
-          disabled={busy || submitting}
-        />
-        <Button htmlType="submit" disabled={!path.trim() || busy || submitting}>
-          连接工作区
-        </Button>
-        <span className={`chat-connection-status ${connected ? 'is-connected' : ''}`} role="status">
-          {connected ? '已连接' : workspace ? '未连接' : '选择工作区开始'}
-        </span>
-      </form>
-      {error && (
-        <div className="chat-error" role="alert">
-          <p>{error}</p>
-          <Button onClick={chat.reconnect}>重新连接</Button>
+    const keydown = (event: KeyboardEvent) => {
+      if (
+        !(event.ctrlKey || event.metaKey) ||
+        event.altKey ||
+        settingsOpen ||
+        searchOpen ||
+        connectionOpen ||
+        chat.guard.confirming ||
+        deleting.length > 0
+      )
+        return;
+      if (event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+      if (event.key.toLowerCase() === 'j') {
+        event.preventDefault();
+        newChat();
+      }
+    };
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  });
+  const connectionForm = (
+    <form
+      className="chat-connection"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!chat.path.trim() || chat.busy || chat.submitting) return;
+        setConnectionOpen(false);
+        setSettingsOpen(false);
+        chat.connectWorkspace();
+      }}
+    >
+      <div className="field">
+        <div className="chat-workspace-label">
+          <label htmlFor="chat-workspace-path">工作区路径</label>
+          <InfoTip label="工作区历史记录说明" content="历史记录仅保存在此浏览器，最多 5 条。" />
         </div>
-      )}
-      <div className="chat-workspace">
-        <aside className="chat-sessions" aria-label="会话管理">
-          <div className="chat-sessions-heading">
-            <h2>会话</h2>
-            <span>{sessions.length}</span>
-            <Button
-              theme="borderless"
-              icon={<Plus size={16} />}
-              aria-label="新建会话"
-              title="新建会话"
-              disabled={!connected || busy || submitting}
-              onClick={() =>
-                guard.requestLeave(() => {
-                  chat.clearDraft();
-                  void chat.createSession();
-                })
-              }
-            />
-          </div>
-          <SearchField value={search} onChange={setSearch} placeholder="搜索会话…" />
-          <nav ref={sessionList} className="chat-session-list" aria-label="会话列表">
-            {filtered.map((session) => (
-              <div className="chat-session-row" key={session.session_id}>
-                <Tooltip
-                  className="chat-session-popover"
-                  showArrow={false}
-                  motion={false}
-                  position="right"
-                  content={
-                    <div className="chat-session-tooltip">
-                      <strong>{titleOf(session)}</strong>
-                      {session.updated_at && (
-                        <span>
-                          最近对话 · {sessionTime(session.updated_at)} ·{' '}
-                          {new Date(session.updated_at).toLocaleString('zh-CN')}
-                        </span>
-                      )}
-                      {session.created_at && (
-                        <span>创建于 {new Date(session.created_at).toLocaleString('zh-CN')}</span>
-                      )}
-                    </div>
-                  }
-                >
-                  <button
-                    className={`chat-session ${session.session_id === sessionId ? 'is-selected' : ''}`}
-                    aria-current={session.session_id === sessionId ? 'page' : undefined}
-                    aria-label={titleOf(session)}
-                    disabled={busy || submitting}
-                    onClick={() => chat.go({ workspace, session: session.session_id })}
-                  >
-                    <SessionTitle title={titleOf(session)} />
-                  </button>
-                </Tooltip>
-                <Button
-                  className="chat-session-delete"
-                  theme="borderless"
-                  type="tertiary"
-                  icon={<Trash2 size={14} />}
-                  aria-label={`删除会话：${titleOf(session)}`}
-                  disabled={
-                    !connected ||
-                    busy ||
-                    submitting ||
-                    (session.session_id === sessionId &&
-                      (transcript.tasks.length > 0 || Boolean(draft) || chat.queue.length > 0))
-                  }
-                  onClick={() => setDeleting(session)}
-                />
-              </div>
-            ))}
-            {!filtered.length && (
-              <p className="chat-session-empty">
-                {search ? '没有匹配的会话' : connected ? '暂无会话' : ''}
-              </p>
-            )}
-          </nav>
-        </aside>
-        <div className="chat-conversation">
-          <header className="chat-conversation-heading">
-            <h2>
-              <span className="chat-title-change" key={selected ? titleOf(selected) : sessionId}>
-                {selected ? titleOf(selected) : sessionId ? '新会话' : '对话'}
-              </span>
-            </h2>
-            {(submitting || transcript.tasks.length > 0) && <span role="status">正在执行</span>}
-          </header>
-          <ChatTranscript
-            key={workspace + sessionId}
-            transcript={transcript}
-            active={active}
-            sessionId={sessionId}
-            submitting={submitting}
-            loading={loading || Boolean(workspace && !connected && !error)}
+        <div className="chat-workspace-path-row">
+          <input
+            id="chat-workspace-path"
+            type="text"
+            aria-label="工作区路径"
+            placeholder="服务端工作区的绝对路径"
+            value={chat.path}
+            onChange={(event) => chat.setPath(event.target.value)}
+            disabled={chat.busy || chat.submitting}
           />
-          {sessionId && (
-            <form
-              className="chat-compose"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void chat.send();
-              }}
-            >
-              {chat.queue.length > 0 && (
-                <div className="chat-queue" aria-label="待发送消息">
-                  <div className="chat-queue-heading">
-                    <span>
-                      待发送 · {chat.queue.length}
-                      {chat.queuePaused ? ' · 已暂停' : ''}
-                    </span>
-                    {chat.queuePaused && (
-                      <Button
-                        theme="borderless"
-                        size="small"
-                        disabled={!connected || busy || submitting || unknown}
-                        onClick={chat.resumeQueue}
-                      >
-                        继续队列
-                      </Button>
-                    )}
-                  </div>
-                  <ol>
-                    {chat.queue.map((item, index) => (
-                      <li key={item.id}>
-                        <span className="chat-queue-number">{index + 1}</span>
-                        <span className="chat-queue-text" title={item.text}>
-                          {item.text}
-                        </span>
-                        <Button
-                          theme="borderless"
-                          size="small"
-                          icon={<Pencil size={13} />}
-                          aria-label={`编辑待发送消息 ${index + 1}`}
-                          onClick={() => chat.editQueued(item.id)}
-                        />
-                        <Button
-                          theme="borderless"
-                          size="small"
-                          icon={<Trash2 size={13} />}
-                          aria-label={`删除待发送消息 ${index + 1}`}
-                          onClick={() => chat.removeQueued(item.id)}
-                        />
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-              <div className="chat-input-box">
-                <TextArea
-                  aria-label="发送消息"
-                  placeholder="输入消息…"
-                  value={draft}
-                  rows={1}
-                  onChange={setDraft}
-                  disabled={busy || unknown || loading}
-                  autosize={{ minRows: 1, maxRows: 5 }}
-                  onKeyDown={(event) => {
-                    if (
-                      !event.nativeEvent.isComposing &&
-                      !event.shiftKey &&
-                      event.nativeEvent.keyCode !== 229 &&
-                      event.key === 'Enter'
-                    ) {
-                      event.preventDefault();
-                      void chat.send();
-                    }
-                  }}
-                />
-                <div className="chat-compose-actions">
-                  {(submitting || transcript.tasks.length > 0) && (
-                    <Button disabled={!connected || busy} onClick={chat.cancel}>
-                      停止执行
-                    </Button>
-                  )}
-                  {unknown && (
-                    <Button disabled={busy || submitting} onClick={chat.clearDraft}>
-                      已核对历史，清除草稿
-                    </Button>
-                  )}
-                  {transcript.tasks.length > 0 && !unknown && (
-                    <Button
-                      disabled={!connected || loading || busy || submitting || !draft.trim()}
-                      onClick={() => void chat.send(true)}
-                    >
-                      引导当前任务
-                    </Button>
-                  )}
-                  <Button
-                    htmlType="submit"
-                    theme="solid"
-                    icon={<Send size={14} />}
-                    disabled={
-                      !connected || loading || busy || (unknown && submitting) || !draft.trim()
-                    }
-                  >
-                    {unknown
-                      ? '重试发送'
-                      : submitting || transcript.tasks.length > 0 || chat.queue.length > 0
-                        ? '排队发送'
-                        : '发送'}
-                  </Button>
-                </div>
-              </div>
-            </form>
+          {chat.workspaceHistory.length > 0 && (
+            <Select
+              className="chat-workspace-history"
+              aria-label="工作区历史记录"
+              value="历史记录"
+              optionList={chat.workspaceHistory.map((path) => ({ value: path, label: path }))}
+              onChange={chat.setPath}
+              disabled={chat.busy || chat.submitting}
+            />
           )}
         </div>
       </div>
-      <Modal
-        title="删除这段对话？"
-        className="chat-confirm"
-        width={360}
-        closable={false}
-        visible={Boolean(deleting)}
-        onCancel={() => {
-          if (!busy) setDeleting(undefined);
-        }}
-        maskClosable={!busy}
-        footer={
-          <>
-            <Button disabled={busy} onClick={() => setDeleting(undefined)}>
-              取消
-            </Button>
-            <Button
-              type="danger"
-              theme="solid"
-              loading={busy}
-              onClick={async () => {
-                if (deleting && (await chat.deleteSession(deleting.session_id)))
-                  setDeleting(undefined);
-              }}
-            >
-              删除
-            </Button>
-          </>
+      <div className="setting-row">
+        <span className="chat-connection-status" role="status">
+          {chat.connected ? '已连接' : chat.workspace ? '未连接' : '选择工作区开始'}
+        </span>
+        <button
+          type="submit"
+          className="btn btn-ghost"
+          disabled={!chat.path.trim() || chat.busy || chat.submitting}
+        >
+          连接工作区
+        </button>
+      </div>
+    </form>
+  );
+  return (
+    <div className="chat-workspace">
+      <section
+        className={`dswui app chat-page ${active ? '' : 'is-management'}`}
+        aria-label="Agent 对话"
+        style={
+          {
+            '--chat-font-size': `${fontSize}px`,
+            '--message-max': wide ? '1080px' : '840px',
+            ...(!active ? { width: sidebarOpen && !narrow ? '261px' : '0px' } : {}),
+          } as CSSProperties
         }
       >
-        {error && (
-          <p role="alert" className="form-error">
-            {error}
-          </p>
-        )}
-      </Modal>
-      <Modal
-        title="放弃未发送的消息？"
-        className="chat-confirm"
-        width={360}
-        closable={false}
-        visible={guard.confirming}
-        onCancel={guard.keepEditing}
-        footer={
-          <>
-            <Button onClick={guard.keepEditing}>继续编辑</Button>
-            <Button type="danger" theme="solid" disabled={busy} onClick={chat.discardDraft}>
-              放弃
-            </Button>
-          </>
-        }
-      />
-    </section>
+        <DswSidebar
+          chat={chat}
+          open={sidebarOpen}
+          narrow={narrow}
+          active
+          onToggle={(value) => transitionLayout(() => setSidebarOpen(value), false)}
+          onNewChat={newChat}
+          onSearch={() => setSearchOpen(true)}
+          onSettings={() => setSettingsOpen(true)}
+          onDelete={setDeleting}
+          onExport={(session) => void exportSession(session)}
+          managementPage={managementPage}
+          managementPaths={settings.managementPaths}
+          onOpenManagement={settings.onOpenManagement}
+        />
+        <div className="main" hidden={!active} inert={narrow && sidebarOpen}>
+          <div
+            className={`topbar conversation-topbar chat-conversation-heading ${empty ? 'dsw-welcome-topbar' : ''} ${sidebarOpen ? '' : 'sidebar-is-collapsed'}`}
+          >
+            <div className="conversation-title-wrap">
+              {renaming && selected ? (
+                <div className="conversation-title-editor" data-value={titleDraft || '新对话'}>
+                  <input
+                    className="conversation-title-input"
+                    aria-label="修改对话标题"
+                    autoFocus
+                    maxLength={80}
+                    value={titleDraft}
+                    onFocus={(event) => event.target.select()}
+                    onChange={(event) => setTitleDraft(event.target.value)}
+                    onBlur={async () => {
+                      if (
+                        !titleDraft.trim() ||
+                        (await chat.renameSession(selected.session_id, titleDraft))
+                      )
+                        setRenaming(false);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.nativeEvent.isComposing) return;
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        event.currentTarget.blur();
+                      }
+                      if (event.key === 'Escape') setRenaming(false);
+                    }}
+                  />
+                </div>
+              ) : (
+                <h2 className="conversation-title" title={selected ? titleOf(selected) : undefined}>
+                  <button
+                    className="chat-title-edit"
+                    disabled={!selected || !chat.connected}
+                    aria-label="修改对话标题"
+                    onClick={() => {
+                      if (selected) {
+                        setTitleDraft(titleOf(selected));
+                        setRenaming(true);
+                      }
+                    }}
+                  >
+                    {empty ? '' : selected ? titleOf(selected) : '新会话'}
+                  </button>
+                </h2>
+              )}
+            </div>
+            {(chat.submitting || chat.transcript.tasks.length > 0) && (
+              <span className="chat-running" role="status">
+                正在执行
+              </span>
+            )}
+            <span className="chat-connection-status" role="status">
+              {chat.connected ? '已连接' : ''}
+            </span>
+          </div>
+          {chat.error && (
+            <div className="error-card chat-error" role="alert">
+              <p>{chat.error}</p>
+              <button className="mini-btn" onClick={chat.reconnect}>
+                重新连接
+              </button>
+            </div>
+          )}
+          {exportError && (
+            <p className="chat-error error-card" role="alert">
+              {exportError}
+            </p>
+          )}
+          <div className={empty ? 'welcome' : 'dsw-conversation-body'}>
+            <div className="welcome-heading" hidden={!empty}>
+              <span className="welcome-mark">
+                <BrandMark size={34} />
+              </span>
+              <h1>{greeting}</h1>
+            </div>
+            <div className="dsw-transcript-slot" hidden={empty}>
+              <ChatTranscript
+                workspace={chat.workspace}
+                key={chat.workspace + chat.sessionId}
+                transcript={chat.transcript}
+                active={active}
+                sessionId={chat.sessionId}
+                submitting={chat.submitting}
+                loading={chat.loading || Boolean(chat.workspace && !chat.connected && !chat.error)}
+                onCompose={compose}
+              />
+            </div>
+            <div className={empty ? 'welcome-composer' : 'dsw-composer-slot'}>
+              <DswComposer
+                chat={chat}
+                enterToSend={enterToSend}
+                onConnect={() => setConnectionOpen(true)}
+              />
+            </div>
+          </div>
+        </div>
+        <ChatSettings
+          {...settings}
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          connectionForm={connectionForm}
+          enterToSend={enterToSend}
+          setEnterToSend={setEnterToSend}
+          fontSize={fontSize}
+          setFontSize={setFontSize}
+          wide={wide}
+          setWide={setWide}
+          gateway={chat.gateway}
+          deepSearch={chat.deepSearch}
+          setDeepSearch={chat.setDeepSearch}
+        />
+        <ChatDialog
+          open={connectionOpen}
+          label="切换工作区"
+          onClose={() => setConnectionOpen(false)}
+        >
+          <div className="dialog">
+            <div className="dialog-head">
+              <h2>工作区</h2>
+              <button
+                className="icon-btn"
+                aria-label="关闭工作区"
+                onClick={() => setConnectionOpen(false)}
+              >
+                <IconClose />
+              </button>
+            </div>
+            <div className="dialog-body">{connectionForm}</div>
+          </div>
+        </ChatDialog>
+        <ChatDialog open={searchOpen} label="搜索对话" search onClose={() => setSearchOpen(false)}>
+          <div className="search-dialog">
+            <div className="search-dialog-input">
+              <IconSearch />
+              <input
+                autoFocus
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="搜索会话…"
+                placeholder="搜索对话标题和首条消息..."
+              />
+              <button onClick={() => setSearchOpen(false)} aria-label="关闭搜索">
+                ×
+              </button>
+            </div>
+            {query && (
+              <div className="search-results" role="list" aria-label="搜索结果">
+                {chat.sessions
+                  .filter((session) =>
+                    (titleOf(session) + ' ' + session.first_user_input)
+                      .toLowerCase()
+                      .includes(query.trim().toLowerCase()),
+                  )
+                  .map((session) => (
+                    <button
+                      className="search-result"
+                      key={session.session_id}
+                      aria-label={titleOf(session)}
+                      onClick={() => {
+                        setSearchOpen(false);
+                        if (narrow) setSidebarOpen(false);
+                        chat.go({ workspace: chat.workspace, session: session.session_id });
+                      }}
+                    >
+                      <span className="search-result-icon">
+                        <IconSearch />
+                      </span>
+                      <span className="search-result-copy">
+                        <strong>{titleOf(session)}</strong>
+                        <span>{session.first_user_input.slice(0, 100)}</span>
+                      </span>
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
+        </ChatDialog>
+        <ChatDialog
+          open={deleting.length > 0}
+          label={deleting.length > 1 ? `删除选择的 ${deleting.length} 个对话？` : '删除这段对话？'}
+          onClose={() => {
+            if (!chat.busy) setDeleting([]);
+          }}
+        >
+          <div className="confirm-modal">
+            <h3>
+              {deleting.length > 1 ? `删除选择的 ${deleting.length} 个对话？` : '删除这段对话？'}
+            </h3>
+            {chat.deleteError && <p role="alert">{chat.deleteError}</p>}
+            <div className="confirm-actions">
+              <button
+                className="confirm-cancel"
+                disabled={chat.busy}
+                onClick={() => setDeleting([])}
+              >
+                取消
+              </button>
+              <button
+                className="confirm-ok danger"
+                disabled={chat.busy}
+                onClick={async () => {
+                  const deleted = await chat.deleteSessions(
+                    deleting.map((session) => session.session_id),
+                  );
+                  setDeleting((items) =>
+                    items.filter((session) => !deleted.includes(session.session_id)),
+                  );
+                }}
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </ChatDialog>
+        <ChatDialog
+          open={chat.guard.confirming}
+          label="放弃未发送的消息？"
+          onClose={chat.guard.keepEditing}
+        >
+          <div className="confirm-modal">
+            <h3>放弃未发送的消息？</h3>
+            <div className="confirm-actions">
+              <button className="confirm-cancel" onClick={chat.guard.keepEditing}>
+                继续编辑
+              </button>
+              <button
+                className="confirm-ok danger"
+                disabled={chat.busy}
+                onClick={chat.discardDraft}
+              >
+                放弃
+              </button>
+            </div>
+          </div>
+        </ChatDialog>
+      </section>
+      <div
+        className={`chat-management-root ${sidebarOpen && !narrow ? '' : 'sidebar-is-collapsed'}`}
+        hidden={active}
+        inert={narrow && sidebarOpen}
+      >
+        {managementContent}
+      </div>
+    </div>
   );
 }

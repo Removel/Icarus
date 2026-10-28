@@ -17,9 +17,21 @@ pnpm build
 node --env-file=.env.local server/index.mjs
 ```
 
-默认打开 `http://127.0.0.1:8080`。`pnpm start` 直接读取进程环境；生产入口不会隐式加载仓库根 `.env`。开发模式 `pnpm dev` 才从仓库根目录读取 `ICARUS_` 配置，并监听 `127.0.0.1:5173`。Vite preview 仅用于构建预览，不提供生产认证与代理。
+默认打开 `http://127.0.0.1:8080`。`pnpm start` 直接读取进程环境；生产入口不会隐式加载仓库根 `.env`。开发模式 `pnpm dev` 从仓库根目录读取 `ICARUS_` 配置和服务端 `RELA_MEM_API_TOKEN`，并监听 `127.0.0.1:5173`。Vite preview 仅用于构建预览，不提供生产认证与代理。
+
+构建会为超过 1 KB 且压缩有效的 JS、CSS、HTML、SVG 生成 `.br` / `.gz` 副本。部署时保留整个 `apps/shell/dist`，Node 入口按 `Accept-Encoding` 协商并返回 `Vary: Accept-Encoding`，不在请求时压缩。没有副本时可回退到原文件。哈希资源继续使用一年 immutable 缓存，HTML 使用 `no-cache`；反向代理应保留这些响应头。
+
+聊天历史会在当前浏览器的 IndexedDB 缓存最多 12 个会话、保留 7 天，刷新后先展示快照，再从服务端重建历史校准。缓存不可用或连续失败时自动停用，不阻塞 RPC；删除会话会清除对应缓存。排查旧快照时可在浏览器开发者工具的 Application / IndexedDB 中删除 `icarus.webui.history`，无需修改后端数据。性能实现与验证见 [WebUI 性能改造](spec/2026-10-24-webui-performance/plan.md)。
 
 ## 配置
+
+图片输入依赖新版 Gateway 的 `POST/GET /resources`，Vite 与生产 Node 入口均代理到
+`ICARUS_GATEWAY_ENDPOINT`。更新后重启 Gateway；生产环境重新构建 WebUI 并重启 Node，
+开发环境更新代理配置后重启 Vite。反向代理的请求体上限应允许单张 20 MiB 原始图片。
+图片暂存在 Gateway 的 incoming/webui 目录，由既有 Agent 导入器写入会话 assets；
+WebUI 进程不挂载或读取 Agent 数据目录。移除草稿不删除服务端资源，暂存文件目前不自动回收。
+消息中的图片链接受当前入口认证保护，Markdown 导出包含这些链接，不嵌入图片或凭据，
+离线阅读需要另行保存图片。没有图片输入能力的模型仍由服务端报告错误，浏览器不判断供应商。
 
 | 变量 | 默认值或用途 |
 | --- | --- |
@@ -31,9 +43,15 @@ node --env-file=.env.local server/index.mjs
 | `ICARUS_MEM0_API_KEY` | Mem0 管理 API Key；全列表访问要求管理员权限 |
 | `ICARUS_OPENKB_ENDPOINT` | `http://127.0.0.1:7566` |
 | `ICARUS_OPENKB_API_TOKEN` | OpenKB Bearer token |
+| `ICARUS_RELATIONSHIP_ENDPOINT` | `http://127.0.0.1:8767`；`/api/rela` 剥离前缀后转发到 rela-mem |
+| `RELA_MEM_API_TOKEN` | rela-mem Bearer token，仅在服务端读取，不使用 `VITE_` 前缀 |
 | `ICARUS_GATEWAY_ENDPOINT` | `http://127.0.0.1:8765`；填写 HTTP(S) origin，代理负责升级连接 |
 
 后端地址不支持路径前缀或内嵌用户名密码。服务凭据只存在于 Node 进程，入口的 Authorization、Cookie 和客户端伪造的服务凭据不会转发到后端。健康检查 `GET /health` 无需认证，只表示 WebUI 进程存活，不代表后端可用。
+
+通过 `icarus start webui` 启动时，启动器会从仓库根 `.env` 白名单读取上述 rela endpoint 与 Token，进程环境优先。rela-mem 是 WebUI 的可选依赖：未启动时仍能使用对话和其他管理模块，人物页单独报告失败。修改代理配置后需重启 Vite 或生产 Node 入口；更新前端需重新构建。
+
+人物工作台支持单项显式写入；超时或连接中断可能已在服务端生效，页面会保留输入并阻止自动重试，应关闭表单、刷新记录核对后再提交。圈子没有单条 GET 接口，深链接与刷新通过分页遍历圈子列表定位，大量圈子时会增加请求。人物数据不按当前对话工作区隔离；人物合并、身份重绑、归档专用流程与关系图不在本次范围。
 
 非本机部署应由 HTTPS 反向代理终止 TLS，保留浏览器的 `Host`、`Authorization`、`Origin` 以及 WebSocket 的 `Upgrade`、`Connection` 请求头。将 `ICARUS_WEBUI_ORIGIN` 配置为外部 HTTPS origin，并将 WebSocket 空闲超时设置为适合长对话的值。入口校验 Host，不信任 `X-Forwarded-*` 来决定允许来源。所有非 GET/HEAD API 请求及 WebSocket 都需匹配配置的 Origin；命令行验证写入时同样需要发送该请求头。
 
@@ -54,7 +72,7 @@ docker run --rm --env-file .env.local -e ICARUS_WEBUI_HOST=0.0.0.0 -p 127.0.0.1:
 node --env-file=.env.local server/check-services.mjs
 ```
 
-该命令只读取真实 Mem0 列表、OpenKB 库列表、Gateway runtime 状态，不打印业务数据或凭据，不调用模型。失败以非零状态退出。它不能替代以下隔离验收：使用专用测试用户、空测试知识库及临时 Agent 工作区，验证记忆创建、修正、历史、暂停恢复、删除和刷新持久化；验证知识导入与阅读；提交一条简短 Agent 消息，核对文本、工具状态、取消与重连。模型冒烟需已配置的有效凭据，结果与模拟响应回归分开记录。不要以生产资料作为测试数据。
+该命令只读取真实 rela 人物首条列表、Mem0 列表、OpenKB 库列表、Gateway runtime 状态，不打印业务数据或凭据，不调用模型。任一服务失败以非零状态退出，包括可选的 rela；该诊断不是启动前置条件，HTTP 健康与业务鉴权应分别核对。它不能替代以下隔离验收：使用专用测试用户、空测试知识库及临时 Agent 工作区，验证记忆创建、修正、历史、暂停恢复、删除和刷新持久化；验证知识导入与阅读；提交一条简短 Agent 消息，核对文本、工具状态、取消与重连。人物真实写入应使用隔离数据并另行明确授权。模型冒烟需已配置的有效凭据，结果与模拟响应回归分开记录。不要以生产资料作为测试数据。
 
 ## 升级和回滚
 
@@ -68,8 +86,13 @@ node --env-file=.env.local server/check-services.mjs
 | 页面 401 | 核对入口 Basic 凭据；浏览器可能缓存旧凭据 |
 | 写入或对话 403 | 核对 `ICARUS_WEBUI_ORIGIN` 与地址栏 origin、反向代理是否保留 Host 和 Origin |
 | API 502 | 检查后端进程、容器网络地址和端口；运行真实服务检查 |
+| 图片接口不可用 | 更新并重启 Gateway，确认 Vite/Node 和外层反向代理转发 `/resources` |
+| 图片上传 413 | 单张限制 20 MiB，同时检查外层反向代理请求体限制 |
 | Mem0 401/403 | 检查服务管理 Key；全列表需要管理员权限 |
+| 人物页鉴权失败 | 检查服务端 `RELA_MEM_API_TOKEN`，修改后重启代理入口 |
+| 人物写入结果待核对 | 刷新对应人物/字段/关系/圈子确认结果，不自动重放请求 |
 | 对话断线 | 检查 Gateway `/health`、WebSocket 转发和代理超时；客户端会恢复历史，不自动重发输入 |
+| Gateway `8765/` 返回 404 | Gateway 是 API/RPC 服务，没有网页首页；WebUI 默认访问 `http://127.0.0.1:8080`，并验证同源 `/rpc` 的实际握手与 RPC，不能只凭健康接口判断可用 |
 | 发送结果未知 | 核对历史后再重试；重试复用 submission ID，幂等范围是同一 Gateway 进程，进程重启后不要盲目重试 |
 | 记忆搜索缺少条目 | 列表最多读取 1000 条，筛选和排序仅覆盖已加载条目 |
 

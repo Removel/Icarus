@@ -1,0 +1,52 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* ============================ 弹层 ============================ */
+.dswui .overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: fade-in 0.15s var(--ease);
+}
+.dswui .dialog {
+  width: 100%;
+  max-width: 760px;
+  max-height: min(84vh, 600px);
+  background: var(--bg-base);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-l1);
+}
+.dswui .dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-l1);
+}
+.dswui .dialog-head h2 {
+  font-size: 16px;
+  margin: 0;
+  font-weight: 600;
+}
+.dswui .dialog-subtitle {
+  margin-top: 3px;
+  color: var(--label-tertiary);
+  font-size: 12px;
+}
+.dswui .settings-dialog {
+  width: 760px;
+  max-width: min(760px, 100%);
+  height: 500px;
+  max-height: calc(100vh - 32px);
+  border-radius: 24px;
+  border: none;
+  background: var(--bg-layer-1);
+  box-shadow: none;
+}

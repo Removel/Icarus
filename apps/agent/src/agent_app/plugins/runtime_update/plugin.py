@@ -41,6 +41,7 @@ from icarus.core.contracts.process import (
     ProcessUpdatedEvent,
 )
 from agent_app.plugins.runtime_update import tool_preview
+from agent_app.contracts.web_search import WebSearchUpdatedEvent
 from icarus.core.models.messages import TextPart
 from icarus.core.runtime_update import RuntimeUpdate, RuntimeUpdateType
 from typing import cast
@@ -71,6 +72,16 @@ class RuntimeUpdatePlugin(BasePlugin):
         update = self._project(source_plugin_id, event)
         if update is not None:
             await self._publish_update(update)
+
+    @handles(WebSearchUpdatedEvent, optional=True)
+    async def on_web_search(self, source_plugin_id: str, event: WebSearchUpdatedEvent) -> None:
+        if source_plugin_id != "web-search":
+            return
+        await self._publish_update(RuntimeUpdate(workspace_key=self.workspace_key,
+            session_id=self.session_id, task_id=event.task_id, type="web_search.updated",
+            payload={"status": event.status, "total": event.total, "queries": list(event.queries),
+                "sources": self._redactor.redact(list(event.sources)), "pages": self._redactor.redact(list(event.pages)),
+                "browsing": event.browsing, "notice": event.notice}, occurred_at=event.occurred_at))
 
     def _project(
         self, source_plugin_id: str, event: Event
@@ -108,6 +119,7 @@ class RuntimeUpdatePlugin(BasePlugin):
         elif isinstance(event, TaskSteerAppliedEvent):
             update_type = "user.correction"
             payload = {
+                "submission_id": event.request_event_id,
                 "text": (
                     event.content
                     if event.display_text is None

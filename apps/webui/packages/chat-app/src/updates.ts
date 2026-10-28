@@ -1,12 +1,20 @@
 import type { RuntimeUpdate } from './gateway';
+import { parseSearchState, type WebSearchState } from './webSearch';
+import { parseImageResources, type ImageResource } from './imageResources';
+import { taskFailure } from '@icarus/ui';
 
 export type ChatItem = {
   id: string;
   taskId?: string;
-  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error';
+  submissionId?: string;
+  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'search';
+  search?: WebSearchState;
   text: string;
+  resources?: ImageResource[];
   label?: string;
   detail?: string;
+  arguments?: string;
+  toolStatus?: 'running' | 'success' | 'error' | 'stopped';
   final: boolean;
   pending?: boolean;
   live?: boolean;
@@ -41,9 +49,29 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
     return {
       ...state,
       items: state.items.map((item) =>
-        item.taskId === task && item.pending && item.label
-          ? { ...item, pending: false, label: '引导未应用' }
-          : item,
+        item.taskId === task &&
+        item.search &&
+        (item.search.status === 'searching' || item.search.browsing)
+          ? {
+              ...item,
+              final: true,
+              search: {
+                ...item.search,
+                status:
+                  p.status === 'cancelled' ? 'stopped' : item.search.total ? 'complete' : 'error',
+                browsing: false,
+              },
+            }
+          : item.taskId === task && item.kind === 'tool' && !item.final
+            ? {
+                ...item,
+                final: true,
+                toolStatus: 'stopped',
+                text: p.status === 'cancelled' ? '已停止' : '未完成',
+              }
+            : item.taskId === task && item.pending && item.label
+              ? { ...item, pending: false, label: '引导未应用' }
+              : item,
       ),
       tasks: state.tasks.filter((id) => id !== task),
       finished: new Set([...state.finished, task]),
@@ -51,12 +79,24 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
   let item: ChatItem;
   const step = typeof p.step === 'number' && p.step >= 1 ? p.step : 1;
   const key = `${task}:${step}`;
-  if (update.type === 'user.message' || update.type === 'user.correction') {
+  if (update.type === 'web_search.updated') {
+    const search = parseSearchState(p);
+    if (!search || state.finished.has(task)) return state;
+    item = {
+      id: `search:${task}`,
+      kind: 'search',
+      text: '',
+      search,
+      final: search.status !== 'searching' && !search.browsing,
+    };
+  } else if (update.type === 'user.message' || update.type === 'user.correction') {
     item = {
       id: `user:${task}:${update.type}:${update.sequence ?? ''}`,
       kind: 'user',
       text,
+      resources: parseImageResources(p.resources),
       final: true,
+      submissionId: typeof p.submission_id === 'string' ? p.submission_id : undefined,
       label: update.type === 'user.correction' ? '引导已应用' : undefined,
     };
   } else if (
@@ -82,6 +122,8 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
       label: String(p.tool_name ?? '工具'),
       text: completed ? (p.success ? '已完成' : '执行失败') : '执行中',
       final: completed,
+      arguments: completed ? existing?.arguments : JSON.stringify(p.arguments ?? {}, null, 2),
+      toolStatus: completed ? (p.success ? 'success' : 'error') : 'running',
       detail: completed
         ? typeof (p.error ?? p.output_preview) === 'string'
           ? String(p.error ?? p.output_preview)
@@ -93,7 +135,7 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
     item = {
       id: `error:${task}`,
       kind: 'error',
-      text: String(p.message ?? '执行失败'),
+      text: taskFailure(String(p.message ?? '执行失败')),
       final: true,
     };
   } else return state;
@@ -101,7 +143,13 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
   item.live = live;
   if (update.type === 'user.message' || update.type === 'user.correction') {
     const pending = state.items.find(
-      (row) => row.pending && row.text === text && (!row.taskId || row.taskId === task),
+      (row) =>
+        (!row.taskId || row.taskId === task) &&
+        (item.submissionId
+          ? row.submissionId === item.submissionId
+          : row.pending &&
+            row.text === text &&
+            Boolean(row.label) === (update.type === 'user.correction')),
     );
     if (pending)
       return { ...state, items: state.items.map((row) => (row === pending ? item : row)) };

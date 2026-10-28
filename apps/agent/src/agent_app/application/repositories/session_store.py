@@ -255,7 +255,7 @@ class SessionStore:
             )
             return row.title if row is not None else None
 
-    async def save_title(self, identity: SessionIdentity, title: str) -> str:
+    async def save_title(self, identity: SessionIdentity, title: str, *, overwrite: bool = False) -> str:
         title = " ".join(title.split()).strip()[:80]
         if not title:
             raise ValueError("Session title cannot be empty")
@@ -266,15 +266,20 @@ class SessionStore:
             )
             if row is None or row.deleted_at is not None:
                 raise SessionNotFoundError(identity.session_id)
-            await db.execute(
+            statement = (
                 sqlite_insert(_SessionTitleRow)
                 .values(
                     workspace_key=identity.workspace_key,
                     session_id=identity.session_id,
                     title=title,
                 )
-                .on_conflict_do_nothing()
             )
+            statement = (
+                statement.on_conflict_do_update(
+                    index_elements=["workspace_key", "session_id"], set_={"title": title}
+                ) if overwrite else statement.on_conflict_do_nothing()
+            )
+            await db.execute(statement)
             saved = await db.get(
                 _SessionTitleRow, (identity.workspace_key, identity.session_id)
             )

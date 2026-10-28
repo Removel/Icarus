@@ -91,7 +91,11 @@ export default function useMemories(active: boolean, selectedId: string | null, 
     detailLoading,
     missingId,
     selected: detail?.id === selectedId ? detail : memories.find((item) => item.id === selectedId),
-    refresh: () => setVersion((value) => value + 1),
+    refresh: () => {
+      // Consumers must wait for the refreshed list before restoring focus.
+      setLoading(true);
+      setVersion((value) => value + 1);
+    },
     upsert: (item: MemoryEntry) => {
       // A deep-linked detail can belong to another page; keep the current page bounded.
       setMemories((rows) => rows.map((row) => (row.id === item.id ? item : row)));

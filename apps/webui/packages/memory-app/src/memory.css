@@ -1,51 +1,38 @@
-.memory-page .page-heading {
-  margin-bottom: 12px;
-}
-.memory-page .page-heading-main {
-  flex: 1;
-}
-.memory-context {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  width: 100%;
-  min-width: 0;
-}
-.memory-context .form-field {
-  display: flex;
-  align-items: center;
+.memory-page .toolbar.memory-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) repeat(3, 128px) auto;
   gap: 8px;
-  margin: 0;
+  padding: 0 0 20px;
+}
+.memory-filters .search-field {
+  width: 100%;
+  max-width: none;
+}
+.memory-filters.toolbar .icarus-select {
   min-width: 0;
+  width: 100%;
 }
-.memory-context .form-label {
-  font-size: 12px;
-  color: var(--muted);
-  margin: 0;
-  white-space: nowrap;
-}
-.memory-context .form-field .semi-select {
-  width: 132px;
-  min-width: 0;
-}
-.memory-state-nav {
+.memory-filter-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
-  border-bottom: 1px solid var(--line);
+  justify-content: flex-end;
+  gap: 4px;
 }
-.memory-state-nav .content-tabs {
-  flex: 1;
-  min-width: 0;
+@media (max-width: 1200px) {
+  .memory-page .toolbar.memory-filters {
+    grid-template-columns: minmax(180px, 1fr) repeat(3, 128px);
+  }
+  .memory-filter-actions {
+    grid-column: 1 / -1;
+  }
 }
-.memory-state-nav .content-tabs .semi-tabs-bar {
-  border-bottom: 0;
-}
-.memory-page .toolbar {
-  padding: 16px 0;
-}
-.memory-page .toolbar .search-field {
-  max-width: 460px;
+@media (max-width: 900px) {
+  .memory-page .toolbar.memory-filters {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .memory-filters .search-field {
+    grid-column: 1 / -1;
+  }
 }
 .memory-board {
   min-width: 0;
@@ -94,8 +81,8 @@
 }
 .memory-entry:hover,
 .memory-entry:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 4px 16px #0000000a;
+  border-color: var(--strong-line);
+  background: var(--selected);
 }
 ::view-transition-group(*) {
   animation-duration: 180ms;
@@ -149,7 +136,7 @@
   height: 45px;
   overflow: hidden;
   font-size: 14px;
-  font-weight: 550;
+  font-weight: 500;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
@@ -432,35 +419,6 @@
 @media (max-width: 700px) {
   .memory-page.page {
     padding-top: 18px;
-  }
-  .memory-page .page-heading {
-    align-items: flex-end;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  .memory-context {
-    gap: 8px;
-  }
-  .memory-page .toolbar {
-    padding: 12px 0;
-  }
-  .memory-context .form-field {
-    display: block;
-    flex: 1;
-    min-width: 0;
-  }
-  .memory-context .form-label {
-    margin-bottom: 5px;
-  }
-  .memory-context .form-field .semi-select {
-    width: 100%;
-  }
-  .memory-context .semi-select-selection-text {
-    font-size: 13px;
-  }
-  .memory-page .heading-actions .semi-button {
-    padding-inline: 10px;
-    font-size: 12px;
   }
   .memory-entry-open {
     padding: 12px;

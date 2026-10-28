@@ -1,5 +1,6 @@
 import type { KnowledgeBase, Source, WikiPage } from './types';
 import type { GraphData } from './evidence';
+import { serviceFailure } from '@icarus/ui';
 
 const origin = (
   (import.meta as ImportMeta & { env: Record<string, string | undefined> }).env
@@ -31,7 +32,7 @@ async function request<T>(
       throw new Error('无权访问知识服务，请检查登录状态或服务授权。');
     if (response.status === 404) throw new Error('内容不存在或已被移除，请刷新列表。');
     if (response.status === 409) throw new Error('资料标识存在歧义或正在处理，请刷新后重试。');
-    throw new Error('知识服务请求失败（' + response.status + '），请稍后重试。');
+    throw new Error(serviceFailure('知识服务', response.status));
   }
   try {
     return (await response.json()) as T;

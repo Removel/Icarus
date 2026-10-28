@@ -7,6 +7,7 @@ import {
   Modal,
   SearchField,
   EmptyState,
+  Field,
   Toast,
   navigate,
 } from '@icarus/ui';
@@ -166,59 +167,39 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
         {surface !== 'graph' && (
           <div className="knowledge-context">
             {data.names?.length ? (
-              <Select
-                className="base-switch"
-                aria-label="选择知识库"
-                value={name}
-                disabled={Boolean(compiling)}
-                onChange={(value) => go(surface, { base: String(value) })}
-                optionList={data.names.map((value) => ({ label: value, value }))}
-              />
+              <Field label="知识库">
+                <Select
+                  className="base-switch"
+                  aria-label="选择知识库"
+                  value={name}
+                  disabled={Boolean(compiling)}
+                  onChange={(value) => go(surface, { base: String(value) })}
+                  optionList={data.names.map((value) => ({ label: value, value }))}
+                />
+              </Field>
             ) : (
               <span>知识库</span>
             )}
             <Button
-              icon={<Plus size={15} />}
+              className="knowledge-create"
+              aria-label="新建知识库"
+              title="新建知识库"
+              icon={<Plus size={16} />}
               disabled={!data.names || Boolean(data.listError)}
               onClick={() => setAction({ kind: 'create' })}
             >
-              新建知识库
+              <span className="knowledge-action-label">新建知识库</span>
             </Button>
-            <Button icon={<RefreshCw size={15} />} disabled={data.loading} onClick={data.refresh}>
-              刷新知识库
-            </Button>
-            {base && graph && (surface === 'sources' || surface === 'pages') && (
-              <div className="knowledge-filters">
-                <SearchField
-                  value={search}
-                  onChange={setSearch}
-                  placeholder={surface === 'sources' ? '搜索资料名称…' : '搜索标题与摘要…'}
-                />
-                <Select
-                  aria-label="筛选内容类型"
-                  value={type}
-                  onChange={(value) => setType(String(value))}
-                  optionList={
-                    surface === 'sources'
-                      ? [
-                          { value: 'all', label: '全部格式' },
-                          ...[...new Set(base.documents.map((item) => item.display_type))].map(
-                            (value) => ({ value, label: value }),
-                          ),
-                        ]
-                      : [
-                          { value: 'all', label: '全部类型' },
-                          ...Object.entries(kindLabel).map(([value, label]) => ({ value, label })),
-                        ]
-                  }
-                />
-                {(search || type !== 'all') && (
-                  <Button type="tertiary" theme="borderless" onClick={clearFilters}>
-                    清除筛选
-                  </Button>
-                )}
-              </div>
-            )}
+            <Button
+              className="icon-button"
+              theme="borderless"
+              type="tertiary"
+              aria-label="刷新知识库"
+              title="刷新知识库"
+              icon={<RefreshCw size={16} />}
+              disabled={data.loading}
+              onClick={data.refresh}
+            />
             {surface === 'sources' && (
               <Button
                 className="knowledge-import"
@@ -228,6 +209,38 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
                 onClick={() => setAction({ kind: 'import' })}
               >
                 导入资料
+              </Button>
+            )}
+          </div>
+        )}
+        {base && graph && (surface === 'sources' || surface === 'pages') && (
+          <div className="knowledge-filters">
+            <SearchField
+              value={search}
+              onChange={setSearch}
+              placeholder={surface === 'sources' ? '搜索资料名称…' : '搜索标题与摘要…'}
+            />
+            <Select
+              aria-label="筛选内容类型"
+              value={type}
+              onChange={(value) => setType(String(value))}
+              optionList={
+                surface === 'sources'
+                  ? [
+                      { value: 'all', label: '全部格式' },
+                      ...[...new Set(base.documents.map((item) => item.display_type))].map(
+                        (value) => ({ value, label: value }),
+                      ),
+                    ]
+                  : [
+                      { value: 'all', label: '全部类型' },
+                      ...Object.entries(kindLabel).map(([value, label]) => ({ value, label })),
+                    ]
+              }
+            />
+            {(search || type !== 'all') && (
+              <Button type="tertiary" theme="borderless" onClick={clearFilters}>
+                清除筛选
               </Button>
             )}
           </div>
@@ -247,7 +260,7 @@ export default function KnowledgeApp({ active, hash }: { active: boolean; hash: 
           </div>
         )}
         {((!data.names && !data.listError) || data.loading) && (
-          <LoadingIndicator label="正在加载知识库" />
+          <LoadingIndicator overlay={Boolean(base)} label="正在加载知识库" />
         )}
         {invalidBase && (
           <EmptyState

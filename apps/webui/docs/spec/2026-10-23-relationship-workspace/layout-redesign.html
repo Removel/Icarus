@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Icarus · 人物管理布局稿</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #fff;
+      --surface: #fff;
+      --sidebar: #faf8f9;
+      --subtle: #f1f3f5;
+      --raised: #faf8f9;
+      --selected: rgba(38, 49, 72, .06);
+      --ink: #0f1115;
+      --muted: #61666b;
+      --faint: #93989f;
+      --line: rgba(0, 0, 0, .1);
+      --strong-line: #81858c;
+      --accent: #a45b70;
+      --accent-soft: #f4e9ed;
+      --success: #287447;
+      --danger: #b64657;
+      --shadow: 0 0 1px #0003, 0 12px 36px #00000014;
+      --sider-width: 261px;
+    }
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --canvas: #151517;
+      --surface: #1b1b1c;
+      --sidebar: #1b1b1c;
+      --subtle: #2c2c2e;
+      --raised: #232324;
+      --selected: rgba(255, 255, 255, .08);
+      --ink: #faf8f9;
+      --muted: #adb2b8;
+      --faint: #777c83;
+      --line: rgba(255, 255, 255, .12);
+      --strong-line: #9599a0;
+      --accent: #e0a8b6;
+      --accent-soft: #382a30;
+      --success: #75bd92;
+      --danger: #db737f;
+      --shadow: 0 0 1px #fff2, 0 16px 44px #0006;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--ink);
+      background: var(--canvas);
+      font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { color: inherit; cursor: pointer; }
+    button, a, input, select { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .42; }
+    h1, h2, h3, p { margin: 0; }
+    svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    [hidden] { display: none !important; }
+    .icon { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; color: var(--muted); background: transparent; }
+    .icon:hover { color: var(--ink); background: var(--selected); }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      min-height: 36px; padding: 0 14px; border: 1px solid transparent; border-radius: 18px;
+      background: transparent; font-size: 13px; white-space: nowrap;
+    }
+    .btn:hover { background: var(--selected); }
+    .btn.primary { color: #fff; background: var(--accent); }
+    html[data-theme="dark"] .btn.primary { color: #2b2024; }
+    .btn.primary:hover { filter: brightness(.94); }
+    .btn.secondary { border-color: var(--line); }
+    .btn.small { min-height: 30px; padding: 0 10px; font-size: 12px; }
+    .btn.danger { color: var(--danger); }
+    .mono { font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; }
+    .prototype-bar {
+      height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 14px;
+      border-bottom: 1px solid var(--line); background: var(--subtle); color: var(--muted); font-size: 12px;
+    }
+    .prototype-bar strong { color: var(--ink); font-weight: 550; }
+    .prototype-bar .divider { width: 1px; height: 14px; background: var(--line); }
+    .prototype-bar .spacer { flex: 1; }
+    .prototype-bar button { min-height: 26px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; }
+    .prototype-bar button:hover { color: var(--ink); background: var(--selected); }
+    .app { display: flex; height: calc(100dvh - 36px); min-width: 0; overflow: hidden; }
+    .sidebar {
+      position: relative; z-index: 8; display: flex; flex: 0 0 var(--sider-width); flex-direction: column;
+      width: var(--sider-width); min-width: 0; padding: 0 12px 12px; border-right: 1px solid var(--line);
+      background: var(--sidebar); transition: margin-left 180ms ease;
+    }
+    .app.sidebar-closed .sidebar { margin-left: calc(-1 * var(--sider-width)); visibility: hidden; }
+    .brand-row { display: flex; align-items: center; height: 56px; margin-bottom: 10px; padding-left: 4px; }
+    .brand { display: flex; align-items: center; gap: 8px; color: var(--accent); font-size: 19px; font-weight: 650; letter-spacing: -.5px; }
+    .brand-mark { width: 23px; height: 23px; stroke-width: 1.5; }
+    .brand-actions { display: flex; gap: 8px; margin-left: auto; }
+    .new-chat {
+      display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; height: 40px;
+      border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: 0 2px 5px #2631480c;
+      font-weight: 500;
+    }
+    .new-chat:hover { background: var(--selected); }
+    .session-region { flex: 1; min-height: 0; margin: 24px 4px 0; overflow: auto; scrollbar-width: thin; }
+    .session-group + .session-group { margin-top: 20px; }
+    .session-label { padding: 0 10px 6px; color: var(--faint); font-size: 12px; }
+    .session-item { display: flex; align-items: center; width: 100%; height: 40px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; }
+    .session-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-item:hover { background: var(--selected); }
+    .sidebar-foot { padding-top: 12px; border-top: 1px solid var(--line); }
+    .profile-trigger { display: flex; align-items: center; gap: 10px; width: 100%; height: 44px; padding: 4px 8px; border: 0; border-radius: 10px; background: transparent; text-align: left; }
+    .profile-trigger:hover { background: var(--selected); }
+    .account-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--accent); background: var(--accent-soft); font-size: 12px; }
+    .profile-trigger .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .profile-trigger svg { width: 16px; color: var(--muted); }
+    .collapsed-nav { position: fixed; z-index: 12; top: 44px; left: 14px; display: flex; align-items: center; gap: 14px; }
+    .collapsed-actions { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 22px; background: var(--surface); box-shadow: var(--shadow); }
+    .workspace { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; background: var(--canvas); }
+    .management-header {
+      position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      align-items: center; flex: 0 0 96px; min-height: 96px; padding: 10px 16px 30px;
+    }
+    .management-heading { display: flex; align-items: center; gap: 7px; padding-left: 0; }
+    .management-heading h1 { font-size: 14px; font-weight: 500; }
+    .content-tabs { display: flex; align-items: center; justify-content: center; gap: 4px; transform: translateY(16px); }
+    .content-tabs button { min-height: 36px; padding: 0 13px; border: 0; border-radius: 18px; background: transparent; color: var(--muted); }
+    .content-tabs button:hover { background: var(--selected); color: var(--ink); }
+    .content-tabs button[aria-current="page"] { color: var(--ink); background: var(--subtle); font-weight: 500; }
+    .header-actions { display: flex; justify-content: flex-end; transform: translateY(16px); }
+    .management-body { flex: 1; min-height: 0; overflow: auto; }
+    .page { width: min(1120px, 100%); min-height: 100%; margin: 0 auto; padding: 16px 32px 40px; }
+    .filters { display: flex; align-items: center; gap: 8px; padding-bottom: 18px; }
+    .search { position: relative; flex: 1; min-width: 160px; max-width: 480px; }
+    .search svg { position: absolute; top: 9px; left: 13px; width: 16px; height: 16px; color: var(--muted); pointer-events: none; }
+    .search input, .select, .resolver input {
+      width: 100%; height: 36px; border: 1px solid transparent; border-radius: 18px; background: var(--subtle); color: var(--ink); outline: 0;
+    }
+    .search input { padding: 0 14px 0 38px; }
+    .search input:focus, .select:focus, .resolver input:focus { border-color: var(--strong-line); }
+    .select { width: 132px; padding: 0 12px; cursor: pointer; }
+    .archive-check { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 8px; color: var(--muted); font-size: 12px; white-space: nowrap; cursor: pointer; }
+    .archive-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+    .list-caption { display: flex; align-items: baseline; gap: 12px; padding: 0 2px 10px; }
+    .list-caption h2 { font-size: 13px; font-weight: 550; }
+    .list-caption span { color: var(--muted); font-size: 12px; }
+    .list-caption .page-count { margin-left: auto; white-space: nowrap; }
+    #peopleList { container-type: inline-size; }
+    .people-list { display: grid; grid-template-columns: minmax(0, 280px); gap: 16px; }
+    #circlesView { container-type: inline-size; }
+    .circle-list { display: grid; grid-template-columns: minmax(0, 360px); gap: 16px; }
+    @container (min-width: 800px) { .circle-list { grid-template-columns: repeat(2, minmax(0, 360px)); } }
+    .person-row { --person-tone: var(--muted); display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: start; gap: 12px; width: 100%; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-align: left; }
+    .person-row[data-kind="agent"] { --person-tone: var(--accent); }
+    .person-row:hover, .person-row:focus-visible, .circle-row:hover { background: var(--selected); }
+    .person-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .person-row .person-distinction { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+    .person-row .person-distinction small { margin: 0; color: var(--muted); font-size: 10px; }
+    .person-row .person-distinction .mono { font-family: inherit; font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+    .person-row .avatar { width: 36px; height: 36px; border-radius: 10px; font-size: 17px; color: var(--person-tone); background: color-mix(in srgb, var(--person-tone) 8%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--person-tone) 12%, transparent); }
+    .person-row .avatar svg { width: 20px; height: 20px; }
+    .person-row .person-name-line { min-height: 24px; flex-wrap: wrap; gap: 6px 8px; }
+    .person-row .person-name { font-size: 16px; font-weight: 600; max-width: 100%; }
+    .person-row .person-kind { display: flex; flex-wrap: wrap; gap: 6px; }
+    .person-row .person-kind > span { padding: 1px 6px; border-radius: 6px; font-size: 10px; line-height: 16px; color: var(--person-tone); background: color-mix(in srgb, var(--person-tone) 8%, var(--surface)); }
+    .person-row .person-kind .archived { color: var(--danger); }
+    .person-row .aliases { margin-top: 6px; line-height: 1.7; }
+    .person-row .person-name, .person-row .aliases { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+    @container (min-width: 600px) { .people-list { grid-template-columns: repeat(2, minmax(0, 280px)); } }
+    @container (min-width: 960px) { .people-list { grid-template-columns: repeat(3, minmax(0, 280px)); } }
+    .avatar { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--subtle); color: var(--muted); font-size: 14px; font-weight: 550; }
+    .person-primary { min-width: 0; }
+    .person-name-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .person-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 550; }
+    .kind { flex: none; padding: 1px 6px; border-radius: 5px; color: var(--muted); background: var(--subtle); font-size: 10px; font-weight: 400; }
+    .kind.archived { color: var(--danger); }
+    .aliases { display: block; margin-top: 5px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .person-distinction { min-width: 0; }
+    .person-distinction .mono { display: block; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+    .person-distinction small { display: block; margin-top: 5px; color: var(--faint); font-size: 11px; }
+    .row-arrow { width: 16px; color: var(--faint); }
+    .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 16px; }
+    .pagination > span { margin-right: auto; color: var(--muted); font-size: 12px; }
+    .empty { display: grid; place-items: center; min-height: 320px; padding: 40px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); text-align: center; }
+    .empty svg { width: 26px; height: 26px; margin-bottom: 12px; }
+    .empty strong { display: block; margin-bottom: 6px; color: var(--ink); font-weight: 500; }
+    .empty p { max-width: 360px; font-size: 12px; line-height: 1.8; }
+    .circle-row { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: start; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-align: left; }
+    .circle-row .avatar { width: 36px; height: 36px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--line); }
+    .circle-row .avatar svg { width: 20px; height: 20px; color: var(--muted); }
+    .circle-row > div { min-width: 0; }
+    .circle-row h3 { font-size: 15px; font-weight: 550; overflow-wrap: anywhere; }
+    .circle-row p { margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .circle-row .card-id { display: flex; gap: 6px; align-items: center; margin-top: 8px; font-family: inherit; font-size: 12px; }
+    .circle-row .card-id small { font-size: 10px; color: var(--muted); }
+    dialog { color: var(--ink); }
+    dialog::backdrop { background: rgba(15, 17, 21, .46); backdrop-filter: blur(2px); }
+    .person-dialog {
+      --detail-gutter: 28px;
+      width: min(860px, calc(100vw - 32px)); max-width: none; height: min(760px, calc(100dvh - 96px)); max-height: none;
+      margin: auto; padding: 0; overflow: hidden; border: 0; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow);
+    }
+    .person-dialog[open] { display: flex; flex-direction: column; }
+    .dialog-top { display: flex; align-items: center; flex: none; min-height: 54px; padding: 8px var(--detail-gutter) 0; background: var(--raised); color: var(--muted); font-size: 12px; }
+    .dialog-top .trail { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .trail button { padding: 3px 5px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
+    .trail button:hover { background: var(--selected); color: var(--ink); }
+    .dialog-top > .icon { margin-left: auto; }
+    .person-hero { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: start; gap: 16px; flex: none; padding: 16px var(--detail-gutter) 24px; background: var(--raised); }
+    .person-hero .avatar { width: 44px; height: 44px; border-radius: 12px; font-size: 20px; box-shadow: inset 0 0 0 1px var(--line); }
+    .hero-copy { flex: 1; min-width: 0; }
+    .hero-copy h2 { overflow-wrap: anywhere; font-size: 22px; font-weight: 600; line-height: 1.4; }
+    .hero-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+    .hero-meta { color: var(--muted); font-size: 12px; }
+    .hero-meta p { margin-top: 6px; line-height: 1.8; overflow-wrap: anywhere; }
+    .copy-id { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin-top: 10px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 12px; text-align: left; }
+    .copy-id small { font-size: 10px; }
+    .copy-id code { min-width: 0; overflow-wrap: anywhere; font-family: inherit; }
+    .hero-actions { display: flex; gap: 6px; }
+    .detail-tabs { display: flex; flex: none; gap: 24px; padding: 0 var(--detail-gutter); background: var(--raised); overflow-x: auto; }
+    .detail-tabs button { position: relative; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--muted); white-space: nowrap; }
+    .detail-tabs button[aria-selected="true"] { color: var(--ink); font-weight: 500; }
+    .detail-tabs button[aria-selected="true"]::after { content: ""; position: absolute; right: 0; bottom: 0; left: 0; height: 2px; border-radius: 2px; background: var(--accent); }
+    .detail-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+    .detail-content { width: 100%; margin: 0; padding: 24px var(--detail-gutter); }
+    .person-dialog .btn { border-radius: 8px; }
+    .detail-content .empty { min-height: 210px; padding: 36px 20px; border-style: dashed; background: var(--raised); }
+    .section-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .section-heading > div { flex: 1; }
+    .section-heading h3 { font-size: 14px; font-weight: 550; }
+    .section-heading p { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .profile-filter { display: flex; position: relative; align-items: center; flex: 0 1 320px; min-width: 0; height: 36px; padding: 0 10px; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .profile-filter svg { width: 16px; height: 16px; color: var(--muted); }
+    .profile-filter input { min-width: 0; width: 100%; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); }
+    .profile-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+    .profile-list { border-top: 1px solid var(--line); }
+    .profile-item { padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .profile-key { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+    .profile-key code { color: var(--muted); font: 12px "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+    .profile-key .source { margin-left: auto; color: var(--faint); font-size: 11px; white-space: nowrap; }
+    .profile-value { color: var(--ink); font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .profile-value.json { padding: 10px 12px; border-radius: 8px; background: var(--subtle); font: 12px/1.7 "Cascadia Code", Consolas, monospace; white-space: pre-wrap; }
+    .null-value { color: var(--muted); font-style: italic; }
+    .profile-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 9px; color: var(--muted); font-size: 11px; }
+    .profile-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+    .text-action { min-height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; }
+    .text-action:hover { color: var(--ink); background: var(--selected); }
+    .field-history { margin-top: 10px; padding: 12px; border-radius: 8px; background: var(--raised); }
+    .field-history summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+    .history-line { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; padding: 10px 0 0; font-size: 12px; }
+    .history-line time { color: var(--muted); }
+    .relation-list, .membership-list, .alias-list { border-top: 1px solid var(--line); }
+    .relation-row { display: flex; align-items: center; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+    .relation-row > div { flex: 1; min-width: 0; }
+    .relation-sentence { font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+    .relation-sentence button { padding: 0; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--accent); }
+    .relation-row small, .membership-row small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .membership-row, .alias-row { display: flex; align-items: center; gap: 12px; min-height: 58px; border-bottom: 1px solid var(--line); }
+    .membership-row > div, .alias-row > span { flex: 1; min-width: 0; }
+    .membership-row strong { font-weight: 500; }
+    .capability-note { margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); color: var(--muted); font-size: 12px; line-height: 1.8; }
+    .resolver { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 8px; margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
+    .resolver h3 { grid-column: 1 / -1; font-size: 13px; font-weight: 550; }
+    .resolver p { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+    .resolver input { padding: 0 12px; border-color: var(--line); }
+    .alias-row code { color: var(--muted); font-size: 11px; }
+    .notes-dialog { width: min(680px, calc(100vw - 40px)); max-height: calc(100dvh - 64px); padding: 0; border: 0; border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+    .notes-content { padding: 26px 28px; }
+    .notes-content h2 { margin-bottom: 8px; font-size: 20px; }
+    .notes-content h3 { margin: 22px 0 8px; font-size: 14px; }
+    .notes-content p, .notes-content li { color: var(--muted); font-size: 13px; line-height: 1.85; }
+    .notes-content ul { margin: 8px 0; padding-left: 20px; }
+    .notes-close { float: right; }
+    .account-menu { position: fixed; z-index: 70; width: 164px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+    .account-menu button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 40px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; }
+    .account-menu button:hover, .account-menu button.active { background: var(--selected); }
+    .account-menu button.active { color: var(--accent); }
+    .account-menu hr { height: 1px; margin: 4px 6px; border: 0; background: var(--line); }
+    .menu-mask { position: fixed; inset: 0; z-index: 60; }
+    .toast { position: fixed; z-index: 100; right: 24px; bottom: 24px; max-width: min(420px, calc(100vw - 32px)); padding: 11px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); color: var(--muted); font-size: 12px; }
+    @media (max-width: 1100px) {
+      .page { padding-inline: 24px; }
+      .archive-check { padding-inline: 4px; }
+    }
+    @media (max-width: 900px) {
+      .filters { flex-wrap: wrap; }
+      .search { max-width: none; flex-basis: 100%; }
+      .filters .select { flex: 1; }
+      .person-distinction small { display: none; }
+    }
+    @media (max-width: 700px) {
+      .prototype-bar .prototype-description, .prototype-bar .divider { display: none; }
+      .prototype-bar { padding-inline: 10px; }
+      .sidebar { position: fixed; inset: 36px auto 0 0; box-shadow: var(--shadow); }
+      .app.sidebar-closed .sidebar { visibility: hidden; }
+      .management-header { grid-template-columns: 1fr auto; grid-template-rows: 40px 40px; flex-basis: 96px; padding: 8px 12px; }
+      .management-heading { margin-left: 104px; }
+      .content-tabs { grid-column: 1 / -1; grid-row: 2; transform: none; }
+      .header-actions { grid-column: 2; grid-row: 1; transform: none; }
+      .header-actions .btn { width: 36px; padding: 0; }
+      .header-actions .btn span { display: none; }
+      .page { padding: 14px 16px 30px; }
+      .list-caption .caption-hint { display: none; }
+      .person-row .avatar { width: 38px; height: 38px; }
+      .pagination { flex-wrap: wrap; }
+      .pagination > span { flex-basis: 100%; }
+      .person-dialog { --detail-gutter: 20px; width: 100vw; height: 100dvh; border-radius: 0; }
+      .person-hero { grid-template-columns: 44px minmax(0, 1fr); }
+      .hero-actions { grid-column: 2; }
+      .hero-copy h2 { font-size: 20px; }
+      .detail-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr 2fr; gap: 4px; }
+      .detail-tabs button { white-space: normal; font-size: 12px; }
+      .section-heading { align-items: flex-start; flex-wrap: wrap; }
+      .section-heading > div { flex-basis: calc(100% - 50px); }
+      .profile-toolbar { flex-wrap: nowrap; }
+      .profile-filter { flex: 1; }
+      .profile-key { flex-wrap: wrap; }
+      .profile-key .source { margin-left: 0; }
+      .history-line { grid-template-columns: 1fr; gap: 3px; }
+      .resolver { grid-template-columns: 1fr; }
+      .resolver h3, .resolver p { grid-column: 1; }
+      .notes-content { padding: 22px 20px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="prototype-bar" aria-label="布局稿工具栏">
+    <strong>人物管理 · 布局稿 A</strong><span class="divider"></span>
+    <span class="prototype-description">独立静态稿，所有人物与操作结果均为演示，不连接后端</span>
+    <span class="spacer"></span>
+    <button id="themeToggle">切换深色</button>
+    <button id="notesOpen">设计说明</button>
+  </div>
+
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar" aria-label="会话管理">
+      <div class="brand-row">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19C8 18 9 14 10 5c4 3 7 7 10 14-5-2-8-2-16 0Z"/><path d="M8 16c3-2 6-2 9 0"/></svg>
+          <span>Icarus</span>
+        </div>
+        <div class="brand-actions">
+          <button class="icon" aria-label="搜索对话" data-demo="对话搜索不在本稿范围内"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+          <button class="icon" id="sidebarClose" aria-label="收起会话列表"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+        </div>
+      </div>
+      <button class="new-chat" data-demo="返回对话由生产 Shell 处理"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>开启新对话</button>
+      <div class="session-region">
+        <div class="session-group"><div class="session-label">今天</div>
+          <button class="session-item"><span>整理项目周报</span></button>
+          <button class="session-item"><span>Icarus 人物管理设计</span></button>
+          <button class="session-item"><span>知识库阅读体验</span></button>
+        </div>
+        <div class="session-group"><div class="session-label">昨天</div>
+          <button class="session-item"><span>Agent 记忆机制讨论</span></button>
+          <button class="session-item"><span>WebUI 交互走查</span></button>
+        </div>
+        <div class="session-group"><div class="session-label">7 天内</div>
+          <button class="session-item"><span>产品需求梳理</span></button>
+          <button class="session-item"><span>接口能力核对</span></button>
+          <button class="session-item"><span>首页视觉优化</span></button>
+        </div>
+      </div>
+      <div class="sidebar-foot">
+        <button class="profile-trigger" id="accountTrigger" aria-haspopup="menu" aria-expanded="false">
+          <span class="account-avatar">I</span><span class="who">Icarus</span>
+          <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <div class="collapsed-nav" id="collapsedNav" hidden>
+      <button class="icon" id="sidebarOpen" aria-label="展开会话列表"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+      <div class="collapsed-actions">
+        <button class="icon" aria-label="搜索对话"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+        <button class="icon" aria-label="新建会话"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+    </div>
+
+    <section class="workspace">
+      <header class="management-header">
+        <div class="management-heading">
+          <button class="icon" aria-label="返回对话" data-demo="静态稿不修改对话路由"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+          <h1>人物</h1>
+        </div>
+        <nav class="content-tabs" aria-label="人物管理分类">
+          <button id="peopleTab" aria-current="page">人物</button>
+          <button id="circlesTab">圈子</button>
+        </nav>
+        <div class="header-actions"><button class="btn primary" id="createButton"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>添加人物</span></button></div>
+      </header>
+
+      <main class="management-body">
+        <div class="page">
+          <section id="peopleView" aria-label="人物卡片">
+            <div class="filters">
+              <label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="personSearch" type="search" placeholder="搜索姓名或别名…" aria-label="搜索姓名或别名"></label>
+              <select class="select" id="kindFilter" aria-label="筛选人物类型">
+                <option value="all">全部类型</option><option value="human">真人</option><option value="virtual">虚拟人物</option><option value="user">用户</option><option value="agent">助手</option>
+              </select>
+              <label class="archive-check"><input id="archiveFilter" type="checkbox">包含已归档</label>
+              <button class="icon" aria-label="刷新人物" title="刷新" data-demo="正式接入时重新请求当前筛选条件"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.8-1L20 12M4 12l2.1 5a7 7 0 0 0 11.8-1"/></svg></button>
+            </div>
+            <div class="list-caption"><h2>人物卡片</h2><span class="caption-hint">姓名可重复，使用别名与 Person ID 区分候选</span><span class="page-count" id="pageCount"></span></div>
+            <div id="peopleList"></div>
+            <nav class="pagination" aria-label="人物分页" id="peoplePagination"><span>游标分页 · 不显示未经接口提供的总数</span><button class="btn secondary small" id="previousPage">上一页</button><button class="btn secondary small" id="nextPage">下一页</button></nav>
+          </section>
+
+          <section id="circlesView" aria-label="圈子列表" hidden>
+            <div class="filters"><label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="circleSearch" type="search" placeholder="搜索圈子名称…" aria-label="搜索圈子名称"></label><select class="select" aria-label="筛选圈子类型"><option>全部类型</option><option>工作</option><option>家庭</option><option>兴趣</option></select><label class="archive-check"><input type="checkbox">包含已归档</label></div>
+            <div class="list-caption"><h2>圈子</h2><span class="caption-hint">成员与人物档案分开管理</span><span class="page-count">本页 3 个</span></div>
+            <div class="circle-list" id="circleList"></div>
+          </section>
+        </div>
+      </main>
+    </section>
+  </div>
+
+  <div class="menu-mask" id="menuMask" hidden></div>
+  <div class="account-menu" id="accountMenu" role="menu" hidden>
+    <button role="menuitem" data-demo="知识库入口迁移属于后续生产改造"><svg viewBox="0 0 24 24"><path d="M4 5a3 3 0 0 1 3-2h5v16H7a3 3 0 0 0-3 2V5Zm16 0a3 3 0 0 0-3-2h-5v16h5a3 3 0 0 1 3 2V5Z"/></svg>知识库</button>
+    <button role="menuitem" data-demo="记忆入口迁移属于后续生产改造"><svg viewBox="0 0 24 24"><path d="M9 4a4 4 0 0 0-4 4v1a4 4 0 0 0-1 7 4 4 0 0 0 5 4 4 4 0 0 0 6 0 4 4 0 0 0 5-4 4 4 0 0 0-1-7V8a4 4 0 0 0-4-4 4 4 0 0 0-6 0Z"/><path d="M9 4v16M15 4v16"/></svg>记忆</button>
+    <button role="menuitem" class="active" aria-current="page"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 11a3 3 0 1 0 0-6M18 15a6 6 0 0 1 4 6"/></svg>人物</button>
+    <hr>
+    <button role="menuitem" data-demo="系统设置保持现有交互"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L14.5 3h-5l-.3 3.1a8 8 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.3 3.1h5l.3-3.1a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1Z"/></svg>系统设置</button>
+  </div>
+
+  <dialog class="person-dialog" id="personDialog" aria-labelledby="detailName">
+    <div class="dialog-top"><div class="trail" id="detailTrail"><span>人物档案</span></div><button class="icon" id="detailClose" aria-label="关闭人物详情"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <div class="person-hero">
+      <div class="avatar" id="detailAvatar"></div>
+      <div class="hero-copy"><div class="hero-title"><h2 id="detailName"></h2><span id="detailKind"></span></div><div class="hero-meta" id="detailMeta"></div></div>
+      <div class="hero-actions"><button class="btn secondary" data-demo="PATCH 人物基础信息的表单在后续接入阶段实现"><svg viewBox="0 0 24 24"><path d="m4 16-1 5 5-1L19 9l-4-4L4 16ZM13 7l4 4"/></svg><span>编辑</span></button></div>
+    </div>
+    <nav class="detail-tabs" id="detailTabs" aria-label="人物详情分类">
+      <button data-section="profile" aria-selected="true">稳定档案</button><button data-section="relations" aria-selected="false">关系</button><button data-section="circles" aria-selected="false">圈子</button><button data-section="identity" aria-selected="false">别名与身份核对</button>
+    </nav>
+    <div class="detail-scroll"><div class="detail-content" id="detailContent"></div></div>
+  </dialog>
+
+  <dialog class="notes-dialog" id="notesDialog">
+    <div class="notes-content">
+      <button class="icon notes-close" id="notesClose" aria-label="关闭设计说明"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      <h2>人物卡片 + 阅读式档案</h2>
+      <p>这不是生产页面，也不包含真实请求。示例数据只用于验证信息密度、同名区分、详情阅读和响应式空间。</p>
+      <h3>核心取舍</h3>
+      <ul><li>外层完整复用记忆/知识库的管理页节奏：侧栏保留、紧凑标题、居中分类、主操作在右侧。</li><li>首页采用响应式紧凑人物卡片，宽区三列、中区两列、窄区一列；头像与姓名/类型组合，无别名不占位，不再强制方形。圈子采用宽区两列、窄区一列的紧凑卡片，不展示成员统计。</li><li>详情沿用弹窗，关闭后回到原列表；关系跳人时在弹窗内保留返回轨迹。</li><li>档案 key 原样显示，对象/数组使用 JSON 区域，null 明确标为有效值；历史只出现在单字段上。</li></ul>
+      <h3>刻意没有放入的能力</h3>
+      <ul><li>没有人物总数、总页数、任意排序、语义搜索、仅归档筛选和完整关系图。</li><li>没有人物合并、硬删除、批量写入或跨请求事务承诺。</li><li>当前接口不能列出某人的全部精确身份，因此详情只提供别名管理与按 namespace + value 核对身份。</li><li>source_ref 以文本展示，不伪装成可点击的会话来源。</li></ul>
+      <h3>可讨论的下一步</h3>
+      <p>优先讨论首页卡片比例与列数、详情四个分类是否符合核对任务，以及“圈子”是否与人物同为一级分类。确认布局后再拆生产接入范围。</p>
+    </div>
+  </dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script>
+    const icons = {
+      arrow: '<svg class="row-arrow" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>',
+      users: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 11a3 3 0 1 0 0-6M18 15a6 6 0 0 1 4 6"/></svg>',
+      plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>'
+    };
+    const kindNames = { human: '真人', virtual: '虚拟人物', user: '用户', agent: '助手' };
+    const sourceNames = { user: '人工记录', agent: 'Agent 记录', import: '导入', observer: '观察记录' };
+    const people = [
+      { id: 'p_01J8W3M7Q2', name: '王明', aliases: ['小明', '王哥'], kind: 'human', status: 'active', created: '2026-10-18' },
+      { id: 'p_01J8W4K9AX', name: '王明', aliases: ['阿明'], kind: 'human', status: 'active', created: '2026-10-19' },
+      { id: 'p_01J8V9N2CE', name: '李欣', aliases: ['欣欣', '李欣（北京）', 'Xin'], kind: 'human', status: 'active', created: '2026-10-17' },
+      { id: 'p_01J8V6D4RT', name: '鱼梦', aliases: [], kind: 'user', status: 'active', created: '2026-10-16' },
+      { id: 'p_01J8TP8H6N', name: 'Icarus', aliases: ['小 I'], kind: 'agent', status: 'active', created: '2026-10-16' },
+      { id: 'p_01J8RZ2P5Y', name: '沈星回', aliases: ['星星'], kind: 'virtual', status: 'active', created: '2026-10-12' },
+      { id: 'p_01J8QK7B3F', name: '周岚', aliases: ['岚姐'], kind: 'human', status: 'active', created: '2026-10-10' },
+      { id: 'p_01J8ND6U8M', name: '赵一鸣', aliases: ['赵工'], kind: 'human', status: 'archived', created: '2026-10-08' },
+      { id: 'p_01J8M2C9LK', name: '陈墨', aliases: ['墨墨'], kind: 'virtual', status: 'active', created: '2026-10-06' },
+      { id: 'p_01J8K5A1VP', name: '孙宁', aliases: [], kind: 'human', status: 'active', created: '2026-10-03' },
+      { id: 'p_01J8J9E7SW', name: '林霁', aliases: ['霁月'], kind: 'virtual', status: 'active', created: '2026-10-01' },
+      { id: 'p_01J8H4T2ZG', name: '许舟', aliases: ['舟舟'], kind: 'human', status: 'active', created: '2026-09-28' }
+    ];
+    const profiles = {
+      p_01J8W3M7Q2: [
+        { key: 'work', value: { company: '北岸科技', role: '产品设计', team: '平台体验组' }, source: 'agent', ref: 'session:demo-018', time: '2026-10-24 18:32' },
+        { key: 'coffee.preference', value: ['美式', '浅烘手冲'], source: 'user', ref: 'manual:profile-review', time: '2026-10-23 09:16' },
+        { key: 'availability', value: null, source: 'observer', ref: 'observer:demo', time: '2026-10-21 14:05' },
+        { key: 'custom_future_field', value: { nested: { enabled: true, priority: 2 }, tags: ['unknown-key', 'json'] }, source: 'import', ref: 'import:batch-demo', time: '2026-10-19 11:40' }
+      ]
+    };
+    const relations = {
+      p_01J8W3M7Q2: [
+        { other: 'p_01J8V6D4RT', sentence: ['王明', '是', '鱼梦', '的同事'], meta: '工作关系 · 生效中', source: 'Agent 记录 · 2026-10-22' },
+        { other: 'p_01J8V9N2CE', sentence: ['李欣', '是', '王明', '的姐姐'], meta: '家庭关系 · 生效中', source: '人工记录 · 2026-10-20' },
+        { other: 'p_01J8QK7B3F', sentence: ['周岚', '是', '王明', '的项目负责人'], meta: '单向称谓 · 生效中', source: 'Agent 记录 · 2026-10-18' }
+      ]
+    };
+    const circles = [
+      { id: 'c_01J8WORK', name: '北岸科技 · 产品组', kind: '工作', owner: '鱼梦' },
+      { id: 'c_01J8FAMILY', name: '家人', kind: '家庭', owner: '鱼梦' },
+      { id: 'c_01J8COFFEE', name: '周末咖啡小组', kind: '兴趣', owner: '王明' }
+    ];
+    const state = { view: 'people', query: '', kind: 'all', archived: false, page: 0, size: 8, person: null, section: 'profile', trail: [], profileQuery: '' };
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => [...document.querySelectorAll(selector)];
+    const escapeHTML = (value) => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+    let toastTimer;
+    function toast(message) {
+      clearTimeout(toastTimer);
+      $('#toast').textContent = message;
+      $('#toast').hidden = false;
+      toastTimer = setTimeout(() => $('#toast').hidden = true, 3400);
+    }
+    function filteredPeople() {
+      const query = state.query.trim().toLowerCase();
+      return people.filter((person) => (state.archived || person.status !== 'archived') && (state.kind === 'all' || person.kind === state.kind) && (!query || `${person.name} ${person.aliases.join(' ')}`.toLowerCase().includes(query)));
+    }
+    function renderPeople() {
+      const matches = filteredPeople();
+      const pages = Math.max(1, Math.ceil(matches.length / state.size));
+      state.page = Math.min(state.page, pages - 1);
+      const start = state.page * state.size;
+      const items = matches.slice(start, start + state.size);
+      $('#pageCount').textContent = `本页 ${items.length} 人`;
+      $('#peoplePagination').hidden = matches.length <= state.size;
+      $('#previousPage').disabled = state.page === 0;
+      $('#nextPage').disabled = start + state.size >= matches.length;
+      if (!items.length) {
+        $('#peopleList').innerHTML = `<div class="empty"><div>${icons.users}<strong>${people.length ? '没有匹配的人物' : '还没有人物'}</strong><p>${people.length ? '试试清除姓名、类型或归档筛选。搜索只匹配姓名与别名。' : '可通过添加人物建立第一份档案。'}</p></div></div>`;
+        return;
+      }
+      $('#peopleList').innerHTML = `<div class="people-list">${items.map((person) => `
+        <button class="person-row" data-kind="${person.kind}" data-person="${person.id}" aria-label="查看人物：${escapeHTML(person.name)}，${person.id}">
+          <span class="avatar">${person.kind === 'agent' ? '<svg viewBox="0 0 24 24"><rect x="5" y="7" width="14" height="13" rx="3"/><path d="M12 7V3H9M2 12h3m14 0h3M9 11v3m6-3v3"/></svg>' : person.kind === 'user' ? '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 22v-2a8 8 0 0 1 16 0v2"/></svg>' : escapeHTML(person.name.slice(0, 1))}</span>
+          <span class="person-primary"><span class="person-name-line"><span class="person-name">${escapeHTML(person.name)}</span><span class="person-kind"><span>${kindNames[person.kind]}</span>${person.status === 'archived' ? '<span class="archived">已归档</span>' : ''}</span></span>
+          ${person.aliases.length ? `<span class="aliases">别名 ${person.aliases.map(escapeHTML).join('、')}</span>` : ''}
+          <span class="person-distinction"><small>ID</small><span class="mono">${person.id}</span></span></span>
+        </button>`).join('')}</div>`;
+      $$('[data-person]').forEach((button) => button.addEventListener('click', () => openPerson(button.dataset.person)));
+    }
+    function renderCircles() {
+      const query = $('#circleSearch').value.trim().toLowerCase();
+      const items = circles.filter((circle) => circle.name.toLowerCase().includes(query));
+      $('#circleList').innerHTML = items.length ? items.map((circle) => `<button class="circle-row" data-demo="静态稿仅展示圈子卡片；详情与成员操作以生产组件和测试为准"><span class="avatar">${icons.users}</span><div><div class="person-name-line"><h3>${escapeHTML(circle.name)}</h3><span class="kind">${escapeHTML(circle.kind)}</span></div>${circle.owner ? `<p>负责人：${escapeHTML(circle.owner)}</p>` : ''}<div class="card-id"><small>ID</small><span>${escapeHTML(circle.id)}</span></div></div></button>`).join('') : '<div class="empty"><div><strong>没有匹配的圈子</strong><p>圈子名称按文本匹配。</p></div></div>';
+      bindDemo($('#circleList'));
+    }
+    function setView(view) {
+      state.view = view;
+      $('#peopleView').hidden = view !== 'people';
+      $('#circlesView').hidden = view !== 'circles';
+      $('#peopleTab').toggleAttribute('aria-current', view === 'people');
+      $('#circlesTab').toggleAttribute('aria-current', view === 'circles');
+      $('#createButton span').textContent = view === 'people' ? '添加人物' : '新建圈子';
+    }
+    function currentPerson() { return people.find((person) => person.id === state.person); }
+    function openPerson(id, preserveTrail = false) {
+      if (!preserveTrail) state.trail = [];
+      if (state.person && state.person !== id) state.trail.push(state.person);
+      state.person = id;
+      state.section = 'profile';
+      state.profileQuery = '';
+      renderPerson();
+      if (!$('#personDialog').open) $('#personDialog').showModal();
+    }
+    function renderPerson() {
+      const person = currentPerson();
+      if (!person) return;
+      $('#detailAvatar').textContent = person.name.slice(0, 1);
+      $('#detailName').textContent = person.name;
+      $('#detailKind').innerHTML = `<span class="kind">${kindNames[person.kind]}</span>${person.status === 'archived' ? ' <span class="kind archived">已归档</span>' : ''}`;
+      $('#detailMeta').innerHTML = `${person.aliases.length ? `<p>别名：${person.aliases.map(escapeHTML).join('、')}</p>` : ''}<button class="copy-id" id="copyIdentity" aria-label="复制完整 Person ID"><small>ID</small><code>${escapeHTML(person.id)}</code></button>`;
+      $('#copyIdentity').onclick = async () => { try { await navigator.clipboard.writeText(person.id); toast('已复制 Person ID'); } catch { toast('复制失败，请手动选择 ID'); } };
+      $('#detailTrail').innerHTML = state.trail.length ? `<button id="trailBack">← ${escapeHTML(people.find((item) => item.id === state.trail.at(-1))?.name || '返回')}</button><span>/</span><span>${escapeHTML(person.name)}</span>` : '<span>人物档案</span>';
+      if ($('#trailBack')) $('#trailBack').onclick = () => { const previous = state.trail.pop(); state.person = previous; renderPerson(); };
+      $$('#detailTabs button').forEach((button) => button.setAttribute('aria-selected', String(button.dataset.section === state.section)));
+      const renderers = { profile: renderProfile, relations: renderRelations, circles: renderPersonCircles, identity: renderIdentity };
+      renderers[state.section]();
+    }
+    function renderProfile() {
+      const all = profiles[state.person] || [];
+      const items = all.filter((item) => !state.profileQuery || item.key.toLowerCase().includes(state.profileQuery.toLowerCase()));
+      $('#detailContent').innerHTML = `
+        <div class="profile-toolbar"><label class="profile-filter"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="profileQuery" value="${escapeHTML(state.profileQuery)}" placeholder="筛选当前人物 key…" aria-label="筛选档案 key"></label><button class="btn primary" data-demo="静态稿不执行档案写入；生产表单调用 PUT 单字段接口">${icons.plus}添加档案</button></div>
+        ${items.length ? `<div class="profile-list">${items.map((item) => {
+          const isObject = item.value !== null && typeof item.value === 'object';
+          const value = item.value === null ? '<span class="null-value">null</span> <small>（有效值，不是已删除）</small>' : escapeHTML(isObject ? JSON.stringify(item.value, null, 2) : typeof item.value === 'string' ? item.value : JSON.stringify(item.value));
+          return `<article class="profile-item"><div class="profile-key"><code>${escapeHTML(item.key)}</code><span class="source">${sourceNames[item.source]}</span></div><div class="profile-value ${isObject ? 'json' : ''}">${value}</div><div class="profile-meta"><span>记录于 ${item.time}</span><span>source_ref：${escapeHTML(item.ref)}</span></div><div class="profile-actions"><button class="text-action" data-demo="修正一个 key，不进行多字段事务提交">修正此字段</button><button class="text-action" data-demo="忘记字段会追加 deleted 墓碑，不是物理删除">忘记此字段</button></div><details class="field-history"><summary>查看此字段历史</summary><div class="history-line"><time>${item.time}</time><span>当前值 · ${sourceNames[item.source]}</span></div><div class="history-line"><time>2026-10-12 10:20</time><span>较早记录（演示）· 历史仅属于 ${escapeHTML(item.key)}</span></div></details></article>`;
+        }).join('')}</div>` : `<div class="empty"><div><strong>${all.length ? '没有匹配的档案 key' : '还没有稳定档案'}</strong><p>${all.length ? '试试其他关键词，或清除搜索条件。' : '点击“添加档案”，记录人物的偏好、背景或其他稳定信息。'}</p></div></div>`}`;
+      $('#profileQuery').oninput = (event) => { state.profileQuery = event.target.value; renderProfile(); $('#profileQuery').focus(); };
+      bindDemo($('#detailContent'));
+    }
+    function renderRelations() {
+      const items = relations[state.person] || [];
+      $('#detailContent').innerHTML = `<div class="section-heading"><div><h3>生效关系</h3><p>用查询视角下的自然语句表达；不推断缺失的反向称谓。</p></div><button class="btn secondary small" data-demo="POST 关系需明确 from / to、方向与正反称谓">${icons.plus}添加关系</button></div>${items.length ? `<div class="relation-list">${items.map((relation) => {
+        const other = people.find((person) => person.id === relation.other);
+        const sentence = relation.sentence.map((part) => part === other.name ? `<button data-related="${other.id}">${escapeHTML(part)}</button>` : escapeHTML(part)).join('');
+        return `<div class="relation-row"><div><div class="relation-sentence">${sentence}</div><small>${relation.meta} · ${relation.source}</small></div><button class="text-action" data-demo="关系失效使用 DELETE；关系没有完整变更史接口">失效</button></div>`;
+      }).join('')}</div>` : '<div class="empty"><div><strong>暂无生效关系</strong><p>无关系与关系区块加载失败应分别呈现。</p></div></div>'}`;
+      $$('[data-related]').forEach((button) => button.onclick = () => openPerson(button.dataset.related, true));
+      bindDemo($('#detailContent'));
+    }
+    function renderPersonCircles() {
+      const items = state.person === 'p_01J8W3M7Q2' ? circles.slice(0, 2) : [];
+      $('#detailContent').innerHTML = `<div class="section-heading"><div><h3>所在圈子</h3><p>这里只浏览当前人物的成员关系；圈子完整管理留在“圈子”分类。</p></div></div>${items.length ? `<div class="membership-list">${items.map((circle) => `<div class="membership-row"><div><strong>${circle.name}</strong><small>${circle.kind} · 成员关系生效中</small></div><button class="text-action" data-demo="圈子成员管理接口存在，是否纳入首期仍待确认">管理成员</button></div>`).join('')}</div>` : '<div class="empty"><div><strong>未加入圈子</strong><p>没有圈子不会阻止查看或编辑人物档案。</p></div></div>'}`;
+      bindDemo($('#detailContent'));
+    }
+    function renderIdentity() {
+      const person = currentPerson();
+      $('#detailContent').innerHTML = `<div class="section-heading"><div><h3>别名</h3><p>人物详情提供完整别名；列表中的别名可能只是截断结果。</p></div><button class="btn secondary small" data-demo="POST aliases 可添加别名">${icons.plus}添加别名</button></div>
+        ${person.aliases.length ? `<div class="alias-list">${person.aliases.map((alias, index) => `<div class="alias-row"><span>${escapeHTML(alias)}</span><code>alias_demo_${index + 1}</code><button class="text-action" data-demo="DELETE alias 只删除别名，不删除人物">移除</button></div>`).join('')}</div>` : '<div class="empty"><div><strong>暂无别名</strong><p>同名候选仍可通过 Person ID 区分。</p></div></div>'}
+        <div class="capability-note" style="margin-top:22px;margin-bottom:0">当前 REST 没有“列出此人的全部精确身份”接口。这里不把示例身份绑定列表伪装成已有能力。</div>
+        <form class="resolver" id="resolverForm"><h3>按精确身份核对</h3><p>输入已知的 namespace 与 value；找不到时应显示 person: null，而非错误。</p><select class="select" aria-label="身份命名空间"><option value="wechat">wechat</option><option value="email">email</option><option value="phone">phone</option></select><input required placeholder="身份值" aria-label="精确身份值"><button class="btn secondary" type="submit">核对</button></form>`;
+      $('#resolverForm').onsubmit = (event) => { event.preventDefault(); toast('静态稿：正式接入时调用 GET /v1/identity/resolve，并明确处理空结果'); };
+      bindDemo($('#detailContent'));
+    }
+    function bindDemo(root = document) {
+      root.querySelectorAll('[data-demo]').forEach((element) => {
+        if (element.dataset.bound) return;
+        element.dataset.bound = '1';
+        element.addEventListener('click', (event) => { event.preventDefault(); toast(`布局演示：${element.dataset.demo}`); });
+      });
+    }
+    function closeAccountMenu() { $('#accountMenu').hidden = true; $('#menuMask').hidden = true; $('#accountTrigger').setAttribute('aria-expanded', 'false'); }
+    $('#accountTrigger').onclick = () => {
+      const rect = $('#accountTrigger').getBoundingClientRect();
+      $('#accountMenu').style.left = `${Math.max(8, rect.left)}px`;
+      $('#accountMenu').style.top = `${Math.max(8, rect.top - 188)}px`;
+      $('#accountMenu').hidden = false; $('#menuMask').hidden = false; $('#accountTrigger').setAttribute('aria-expanded', 'true');
+    };
+    $('#menuMask').onclick = closeAccountMenu;
+    $('#accountMenu').onclick = (event) => { if (event.target.closest('button')) closeAccountMenu(); };
+    function setSidebar(closed) {
+      $('#app').classList.toggle('sidebar-closed', closed);
+      $('#collapsedNav').hidden = !closed;
+      if (innerWidth <= 700) $('.management-heading').style.marginLeft = closed ? '104px' : '0';
+    }
+    $('#sidebarClose').onclick = () => setSidebar(true);
+    $('#sidebarOpen').onclick = () => setSidebar(false);
+    $('#peopleTab').onclick = () => setView('people');
+    $('#circlesTab').onclick = () => setView('circles');
+    $('#createButton').onclick = () => toast(state.view === 'people' ? '布局演示：创建仅允许 human / virtual；user 与 agent 由部署配置初始化' : '布局演示：POST /v1/circles 可创建圈子，表单待后续确认');
+    $('#personSearch').oninput = (event) => { state.query = event.target.value; state.page = 0; renderPeople(); };
+    $('#kindFilter').onchange = (event) => { state.kind = event.target.value; state.page = 0; renderPeople(); };
+    $('#archiveFilter').onchange = (event) => { state.archived = event.target.checked; state.page = 0; renderPeople(); };
+    $('#previousPage').onclick = () => { state.page--; renderPeople(); $('.management-body').scrollTop = 0; };
+    $('#nextPage').onclick = () => { state.page++; renderPeople(); $('.management-body').scrollTop = 0; };
+    $('#circleSearch').oninput = renderCircles;
+    $('#detailTabs').onclick = (event) => { const button = event.target.closest('[data-section]'); if (button) { state.section = button.dataset.section; renderPerson(); $('.detail-scroll').scrollTop = 0; } };
+    $('#detailClose').onclick = () => $('#personDialog').close();
+    $('#personDialog').addEventListener('click', (event) => { if (event.target === $('#personDialog')) $('#personDialog').close(); });
+    $('#themeToggle').onclick = () => { const dark = document.documentElement.dataset.theme !== 'dark'; document.documentElement.dataset.theme = dark ? 'dark' : 'light'; $('#themeToggle').textContent = dark ? '切换浅色' : '切换深色'; };
+    $('#notesOpen').onclick = () => $('#notesDialog').showModal();
+    $('#notesClose').onclick = () => $('#notesDialog').close();
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !$('#accountMenu').hidden) closeAccountMenu(); });
+    if (innerWidth <= 700) setSidebar(true);
+    renderPeople(); renderCircles(); bindDemo();
+  </script>
+</body>
+</html>

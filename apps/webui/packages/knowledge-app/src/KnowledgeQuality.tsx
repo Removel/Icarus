@@ -89,15 +89,17 @@ export default function KnowledgeQuality({ name, active }: { name: string; activ
     <section className="quality-workspace" aria-label="检查报告">
       <div className="quality-start" aria-label="质量检查操作">
         <ShieldCheck size={24} />
-        <div>
+        <div className="quality-start-title">
           <h2>知识库质量检查</h2>
         </div>
-        <Button disabled={busy || loading} onClick={() => perform(refresh)}>
-          刷新报告
-        </Button>
-        <Button theme="solid" disabled={busy || loading} loading={busy} onClick={run}>
-          {busy ? '正在处理…' : reports.length ? '重新检查' : '开始检查'}
-        </Button>
+        <div className="quality-start-actions">
+          <Button disabled={busy || loading} onClick={() => perform(refresh)}>
+            刷新报告
+          </Button>
+          <Button theme="solid" disabled={busy || loading} loading={busy} onClick={run}>
+            {busy ? '正在处理…' : reports.length ? '重新检查' : '开始检查'}
+          </Button>
+        </div>
       </div>
       {error && (
         <p className="form-error" role="alert">

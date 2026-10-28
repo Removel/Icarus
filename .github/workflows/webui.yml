@@ -10,7 +10,8 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A cold browser/dependency install can take 10+ minutes; tests take about 12.
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: apps/webui
@@ -29,11 +30,19 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: apps/webui/test/requirements.txt
       - run: pnpm install --frozen-lockfile
-      - run: uv run --no-project --with-requirements test/requirements.txt python -m playwright install --with-deps chromium
-      - run: |
-          pnpm dev > /tmp/icarus-webui.log 2>&1 &
-          pnpm test --junitxml=test-results/junit.xml
+      - name: Install headless Chromium and system dependencies
+        timeout-minutes: 15
+        run: uv run --no-project --with-requirements test/requirements.txt python -m playwright install --with-deps --only-shell chromium
+      - name: Run WebUI tests
+        timeout-minutes: 20
+        run: |
+          mkdir -p test-results
+          pnpm dev > test-results/dev-server.log 2>&1 &
+          curl --retry 30 --retry-connrefused --retry-delay 1 --retry-max-time 60 --max-time 2 --fail --silent --show-error --output /dev/null http://127.0.0.1:5173/
+          pnpm test --junitxml=test-results/junit.xml --durations=15
       - run: pnpm lint && pnpm format:check && pnpm typecheck && pnpm build
       - run: git diff --check
       - uses: actions/upload-artifact@v4

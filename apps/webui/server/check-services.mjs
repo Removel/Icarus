@@ -14,15 +14,18 @@ async function gatewayCheck() {
   endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
   const socket = new WebSocket(endpoint);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error('Gateway: timeout'));
-      socket.close();
-    }, 5000);
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error('Gateway: timeout')), 5000);
     const finish = (error) => {
+      // Node 22 may emit another error synchronously from close() after a
+      // failed handshake. Guard cleanup as well as Promise settlement.
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       if (error) reject(error);
       else resolve('Gateway');
-      socket.close();
+      if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)
+        socket.close();
     };
     socket.addEventListener('open', () =>
       socket.send(
@@ -30,10 +33,7 @@ async function gatewayCheck() {
       ),
     );
     socket.addEventListener('error', () => finish(new Error('Gateway: connection failed')));
-    socket.addEventListener('close', () => {
-      clearTimeout(timer);
-      reject(new Error('Gateway: connection closed'));
-    });
+    socket.addEventListener('close', () => finish(new Error('Gateway: connection closed')));
     socket.addEventListener('message', (event) => {
       try {
         const response = JSON.parse(String(event.data));
@@ -48,6 +48,17 @@ async function gatewayCheck() {
   });
 }
 const checks = [
+  [
+    'rela',
+    () =>
+      httpCheck(
+        'rela',
+        env.ICARUS_RELATIONSHIP_ENDPOINT || 'http://127.0.0.1:8767',
+        '/v1/persons?limit=1',
+        env.RELA_MEM_API_TOKEN ? { Authorization: `Bearer ${env.RELA_MEM_API_TOKEN}` } : {},
+        (body) => Array.isArray(body.items),
+      ),
+  ],
   [
     'Mem0',
     () =>

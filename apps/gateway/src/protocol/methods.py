@@ -8,7 +8,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, StrictStr, ValidationError
+from pydantic import Field, StrictStr, StrictBool, ValidationError
+from agent_app.config.settings_service import EditableSettings, SettingsConflictError, SettingsService
 
 from agent_app.application import (
     AgentRuntime,
@@ -63,11 +64,28 @@ class CreateSessionParams(WorkspaceParams):
     )
 
 
+class RenameSessionParams(SessionParams):
+    title: StrictStr = Field(min_length=1, max_length=80, pattern=r".*\S.*")
+
+
+class UpdateSettingsParams(StrictModel):
+    revision: str = Field(min_length=1)
+    settings: EditableSettings
+
+
+class RequestOptions(StrictModel):
+    web_search: StrictBool = False
+    deep_search: StrictBool = False
+    local_time: str = Field(default="", max_length=100)
+    time_zone: str = Field(default="", max_length=100)
+
+
 class SubmitParams(SessionParams):
     prompt: str
     display_text: str | None = None
     submission_id: str = Field(min_length=1, pattern=r".*\S.*")
     resources: tuple[ResourceRefModel, ...] = ()
+    request_options: RequestOptions | None = None
 
 
 class SteerParams(SessionParams):
@@ -105,8 +123,10 @@ class GatewayMethods:
         runtime: AgentRuntime,
         *,
         logger: logging.Logger | None = None,
+        settings_service: SettingsService | None = None,
     ) -> None:
         self.runtime = runtime
+        self.settings_service = settings_service or SettingsService()
         self.logger = logger or logging.getLogger("icarus.gateway.methods")
 
     async def dispatch(
@@ -118,9 +138,12 @@ class GatewayMethods:
         handlers = {
             "memory.get_context": self._memory_context,
             "runtime.get_status": self._runtime_status,
+            "settings.get": self._settings_get,
+            "settings.update": self._settings_update,
             "session.create": self._session_create,
             "session.list": self._session_list,
             "session.generate_title": self._session_generate_title,
+            "session.rename": self._session_rename,
             "session.discard_empty": self._session_discard_empty,
             "session.delete": self._session_delete,
             "session.get": self._session_get,
@@ -182,6 +205,24 @@ class GatewayMethods:
         self._validate(StrictModel, params)
         return {"status": "ready" if self.runtime.is_running else "stopped"}
 
+    async def _settings_get(self, params):
+        self._validate(StrictModel, params)
+        try:
+            return self.settings_service.get()
+        except (ValueError, OSError):
+            raise _business("settings_unavailable", "无法读取配置，请检查服务端 ICARUS_SETTINGS_PATH。") from None
+
+    async def _settings_update(self, params):
+        value = self._validate(UpdateSettingsParams, params)
+        try:
+            return self.settings_service.update(value.revision, value.settings)
+        except SettingsConflictError as error:
+            raise _business("settings_conflict", str(error)) from None
+        except ValidationError:
+            raise GatewayRpcError(INVALID_PARAMS, "配置无效，请检查模型角色、工具超时与输出预算。") from None
+        except (ValueError, OSError):
+            raise _business("settings_unavailable", "保存配置失败，请检查配置文件及写入权限。") from None
+
     async def _session_create(self, params):
         value = self._validate(CreateSessionParams, params)
         try:
@@ -212,6 +253,12 @@ class GatewayMethods:
         value = self._validate(SessionParams, params)
         return {"title": await self.runtime.generate_session_title(
             value.workspace_path, value.session_id
+        )}
+
+    async def _session_rename(self, params):
+        value = self._validate(RenameSessionParams, params)
+        return {"title": await self.runtime.rename_session(
+            value.workspace_path, value.session_id, value.title
         )}
 
     async def _session_discard_empty(self, params):
@@ -248,6 +295,7 @@ class GatewayMethods:
                 submission_id=value.submission_id,
                 resources=resources,
                 display_text=value.display_text,
+                **({"request_options": value.request_options.model_dump()} if value.request_options else {}),
             )
         except ResourceUnavailableError as error:
             raise _business(

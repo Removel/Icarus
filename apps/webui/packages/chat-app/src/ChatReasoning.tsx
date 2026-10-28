@@ -1,10 +1,7 @@
-import { lazy, Suspense, useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import ChatContent from './ChatContent';
 import useChatText from './useChatText';
 import type { ChatItem } from './updates';
-
-const Reasoning = lazy(() =>
-  import('@icarus/ui/ai').then(({ AIChatReasoning }) => ({ default: AIChatReasoning })),
-);
 
 export default function ChatReasoning({
   entry,
@@ -20,7 +17,8 @@ export default function ChatReasoning({
   onGrowth: () => void;
 }) {
   const node = useRef<HTMLDivElement>(null);
-  // Keep presentation state outside Semi's collapsible content so reopening
+  const [expanded, setExpanded] = useState(Boolean(entry.live && running));
+  // Keep presentation state outside the collapsible content so reopening
   // a thought does not replay text that has already arrived.
   const content = useChatText(entry.text, Boolean(entry.live && active && !loading), onGrowth);
   useLayoutEffect(() => {
@@ -31,26 +29,24 @@ export default function ChatReasoning({
   }, [onGrowth]);
   return (
     <div ref={node} className="chat-message chat-thinking">
-      <Suspense
-        fallback={
-          <div className="chat-reasoning-pending" role="status">
-            正在思考中
-          </div>
-        }
+      <details
+        open={expanded}
+        onToggle={(event) => {
+          if (event.target !== event.currentTarget) return;
+          setExpanded(event.currentTarget.open);
+          onGrowth();
+        }}
       >
-        <Reasoning
-          status={entry.final || !running ? 'completed' : 'in_progress'}
-          customRenderer={() => (
-            <pre
-              data-streaming={content !== entry.text || undefined}
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-            >
-              {content}
-            </pre>
-          )}
-        />
-      </Suspense>
+        <summary>{entry.final || !running ? '已思考' : '正在思考'}</summary>
+        <div className="chat-reasoning-text" data-streaming={content !== entry.text || undefined}>
+          <ChatContent
+            text={content}
+            live={false}
+            streaming={Boolean(entry.live && (!entry.final || content !== entry.text))}
+            onGrowth={onGrowth}
+          />
+        </div>
+      </details>
     </div>
   );
 }

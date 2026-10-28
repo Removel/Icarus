@@ -1,239 +1,300 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, List, MessageSquare } from 'lucide-react';
-import { Button, LoadingIndicator, SearchField } from '@icarus/ui';
-import ChatContent from './ChatContent';
-import ChatCopyButton from './ChatCopyButton';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import ChatMessage from './ChatMessage';
 import ChatProcess from './ChatProcess';
-import ThinkingWave from './ThinkingWave';
-import { emptyTranscript } from './updates';
+import { IconChevronDown, IconThinking } from './dswui/Icons';
+import { ScrollNav } from './dswui/ScrollNav';
+import type { Transcript, ChatItem } from './updates';
+import type { WebSource } from './webSearch';
+import type { ImageResource } from './imageResources';
+
+type Row = {
+  id: string;
+  item: ChatItem;
+  entries?: ChatItem[];
+  prompt?: ChatItem;
+  sources?: WebSource[];
+};
 
 export default function ChatTranscript({
   transcript,
   active,
   sessionId,
+  workspace,
   loading,
   submitting,
+  onCompose,
 }: {
-  transcript: ReturnType<typeof emptyTranscript>;
+  transcript: Transcript;
   active: boolean;
   sessionId: string;
+  workspace: string;
   loading: boolean;
   submitting: boolean;
+  onCompose: (text: string, resources?: ImageResource[]) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const followedTop = useRef(0);
+  const previousHeight = useRef(0);
+  const measuredRows = useRef(new Map<string, number>());
+  const frame = useRef<number | undefined>(undefined);
   const anchors = useRef(new Map<string, HTMLElement>());
+  const pendingJump = useRef<string | undefined>(undefined);
   const [away, setAway] = useState(false);
-  const [outline, setOutline] = useState(false);
-  const [query, setQuery] = useState('');
-  const [position, setPosition] = useState(-1);
-  const responseKinds = ['assistant', 'thinking', 'tool', 'error'];
-  const lastUser = transcript.items.map((item) => item.kind).lastIndexOf('user');
-  const waiting =
-    !loading &&
-    (submitting
-      ? !transcript.items.slice(lastUser + 1).some((item) => responseKinds.includes(item.kind))
-      : transcript.tasks.some(
-          (task) =>
-            !transcript.items.some(
-              (item) => item.taskId === task && responseKinds.includes(item.kind),
-            ),
-        ));
+  const [position, setPosition] = useState<string | null>(null);
+  const { rows, outline, waiting } = useMemo(() => {
+    const rows: Row[] = [];
+    const processes = new Map<string, Row>();
+    const sources = new Map<string | undefined, WebSource[]>();
+    for (const item of transcript.items)
+      if (item.search) sources.set(item.taskId, item.search.sources);
+    let prompt: ChatItem | undefined;
+    let lastUser = -1;
+    const responding = new Set<string | undefined>();
+    transcript.items.forEach((item, index) => {
+      if (item.kind === 'user') {
+        prompt = item;
+        lastUser = index;
+      } else responding.add(item.taskId);
+      if (item.kind === 'thinking' || item.kind === 'tool' || item.kind === 'search') {
+        const key = item.taskId ?? item.id;
+        const row = processes.get(key);
+        if (row) row.entries!.push(item);
+        else {
+          const row = { id: key, item, entries: [item] };
+          processes.set(key, row);
+          rows.push(row);
+        }
+      } else rows.push({ id: item.id, item, prompt, sources: sources.get(item.taskId) });
+    });
+    return {
+      rows,
+      outline: transcript.items
+        .filter((item) => item.kind === 'user')
+        .map((item) => ({ id: item.id, title: item.text || '图片消息' })),
+      waiting:
+        !loading &&
+        (submitting
+          ? !transcript.items.slice(lastUser + 1).some((item) => item.kind !== 'user')
+          : transcript.tasks.some((task) => !responding.has(task))),
+    };
+  }, [transcript.items, transcript.tasks, loading, submitting]);
+  // Small conversations keep native full-document selection and browser find.
+  const virtual = rows.length >= 80;
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scroll.current,
+    getItemKey: (index) => rows[index].id,
+    estimateSize: (index) =>
+      measuredRows.current.get(rows[index].id) ??
+      (rows[index].entries ? 56 : rows[index].item.kind === 'user' ? 100 : 200),
+    overscan: 6,
+    enabled: virtual && active,
+    initialOffset: () => followedTop.current,
+    scrollMargin: 8,
+    useAnimationFrameWithResizeObserver: true,
+  });
   const onGrowth = useCallback(() => {
-    const node = scroll.current;
-    if (!follow.current || !node) return;
-    // A scroll event can arrive after the next presentation frame. Respect an
-    // upward move immediately instead of overwriting it with that frame.
-    if (node.scrollTop < followedTop.current - 2) {
-      follow.current = false;
-      setAway(true);
-      return;
-    }
-    node.scrollTop = node.scrollHeight;
-    followedTop.current = node.scrollTop;
+    if (frame.current !== undefined) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = undefined;
+      const node = scroll.current;
+      if (!follow.current || !node || !node.clientHeight) return;
+      node.scrollTop = node.scrollHeight;
+      followedTop.current = node.scrollTop;
+    });
   }, []);
-  const messages = transcript.items.filter((item) =>
-    ['user', 'assistant', 'error'].includes(item.kind),
-  );
-  const matches = messages.filter((item) =>
-    item.text.toLowerCase().includes(query.trim().toLowerCase()),
-  );
-  useEffect(() => {
+  const anchor = useCallback((id: string, node: HTMLElement | null) => {
+    if (node) anchors.current.set(id, node);
+    else anchors.current.delete(id);
+  }, []);
+  useLayoutEffect(() => {
     follow.current = true;
     followedTop.current = 0;
+    pendingJump.current = undefined;
     setAway(false);
-    setOutline(false);
-    setQuery('');
-    setPosition(-1);
+    setPosition(null);
   }, [sessionId]);
-  useEffect(() => {
-    if (active) onGrowth();
-  }, [transcript.items, active, waiting, onGrowth]);
+  useLayoutEffect(() => {
+    if (!active) return;
+    // Paint cached history at the bottom immediately, before presentation frames.
+    if (follow.current && scroll.current) {
+      scroll.current.scrollTop = scroll.current.scrollHeight;
+      followedTop.current = scroll.current.scrollTop;
+    }
+    onGrowth();
+  }, [rows.length, sessionId, active, loading, onGrowth]);
+  useLayoutEffect(() => {
+    const node = content.current;
+    if (!node || !active) return;
+    const observer = new ResizeObserver(onGrowth);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [active, onGrowth]);
+  useLayoutEffect(() => {
+    if (virtual || !active || !content.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset.rowId;
+        if (id)
+          measuredRows.current.set(
+            id,
+            entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height,
+          );
+      }
+    });
+    measuredRows.current.clear();
+    for (const row of content.current.querySelectorAll('.chat-row')) observer.observe(row);
+    return () => observer.disconnect();
+  }, [virtual, active, rows.length, sessionId]);
+  useLayoutEffect(
+    () => () => {
+      if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+      frame.current = undefined;
+    },
+    [],
+  );
+  const visible = virtualizer.getVirtualItems();
+  useLayoutEffect(() => {
+    const id = pendingJump.current;
+    const target = id && anchors.current.get(id);
+    const container = scroll.current;
+    if (!target || !container) return;
+    pendingJump.current = undefined;
+    virtualizer.cancelScroll();
+    container.scrollTop +=
+      target.getBoundingClientRect().top - container.getBoundingClientRect().top - 20;
+    target.focus({ preventScroll: true });
+  });
   function jump(id: string) {
     const node = anchors.current.get(id);
     const container = scroll.current;
-    if (!node || !container) return;
+    if (!container) return;
     follow.current = false;
-    container.scrollTop +=
-      node.getBoundingClientRect().top - container.getBoundingClientRect().top - 20;
-    node.focus({ preventScroll: true });
-    setPosition(messages.findIndex((item) => item.id === id));
-    setAway(container.scrollHeight - container.scrollTop - container.clientHeight >= 64);
-  }
-  const processes = new Map<string, typeof transcript.items>();
-  for (const item of transcript.items)
-    if (item.kind === 'thinking' || item.kind === 'tool') {
-      const key = item.taskId ?? item.id;
-      processes.set(key, [...(processes.get(key) ?? []), item]);
+    setAway(true);
+    setPosition(id);
+    if (node) {
+      container.scrollTop +=
+        node.getBoundingClientRect().top - container.getBoundingClientRect().top - 20;
+      node.focus({ preventScroll: true });
+    } else {
+      pendingJump.current = id;
+      virtualizer.scrollToIndex(
+        rows.findIndex((row) => row.id === id),
+        { align: 'start' },
+      );
     }
-  const rendered = new Set<string>();
+  }
+  const disabled = submitting || loading || transcript.tasks.length > 0;
+  function renderRow(row: Row) {
+    return row.entries ? (
+      <ChatProcess
+        entries={row.entries}
+        running={transcript.tasks.includes(row.id)}
+        active={active}
+        loading={loading}
+        onGrowth={onGrowth}
+      />
+    ) : (
+      <ChatMessage
+        item={row.item}
+        workspace={workspace}
+        sessionId={sessionId}
+        active={active}
+        loading={loading}
+        disabled={disabled}
+        prompt={row.prompt}
+        sources={row.sources}
+        onCompose={onCompose}
+        onGrowth={onGrowth}
+        anchor={anchor}
+      />
+    );
+  }
   return (
     <div className="chat-transcript-frame">
-      {messages.length > 0 && (
-        <div className="chat-navigation">
-          <Button
-            theme="borderless"
-            icon={<ArrowUp size={14} />}
-            aria-label="上一条消息"
-            disabled={position === 0}
-            onClick={() =>
-              jump(messages[Math.max(0, (position < 0 ? messages.length : position) - 1)].id)
-            }
-          />
-          <Button
-            theme="borderless"
-            icon={<List size={15} />}
-            aria-label="定位消息"
-            aria-expanded={outline}
-            onClick={() => setOutline((value) => !value)}
-          />
-          <Button
-            theme="borderless"
-            icon={<ArrowDown size={14} />}
-            aria-label="下一条消息"
-            disabled={position >= messages.length - 1}
-            onClick={() => jump(messages[Math.min(messages.length - 1, position + 1)].id)}
-          />
-          {outline && (
-            <nav className="chat-message-outline" aria-label="消息定位">
-              <SearchField value={query} onChange={setQuery} placeholder="搜索本段对话…" />
-              <div className="chat-outline-items">
-                {matches.map((item) => (
-                  <button
-                    key={item.id}
-                    aria-current={messages[position]?.id === item.id ? 'location' : undefined}
-                    onClick={() => {
-                      jump(item.id);
-                      setOutline(false);
-                    }}
-                  >
-                    <small>
-                      {messages.indexOf(item) + 1} ·{' '}
-                      {item.kind === 'user' ? '你' : item.kind === 'error' ? '错误' : 'Icarus'}
-                    </small>
-                    <span>{item.text.replace(/[#*`]/g, '').slice(0, 100) || '…'}</span>
-                  </button>
-                ))}
-                {!matches.length && <p>没有匹配的消息</p>}
-              </div>
-            </nav>
-          )}
-        </div>
-      )}
+      <ScrollNav items={outline} active={position} onJump={jump} />
       <div
         ref={scroll}
-        className="chat-transcript"
+        className="scroll-area chat-transcript"
         role="log"
         aria-label="对话记录"
         aria-live="polite"
         aria-busy={loading}
+        onWheel={(event) => {
+          if (event.deltaY < 0) {
+            virtualizer.cancelScroll();
+            follow.current = false;
+            setAway(true);
+          }
+        }}
+        onTouchStart={() => {
+          virtualizer.cancelScroll();
+          follow.current = false;
+        }}
         onScroll={() => {
           const node = scroll.current!;
-          follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64;
-          if (follow.current) followedTop.current = node.scrollTop;
+          if (!active || !node.clientHeight) return;
+          const resized = previousHeight.current !== node.scrollHeight;
+          const bottom = node.scrollHeight - node.scrollTop - node.clientHeight < 64;
+          if (bottom) follow.current = true;
+          else if (!resized && node.scrollTop < followedTop.current - 2) follow.current = false;
+          previousHeight.current = node.scrollHeight;
+          followedTop.current = node.scrollTop;
           setAway(!follow.current);
         }}
       >
-        {loading ? (
-          <LoadingIndicator label="正在加载对话" />
-        ) : (
-          !transcript.items.length && (
-            <div className="chat-welcome">
-              <MessageSquare size={28} aria-hidden="true" />
-              <p>{sessionId ? '有什么可以帮你？' : '选择或新建对话'}</p>
-            </div>
-          )
-        )}
-        {transcript.items.map((item) => {
-          if (item.kind === 'thinking' || item.kind === 'tool') {
-            const key = item.taskId ?? item.id;
-            if (rendered.has(key)) return null;
-            rendered.add(key);
-            const entries = processes.get(key)!;
-            return (
-              <ChatProcess
-                key={key}
-                entries={entries}
-                running={transcript.tasks.includes(key)}
-                active={active}
-                loading={loading}
-                onGrowth={onGrowth}
-              />
-            );
-          }
-          return (
-            <article
-              ref={(node) => {
-                if (node) anchors.current.set(item.id, node);
-                else anchors.current.delete(item.id);
-              }}
-              tabIndex={-1}
-              className={`chat-message chat-${item.kind}`}
-              data-live={(item.kind === 'assistant' && item.live) || undefined}
-              key={item.id}
-            >
-              <strong>
-                {item.kind === 'user' ? '你' : item.kind === 'error' ? '执行失败' : 'Icarus'}
-              </strong>
-              {item.kind === 'user' && item.label && (
-                <small className="chat-message-state">{item.label}</small>
-              )}
-              <ChatContent
-                text={item.text}
-                live={Boolean(item.kind === 'assistant' && item.live && active && !loading)}
-                onGrowth={onGrowth}
-              />
-              {item.kind === 'assistant' && item.final && item.text && (
-                <div className="chat-message-actions">
-                  <ChatCopyButton text={item.text} label="复制回答" />
-                </div>
-              )}
-            </article>
-          );
-        })}
-        {waiting && (
-          <div className="chat-response-pending" role="status">
-            <ThinkingWave active={active} />
-            <span>正在思考中</span>
+        <div ref={content} className="chat-inner">
+          {loading && !transcript.items.length && <div role="status">正在加载对话</div>}
+          <div
+            className={virtual ? 'chat-virtual-items' : undefined}
+            data-virtualized={virtual || undefined}
+            style={virtual ? { height: virtualizer.getTotalSize() } : undefined}
+          >
+            {virtual
+              ? visible.map((item) => (
+                  <div
+                    key={item.key}
+                    ref={virtualizer.measureElement}
+                    data-index={item.index}
+                    className="chat-virtual-row"
+                    style={{ transform: `translateY(${item.start - 8}px)` }}
+                  >
+                    {renderRow(rows[item.index])}
+                  </div>
+                ))
+              : rows.map((row) => (
+                  <div className="chat-row" data-row-id={row.id} key={row.id}>
+                    {renderRow(row)}
+                  </div>
+                ))}
           </div>
-        )}
+          {waiting && (
+            <div className="think thinking chat-response-pending" role="status">
+              <IconThinking className="think-icon" />
+              <span className="think-label">正在思考中</span>
+            </div>
+          )}
+          <div style={{ height: 8 }} />
+        </div>
       </div>
       {away && (
-        <Button
-          className="chat-latest"
-          icon={<ArrowDown size={14} />}
+        <button
+          className="scroll-bottom chat-latest"
+          title="回到底部"
+          aria-label="回到最新消息"
           onClick={() => {
+            virtualizer.cancelScroll();
+            pendingJump.current = undefined;
             follow.current = true;
             setAway(false);
-            if (scroll.current) {
-              scroll.current.scrollTop = scroll.current.scrollHeight;
-              followedTop.current = scroll.current.scrollTop;
-            }
+            onGrowth();
           }}
         >
-          回到最新消息
-        </Button>
+          <IconChevronDown width={14} height={14} />
+        </button>
       )}
     </div>
   );

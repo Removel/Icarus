@@ -1,0 +1,153 @@
+/* Source: xilele777/dswui @ 3eaf631; selectors scoped to Icarus chat. */
+/* ============================ 布局 ============================ */
+.dswui.app {
+  display: flex;
+  height: 100%;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.dswui .sidebar {
+  width: var(--sider-width);
+  flex: 0 0 var(--sider-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-fill);
+  border-right: 1px solid var(--border-l1);
+  min-width: 0;
+  z-index: 8;
+  transition:
+    margin-left var(--dur) var(--ease),
+    transform var(--dur) var(--ease),
+    visibility 0s;
+  overflow: hidden;
+}
+.dswui .sidebar.collapsed {
+  margin-left: calc(-1 * var(--sider-width));
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    margin-left var(--dur) var(--ease),
+    transform var(--dur) var(--ease),
+    visibility 0s var(--dur);
+}
+
+.dswui .sidebar-top {
+  padding: 0 12px;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
+
+.dswui .brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--header-height);
+  margin-bottom: 10px;
+  padding-left: 4px;
+}
+.dswui .brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex: none;
+  margin-left: auto;
+  color: var(--label-tertiary);
+}
+.dswui .brand-actions .icon-btn {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--label-tertiary);
+  padding: 0;
+  line-height: 0;
+}
+.dswui .brand-actions .icon-btn svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+.dswui .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.dswui .brand-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: var(--brand);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.dswui .brand {
+  flex: none;
+}
+.dswui .brand img {
+  display: block;
+  width: 143px;
+  height: 23px;
+}
+.dswui .brand-actions .icon-btn::before {
+  content: '';
+  position: absolute;
+  inset: -9px;
+  border-radius: 50%;
+}
+.dswui .brand-actions .icon-btn:hover {
+  background: none;
+}
+.dswui .brand-actions .icon-btn:hover::before {
+  background: var(--hover);
+}
+.dswui .collapsed-nav {
+  z-index: 12;
+  position: fixed;
+  top: calc((var(--header-height) - 40px) / 2);
+  left: 16px;
+  display: flex;
+  align-items: center;
+}
+.dswui .collapsed-brand {
+  width: 27px;
+  height: 24px;
+}
+.dswui .collapsed-brand img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.dswui .collapsed-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  margin-left: 16px;
+  padding: 0 3px;
+  border: 1px solid var(--border-l2);
+  border-radius: 100px;
+  background: var(--bg-layer-1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+.dswui .collapsed-actions .icon-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  line-height: 0;
+  border-radius: 50%;
+  color: var(--label-primary);
+}
+.dswui .collapsed-actions svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}

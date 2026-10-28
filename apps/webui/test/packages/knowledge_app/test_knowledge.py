@@ -4,6 +4,7 @@ import re
 
 import pytest
 from playwright.sync_api import expect
+from test.navigation import follow_link, open_navigation
 
 
 def fake_openkb(page, broken_sources=False, content=None, graph_data=None):
@@ -66,13 +67,13 @@ def fake_openkb(page, broken_sources=False, content=None, graph_data=None):
 
 
 def open_knowledge(page):
-    page.get_by_role('link', name='知识库', exact=True).click()
-    page.get_by_role('link', name='知识页面', exact=True).click()
+    follow_link(page, '知识库')
+    follow_link(page, '知识页面')
     page.get_by_role('region', name='知识页面列表').wait_for()
 
 
 def open_graph(page):
-    page.get_by_role('link', name='知识页面', exact=True).click()
+    follow_link(page, '知识页面')
     page.locator('.knowledge-card-main').first.click()
     page.get_by_role('button', name='查看关联', exact=True).click()
     page.get_by_role('dialog', name='文档关联', exact=True).get_by_role('button', name='close', exact=True).click()
@@ -105,7 +106,7 @@ def test_evidence_map_explains_real_links_and_source_chain(page):
 def test_quality_report_and_remove_preview_use_service(page):
     calls = fake_openkb(page)
     open_knowledge(page)
-    page.get_by_role('link', name='质量检查', exact=True).click()
+    follow_link(page, '质量检查')
     assert not any(path == 'lint' for path, _ in calls)
     page.get_by_role('button', name='开始检查', exact=True).click()
     expect(page.get_by_text('检查完成', exact=True)).to_be_visible()
@@ -115,14 +116,14 @@ def test_quality_report_and_remove_preview_use_service(page):
     assert sum(path == 'lint' for path, _ in calls) == 1
     assert page.get_by_text('无结构问题。').is_visible()
     page.keyboard.press('Escape')
-    page.get_by_role('link', name='知识页面', exact=True).click()
-    page.get_by_role('link', name='质量检查', exact=True).click()
+    follow_link(page, '知识页面')
+    follow_link(page, '质量检查')
     page.get_by_role('button', name='查看报告', exact=True).click()
     page.get_by_text('无结构问题。').wait_for()
     assert page.get_by_text('无结构问题。').is_visible()
     page.keyboard.press('Escape')
     assert sum(path == 'lint' for path, _ in calls) == 1
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '原始资料')
     page.get_by_role('button', name='查看资料：paper.pdf').click()
     page.get_by_role('button', name='资料操作').click()
     page.get_by_role('menuitem', name='移除资料', exact=True).click()
@@ -140,7 +141,7 @@ def test_mobile_evidence_has_canvas_and_readable_inspector(page):
     page.set_viewport_size({"width": 390, "height": 844})
     open_knowledge(page)
     open_graph(page)
-    page.get_by_role('link', name='知识页面', exact=True).click()
+    follow_link(page, '知识页面')
     page.get_by_role('button', name='阅读知识：Agent 约束', exact=True).click()
     page.get_by_role('button', name='查看关联', exact=True).click()
     assert page.locator('.relation-title').is_visible()
@@ -158,14 +159,14 @@ def test_edit_import_and_recompile_follow_service_results(page):
     page.get_by_text('已复核。').wait_for()
     assert any(path == 'page' and body.get('content') == '# Agent 约束\n\n已复核。' for path, body in calls)
     page.get_by_role('dialog').get_by_role('button', name='close', exact=True).click()
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '原始资料')
     page.get_by_role('button', name='导入资料').click()
     page.get_by_label('选择资料文件').set_input_files({"name": "notes.md", "mimeType": "text/markdown", "buffer": b'# notes'})
     page.get_by_role('button', name='开始导入').click()
     page.get_by_text('已完成 1 · 已跳过 0 · 失败 0').wait_for()
     assert any(path == 'add' for path, _ in calls)
     page.get_by_role('button', name='关闭').click()
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '原始资料')
     page.get_by_role('button', name='查看资料：paper.pdf').click()
     page.get_by_role('button', name='资料操作').click()
     page.get_by_role('menuitem', name='重新生成知识', exact=True).click()
@@ -179,7 +180,7 @@ def test_missing_and_ambiguous_sources_do_not_create_false_links(page):
     fake_openkb(page, broken_sources=True)
     open_knowledge(page)
     open_graph(page)
-    page.get_by_role('link', name='知识页面', exact=True).click()
+    follow_link(page, '知识页面')
     page.get_by_role('button', name='阅读知识：独立页面', exact=True).click()
     page.get_by_role('button', name='查看关联', exact=True).click()
     group = page.get_by_role('dialog', name='文档关联', exact=True).get_by_role('region', name='内容来源')
@@ -191,8 +192,8 @@ def test_missing_and_ambiguous_sources_do_not_create_false_links(page):
 
 def test_service_failure_is_shown_as_error_not_empty_graph(page):
     page.route('**/api/v1/kbs', lambda route: route.fulfill(status=503, json={"detail": "unavailable"}))
-    page.get_by_role('link', name='知识库', exact=True).click()
-    page.get_by_role('alert').get_by_text('知识服务请求失败（503），请稍后重试。').wait_for()
+    follow_link(page, '知识库')
+    page.get_by_role('alert').get_by_text('知识服务暂不可用（503），请确认服务已启动后重试。').wait_for()
     assert page.get_by_role('button', name='重试加载').is_visible()
     assert page.get_by_text('知识库为空').count() == 0
 
@@ -200,7 +201,7 @@ def test_service_failure_is_shown_as_error_not_empty_graph(page):
 def test_source_derivation_includes_summary_chain_but_not_unrelated_pages(page):
     fake_openkb(page)
     open_knowledge(page)
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '原始资料')
     expect(page.locator('.source-card').first).to_contain_text('3 篇')
     page.get_by_role('button', name='查看资料：paper.pdf').click()
     related = page.get_by_role('region', name='派生知识')
@@ -218,7 +219,7 @@ def test_graph_failure_does_not_block_documents_import_or_reading(page):
     fake_openkb(page)
     page.route('**/api/v1/graph', lambda route: route.fulfill(status=500, json={'detail': 'graph unavailable'}))
     open_knowledge(page)
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '原始资料')
     expect(page.locator('.source-card')).to_have_count(1)
     expect(page.locator('.knowledge-grid')).to_contain_text('暂不可用')
     assert page.get_by_role('button', name='导入资料', exact=True).is_enabled()
@@ -234,7 +235,7 @@ def test_quality_failure_can_retry_without_restarting_on_navigation(page):
     calls = fake_openkb(page)
     open_knowledge(page)
     page.route('**/api/v1/lint', lambda route: route.fulfill(status=500, json={'detail': 'failed'}))
-    page.get_by_role('link', name='质量检查', exact=True).click()
+    follow_link(page, '质量检查')
     assert not any(path == 'lint' for path, _ in calls)
     page.get_by_role('button', name='开始检查', exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('500')
@@ -243,8 +244,8 @@ def test_quality_failure_can_retry_without_restarting_on_navigation(page):
     page.get_by_role('button', name='查看报告', exact=True).click()
     expect(page.get_by_role('heading', name='结构报告', exact=True)).to_be_visible()
     page.keyboard.press('Escape')
-    page.get_by_role('link', name='记忆', exact=True).click()
-    page.get_by_role('link', name='知识库', exact=True).click()
+    follow_link(page, '记忆')
+    follow_link(page, '知识库')
     page.get_by_role('button', name='查看报告', exact=True).click()
     expect(page.get_by_text('无结构问题。')).to_be_visible()
     assert sum(path == 'lint' for path, _ in calls) == 1
@@ -253,7 +254,7 @@ def test_quality_failure_can_retry_without_restarting_on_navigation(page):
 def test_regeneration_can_be_cancelled_without_calling_service(page):
     calls = fake_openkb(page)
     open_knowledge(page)
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '原始资料')
     page.get_by_role('button', name='查看资料：paper.pdf').click()
     page.get_by_role('button', name='资料操作', exact=True).click()
     page.get_by_role('menuitem', name='重新生成知识', exact=True).click()
@@ -323,17 +324,17 @@ def test_search_is_stable_after_reading_and_filters_persist_per_list(page):
     expect(page.get_by_role('heading', name='没有匹配的知识页面')).to_be_visible()
     search.fill('Agent')
     page.get_by_role('combobox', name='筛选内容类型').click()
-    page.locator('.semi-select-option').filter(has_text=re.compile('^概念$')).click()
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    page.get_by_role('option', name='概念', exact=True).click()
+    follow_link(page, '原始资料')
     source_search = page.get_by_role('textbox', name='搜索资料名称…')
     expect(source_search).to_have_value('')
     source_search.fill('paper')
-    page.get_by_role('link', name='知识页面', exact=True).click()
+    follow_link(page, '知识页面')
     expect(search).to_have_value('Agent')
     expect(page.get_by_role('combobox', name='筛选内容类型')).to_contain_text('概念')
     page.get_by_role('button', name='移除类型筛选').click()
     expect(search).to_have_value('Agent')
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '原始资料')
     expect(source_search).to_have_value('paper')
     open_graph(page)
     expect(page.get_by_role('textbox', name='搜索知识与资料…')).to_have_count(0)
@@ -349,7 +350,7 @@ def test_tabs_sources_and_reader_index_fit_narrow_screens(page, width):
         box = page.get_by_role('link', name=name, exact=True).bounding_box()
         assert box['x'] >= nav['x']
         assert box['x'] + box['width'] <= nav['x'] + nav['width']
-    page.get_by_role('link', name='原始资料', exact=True).click()
+    follow_link(page, '原始资料')
     assert page.locator('.source-table .status').count() == 0
     assert page.locator('.shell-main').evaluate('el => el.scrollWidth <= el.clientWidth')
     page.get_by_role('button', name='查看资料：paper.pdf').click()
@@ -432,7 +433,7 @@ def test_reader_modal_preserves_list_filter_and_focus(page):
 def test_graph_canvas_navigation_and_layout_survive_reader(page):
     calls = fake_openkb(page)
     open_knowledge(page)
-    page.get_by_role('link', name='文档关联', exact=True).click()
+    follow_link(page, '文档关联')
     expect(page.locator('.react-flow__node')).to_have_count(5)
     page.get_by_role('button', name='全部连线', exact=True).click()
     expect(page.locator('.react-flow__edge')).to_have_count(4)
@@ -478,7 +479,7 @@ def test_graph_canvas_navigation_and_layout_survive_reader(page):
 def test_graph_edge_keyboard_selection_explains_direction(page):
     fake_openkb(page)
     open_knowledge(page)
-    page.get_by_role('link', name='文档关联', exact=True).click()
+    follow_link(page, '文档关联')
     page.get_by_role('button', name='全部连线', exact=True).click()
     edge = page.locator('.react-flow__edge[aria-label="正文引用"]')
     edge.focus()
@@ -498,7 +499,7 @@ def test_reader_explore_opens_relation_modal(page, kind):
     fake_openkb(page)
     open_knowledge(page)
     if kind == 'source':
-        page.get_by_role('link', name='原始资料', exact=True).click()
+        follow_link(page, '原始资料')
         page.get_by_role('button', name='查看资料：paper.pdf').click()
     else:
         page.get_by_role('button', name='阅读知识：Agent 约束').click()
@@ -516,7 +517,7 @@ def test_reader_explore_opens_relation_modal(page, kind):
 def test_quality_reports_survive_reload_export_and_delete(page):
     calls = fake_openkb(page)
     open_knowledge(page)
-    page.get_by_role('link', name='质量检查', exact=True).click()
+    follow_link(page, '质量检查')
     page.get_by_role('button', name='开始检查', exact=True).click()
     expect(page.locator('.quality-report-row')).to_have_count(1)
     assert not page.get_by_text('无结构问题。').is_visible()
@@ -536,24 +537,31 @@ def test_quality_reports_survive_reload_export_and_delete(page):
     assert sum(path == 'lint' for path, _ in calls) == 2
 
 
-def test_quality_actions_and_empty_state_have_separate_areas(page):
+@pytest.mark.parametrize('width,theme', [(390, 'light'), (1280, 'dark')])
+def test_quality_actions_and_empty_state_have_separate_areas(page, width, theme):
+    page.set_viewport_size({'width': width, 'height': 844})
+    page.emulate_media(color_scheme=theme)
     fake_openkb(page)
-    page.get_by_role('link', name='知识库', exact=True).click()
-    page.get_by_role('link', name='质量检查', exact=True).click()
+    follow_link(page, '知识库')
+    follow_link(page, '质量检查')
     expect(page.get_by_role('heading', name='还没有检查报告')).to_be_visible()
     context = page.locator('.knowledge-context').bounding_box()
     actions = page.locator('.quality-start').bounding_box()
     reports = page.locator('.quality-empty').bounding_box()
-    assert context['y'] + context['height'] <= actions['y']
+    assert context['y'] + context['height'] + 20 <= actions['y']
     assert actions['y'] + actions['height'] <= reports['y']
-    assert page.get_by_role('combobox', name='选择知识库').bounding_box()['width'] <= 200
+    if width >= 768:
+        assert page.get_by_role('combobox', name='选择知识库').bounding_box()['width'] <= 200
+    expect(page.get_by_role('button', name='开始检查', exact=True)).to_be_visible()
+    assert page.locator('.management-body:visible').evaluate('el => el.scrollWidth <= el.clientWidth')
+    page.screenshot(path=f'test-results/dswui-quality-{theme}-{width}.png')
 
 @pytest.mark.parametrize('motion', ['reduce', 'no-preference'])
 def test_quality_export_preserves_page_and_report_dialog(page, motion):
     page.emulate_media(reduced_motion=motion)
     fake_openkb(page)
     open_knowledge(page)
-    page.get_by_role('link', name='质量检查', exact=True).click()
+    follow_link(page, '质量检查')
     expect(page.get_by_role('heading', name='还没有检查报告')).to_be_visible()
     assert page.get_by_text('检查知识内容与引用关系，生成可回看的检查报告。').count() == 0
     assert page.locator('.quality-empty p').count() == 0

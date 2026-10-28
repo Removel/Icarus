@@ -139,6 +139,9 @@ class SessionRuntime(SessionHost):
                     **config.runtime.plugin_config.get("persona", {}),
                     "config_model": config,
                 },
+                "web-search": {
+                    **config.runtime.plugin_config.get("web-search", {}),
+                },
                 "knowledge": {
                     **config.runtime.plugin_config.get("knowledge", {}),
                     "default_page_size": (
@@ -233,6 +236,8 @@ class SessionRuntime(SessionHost):
         prompt.prepare(static, dynamic_sources=frozenset(dynamic), update_sources=frozenset(updates),
                        required_sources=required, measure_dynamic=measure)
         for board in boards:
+            if "web-search" in active:
+                board.required_context_sources = board.required_context_sources | {"web-search"}
             board.validate_prompt_context = validate
             board.region_registry.remove_inactive_owners(active)
             board.region_store.initialize()

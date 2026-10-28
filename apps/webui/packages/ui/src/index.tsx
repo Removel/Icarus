@@ -2,21 +2,15 @@ import '@douyinfe/semi-ui/react19-adapter';
 import {
   cloneElement,
   isValidElement,
-  useId,
+  useRef,
+  useState,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { ArrowDown, Search, X, SearchX } from 'lucide-react';
+import { ArrowDown, Info, Search, X, SearchX } from 'lucide-react';
 import { flushSync } from 'react-dom';
-import {
-  Button,
-  Input,
-  Tabs as SemiTabs,
-  Modal as SemiModal,
-  Select as SemiSelect,
-  Spin,
-} from '@douyinfe/semi-ui';
+import { Button, Input, Modal as SemiModal, Spin, Tooltip } from '@douyinfe/semi-ui';
 
 export {
   CodeHighlight,
@@ -33,6 +27,44 @@ export {
   Dropdown,
 } from '@douyinfe/semi-ui';
 export { navigate, useHashLocation, useUnsavedChanges } from './navigation';
+export { NavigationDrawer, useNarrowLayout } from './navigation-drawer';
+export { Select } from './Select';
+export { serviceFailure, taskFailure } from './serviceErrors';
+
+export function InfoTip({ label, content }: { label: string; content: string }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip
+      content={content}
+      trigger="custom"
+      visible={open}
+      onClickOutSide={() => setOpen(false)}
+      onEscKeyDown={() => setOpen(false)}
+      position="topLeft"
+      motion={false}
+      closeOnEsc
+      getPopupContainer={() => trigger.current?.closest('dialog') ?? document.body}
+    >
+      <button
+        ref={trigger}
+        type="button"
+        className="info-tip"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && open) {
+            event.stopPropagation();
+            setOpen(false);
+          }
+        }}
+      >
+        <Info size={14} aria-hidden="true" />
+      </button>
+    </Tooltip>
+  );
+}
 
 let layoutTransition: ViewTransition | undefined;
 
@@ -58,9 +90,19 @@ export function transitionLayout(update: () => void, animate = true) {
   void transition.finished.then(clear, clear);
 }
 
-export function LoadingIndicator({ label = '正在加载' }: { label?: string }) {
+export function LoadingIndicator({
+  label = '正在加载',
+  overlay = false,
+}: {
+  label?: string;
+  overlay?: boolean;
+}) {
   return (
-    <div className="loading-indicator" role="status" aria-label={label}>
+    <div
+      className={`loading-indicator${overlay ? ' is-overlay' : ''}`}
+      role="status"
+      aria-label={label}
+    >
       <Spin />
     </div>
   );
@@ -78,6 +120,8 @@ export function Modal({
 }: ComponentProps<typeof SemiModal>) {
   return (
     <SemiModal
+      motion={false}
+      preventScroll
       {...props}
       centered={centered}
       className={['icarus-modal', className].filter(Boolean).join(' ')}
@@ -107,43 +151,16 @@ export function Modal({
   );
 }
 
-export function Select({
-  'aria-label': label,
-  ...props
-}: ComponentProps<typeof SemiSelect> & { 'aria-label'?: string }) {
-  const labelId = useId();
-  return (
-    <>
-      {label && (
-        <span id={labelId} className="visually-hidden">
-          {label}
-        </span>
-      )}
-      <SemiSelect
-        {...props}
-        aria-labelledby={props['aria-labelledby'] ?? (label ? labelId : undefined)}
-      />
-    </>
-  );
-}
-
 export function BrandMark({ size = 30 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="currentColor" aria-hidden="true">
-      <path
-        d="M24 10v14m-10-9 10 9 10-9"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={3}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx={24} cy={7} r={3.5} />
-      <circle cx={11} cy={13} r={3} />
-      <circle cx={37} cy={13} r={3} />
-      <path d="M6 23c6-1 12 1 16 5v13c-5-4-10-6-16-5V23Z" />
-      <path d="M42 23c-6-1-12 1-16 5v13c5-4 10-6 16-5V23Z" opacity={0.75} />
-    </svg>
+    <img
+      className="icarus-brand-mark"
+      src="/icarus.svg"
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden="true"
+    />
   );
 }
 
@@ -199,20 +216,36 @@ export function Tabs({
   onChange: (id: string) => void;
 }) {
   return (
-    <SemiTabs className="content-tabs" type="line" activeKey={value} onChange={onChange}>
-      {items.map((item) => (
-        <SemiTabs.TabPane
-          itemKey={item.id}
+    <div className="content-tabs" role="tablist" aria-label="记忆状态">
+      {items.map((item, index) => (
+        <button
+          type="button"
+          role="tab"
+          className="content-tab"
           key={item.id}
-          tab={
-            <span>
-              {item.label}
-              {item.count !== undefined && <span className="tab-count">{item.count}</span>}
-            </span>
-          }
-        />
+          aria-selected={value === item.id}
+          tabIndex={value === item.id ? 0 : -1}
+          onClick={() => onChange(item.id)}
+          onKeyDown={(event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const next =
+              event.key === 'Home'
+                ? 0
+                : event.key === 'End'
+                  ? items.length - 1
+                  : (index + (event.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length;
+            const buttons =
+              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button');
+            buttons?.[next]?.focus();
+            onChange(items[next].id);
+          }}
+        >
+          {item.label}
+          {item.count !== undefined && <span className="tab-count">{item.count}</span>}
+        </button>
       ))}
-    </SemiTabs>
+    </div>
   );
 }
 
