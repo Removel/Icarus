@@ -21,6 +21,7 @@ from apps.tui.src.screens.chat.messages import (
 from apps.tui.src.screens.chat.screen import ChatScreen
 from apps.tui.src.services.chat.operations import PreparedSession, execute
 from apps.tui.src.services.chat.session import ChatSession
+from apps.tui.src.services.desktop import DesktopService
 from apps.tui.src.stores.chat import ChatStore
 
 
@@ -52,6 +53,7 @@ class IcarusTextualApp(App[int]):
         super().__init__()
         self.config = config
         self.attachments = attachments
+        self.desktop = DesktopService()
         self.commands = commands or create_default_command_registry()
         self.chat_store = ChatStore(
             workspace_path=config.workspace_path,
