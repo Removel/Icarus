@@ -34,6 +34,25 @@ Windows 全量的 7 项安装/启动脚本失败与人物交付记录中同 HEAD
 
 没有向真实业务库写入数据或调用付费模型。13 项跳过为需要显式启用的真实服务/模型集成检查，不能把隔离 HTTP/RPC 回归当作真实写入或模型验收。完成后已退出本次测试使用的 Vite 进程，实际 8080 服务保持运行。
 
+## Node 22 CI 故障复现与修复
+
+首次远端 [WebUI 检查](https://github.com/Removel/Icarus/actions/runs/40663701122)
+为 348 passed、13 skipped、1 failed；失败集中在 rela 服务诊断测试，其他工作流通过。
+CI 使用 Node 22.23.3，而上述 WSL 全量使用 Node 24.22.0，后者的通过不能替代前者的运行时验证。
+
+在 WSL 的 Node 22.22.0 和与 CI 相同的 22.23.3 下均复现：Gateway 握手失败后，
+`WebSocket.close()` 可同步再次触发 error，原错误回调重复关闭连接，引起递归异常，
+使并行执行的 rela/Mem0/OpenKB 诊断结果也无法正常输出。
+
+`server/check-services.mjs` 现在统一成功、错误、关闭与超时的结束路径，在清理前标记已结束，
+并仅关闭 CONNECTING/OPEN 状态的连接。保留错误监听以处理关闭期间再次产生的 error。
+回归测试同时覆盖真实 HTTP 拒绝握手和同步重入的错误事件，以及 rela 的 200/401 返回；
+新增场景在旧实现上失败，在修复后通过，也继续校验凭据与业务记录不会输出。
+
+WSL 验证：Node 22.23.3 与 Node 24.22.0 的聚焦文件各 5 passed；Node 22.23.3 的
+`test/server` 共 20 passed（66.67s）；`pnpm lint`、`pnpm format:check`、`pnpm typecheck`
+与 `git diff --check` 通过。测试沿用上述隔离副本，未更换实际运行服务的 Node 或依赖。
+
 ## 相关记录
 
 - [人物工作台交付记录](../2026-10-23-relationship-workspace/plan-delivery-report.md)
