@@ -3,7 +3,7 @@ import logging
 import re
 from contextlib import contextmanager
 from typing import Any, List, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from pydantic import BaseModel
 
@@ -195,7 +195,11 @@ class PGVector(VectorStoreBase):
             if sslmode:
                 connection_string = _with_sslmode(connection_string, sslmode)
         else:
-            connection_string = f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+            address = f"[{host}]" if ":" in host and not host.startswith("[") else host
+            connection_string = (
+                f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}"
+                f"@{address}:{port}/{quote(dbname, safe='')}"
+            )
             if sslmode:
                 connection_string = _with_sslmode(connection_string, sslmode)
         
