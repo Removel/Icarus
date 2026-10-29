@@ -10,7 +10,7 @@
 
 `syntax` 总是运行。根控制层、后端、TUI、服务、WebUI 和镜像按输出调用现有 reusable workflow；镜像等待所选快速/应用检查成功后执行。`ci-required` 使用 `always()` 汇总全部依赖，由 [check_results.py](../../../scripts/ci/check_results.py) 对照预期任务验证。预期任务缺失、跳过、取消、失败，或检测失败均不能通过；只有明确不适用的任务可以跳过。
 
-旧 workflow 的 push/PR 触发暂时保留，以便首次远端运行时对照。新旧运行之间使用不同 concurrency group；确认远端检查和必需检查迁移后再取消重复触发，不能将本地验证视为已完成这一步。
+`ci.yml` 是普通 push/PR 的唯一自动入口。应用、语法与镜像 workflow 仅保留 `workflow_call` 和 `workflow_dispatch`，由统一入口复用或按需手动运行，不再因同一事件重复启动独立 workflow。首次真实 push 全量和纯文档验证成功后，按用户要求直接移除了旧自动触发器；分支保护的必需检查配置仍是独立的仓库设置。
 
 ## 验证执行单元
 

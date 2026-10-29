@@ -69,10 +69,16 @@ attempt 2 已完整结束，整轮 `conclusion=success`。应用测试报告已�
 
 WebUI 性能基线：本地 367 个 collection 项中 354 passed、13 skipped，串行累计 741.17 秒。聊天文件 83 项约 204.75 秒，最慢单项约 7.77 秒。公共 page 夹具每项创建独立上下文并先初始化记忆页面；当前慢主要来自完整浏览器覆盖的累积时间。远端本轮浏览器套件 14 分钟，最慢单次 setup 为生产构建/服务夹具 13.25 秒。用户确认先完成 CI 改造，本轮不做测试层级迁移、分片或减覆盖。
 
+## 直接切换统一入口
+
+在全量 push 与后续纯文档运行（[40835245832](https://github.com/xilele777/Icarus/actions/runs/40835245832)，SHA `dfb22185b7d54c5dda90377e77a1e1442b9f681f`）均成功后，用户要求直接推送新版本，结束重复运行的过渡。已从 apps/backend/images/lint/webui/tui 六个执行单元移除 push/PR，保留复用与手动入口；control 原本就没有自动触发。普通自动入口只剩 `ci.yml`，定时扩展和发布使用各自独立事件。
+
+调整后本地相关回归 59 passed，actionlint 与差异检查通过；新增断言要求所有执行单元只能声明复用/手动事件，且均由统一 CI 调用。最终远端结果随本轮切换验证登记；本次不改变应用测试内容、分支保护或发布授权。
+
 ## 待远端验收与后续任务
 
-1. `origin = xilele777/Icarus` 的真实 push 全量已通过；准备从 `xilele777:feat/webui` 向 `Removel/Icarus:feature` 提交 PR，提交前核验目标分支基线。当前保留旧触发器，因此迁移期间会有重复任务。
-2. 真实 PR 验证失败/跳过/取消阻止门禁，纯文档正常完成；再切换必需检查至稳定的 `ci-required`，移除旧重复触发器。未修改远端设置。
+1. `origin = xilele777/Icarus` 的真实 push 全量已通过；准备从 `xilele777:feat/webui` 向 `Removel/Icarus:feature` 提交 PR，提交前核验目标分支基线。旧重复触发器已按用户要求移除。
+2. 真实 PR 验证失败/跳过/取消阻止门禁，再切换目标仓库的必需检查至稳定的 `ci-required`；纯文档与取消阻断已有真实 push 证据。未修改远端设置。
 3. ARM 构建、真实候选推送和 manifest 晋级尚未执行；既有 `latest` 可能没有版本 annotation，首次正式晋级前必须核验并建立基线。未进行真实发布。
 4. 应用 Python 依赖锁消费、完整 retained 环境补齐、耗时统计、长期发布归档、扫描与来源证明仍按计划后续推进，不把一次本地运行称为完成长期治理。
 
