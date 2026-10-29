@@ -2,16 +2,17 @@
 
 import argparse
 import asyncio
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 from apps.tui.src.app import IcarusTextualApp
+from apps.tui.src.configs.config import build_config
 from packages.runtime_environment import get_icarus_data_dir
 
 
 def _load_gateway_client() -> type[Any]:
-    from apps.tui.src.gateway_client import GatewayClient
+    from apps.tui.src.client.gateway import GatewayClient
 
     return GatewayClient
 
@@ -42,29 +43,51 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="ws://127.0.0.1:8765/rpc",
         help="Agent Gateway WebSocket URL",
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Run offline demonstration data in the real TUI; no Gateway or model calls",
+    )
     return parser.parse_args(argv)
 
 
 def run_app(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    workspace_path = Path.cwd().resolve()
-    resource_root = get_icarus_data_dir() / "incoming"
+    config = build_config(
+        cwd=Path.cwd(),
+        gateway_url=args.gateway_url,
+        session_id=args.session_id,
+        data_dir=get_icarus_data_dir(),
+    )
 
-    async def runtime_factory(
-        session_id: str | None, create_if_missing: bool
-    ):
+    preview_client = None
+    if args.preview:
+        from dataclasses import replace
+
+        from apps.tui.src.tools.preview import preview_scenario
+        from apps.tui.src.tools.replay import ReplayRuntimeService
+
+        config = replace(config, session_id="preview-session")
+        preview_client = ReplayRuntimeService(
+            preview_scenario(), events_per_second=8, session_id="preview-session"
+        )
+
+    async def runtime_factory(session_id: str | None, create_if_missing: bool):
+        if preview_client is not None:
+            return preview_client
         return await _create_gateway_client(
-            workspace_path,
+            config.workspace_path,
             session_id,
-            args.gateway_url,
+            config.gateway_url,
             create_if_missing,
         )
 
+    from apps.tui.src.services.attachments import AttachmentsService
+
     app = IcarusTextualApp(
-        runtime_factory=runtime_factory,
-        initial_session_id=args.session_id,
-        workspace_path=workspace_path,
-        resource_root=resource_root,
+        config,
+        client_factory=runtime_factory,
+        attachments=AttachmentsService(config.resource_root),
     )
     result = app.run()
     if isinstance(result, int):

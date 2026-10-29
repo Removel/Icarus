@@ -2,17 +2,17 @@
 
 import json
 
-from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import (
     AppendAssistantDelta,
-    AppendThinkingDelta,
-    CompleteThinking,
-    CompleteAssistantMessage,
     AppendError,
+    AppendThinkingDelta,
     AppendToolStarted,
+    CompleteAssistantMessage,
+    CompleteThinking,
     UiAction,
     UpdateToolCompleted,
 )
+from packages.gateway_protocol import RuntimeUpdateModel
 
 
 class AgentProjector:
@@ -35,8 +35,8 @@ class AgentProjector:
             step = _positive_step(payload)
             text = str(payload.get("text", ""))
             return (
-                AppendThinkingDelta(task_id, step, text, historical),
-            ) if text else ()
+                (AppendThinkingDelta(task_id, step, text, historical),) if text else ()
+            )
         if update.type == "assistant.thinking":
             step = _positive_step(payload)
             text = str(payload.get("text", ""))
@@ -44,8 +44,10 @@ class AgentProjector:
             if not isinstance(partial, bool):
                 raise ValueError("assistant.thinking partial must be boolean")
             return (
-                CompleteThinking(task_id, step, text, partial, historical),
-            ) if text else ()
+                (CompleteThinking(task_id, step, text, partial, historical),)
+                if text
+                else ()
+            )
         if update.type == "tool.started":
             return (
                 AppendToolStarted(
@@ -76,9 +78,7 @@ class AgentProjector:
                     ),
                     step=_positive_step(payload),
                     output_preview=payload.get("output_preview"),
-                    preview_truncated=bool(
-                        payload.get("preview_truncated", False)
-                    ),
+                    preview_truncated=bool(payload.get("preview_truncated", False)),
                     full_result_available=bool(
                         payload.get("full_result_available", False)
                     ),

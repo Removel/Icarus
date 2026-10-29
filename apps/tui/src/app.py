@@ -1,1879 +1,275 @@
-"""Textual application controller for one Gateway-backed Session."""
+"""Application lifetime, I/O workers and serial state application."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from functools import partial
-import logging
 from pathlib import Path
-import tempfile
-from typing import Any, Protocol
 
-from textual import events
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.message import Message
-from textual.widgets import Button, Static
-from textual.worker import Worker, WorkerCancelled
+from textual.app import App
+from textual.worker import WorkerCancelled
 
-from apps.tui.src.clipboard import (
-    ClipboardImage,
-    ClipboardImageReadError,
-    read_clipboard_image,
-    read_clipboard_text,
+from apps.tui.src.configs.config import TuiConfig
+from apps.tui.src.domain.chat_state import InterruptAction
+from apps.tui.src.domain.commands import create_default_command_registry
+from apps.tui.src.event_pipeline import create_default_projector_registry
+from apps.tui.src.screens.chat.messages import (
+    ChatChanged,
+    DesktopCompleted,
+    OperationCompleted,
+    RuntimeOutputReceived,
+    SubscriptionFailed,
 )
-from apps.tui.src.commands import (
-    CommandDefinition,
-    CommandRegistry,
-    create_default_command_registry,
-)
-from apps.tui.src.chat_state import (
-    ChatState,
-    DispatchReservation,
-    InterruptAction,
-    RuntimePhase,
-)
-from apps.tui.src.event_pipeline import (
-    FinishTurn,
-    SetRuntimeStatus,
-    ShowNotification,
-    UiAction,
-    create_default_projector_registry,
-)
-from apps.tui.src.event_pipeline.dispatcher import ProjectorRegistry
-from apps.tui.src.gateway_client import (
-    GatewayClientError,
-    GatewayTransportError,
-)
-from packages.gateway_protocol import (
-    DiscardEmptySessionResultModel,
-    ResourceRefModel,
-    RuntimeUpdateModel,
-    SessionHistoryModel,
-    SessionSummaryModel,
-)
-from apps.tui.src.screens import SessionPicker
-from apps.tui.src.widgets import (
-    ConversationView,
-    PersistentComposer,
-    QueuePanel,
-    RuntimeStatusBar,
-    TurnRail,
-)
-
-
-logger = logging.getLogger("icarus.tui.app")
-
-
-class UpdateSubscription(Protocol):
-    async def next_update(self) -> RuntimeUpdateModel:
-        ...
-
-    def close(self) -> None:
-        ...
-
-
-class RuntimeClient(Protocol):
-    session_id: str | None
-    workspace_key: str | None
-
-    async def start(self) -> None:
-        ...
-
-    def subscribe_updates(self) -> UpdateSubscription:
-        ...
-
-    async def get_session_history(
-        self, *, after_sequence: int = 0
-    ) -> SessionHistoryModel:
-        ...
-
-    async def list_sessions(self) -> tuple[SessionSummaryModel, ...]:
-        ...
-
-    async def get_session_status(self) -> dict[str, Any]:
-        ...
-
-    async def discard_empty_session(
-        self, session_id: str
-    ) -> DiscardEmptySessionResultModel:
-        ...
-
-    async def submit(
-        self,
-        prompt: str,
-        *,
-        submission_id: str,
-        resources: tuple[ResourceRefModel, ...] = (),
-        display_text: str | None = None,
-    ) -> SubmitAccepted:
-        ...
-
-    async def steer_task(
-        self,
-        task_id: str,
-        prompt: str,
-        *,
-        submission_id: str,
-        resources: tuple[ResourceRefModel, ...] = (),
-        display_text: str | None = None,
-    ) -> TaskOperationResult:
-        ...
-
-    async def cancel_task(
-        self,
-        task_id: str,
-        reason: str | None = None,
-    ) -> TaskOperationResult:
-        ...
-
-    async def reconnect(self) -> UpdateSubscription:
-        ...
-
-    async def get_task_status(self, task_id: str) -> dict[str, Any]:
-        ...
-
-    async def close(self) -> None:
-        ...
-
-
-class SubmitAccepted(Protocol):
-    task_id: str
-    queue_position: int
-
-
-class TaskOperationResult(Protocol):
-    task_id: str | None
-    status: str
-
-
-ClientFactory = Callable[[str | None, bool], Awaitable[RuntimeClient]]
-
-
-@dataclass
-class RuntimeOutputReceived(Message):
-    update: RuntimeUpdateModel
-
-
-@dataclass
-class DispatchFinished(Message):
-    service: RuntimeClient
-    reservation: DispatchReservation
-    result: SubmitAccepted | TaskOperationResult | None = None
-    error: BaseException | None = None
-
-
-@dataclass
-class RuntimeStarted(Message):
-    service: RuntimeClient
-    subscription: UpdateSubscription
-    history: tuple[RuntimeUpdateModel, ...] = ()
-    history_cursor: int = 0
-
-
-@dataclass
-class RuntimeReconnected(Message):
-    service: RuntimeClient | None
-    epoch: int
-    cause: BaseException
-    subscription: UpdateSubscription | None = None
-    history: SessionHistoryModel | None = None
-
-
-@dataclass
-class TaskStatusReceived(Message):
-    service: RuntimeClient
-    epoch: int
-    task_id: str
-    status: dict[str, Any]
-
-
-@dataclass
-class RuntimeStartFailed(Message):
-    error: BaseException
-
-
-@dataclass
-class RuntimeSubscriptionFailed(Message):
-    error: BaseException
-    subscription: UpdateSubscription | None = None
-
-
-@dataclass(frozen=True)
-class PreparedSession:
-    service: RuntimeClient
-    subscription: UpdateSubscription
-    history: SessionHistoryModel
-
-
-@dataclass
-class SessionActivationRequested(Message):
-    prepared: PreparedSession
-    service: RuntimeClient | None
-    epoch: int
-    completed: asyncio.Future[bool]
-
-
-class SessionBusyError(RuntimeError):
-    pass
+from apps.tui.src.platform.opener import open_url
+from apps.tui.src.screens.chat.screen import ChatScreen
+from apps.tui.src.services.chat.operations import PreparedSession, execute
+from apps.tui.src.services.chat.session import ChatSession
+from apps.tui.src.services.desktop import DesktopService
+from apps.tui.src.stores.chat import ChatStore
 
 
 class IcarusTextualApp(App[int]):
-    """Full-screen chat UI with a local one-active-task queue."""
-
-    CSS_PATH = "styles.tcss"
     TITLE = "Icarus"
-    BINDINGS = [
-        Binding(
-            "ctrl+c",
-            "context_interrupt",
-            show=False,
-            priority=True,
-        ),
-        Binding("ctrl+d", "eof", show=False, priority=True),
-        Binding(
-            "pageup",
-            "conversation_page_up",
-            show=False,
-            priority=True,
-        ),
-        Binding(
-            "pagedown",
-            "conversation_page_down",
-            show=False,
-            priority=True,
-        ),
-        Binding(
-            "ctrl+end",
-            "conversation_end",
-            show=False,
-            priority=True,
-        ),
+    CSS_PATH = [
+        Path(__file__).parent / "styles" / name
+        for name in (
+            "tokens.tcss",
+            "base.tcss",
+            "screens/chat.tcss",
+            "screens/session_picker.tcss",
+            "widgets/welcome.tcss",
+            "widgets/conversation.tcss",
+            "widgets/input_dock.tcss",
+            "widgets/command_menu.tcss",
+        )
     ]
 
     def __init__(
         self,
+        config: TuiConfig,
         *,
-        runtime_factory: ClientFactory,
-        initial_session_id: str | None = None,
-        workspace_path: str | Path,
-        resource_root: str | Path | None = None,
-        projector_registry: ProjectorRegistry | None = None,
-        command_registry: CommandRegistry | None = None,
-    ) -> None:
+        client_factory,
+        attachments,
+        commands=None,
+        projectors=None,
+    ):
         super().__init__()
-        self.runtime_factory = runtime_factory
-        self.initial_session_id = initial_session_id
-        self.service: RuntimeClient | None = None
-        self.workspace_path = Path(workspace_path).expanduser().resolve()
-        self.resource_root = (
-            Path(resource_root).expanduser().resolve()
-            if resource_root is not None
-            else None
+        self.config = config
+        self.attachments = attachments
+        self.desktop = DesktopService(open_url=open_url)
+        self.commands = commands or create_default_command_registry()
+        self.chat_store = ChatStore(
+            workspace_path=config.workspace_path,
+            session_id=config.session_id,
+            app_version=getattr(config, "app_version", None),
         )
-        self.chat_state = ChatState()
-        self.projector_registry = projector_registry
-        self.command_registry = (
-            command_registry or create_default_command_registry()
+        self.chat_session = ChatSession(
+            self.chat_store,
+            client_factory,
+            attachments,
+            projectors or create_default_projector_registry(),
+            self.commands,
+            initial_session_id=config.session_id,
         )
-        self._last_sequence = 0
-        self._completed_assistant_steps: set[tuple[str, int]] = set()
-        self.subscription: UpdateSubscription | None = None
-        self._runtime_start_worker: Worker[Any] | None = None
-        self._event_worker: Worker[Any] | None = None
-        self._reconnect_worker: Worker[Any] | None = None
-        self._dispatch_worker: Worker[Any] | None = None
-        self._clipboard_worker: Worker[Any] | None = None
-        self._session_operation_worker: Worker[Any] | None = None
-        self._clipboard_temp_directory: tempfile.TemporaryDirectory[
-            str
-        ] | None = None
-        self._cleanup_task: asyncio.Task[None] | None = None
-        self._dispatch_scheduled = False
-        self._connection_epoch = 0
-        self._accepting_input = True
-        self._has_user_submission = False
-        self._session_has_user_input = False
-        self._fatal_message = ""
-        self._fatal_failure = False
-        self._early_updates: dict[str, list[RuntimeUpdateModel]] = {}
+        self.chat_screen = ChatScreen(self.chat_store, self.commands)
+        self._reader = None
+        self._reader_scope = None
+        self._io_workers = set()
+        self._cleanup_task = None
+        self._paste_tokens = {}
 
-    def compose(self) -> ComposeResult:
-        yield Static("ICARUS", id="app-title", markup=False)
-        yield Static(str(self.workspace_path), id="workspace-label", markup=False)
-        with Horizontal(id="conversation-shell"):
-            yield ConversationView(self.workspace_path, id="conversation")
-            yield TurnRail(id="turn-rail")
-            yield Button("↓ New messages", id="new-output")
-        yield QueuePanel(id="queue-panel")
-        with Vertical(id="composer-shell"):
-            yield Static("❯", id="composer-prompt", markup=False)
-            yield PersistentComposer(id="composer")
-        yield RuntimeStatusBar(id="status-bar")
+    def get_css_variables(self):
+        variables = super().get_css_variables()
+        for line in (
+            (Path(__file__).parent / "styles/tokens.tcss").read_text().splitlines()
+        ):
+            if line.startswith("$") and ":" in line:
+                name, value = line.split(":", 1)
+                variables[name[1:]] = value.strip().rstrip(";")
+        return variables
 
-    def on_mount(self) -> None:
-        self._update_responsive_classes(self.size.width, self.size.height)
-        self.query_one(PersistentComposer).focus()
-        self._refresh_status()
-        self._runtime_start_worker = self.run_worker(
-            self._start_runtime,
-            name="runtime-start",
-            group="runtime",
-            exit_on_error=False,
-        )
+    async def on_mount(self):
+        await self.push_screen(self.chat_screen)
+        self._advance(self.chat_session.start())
 
-    def on_resize(self, event: events.Resize) -> None:
-        self._update_responsive_classes(event.size.width, event.size.height)
-        self.call_after_refresh(self._position_new_output)
-
-    def _update_responsive_classes(self, width: int, height: int) -> None:
-        self.screen.set_class(width <= 70, "-narrow")
-        self.screen.set_class(
-            width <= 88,
-            "-compact-logo",
-        )
-        self.screen.set_class(height <= 12, "-short")
-
-    async def _start_runtime(self) -> None:
-        try:
-            if self.projector_registry is None:
-                self.projector_registry = create_default_projector_registry()
-            prepared = await self._prepare_session(
-                self.initial_session_id,
-                True,
-                require_idle=False,
+    def _advance(self, operations=()):
+        self._io_workers = {w for w in self._io_workers if not w.is_finished}
+        for operation in operations:
+            worker = self.run_worker(
+                self._execute(operation),
+                name=f"chat-{operation.kind}",
+                exit_on_error=False,
             )
-        except asyncio.CancelledError:
-            raise
-        except BaseException as error:
-            self.post_message(RuntimeStartFailed(error))
-            return
-        if not self._accepting_input:
-            prepared.subscription.close()
-            await prepared.service.close()
-            return
-        self.service = prepared.service
-        self.post_message(
-            RuntimeStarted(
-                prepared.service,
-                prepared.subscription,
-                tuple(prepared.history.records),
-                prepared.history.history_cursor,
-            )
-        )
-
-    async def _prepare_session(
-        self,
-        session_id: str | None,
-        create_if_missing: bool,
-        *,
-        require_idle: bool,
-    ) -> PreparedSession:
-        service: RuntimeClient | None = None
-        subscription: UpdateSubscription | None = None
-        try:
-            service = await self.runtime_factory(session_id, create_if_missing)
-            await service.start()
-            subscription = service.subscribe_updates()
-            history = await service.get_session_history(after_sequence=0)
-            if require_idle:
-                status = await service.get_session_status()
-                if not self._status_is_idle(status):
-                    raise SessionBusyError(
-                        f"Session {service.session_id} is not idle"
-                    )
-            return PreparedSession(service, subscription, history)
-        except BaseException as error:
-            if service is not None:
-                if create_if_missing and session_id is None and service.session_id:
-                    cleanup_service = (
-                        self.service
-                        if self.service is not None
-                        and self.service is not service
-                        else service
-                    )
-                    try:
-                        await cleanup_service.discard_empty_session(
-                            service.session_id
-                        )
-                    except BaseException:
-                        logger.debug(
-                            "Unable to discard failed candidate Session",
-                            exc_info=True,
-                        )
-                try:
-                    if subscription is not None:
-                        subscription.close()
-                    await service.close()
-                except BaseException as cleanup_error:
-                    error.add_note(
-                        "Candidate cleanup also failed: "
-                        f"{type(cleanup_error).__name__}: {cleanup_error}"
-                    )
-            raise
-
-    async def on_runtime_started(self, message: RuntimeStarted) -> None:
-        if not self._accepting_input:
-            try:
-                message.subscription.close()
-                await message.service.close()
-            except Exception as error:
-                logger.error(
-                    "Unable to close late runtime subscription: %s: %s",
-                    type(error).__name__,
-                    error,
+            self._io_workers.add(worker)
+        scope = self.chat_session.scope
+        subscription = self.chat_session.subscription
+        if self._reader_scope != scope:
+            if self._reader:
+                self._reader.cancel()
+            self._reader_scope = scope
+            if subscription and scope.operation_id:
+                self._reader = self.run_worker(
+                    self._read(subscription, scope),
+                    name="chat-subscription",
+                    exit_on_error=False,
                 )
-            return
-        self.service = message.service
-        self.subscription = message.subscription
-        self._connection_epoch += 1
-        conversation = self.query_one(ConversationView)
-        if message.history:
-            conversation.begin_history_restore()
-            with self.batch_update():
-                for update in message.history:
-                    await self._project_runtime_update(
-                        update, historical=True
-                    )
-                    if self._fatal_failure:
-                        message.subscription.close()
-                        await conversation.finish_history_restore_async()
-                        return
-            await conversation.finish_history_restore_async()
-            rail = self.query_one(TurnRail)
-            rail.set_turns(
-                [turn.text for turn in conversation.projection.turns],
-                conversation.current_turn_index or 0,
-            )
-        self._last_sequence = max(
-            self._last_sequence, message.history_cursor
-        )
-        self._has_user_submission = self._session_has_user_input
-        self.chat_state.mark_ready()
-        service = self.service
-        session_id = getattr(service, "session_id", None)
-        self._refresh_status(
-            (f"Session {session_id}" if session_id else "Ready")
-            if self._has_user_submission
-            else ""
-        )
-        if self._fatal_failure:
-            return
-        self._event_worker = self.run_worker(
-            partial(self._consume_runtime_events, message.subscription),
-            name="runtime-events",
-            group="runtime",
-            exit_on_error=False,
-        )
-        self._schedule_dispatch()
+        self.chat_screen.post_message(ChatChanged(self.chat_store.revision))
+        if self.chat_session.stopping and self._cleanup_task is None:
+            self.request_shutdown(return_code=0)
 
-    async def on_runtime_start_failed(
-        self, message: RuntimeStartFailed
-    ) -> None:
-        if not self._accepting_input:
+    async def _execute(self, operation):
+        result = await execute(operation)
+        if self.chat_session.stopping:
+            if (
+                isinstance(result.value, PreparedSession)
+                and result.value.client is not self.chat_session.client
+            ):
+                result.value.subscription.close()
+                await result.value.client.close()
+            elif operation.kind == "clipboard" and result.value and result.value.image:
+                self.attachments.release((result.value.image,))
             return
-        self._fatal_failure = True
-        self.chat_state.mark_failed()
-        self._fatal_message = (
-            f"{type(message.error).__name__}: {message.error}"
-        )
-        if self._has_user_submission:
-            self._refresh_status(self._fatal_message)
-            self._safe_notify(
-                f"Runtime failed to start: {message.error}",
-                title="Icarus startup failed",
-                severity="error",
-            )
+        self.post_message(OperationCompleted(result))
 
-    async def _consume_runtime_events(
-        self, subscription: UpdateSubscription
-    ) -> None:
+    async def _read(self, subscription, scope):
         try:
             while True:
                 update = await subscription.next_update()
-                self.post_message(RuntimeOutputReceived(update))
+                self.post_message(RuntimeOutputReceived(update, scope))
         except asyncio.CancelledError:
-            raise
-        except BaseException as error:
-            if self._accepting_input:
-                self.post_message(
-                    RuntimeSubscriptionFailed(error, subscription)
-                )
-
-    async def on_runtime_subscription_failed(
-        self, message: RuntimeSubscriptionFailed
-    ) -> None:
-        if not self._accepting_input:
-            return
-        if (
-            message.subscription is not None
-            and message.subscription is not self.subscription
-        ):
-            logger.debug("Ignoring failure from an inactive subscription")
-            return
-        self._schedule_reconnect(message.error)
-
-    def _schedule_reconnect(self, cause: BaseException) -> None:
-        if not self._accepting_input:
-            return
-        worker = self._reconnect_worker
-        if worker is not None and not worker.is_finished:
-            return
-        self._reconnect_worker = self.run_worker(
-            partial(self._reconnect_runtime, cause),
-            name="runtime-reconnect",
-            group="runtime-reconnect",
-            exclusive=True,
-            exit_on_error=False,
-        )
-
-    async def _reconnect_runtime(self, cause: BaseException) -> None:
-        service = self.service
-        epoch = self._connection_epoch
-        if service is not None:
-            try:
-                subscription = await service.reconnect()
-                history = await service.get_session_history(
-                    after_sequence=self._last_sequence
-                )
-                self.post_message(RuntimeReconnected(
-                    service, epoch, cause, subscription, history
-                ))
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug("Runtime reconnect failed", exc_info=True)
-        self.post_message(RuntimeReconnected(service, epoch, cause))
-
-    async def on_runtime_reconnected(self, message: RuntimeReconnected) -> None:
-        subscription = message.subscription
-        if (not self._accepting_input or message.service is not self.service
-                or message.epoch != self._connection_epoch):
-            if subscription is not None and subscription is not self.subscription:
-                subscription.close()
-            return
-        service = message.service
-        history = message.history
-        if service is not None and subscription is not None and history is not None:
-            for update in history.records:
-                await self._project_runtime_update(update, historical=True)
-                if self._fatal_failure:
-                    return
-            self._last_sequence = max(self._last_sequence, history.history_cursor)
-            active_task_id = self.chat_state.active_task_id
-            old_event_worker = self._event_worker
-            if old_event_worker is not None:
-                old_event_worker.cancel()
-            self.subscription = subscription
-            self._connection_epoch += 1
-            self._fatal_failure = False
-            self._fatal_message = ""
-            self.chat_state.mark_ready()
-            if active_task_id is not None:
-                self._request_task_status(service, active_task_id)
-            self._event_worker = self.run_worker(
-                partial(self._consume_runtime_events, subscription),
-                name="runtime-events",
-                group="runtime",
-                exit_on_error=False,
-            )
-            self._refresh_status("Reconnected")
-            reservation = self.chat_state.dispatch_reservation
-            if reservation is not None and reservation.outcome_unknown:
-                retry = self.chat_state.begin_dispatch_retry(reservation, self._connection_epoch)
-                self._start_reservation_worker(retry)
-            else:
-                self._schedule_dispatch()
-            return
-        self._fatal_failure = True
-        self.chat_state.mark_failed()
-        self._fatal_message = (
-            f"Output stream closed: {type(message.cause).__name__}: {message.cause}"
-        )
-        self._refresh_status(self._fatal_message)
-        self._safe_notify(
-            self._fatal_message,
-            title="Icarus output failed",
-            severity="error",
-        )
-
-    async def on_persistent_composer_submitted(
-        self, message: PersistentComposer.Submitted
-    ) -> None:
-        if not self._accepting_input:
-            return
-        local_text = message.text
-        for image in message.images:
-            local_text = local_text.replace(image.marker, "")
-        invocation = self.command_registry.parse(local_text)
-        if invocation is not None:
-            self._handle_command_submission(message, invocation.name, invocation.arguments)
-            return
-        if self.chat_state.phase == RuntimePhase.SWITCHING:
-            self.query_one(PersistentComposer).restore_draft(message.submission)
-            self._notify_session_command_unavailable()
-            return
-
-        self._has_user_submission = True
-        self.chat_state.enqueue(message.submission)
-        if not await self._refresh_queue():
-            return
-        self._refresh_status()
-        if self.chat_state.phase == RuntimePhase.FAILED:
-            self._safe_notify(
-                self._fatal_message or "Runtime initialization failed",
-                title="Icarus startup failed",
-                severity="error",
-            )
-        self._schedule_dispatch()
-
-    def _handle_command_submission(
-        self, message: PersistentComposer.Submitted, name: str, arguments: str
-    ) -> None:
-        definition = self.command_registry.resolve(name)
-        if definition is None:
-            self._reject_command(
-                message, f"Unknown command: {name}", title="Unknown command"
-            )
-            return
-        if arguments and not definition.accepts_arguments:
-            self._reject_command(
-                message,
-                f"{definition.name} does not accept arguments.",
-                title="Command not run",
-            )
-            return
-        if message.images and not definition.allow_attachments:
-            self._reject_command(
-                message,
-                "Remove image attachments before running this command.",
-                title="Command not run",
-            )
-            return
-        if definition.requires_idle and not self._can_start_session_operation():
-            self.query_one(PersistentComposer).restore_draft(message.submission)
-            self._notify_session_command_unavailable()
-            return
-        self._run_command(definition)
-
-    def _reject_command(
-        self,
-        message: PersistentComposer.Submitted,
-        reason: str,
-        *,
-        title: str,
-    ) -> None:
-        self.query_one(PersistentComposer).restore_draft(message.submission)
-        self._refresh_status(reason)
-        self._safe_notify(reason, title=title, severity="warning")
-
-    def _run_command(self, definition: CommandDefinition) -> None:
-        if definition.handler_name == "exit_app":
-            self.request_shutdown(return_code=0)
-            return
-        operations = {
-            "clear_session": self._clear_session,
-            "resume_session": self._resume_session,
-        }
-        operation = operations.get(definition.handler_name)
-        if operation is None:
-            self._enter_fatal(
-                "command dispatch",
-                RuntimeError(
-                    f"Unknown command handler: {definition.handler_name}"
-                ),
-            )
-            return
-        self._session_operation_worker = self.run_worker(
-            operation,
-            name=f"command-{definition.name.removeprefix('/')}",
-            group="session-operation",
-            exclusive=True,
-            exit_on_error=False,
-        )
-
-    def _can_start_session_operation(self) -> bool:
-        worker = self._session_operation_worker
-        return bool(
-            self._accepting_input
-            and not self._fatal_failure
-            and self.service is not None
-            and self.subscription is not None
-            and self.chat_state.can_run_session_command
-            and (worker is None or worker.is_finished)
-        )
-
-    def _notify_session_command_unavailable(self) -> None:
-        text = "Session commands are only available while idle."
-        self._refresh_status(text)
-        self._safe_notify(
-            text,
-            title="Session command not run",
-            severity="warning",
-        )
-        self.query_one(PersistentComposer).focus()
-
-    async def _begin_session_operation(self) -> RuntimeClient:
-        service = self.service
-        if service is None or not self.chat_state.can_run_session_command:
-            raise SessionBusyError(
-                "Session commands are only available while idle"
-            )
-        self.chat_state.begin_switching()
-        self._refresh_status("Checking current Session")
-        status = await service.get_session_status()
-        if not self._status_is_idle(status):
-            raise SessionBusyError("Current Session is not idle")
-        return service
-
-    async def _resume_session(self) -> None:
-        try:
-            service = await self._begin_session_operation()
-            self._refresh_status("Loading Session list")
-            sessions = await service.list_sessions()
-            selected_session_id = await self.push_screen_wait(
-                SessionPicker(
-                    sessions,
-                    current_session_id=service.session_id,
-                )
-            )
-            if selected_session_id is None:
-                self.chat_state.mark_ready()
-                self._refresh_status()
-                return
-            current_status = await service.get_session_status()
-            if not self._status_is_idle(current_status):
-                raise SessionBusyError("Current Session is no longer idle")
-            self._refresh_status("Restoring Session")
-            prepared = await self._prepare_session(
-                selected_session_id,
-                False,
-                require_idle=True,
-            )
-            await self._activate_session(prepared)
-        except asyncio.CancelledError:
-            raise
-        except BaseException as error:
-            if self.chat_state.phase == RuntimePhase.SWITCHING:
-                self.chat_state.mark_ready()
-            self._refresh_status("Session resume failed")
-            self._safe_notify(
-                f"Unable to resume Session: {error}",
-                title="Session resume failed",
-                severity="warning",
-            )
-        finally:
-            if self._accepting_input:
-                self.query_one(PersistentComposer).focus()
-
-    async def _clear_session(self) -> None:
-        try:
-            await self._begin_session_operation()
-            if not self._session_has_user_input:
-                self.chat_state.mark_ready()
-                self._refresh_status("Already in a new conversation")
-                self._safe_notify(
-                    "The current conversation is already empty.",
-                    title="New conversation",
-                )
-                return
-            self._refresh_status("Starting a new conversation")
-            prepared = await self._prepare_session(
-                None,
-                True,
-                require_idle=False,
-            )
-            await self._activate_session(prepared)
-        except asyncio.CancelledError:
-            raise
-        except BaseException as error:
-            if self.chat_state.phase == RuntimePhase.SWITCHING:
-                self.chat_state.mark_ready()
-            self._refresh_status("New conversation failed")
-            self._safe_notify(
-                f"Unable to start a new conversation: {error}",
-                title="New conversation failed",
-                severity="warning",
-            )
-        finally:
-            if self._accepting_input:
-                self.query_one(PersistentComposer).focus()
-
-    async def _activate_session(self, prepared: PreparedSession) -> None:
-        old_service = self.service
-        old_session_id = getattr(old_service, "session_id", None)
-        old_session_was_empty = not self._session_has_user_input
-        completed = asyncio.get_running_loop().create_future()
-        self.post_message(SessionActivationRequested(
-            prepared, old_service, self._connection_epoch, completed
-        ))
-        activated = False
-        try:
-            activated = await completed
-        finally:
-            if self.service is not prepared.service:
-                prepared.subscription.close()
-                await prepared.service.close()
-            elif old_service is not None:
-                try:
-                    await old_service.close()
-                except Exception:
-                    logger.warning("Unable to close previous Session client", exc_info=True)
-        if (activated and old_session_was_empty and old_session_id is not None
-                and old_session_id != prepared.service.session_id):
-            try:
-                await prepared.service.discard_empty_session(old_session_id)
-            except Exception:
-                logger.warning("Unable to discard previous empty Session", exc_info=True)
-
-    async def on_session_activation_requested(self, message: SessionActivationRequested) -> None:
-        if (message.completed.cancelled() or not self._accepting_input
-                or message.service is not self.service
-                or message.epoch != self._connection_epoch):
-            if not message.completed.done():
-                message.completed.set_result(False)
-            return
-        try:
-            activated = await self._apply_prepared_session(message.prepared)
-        except asyncio.CancelledError:
-            if not message.completed.done():
-                message.completed.cancel()
             raise
         except Exception as error:
-            if not message.completed.done():
-                message.completed.set_exception(error)
-        else:
-            if not message.completed.done():
-                message.completed.set_result(activated)
+            self.post_message(SubscriptionFailed(scope, error))
 
-    async def _apply_prepared_session(self, prepared: PreparedSession) -> bool:
-        old_subscription = self.subscription
-        old_event_worker = self._event_worker
-
-        self._event_worker = None
-        if old_event_worker is not None:
-            old_event_worker.cancel()
-            try:
-                await old_event_worker.wait()
-            except (asyncio.CancelledError, WorkerCancelled):
-                pass
-            except Exception:
-                logger.warning(
-                    "Previous Session event worker stopped with an error",
-                    exc_info=True,
-                )
-        if old_subscription is not None:
-            try:
-                old_subscription.close()
-            except Exception:
-                logger.warning(
-                    "Unable to close previous Session subscription",
-                    exc_info=True,
-                )
-
-        self.service = prepared.service
-        self.subscription = prepared.subscription
-        self._connection_epoch += 1
-        self.chat_state = ChatState()
-        self._last_sequence = 0
-        self._completed_assistant_steps.clear()
-        self._early_updates.clear()
-        self._dispatch_scheduled = False
-        self._fatal_failure = False
-        self._fatal_message = ""
-        self._session_has_user_input = False
-        self._has_user_submission = False
-
-        conversation = self.query_one(ConversationView)
-        activated = False
-        try:
-            await conversation.reset()
-            self.query_one("#new-output", Button).display = False
-            self.query_one(TurnRail).set_turns((), 0)
-            if prepared.history.records:
-                conversation.begin_history_restore()
-                with self.batch_update():
-                    for update in prepared.history.records:
-                        await self._project_runtime_update(
-                            update, historical=True
-                        )
-                        if self._fatal_failure:
-                            raise RuntimeError(self._fatal_message)
-                await conversation.finish_history_restore_async()
-                rail = self.query_one(TurnRail)
-                rail.set_turns(
-                    [turn.text for turn in conversation.projection.turns],
-                    conversation.current_turn_index or 0,
-                )
-            self._last_sequence = max(
-                self._last_sequence, prepared.history.history_cursor
-            )
-            self._has_user_submission = self._session_has_user_input
-            self.chat_state.mark_ready()
-            self._refresh_status(
-                (f"Session {prepared.service.session_id}")
-                if self._session_has_user_input
-                else ""
-            )
-            self._event_worker = self.run_worker(
-                partial(
-                    self._consume_runtime_events, prepared.subscription
-                ),
-                name="runtime-events",
-                group="runtime",
-                exit_on_error=False,
-            )
-            activated = True
-        except asyncio.CancelledError:
-            raise
-        except BaseException as error:
-            if not self._fatal_failure:
-                self._enter_fatal("Session activation", error)
-        return activated
-
-    @staticmethod
-    def _status_is_idle(status: dict[str, Any]) -> bool:
-        # Background work belongs to the Session and must not block the user
-        # from switching or resuming. Only an in-progress conversation
-        # (active tasks, queued or pending events) counts as busy here.
-        if status.get("lifecycle") not in {"ready", "running", "unloaded"}:
-            return False
-        if status.get("active_task_ids"):
-            return False
-        return all(
-            int(status.get(field, 0)) == 0
-            for field in (
-                "queued_task_count",
-                "pending_event_count",
-                "pending_plugin_event_count",
-            )
-        )
-
-    def on_persistent_composer_image_paste_requested(
-        self, message: PersistentComposer.ImagePasteRequested
-    ) -> None:
-        del message
-        if not self._accepting_input:
-            return
-        worker = self._clipboard_worker
-        if worker is not None and not worker.is_finished:
-            return
-        self._clipboard_worker = self.run_worker(
-            self._paste_clipboard_image,
-            name="clipboard-image-paste",
-            group="clipboard",
-            exit_on_error=False,
-        )
-
-    async def _paste_clipboard_image(self) -> None:
-        try:
-            image = await asyncio.to_thread(read_clipboard_image)
-            text = (
-                await asyncio.to_thread(read_clipboard_text)
-                if image is None
-                else None
-            )
-        except asyncio.CancelledError:
-            raise
-        except ClipboardImageReadError as error:
-            self._notify_image_paste_failure(error)
-            return
-        except Exception as error:
-            self._notify_image_paste_failure(error)
-            return
-
-        if not self._accepting_input:
-            return
-        composer = self.query_one(PersistentComposer)
-        if image is None:
-            if text is None:
-                composer.paste_text_from_clipboard()
-            elif text:
-                composer.post_message(events.Paste(text))
-            return
-
-        try:
-            path = self._store_clipboard_image(image)
-            composer.attach_image(path, owned_temporary_file=True)
-        except Exception as error:
-            self._notify_image_paste_failure(error)
-
-    def _store_clipboard_image(self, image: ClipboardImage) -> Path:
-        directory = self._clipboard_temp_directory
-        if directory is None:
-            root = self.resource_root
-            if root is not None:
-                root.mkdir(parents=True, exist_ok=True, mode=0o700)
-            directory = tempfile.TemporaryDirectory(
-                prefix="icarus-tui-clipboard-",
-                dir=str(root) if root is not None else None,
-            )
-            self._clipboard_temp_directory = directory
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            prefix="image-",
-            suffix=f".{image.extension}",
-            dir=directory.name,
-            delete=False,
-        ) as file:
-            file.write(image.data)
-            path = Path(file.name)
-        path.chmod(0o600)
-        return path
-
-    def _notify_image_paste_failure(self, error: BaseException) -> None:
-        if not self._accepting_input:
-            return
-        self._safe_notify(
-            f"Unable to paste clipboard content: {error}",
-            title="Paste failed",
-            severity="warning",
-        )
-
-    async def _dispatch_next(self) -> None:
-        self._dispatch_scheduled = False
-        reservation = self.chat_state.begin_dispatch(self._connection_epoch)
-        if reservation is None:
-            return
-        await self._send_reservation(reservation)
-
-    async def _send_reservation(
-        self, reservation: DispatchReservation
-    ) -> None:
-        action = "Submitting queued message"
-        if reservation.mode == "steer":
-            action = "Adding queued message to current task"
-        self._refresh_status(action)
-        if self._fatal_failure:
-            return
-        service = self.service
-        if service is None:
-            self.chat_state.release_dispatch(reservation, fatal=True)
-            self._enter_fatal(
-                "message dispatch", RuntimeError("Runtime is unavailable")
-            )
-            return
-        try:
-            if reservation.mode == "submit":
-                result = await service.submit(
-                    prompt=reservation.message.model_prompt(),
-                    submission_id=reservation.message.submission_id,
-                    resources=self._submission_resources(
-                        reservation.message
-                    ),
-                    display_text=reservation.message.text,
-                )
-            else:
-                task_id = reservation.task_id
-                if task_id is None:
-                    raise RuntimeError(
-                        "Steer reservation is missing its task ID"
-                    )
-                result = await service.steer_task(
-                    task_id,
-                    reservation.message.model_prompt(),
-                    submission_id=reservation.message.submission_id,
-                    resources=self._submission_resources(
-                        reservation.message
-                    ),
-                    display_text=reservation.message.text,
-                )
-        except asyncio.CancelledError:
-            raise
-        except BaseException as error:
-            self.post_message(DispatchFinished(service, reservation, error=error))
-            return
-        self.post_message(DispatchFinished(service, reservation, result=result))
-
-    async def on_dispatch_finished(self, message: DispatchFinished) -> None:
-        reservation = message.reservation
-        if (not self._accepting_input or self._fatal_failure
-                or message.service is not self.service
-                or self.chat_state.dispatch_reservation is not reservation):
-            return
-        error = message.error
-        if isinstance(error, GatewayTransportError):
-            await self._handle_unknown_dispatch(reservation, error)
-            return
-        if isinstance(error, GatewayClientError):
-            await self._handle_dispatch_gateway_error(reservation, error)
-            return
-        if error is not None:
-            self.chat_state.release_dispatch(reservation, fatal=True)
-            self._enter_fatal("message dispatch", error)
-            return
+    def on_operation_completed(self, message):
         result = message.result
-        if result is None:
-            self._enter_fatal("message dispatch", RuntimeError("Dispatch result is missing"))
-            return
-        service = message.service
-        if reservation.mode == "steer":
-            await self._handle_steer_result(reservation, result)
-            return
-        try:
-            accepted_message = self.chat_state.accept_submit(
-                reservation, result.task_id
-            )
-            self._delete_submission_images(accepted_message)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            self._enter_fatal("accepted message rendering", error)
-            return
-        if not await self._refresh_queue():
-            return
-        self._refresh_status("Accepted by runtime")
-        await self._flush_early_updates(result.task_id)
-        if self.chat_state.active_task_id == result.task_id:
-            self._request_task_status(service, result.task_id)
-        self._schedule_dispatch()
-
-    async def _handle_steer_result(
-        self, reservation: DispatchReservation, result: TaskOperationResult
-    ) -> None:
-        status = result.status
-        if status == "accepted":
-            accepted_message = self.chat_state.accept_steer(reservation)
-            self._delete_submission_images(accepted_message)
-            if not await self._refresh_queue():
-                return
-            self._refresh_status("Correction accepted for current task")
-            self._schedule_dispatch()
-            return
-        if status in {"already_finished", "not_found", "not_running"}:
-            self.chat_state.release_dispatch(reservation)
-            self._refresh_status("Queued message will start the next task")
-            task_id = reservation.task_id
-            service = self.service
-            if task_id is not None and service is not None:
-                self._request_task_status(service, task_id)
-            if self.chat_state.phase == RuntimePhase.READY:
-                self._schedule_dispatch()
-            return
-        if status == "already_cancelling":
-            self.chat_state.release_dispatch(reservation)
-            self._refresh_status("Queued message is waiting for cancellation")
-            return
-        if status in {"invalid_content", "expired"}:
-            await self._block_dispatch(
-                reservation, f"Runtime rejected queued message: {status}"
-            )
-            return
-        self.chat_state.release_dispatch(reservation, fatal=True)
-        self._enter_fatal(
-            "steer response", RuntimeError(f"Unknown status: {status}")
-        )
-
-    async def _handle_dispatch_gateway_error(
-        self, reservation: DispatchReservation, error: GatewayClientError
-    ) -> None:
-        if error.code in {
-            "invalid_resource",
-            "resource_unavailable",
-            "invalid_content",
-            "expired",
+        self._advance(self.chat_session.complete(result))
+        if result.error is not None and result.operation.kind in {
+            "clipboard",
+            "cancel",
+            "list",
+            "prepare",
         }:
-            await self._block_dispatch(
-                reservation,
-                f"Runtime rejected queued message: {error.code}",
-            )
-            return
-        self.chat_state.release_dispatch(reservation, fatal=True)
-        self._enter_fatal("message dispatch protocol", error)
-
-    async def _block_dispatch(
-        self, reservation: DispatchReservation, reason: str
-    ) -> None:
-        self.chat_state.block_dispatch(reservation, reason)
-        if not await self._refresh_queue():
-            return
-        self._refresh_status(reason)
-        self._safe_notify(
-            reason + " Press Ctrl+C to edit it.",
-            title="Message needs editing",
-            severity="warning",
-        )
-
-    async def _handle_unknown_dispatch(
-        self, reservation: DispatchReservation, error: GatewayTransportError
-    ) -> None:
-        unknown = self.chat_state.mark_dispatch_outcome_unknown(reservation)
-        self._refresh_status("Connection lost; confirming queued message")
-        if self._connection_epoch > unknown.attempt_epoch:
-            retry = self.chat_state.begin_dispatch_retry(
-                unknown, self._connection_epoch
-            )
-            self._start_reservation_worker(retry)
-            return
-        self._schedule_reconnect(error)
-
-    async def on_runtime_output_received(
-        self, message: RuntimeOutputReceived
-    ) -> None:
-        if self._fatal_failure or not self._accepting_input:
-            return
-        update = message.update
-        if (
-            self.chat_state.dispatch_in_progress
-            and self.chat_state.active_task_id is None
-            and update.task_id is not None
-        ):
-            self._early_updates.setdefault(update.task_id, []).append(update)
-            return
-        await self._project_runtime_update(update)
-
-    async def _project_runtime_update(
-        self,
-        update: RuntimeUpdateModel,
-        *,
-        historical: bool = False,
-    ) -> None:
-        service = self.service
-        current_session_id = getattr(service, "session_id", None)
-        current_workspace_key = getattr(service, "workspace_key", None)
-        if (
-            current_session_id
-            and current_workspace_key
-            and (
-                update.session_id != current_session_id
-                or update.workspace_key != current_workspace_key
-            )
-        ):
-            logger.debug(
-                "Ignoring update for inactive Session: %s/%s",
-                update.workspace_key,
-                update.session_id,
-            )
-            return
-        if update.type in {"user.message", "user.correction"}:
-            self._session_has_user_input = True
-        raw_step = update.payload.get("step")
-        assistant_key = (
-            update.task_id,
-            raw_step,
-        )
-        if (
-            update.type == "assistant.text_delta"
-            and update.task_id is not None
-            and isinstance(raw_step, int)
-            and assistant_key in self._completed_assistant_steps
-        ):
-            return
-        if (
-            update.sequence is not None
-            and update.sequence <= self._last_sequence
-        ):
-            return
-        if (
-            update.sequence is not None
-            and (
-                update.sequence <= self._last_sequence
-                or (
-                    not historical
-                    and update.sequence != self._last_sequence + 1
-                )
-            )
-        ):
-            self._enter_fatal(
-                "RuntimeUpdate sequence",
-                RuntimeError(
-                    "Session history has a sequence gap: "
-                    f"expected={self._last_sequence + 1} "
-                    f"actual={update.sequence}"
-                ),
-            )
-            return
-        projector_registry = self.projector_registry
-        if projector_registry is None:
-            self._enter_fatal(
-                "event projection",
-                RuntimeError(
-                    "Runtime output arrived before projectors were ready"
-                ),
-            )
-            return
-        try:
-            actions = projector_registry.project(
-                update,
-                active_task_id=self.chat_state.active_task_id,
-                include_unrelated=(
-                    historical or update.sequence is not None
-                ),
-                historical=historical,
-            )
-        except Exception as error:
-            self._enter_fatal("event projection", error)
-            return
-        for action in actions:
-            if self._fatal_failure:
-                break
-            if (
-                isinstance(action, SetRuntimeStatus)
-                and (
-                    historical
-                    or action.task_id != self.chat_state.active_task_id
-                )
-            ):
-                continue
             try:
-                await self._apply_action(action)
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                self._enter_fatal("UI action routing", error)
-                break
-        if (
-            not self._fatal_failure
-            and update.type == "assistant.message"
-            and update.task_id is not None
-            and isinstance(raw_step, int)
-        ):
-            self._completed_assistant_steps.add(assistant_key)
-        if not self._fatal_failure and update.sequence is not None:
-            self._last_sequence = update.sequence
-
-    async def _flush_early_updates(self, task_id: str) -> None:
-        del task_id
-        updates = [
-            update
-            for buffered in self._early_updates.values()
-            for update in buffered
-        ]
-        self._early_updates.clear()
-        updates.sort(
-            key=lambda update: (
-                update.sequence is None,
-                update.sequence or 0,
-                update.occurred_at,
-            )
-        )
-        for update in updates:
-            await self._project_runtime_update(update)
-            if self._fatal_failure:
-                return
-
-    def _request_task_status(self, service: RuntimeClient, task_id: str) -> None:
-        self.run_worker(
-            partial(self._reconcile_task_status, service, task_id),
-            name="task-status",
-            group="task-status",
-            exit_on_error=False,
-        )
-
-    async def _reconcile_task_status(
-        self, service: RuntimeClient, task_id: str
-    ) -> None:
-        epoch = self._connection_epoch
-        try:
-            status = await service.get_task_status(task_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.debug("Unable to reconcile task status", exc_info=True)
-            return
-        self.post_message(TaskStatusReceived(service, epoch, task_id, status))
-
-    async def on_task_status_received(self, message: TaskStatusReceived) -> None:
-        if (not self._accepting_input or self._fatal_failure
-                or message.service is not self.service
-                or message.epoch != self._connection_epoch
-                or message.task_id != self.chat_state.active_task_id):
-            return
-        service, task_id, status = message.service, message.task_id, message.status
-        lifecycle = status.get("lifecycle")
-        if lifecycle not in {"completed", "failed", "cancelled"}:
-            return
-        update = RuntimeUpdateModel(
-            workspace_key=str(getattr(service, "workspace_key", "unknown")),
-            session_id=str(getattr(service, "session_id", "unknown")),
-            task_id=task_id,
-            type="task.finished",
-            payload={
-                "status": lifecycle,
-                "run_id": status.get("run_id"),
-            },
-            occurred_at=datetime.now(UTC),
-        )
-        await self._project_runtime_update(update)
-
-    async def _apply_action(self, action: UiAction) -> None:
-        if isinstance(action, SetRuntimeStatus):
-            self._refresh_status(action.text)
-            return
-        if isinstance(action, ShowNotification):
-            self._safe_notify(action.text, severity=action.level)
-            return
-
-        try:
-            handled = await self.query_one(ConversationView).apply_action(action)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            self._enter_fatal("ConversationView action", error)
-            return
-        if not handled:
-            raise TypeError(f"Unhandled UiAction: {type(action).__name__}")
-
-        conversation = self.query_one(ConversationView)
-        rail = self.query_one(TurnRail)
-        self._sync_new_output(conversation.following_live_tail)
-        rail.set_turns(
-            [turn.text for turn in conversation.projection.turns],
-            conversation.current_turn_index or 0,
-        )
-        if isinstance(action, FinishTurn):
-            if not self.chat_state.finish_active(action.task_id):
-                return
-            self._refresh_status(
-                {
-                    "completed": "",
-                    "failed": "Task failed",
-                    "cancelled": "Task cancelled",
-                    "interrupted": "Task interrupted",
-                }[action.status]
-            )
-            self._schedule_dispatch()
-
-    async def on_turn_rail_turn_selected(
-        self, message: TurnRail.TurnSelected
-    ) -> None:
-        conversation = self.query_one(ConversationView)
-        await conversation.jump_to_turn(message.index)
-        self.query_one(TurnRail).set_turns(
-            [turn.text for turn in conversation.projection.turns],
-            message.index,
-        )
-
-    def on_conversation_view_follow_changed(
-        self, message: ConversationView.FollowChanged
-    ) -> None:
-        """Returning to the tail dismisses the prompt."""
-
-        # Showing it stays with _apply_action, which runs when output actually
-        # arrives, so the label keeps meaning "new messages".
-        if message.following:
-            self._sync_new_output(True)
-
-    def _sync_new_output(self, following: bool) -> None:
-        conversation = self.query_one(ConversationView)
-        indicator = self.query_one("#new-output", Button)
-        if not following and conversation.turn_count:
-            indicator.display = True
-            self.call_after_refresh(self._position_new_output)
-        else:
-            indicator.display = False
-
-    def _position_new_output(self) -> None:
-        indicator = self.query_one("#new-output", Button)
-        if not indicator.display:
-            return
-        conversation = self.query_one(ConversationView)
-        shell = self.query_one("#conversation-shell", Horizontal)
-        indicator.styles.offset = (
-            max(
-                0,
-                conversation.region.right
-                - shell.region.x
-                - indicator.size.width
-                - 2,
-            ),
-            2,
-        )
-
-    def on_button_pressed(self, message: Button.Pressed) -> None:
-        if message.button.id != "new-output":
-            return
-        self.query_one(ConversationView).resume_follow()
-        message.button.display = False
-
-    def _schedule_dispatch(self) -> None:
-        if self._dispatch_scheduled or not self.chat_state.can_dispatch:
-            return
-        self._dispatch_scheduled = True
-        self.call_later(self._start_dispatch_worker)
-
-    def _start_dispatch_worker(self) -> None:
-        if not self._accepting_input:
-            self._dispatch_scheduled = False
-            return
-        self._dispatch_worker = self.run_worker(
-            self._dispatch_next,
-            name="message-dispatch",
-            group="message-dispatch",
-            exit_on_error=False,
-        )
-
-    def _start_reservation_worker(self, reservation: DispatchReservation) -> None:
-        self._dispatch_worker = self.run_worker(
-            partial(self._send_reservation, reservation),
-            name="message-dispatch",
-            group="message-dispatch",
-            exit_on_error=False,
-        )
-
-    async def _refresh_queue(self) -> bool:
-        try:
-            await self.query_one(QueuePanel).show_pending(
-                self.chat_state.pending_items
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            self._enter_fatal("queue rendering", error)
-            return False
-        return True
-
-    def _refresh_status(self, message: str = "") -> None:
-        try:
-            self._render_status(message)
-        except Exception as error:
-            self._enter_fatal(
-                "status bar update",
-                error,
-                render_status=False,
-            )
-
-    def _render_status(self, message: str = "") -> None:
-        visible_message = (
-            self._fatal_message
-            if self._fatal_failure
-            else message or self._fatal_message
-        )
-        self.query_one(RuntimeStatusBar).set_status(
-            self.chat_state.phase,
-            pending_count=len(self.chat_state.pending),
-            message=visible_message,
-            show_phase=(
-                self._has_user_submission
-                or self.chat_state.phase == RuntimePhase.STOPPING
-            ),
-        )
-
-    def _enter_fatal(
-        self,
-        stage: str,
-        error: BaseException,
-        *,
-        render_status: bool = True,
-    ) -> None:
-        if self._fatal_failure:
-            logger.error(
-                "Additional TUI failure after fatal handling began: stage=%s error=%s: %s",
-                stage,
-                type(error).__name__,
-                error,
-            )
-            return
-
-        self._fatal_failure = True
-        self._dispatch_scheduled = False
-        self.chat_state.mark_failed()
-        self._fatal_message = (
-            f"TUI {stage} failed: {type(error).__name__}: {error}"
-        )
-        logger.error(
-            self._fatal_message,
-            exc_info=(type(error), error, error.__traceback__),
-        )
-
-        event_worker = self._event_worker
-        if event_worker is not None:
-            event_worker.cancel()
-
-        if render_status:
-            try:
-                self._render_status(self._fatal_message)
-            except Exception as status_error:
-                logger.error(
-                    "Unable to render fatal TUI status: %s: %s",
-                    type(status_error).__name__,
-                    status_error,
+                self.notify(
+                    str(result.error),
+                    title="Paste failed"
+                    if result.operation.kind == "clipboard"
+                    else "Operation failed",
+                    severity="warning",
                 )
-        self._safe_notify(
-            self._fatal_message,
-            title="Icarus interface failed",
-            severity="error",
-        )
+            except Exception:
+                pass
+        if result.operation.kind == "clipboard":
+            token = self._paste_tokens.pop(result.operation.scope.operation_id, None)
+            value = result.value
+            if value is not None:
+                if (
+                    token is not None
+                    and result.operation.scope.generation == self.chat_store.generation
+                ):
+                    self.chat_screen.deliver_clipboard(token, value)
+                elif value.image:
+                    self.attachments.release((value.image,))
 
-    def _safe_notify(self, message: str, **kwargs: Any) -> None:
-        try:
-            self.notify(message, **kwargs)
-        except Exception as error:
-            logger.error(
-                "Unable to display TUI notification: %s: %s",
-                type(error).__name__,
-                error,
-            )
+    def on_runtime_output_received(self, message):
+        self._advance(self.chat_session.receive(message.update, scope=message.scope))
 
-    def action_context_interrupt(self) -> None:
-        if not self._accepting_input:
-            return
-        composer = self.query_one(PersistentComposer)
-        action = self.chat_state.interrupt_action(composer.has_draft)
-        if action == InterruptAction.CLEAR_DRAFT:
-            composer.clear_draft()
-            self._refresh_status("Draft cleared")
-            return
-        if action == InterruptAction.RESTORE_PENDING:
-            restored = self.chat_state.pop_pending_tail()
-            if restored is None:
-                return
-            composer.restore_draft(restored)
-            self.call_later(self._refresh_queue_after_interrupt)
-            self._refresh_status("Latest queued message restored")
-            composer.focus()
-            return
-        if action == InterruptAction.CANCEL_ACTIVE:
-            self.run_worker(
-                self._cancel_active_task,
-                name="cancel-active-task",
-                group="task-control",
-                exclusive=True,
-                exit_on_error=False,
-            )
-            return
-        if action == InterruptAction.NOTIFY_CANCEL_UNAVAILABLE:
-            text = "Waiting for the Runtime to confirm the submitted task."
-            self._refresh_status(text)
-            self._safe_notify(
-                text,
-                title="Cancellation pending",
-                severity="warning",
-            )
-            return
-        self.request_shutdown(return_code=0)
+    def on_subscription_failed(self, message):
+        if message.scope == self.chat_session.scope and self._cleanup_task is None:
+            self._advance(self.chat_session.reconnect(message.error))
 
-    async def _cancel_active_task(self) -> None:
-        task_id = self.chat_state.active_task_id
-        service = self.service
-        if task_id is None or service is None:
-            return
-        try:
-            result = await service.cancel_task(task_id, "user_requested")
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            self._refresh_status("Cancellation failed")
-            self._safe_notify(
-                f"Unable to cancel task: {type(error).__name__}: {error}",
-                title="Cancellation failed",
-                severity="warning",
-            )
-            return
-        if result.status in {"accepted", "already_cancelling"}:
-            if self.chat_state.mark_cancelling(task_id):
-                self._refresh_status("Cancellation requested")
-            return
-        if result.status == "already_finished":
-            self._refresh_status("Task already finished")
-            return
-        self._safe_notify(
-            f"Unable to cancel task: {result.status}",
-            title="Cancellation failed",
-            severity="warning",
-        )
+    def on_copy_text_requested(self, message):
+        self._desktop_worker("copy", message.text, message.generation, message.snapshot)
 
-    async def _refresh_queue_after_interrupt(self) -> None:
-        await self._refresh_queue()
+    def on_open_link_requested(self, message):
+        self._desktop_worker("open", message.url, self.chat_store.generation)
 
-    def action_eof(self) -> None:
-        composer = self.query_one(PersistentComposer)
-        if composer.text:
-            composer.action_delete_right()
-            return
-        self.request_shutdown(return_code=0)
-
-    def action_conversation_page_up(self) -> None:
-        self.query_one(ConversationView).page_up()
-
-    def action_conversation_page_down(self) -> None:
-        self.query_one(ConversationView).page_down()
-
-    def action_conversation_end(self) -> None:
-        self.query_one(ConversationView).resume_follow()
-
-    def request_shutdown(self, *, return_code: int) -> None:
+    def _desktop_worker(self, kind, value, generation, snapshot=None):
         if self._cleanup_task is not None:
             return
-        self._accepting_input = False
-        self.chat_state.begin_stopping()
-        self._refresh_status("Stopping runtime")
-        self._cleanup_task = asyncio.create_task(
-            self._cleanup_and_exit(return_code),
-            name="icarus-tui:cleanup",
+        async def execute_desktop():
+            error = None
+            try:
+                if kind == "copy":
+                    await self.desktop.copy_text(value)
+                else:
+                    await self.desktop.open_link(value)
+            except Exception as caught:
+                error = caught
+            self.post_message(DesktopCompleted(kind, generation, snapshot, error))
+        self._io_workers.add(self.run_worker(execute_desktop(), name=f"desktop-{kind}", exit_on_error=False))
+
+    def on_desktop_completed(self, message):
+        if self._cleanup_task is None:
+            self.chat_screen.deliver_desktop(message)
+
+    def on_submit_requested(self, message):
+        self._advance(self.chat_session.submit(message.submission))
+        if self.chat_session.rejected:
+            self.chat_screen.restore_draft(self.chat_session.rejected)
+
+    def on_paste_requested(self, message):
+        operations = self.chat_session.paste(
+            request_id=message.request_id, draft_token=message.draft_token
         )
+        for operation in operations:
+            self._paste_tokens[operation.scope.operation_id] = message.draft_token
+        self._advance(operations)
 
-    async def _cleanup_and_exit(self, return_code: int) -> None:
-        cleanup_errors = await self._release_runtime_resources()
-        if cleanup_errors:
-            self._fatal_message = "Cleanup failed: " + "; ".join(
-                cleanup_errors
-            )
-            logger.error(self._fatal_message)
-            return_code = return_code or 1
-        self.exit(result=return_code, return_code=return_code)
+    def on_view_failed(self, message):
+        self.chat_session.report_view_failure(message.error)
+        self.chat_screen.post_message(ChatChanged(self.chat_store.revision))
 
-    async def _release_runtime_resources(self) -> list[str]:
-        errors: list[str] = []
+    def on_interrupt_requested(self, message):
+        action = self.chat_session.interrupt(message.has_draft)
+        if action == InterruptAction.CLEAR_DRAFT:
+            self.chat_screen.clear_draft()
+        elif action == InterruptAction.RESTORE_PENDING:
+            if self.chat_session.draft_restore:
+                self.chat_screen.restore_draft(self.chat_session.draft_restore)
+            self._advance()
+        elif action == InterruptAction.CANCEL_ACTIVE:
+            self._advance(self.chat_session.cancel_active())
+        elif action == InterruptAction.EXIT:
+            self.request_shutdown(return_code=0)
 
-        session_worker = self._session_operation_worker
-        self._session_operation_worker = None
-        if session_worker is not None:
-            session_worker.cancel()
-            try:
-                await session_worker.wait()
-            except (asyncio.CancelledError, WorkerCancelled):
-                pass
-            except Exception as error:
-                errors.append(self._cleanup_error("session operation", error))
+    def on_images_released(self, message):
+        self.attachments.release(message.images)
 
-        clipboard_worker = self._clipboard_worker
-        self._clipboard_worker = None
-        if clipboard_worker is not None:
-            clipboard_worker.cancel()
-            try:
-                await clipboard_worker.wait()
-            except (asyncio.CancelledError, WorkerCancelled):
-                pass
-            except Exception as error:
-                errors.append(
-                    self._cleanup_error("clipboard worker", error)
-                )
+    def resume_session(self, session_id, request_id):
+        self._advance(self.chat_session.resume(session_id, request_id=request_id))
 
-        reconnect_worker = self._reconnect_worker
-        self._reconnect_worker = None
-        if reconnect_worker is not None:
-            reconnect_worker.cancel()
-            try:
-                await reconnect_worker.wait()
-            except (asyncio.CancelledError, WorkerCancelled):
-                pass
-            except Exception as error:
-                errors.append(self._cleanup_error("reconnect worker", error))
-
-        dispatch_worker = self._dispatch_worker
-        self._dispatch_worker = None
-        if dispatch_worker is not None:
-            dispatch_worker.cancel()
-            try:
-                await dispatch_worker.wait()
-            except (asyncio.CancelledError, WorkerCancelled):
-                pass
-            except Exception as error:
-                errors.append(self._cleanup_error("dispatch worker", error))
-
-        start_worker = self._runtime_start_worker
-        self._runtime_start_worker = None
-        if start_worker is not None:
-            start_worker.cancel()
-            try:
-                await start_worker.wait()
-            except (asyncio.CancelledError, WorkerCancelled):
-                pass
-            except Exception as error:
-                errors.append(self._cleanup_error("runtime start worker", error))
-
-        subscription = self.subscription
-        self.subscription = None
-        if subscription is not None:
-            try:
-                subscription.close()
-            except Exception as error:
-                errors.append(self._cleanup_error("subscription close", error))
-
-        event_worker = self._event_worker
-        self._event_worker = None
-        if event_worker is not None:
-            event_worker.cancel()
-            try:
-                await event_worker.wait()
-            except (asyncio.CancelledError, WorkerCancelled):
-                pass
-            except Exception as error:
-                errors.append(self._cleanup_error("event worker", error))
-
-        service = self.service
-        self.service = None
-        if service is not None:
-            session_id = service.session_id
-            if session_id is not None:
-                try:
-                    await service.discard_empty_session(session_id)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as error:
-                    logger.warning(
-                        "Unable to discard empty Session during shutdown: %s: %s",
-                        type(error).__name__,
-                        error,
-                    )
-            try:
-                await service.close()
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                errors.append(self._cleanup_error("runtime stop", error))
-
-        clipboard_directory = self._clipboard_temp_directory
-        self._clipboard_temp_directory = None
-        if clipboard_directory is not None:
-            try:
-                clipboard_directory.cleanup()
-            except Exception as error:
-                errors.append(
-                    self._cleanup_error("clipboard files", error)
-                )
-
-        return errors
-
-    def _resource_id(self, image) -> str:
-        root = self.resource_root
-        if root is None:
-            return image.path.name
-        try:
-            return image.path.resolve().relative_to(root).as_posix()
-        except ValueError as error:
-            raise ValueError("Image is outside the controlled resource root") from error
-
-    def _submission_resources(self, submission) -> tuple[ResourceRefModel, ...]:
-        return tuple(
-            ResourceRefModel(
-                resource_id=self._resource_id(image),
-                media_type=None,
-            )
-            for image in submission.images
-        )
-
-    @staticmethod
-    def _delete_submission_images(submission) -> None:
-        for image in submission.images:
-            if not image.owned_temporary_file:
-                continue
-            try:
-                image.path.unlink(missing_ok=True)
-            except OSError:
-                logger.exception("Unable to remove accepted image resource")
-
-    @staticmethod
-    def _cleanup_error(stage: str, error: BaseException) -> str:
-        return f"{stage}: {type(error).__name__}: {error}"
-
-    async def on_unmount(self, event: events.Unmount) -> None:
-        del event
-        cleanup = self._cleanup_task
-        if cleanup is not None and not cleanup.done():
-            await asyncio.shield(cleanup)
+    def request_shutdown(self, *, return_code=0):
+        if self._cleanup_task is not None:
             return
-        if cleanup is None:
-            self._accepting_input = False
-            cleanup_errors = await self._release_runtime_resources()
-            if cleanup_errors:
-                logger.error(
-                    "Cleanup during unmount failed: %s",
-                    "; ".join(cleanup_errors),
-                )
+        self.chat_session.begin_shutdown()
+        self._cleanup_task = asyncio.create_task(self._close(return_code))
+
+    async def _close(self, return_code):
+        workers = [
+            w
+            for w in (*self._io_workers, self._reader)
+            if w is not None and not w.is_finished
+        ]
+        for worker in workers:
+            worker.cancel()
+        for worker in workers:
+            try:
+                await worker.wait()
+            except (asyncio.CancelledError, WorkerCancelled):
+                pass
+            except Exception:
+                return_code = return_code or 1
+        await self.desktop.close()
+        errors = await self.chat_session.close()
+        self.exit(
+            result=return_code or int(bool(errors)),
+            return_code=return_code or int(bool(errors)),
+        )
+
+    async def on_unmount(self):
+        if self._cleanup_task is None:
+            await self.desktop.close()
+            await self.chat_session.close()
+        elif not self._cleanup_task.done():
+            await asyncio.shield(self._cleanup_task)

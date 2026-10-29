@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from apps.tui.src.replay import ReplayRuntimeService, load_replay
-from apps.tui.src.transcript import transcript_from_scenario
+from apps.tui.src.tools.replay import ReplayRuntimeService, load_replay
+from apps.tui.src.tools.transcript import transcript_from_scenario
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -42,18 +41,20 @@ def main(argv: list[str] | None = None) -> int:
 
     # Delayed import keeps transcript replay independent from Textual app startup.
     from apps.tui.src.app import IcarusTextualApp
+    from apps.tui.src.configs.config import TuiConfig
 
-    service = ReplayRuntimeService(
-        scenario, events_per_second=args.speed
-    )
+    service = ReplayRuntimeService(scenario, events_per_second=args.speed)
 
     async def runtime_factory(session_id, create_if_missing):
         del session_id, create_if_missing
         return service
 
+    from apps.tui.src.services.attachments import AttachmentsService
+
     app = IcarusTextualApp(
-        runtime_factory=runtime_factory,
-        workspace_path=Path.cwd().resolve(),
+        TuiConfig(workspace_path=Path.cwd().resolve()),
+        client_factory=runtime_factory,
+        attachments=AttachmentsService(None),
     )
     app.run()
     return app.return_code or 0

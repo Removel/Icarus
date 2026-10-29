@@ -10,8 +10,11 @@ from apps.tui.src.event_pipeline import (
 
 def update(update_type="assistant.text_delta", task_id="task-1"):
     return RuntimeUpdateModel(
-        workspace_key="workspace", session_id="session", task_id=task_id,
-        type=update_type, payload={"step": 1, "text": "hello"},
+        workspace_key="workspace",
+        session_id="session",
+        task_id=task_id,
+        type=update_type,
+        payload={"step": 1, "text": "hello"},
         occurred_at="2026-01-01T00:00:00Z",
     )
 
@@ -43,9 +46,9 @@ def test_dispatcher按type和当前task过滤():
     assert registry.project(value, active_task_id="other") == ()
     assert registry.project(value, active_task_id=None) == ()
     assert registry.unrelated_update_count == 2
-    assert registry.project(
-        value, active_task_id=None, include_unrelated=True
-    ) == (AppendAssistantDelta("task-1", "hello"),)
+    assert registry.project(value, active_task_id=None, include_unrelated=True) == (
+        AppendAssistantDelta("task-1", "hello"),
+    )
 
 
 def test未知update只诊断且registry拒绝重复或空type():

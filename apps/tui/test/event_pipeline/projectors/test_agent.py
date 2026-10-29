@@ -29,20 +29,22 @@ def test_agent_projector映射文本和稳定工具参数():
     ) == (AppendAssistantDelta(task_id="task-1", text="检查中"),)
     assert projector.project(
         update("assistant.message", {"step": 1, "text": "检查完成"})
-    ) == (
-        CompleteAssistantMessage(task_id="task-1", text="检查完成"),
-    )
+    ) == (CompleteAssistantMessage(task_id="task-1", text="检查完成"),)
     assert projector.project(
         update(
             "tool.started",
             {
-                "step": 1, "call_id": "call-1",
-                "tool_name": "read", "arguments": {"z": "你好", "a": 1},
+                "step": 1,
+                "call_id": "call-1",
+                "tool_name": "read",
+                "arguments": {"z": "你好", "a": 1},
             },
         )
     ) == (
         AppendToolStarted(
-            task_id="task-1", call_id="call-1", tool_name="read",
+            task_id="task-1",
+            call_id="call-1",
+            tool_name="read",
             arguments_json='{"a":1,"z":"你好"}',
         ),
     )
@@ -54,8 +56,11 @@ def test_agent_projector工具完成不暴露完整output():
         update(
             "tool.completed",
             {
-                "step": 1, "call_id": "call-1", "tool_name": "bash",
-                "success": True, "error": None,
+                "step": 1,
+                "call_id": "call-1",
+                "tool_name": "bash",
+                "success": True,
+                "error": None,
             },
         )
     )
@@ -63,14 +68,15 @@ def test_agent_projector工具完成不暴露完整output():
         update(
             "tool.completed",
             {
-                "step": 1, "call_id": "call-1", "tool_name": "bash",
-                "success": False, "error": "exit code 1",
+                "step": 1,
+                "call_id": "call-1",
+                "tool_name": "bash",
+                "success": False,
+                "error": "exit code 1",
             },
         )
     )
-    assert success == (
-        UpdateToolCompleted("task-1", "call-1", "bash", True, None),
-    )
+    assert success == (UpdateToolCompleted("task-1", "call-1", "bash", True, None),)
     assert failure == (
         UpdateToolCompleted("task-1", "call-1", "bash", False, "exit code 1"),
     )
@@ -133,16 +139,24 @@ def test_agent_projector映射错误并忽略usage和空delta():
         update(
             "task.error",
             {
-                "fatal": True, "code": "agent_run_failed",
-                "error_type": "RuntimeError", "message": "broken",
-                "step": 1, "run_id": None,
+                "fatal": True,
+                "code": "agent_run_failed",
+                "error_type": "RuntimeError",
+                "message": "broken",
+                "step": 1,
+                "run_id": None,
             },
         )
     ) == (AppendError("task-1", "RuntimeError", "broken"),)
-    assert projector.project(
-        update("assistant.text_delta", {"step": 1, "text": ""})
-    ) == ()
-    assert projector.project(
-        update("task.usage", {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
-    ) == ()
+    assert (
+        projector.project(update("assistant.text_delta", {"step": 1, "text": ""})) == ()
+    )
+    assert (
+        projector.project(
+            update(
+                "task.usage", {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+            )
+        )
+        == ()
+    )
     assert projector.project(update("unknown", {})) is None

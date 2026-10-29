@@ -1,0 +1,252 @@
+"""Deterministic RuntimeUpdate JSONL replay for TUI development."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from apps.tui.src.client.gateway.models import (
+    SubmitAccepted,
+    TaskOperationResult,
+)
+from apps.tui.src.client.gateway.subscription import UpdateSubscription
+from packages.gateway_protocol import (
+    DiscardEmptySessionResultModel,
+    RuntimeUpdateModel,
+    SessionHistoryModel,
+)
+
+SCHEMA_VERSION = 4
+
+
+class ReplayFormatError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class ReplayTurn:
+    task_id: str
+    updates: tuple[RuntimeUpdateModel, ...]
+
+
+@dataclass(frozen=True)
+class ReplayScenario:
+    turns: tuple[ReplayTurn, ...]
+
+    @property
+    def task_ids(self) -> tuple[str, ...]:
+        return tuple(turn.task_id for turn in self.turns)
+
+
+def load_replay(path: str | Path) -> ReplayScenario:
+    records = []
+    with Path(path).open(encoding="utf-8") as file:
+        for line_number, raw_line in enumerate(file, start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                value = json.loads(raw_line)
+                records.append(decode_replay_record(value))
+            except (json.JSONDecodeError, ReplayFormatError) as error:
+                message = (
+                    error.msg if isinstance(error, json.JSONDecodeError) else str(error)
+                )
+                raise ReplayFormatError(f"Line {line_number}: {message}") from error
+    return build_replay_scenario(records)
+
+
+def decode_replay_record(value: object) -> RuntimeUpdateModel:
+    if not isinstance(value, dict):
+        raise ReplayFormatError("record must be an object")
+    if value.get("schema_version") != SCHEMA_VERSION:
+        raise ReplayFormatError(
+            f"unsupported schema_version: {value.get('schema_version')}"
+        )
+    update = dict(value)
+    update.pop("schema_version", None)
+    try:
+        return RuntimeUpdateModel.model_validate(update)
+    except ValidationError as error:
+        raise ReplayFormatError("invalid RuntimeUpdate") from error
+
+
+def build_replay_scenario(
+    updates: Iterable[RuntimeUpdateModel],
+) -> ReplayScenario:
+    turns = []
+    active_task_id = None
+    active = []
+    for update in updates:
+        if active_task_id is None:
+            if update.type != "task.accepted" or update.task_id is None:
+                raise ReplayFormatError(
+                    "each replay turn must start with task.accepted"
+                )
+            active_task_id = update.task_id
+            active = [update]
+            continue
+        active.append(update)
+        if update.type == "task.finished" and update.task_id == active_task_id:
+            turns.append(ReplayTurn(active_task_id, tuple(active)))
+            active_task_id = None
+            active = []
+    if active_task_id is not None:
+        raise ReplayFormatError("replay turn has no matching task.finished")
+    if not turns:
+        raise ReplayFormatError("replay fixture contains no complete turns")
+    return ReplayScenario(tuple(turns))
+
+
+class ReplayRuntimeService:
+    """No-model client matching the GatewayClient shape."""
+
+    def __init__(
+        self,
+        scenario: ReplayScenario,
+        *,
+        events_per_second: float = 0,
+        session_id: str = "replay-session",
+    ) -> None:
+        if events_per_second < 0:
+            raise ValueError("events_per_second cannot be negative")
+        self.scenario = scenario
+        self.events_per_second = events_per_second
+        self.session_id = session_id
+        self.workspace_key = "replay-workspace"
+        self._subscription = UpdateSubscription()
+        self._emit_tasks = set()
+        self._next_turn = 0
+        self._started = False
+        self.submissions = []
+        self._task_statuses = {}
+
+    async def start(self) -> None:
+        self._started = True
+
+    def subscribe_updates(self) -> UpdateSubscription:
+        if not self._started:
+            raise RuntimeError("Replay client is not running")
+        return self._subscription
+
+    async def get_session_history(self, *, after_sequence=0):
+        return SessionHistoryModel(records=(), history_cursor=after_sequence)
+
+    async def list_sessions(self):
+        return ()
+
+    async def get_session_status(self):
+        return {
+            "workspace_key": self.workspace_key,
+            "session_id": self.session_id,
+            "lifecycle": "ready",
+        }
+
+    async def discard_empty_session(self, session_id):
+        return DiscardEmptySessionResultModel(
+            workspace_key=self.workspace_key,
+            session_id=session_id,
+            status="discarded",
+        )
+
+    async def submit(
+        self,
+        prompt: str,
+        *,
+        submission_id: str,
+        resources=(),
+        display_text=None,
+    ) -> SubmitAccepted:
+        del submission_id, resources
+        if self._next_turn >= len(self.scenario.turns):
+            raise RuntimeError("Replay scenario has no remaining turns")
+        turn = self.scenario.turns[self._next_turn]
+        self._next_turn += 1
+        self.submissions.append(prompt)
+        self._task_statuses[turn.task_id] = {
+            "task_id": turn.task_id,
+            "lifecycle": "running",
+        }
+        self._subscription.publish(
+            RuntimeUpdateModel(
+                workspace_key="replay-workspace",
+                session_id=self.session_id,
+                task_id=turn.task_id,
+                type="user.message",
+                payload={
+                    "text": prompt if display_text is None else display_text,
+                    "resources": [],
+                },
+                occurred_at=datetime.now(UTC),
+            )
+        )
+        first = turn.updates[0]
+        self._subscription.publish(
+            first.model_copy(
+                update={
+                    "workspace_key": self.workspace_key,
+                    "session_id": self.session_id,
+                }
+            )
+        )
+        await asyncio.sleep(0)
+        task = asyncio.create_task(self._emit(turn.updates[1:]))
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
+        return SubmitAccepted(turn.task_id, int(first.payload["queue_position"]))
+
+    async def cancel_task(self, task_id, reason=None):
+        del reason
+        return TaskOperationResult(task_id, "accepted")
+
+    async def steer_task(
+        self,
+        task_id,
+        prompt,
+        *,
+        submission_id,
+        resources=(),
+        display_text=None,
+    ):
+        del prompt, submission_id, resources, display_text
+        return TaskOperationResult(task_id, "accepted")
+
+    async def get_task_status(self, task_id):
+        return self._task_statuses.get(
+            task_id, {"task_id": task_id, "lifecycle": "running"}
+        )
+
+    async def reconnect(self):
+        return self._subscription
+
+    async def close(self) -> None:
+        for task in tuple(self._emit_tasks):
+            task.cancel()
+        if self._emit_tasks:
+            await asyncio.gather(*self._emit_tasks, return_exceptions=True)
+        self._subscription.close()
+        self._started = False
+
+    async def _emit(self, updates) -> None:
+        delay = 1 / self.events_per_second if self.events_per_second else 0
+        for update in updates:
+            await asyncio.sleep(delay)
+            self._subscription.publish(
+                update.model_copy(
+                    update={
+                        "workspace_key": self.workspace_key,
+                        "session_id": self.session_id,
+                    }
+                )
+            )
+            if update.type == "task.finished" and update.task_id is not None:
+                self._task_statuses[update.task_id] = {
+                    "task_id": update.task_id,
+                    "lifecycle": update.payload["status"],
+                    "run_id": update.payload.get("run_id"),
+                }

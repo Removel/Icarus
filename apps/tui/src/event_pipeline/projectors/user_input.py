@@ -1,6 +1,5 @@
 """Projection of public Task lifecycle RuntimeUpdate values."""
 
-from packages.gateway_protocol import RuntimeUpdateModel
 from apps.tui.src.event_pipeline.actions import (
     AppendUserCorrection,
     AppendUserMessage,
@@ -8,6 +7,7 @@ from apps.tui.src.event_pipeline.actions import (
     SetRuntimeStatus,
     UiAction,
 )
+from packages.gateway_protocol import RuntimeUpdateModel
 
 
 class UserInputProjector:
@@ -28,9 +28,7 @@ class UserInputProjector:
         if update.type == "user.correction":
             step = update.payload.get("applied_before_step")
             if isinstance(step, bool) or not isinstance(step, int) or step < 1:
-                raise ValueError(
-                    "user.correction applied_before_step must be positive"
-                )
+                raise ValueError("user.correction applied_before_step must be positive")
             return (
                 AppendUserCorrection(
                     task_id=task_id,

@@ -1,0 +1,108 @@
+#queue-panel {
+    height: auto;
+    max-height: 8;
+    margin: 0 2;
+    border-top: solid $icarus-border;
+    border-bottom: solid $icarus-border;
+    background: $icarus-surface;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $icarus-tool;
+    scrollbar-background: $icarus-surface;
+}
+
+#queue-panel.is-empty {
+    display: none;
+}
+
+#queue-title {
+    height: 1;
+    padding: 0 1;
+    color: $icarus-user;
+    text-style: bold;
+}
+
+#queue-items {
+    height: auto;
+    max-height: 6;
+}
+
+.queue-item {
+    height: 1;
+    padding: 0 1;
+    color: $icarus-muted;
+    text-overflow: ellipsis;
+}
+
+#composer-shell {
+    height: auto;
+    min-height: 3;
+    max-height: 10;
+    margin: 0 2;
+    layout: horizontal;
+    border: round $icarus-accent;
+    background: $icarus-panel;
+}
+
+#composer-prompt {
+    width: 3;
+    height: 1;
+    padding: 0 0 0 1;
+    color: $icarus-accent;
+    content-align: center middle;
+}
+
+#composer {
+    width: 1fr;
+    height: 1;
+    min-height: 1;
+    max-height: 8;
+    border: none;
+    background: $icarus-panel;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $icarus-tool;
+    scrollbar-background: $icarus-panel;
+}
+
+#composer:focus {
+    border: none;
+}
+
+#status-bar {
+    height: 1;
+    padding: 0 2;
+    color: $icarus-muted;
+    background: $icarus-surface;
+    text-overflow: ellipsis;
+}
+
+#status-bar.phase-ready {
+    color: $icarus-green;
+}
+
+#status-bar.phase-running {
+    color: $icarus-muted;
+}
+
+#status-bar.phase-switching {
+    color: $icarus-accent;
+}
+
+#status-bar.phase-cancelling,
+#status-bar.phase-failed {
+    color: $icarus-red;
+}
+
+InputDock { height: auto; padding: 0 2; }
+#composer-activity { height: 1; min-width: 0; }
+#task-status { width: auto; max-width: 50%; height: 1; color: $icarus-muted; margin-bottom: 0; text-wrap: nowrap; text-overflow: ellipsis; }
+#composer-tip { width: 1fr; min-width: 0; height: 1; padding-left: 1; color: $icarus-muted; text-align: right; text-wrap: nowrap; text-overflow: ellipsis; }
+#session-metadata { height: 1; color: $icarus-muted; text-wrap: nowrap; text-overflow: ellipsis; }
+SessionMetadataBar > .metadata--key { color: $icarus-tool; }
+SessionMetadataBar > .metadata--value { color: $icarus-user; text-style: bold; }
+InputDock #composer-shell { margin: 0; min-height: 3; border: solid $icarus-border; background: $icarus-surface; }
+InputDock #composer-shell:focus-within { border: solid $icarus-accent; }
+InputDock #composer { background: $icarus-surface; }
+InputDock #queue-panel { margin: 0; max-height: 3; border-bottom: none; }
+InputDock #queue-items { max-height: 1; }
+ChatScreen.-short InputDock { padding: 0 1; }
+ChatScreen.-short #composer { max-height: 4; }

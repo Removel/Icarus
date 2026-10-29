@@ -1,0 +1,5 @@
+Screen {
+    background: $icarus-background;
+    color: $icarus-text;
+    layout: vertical;
+}

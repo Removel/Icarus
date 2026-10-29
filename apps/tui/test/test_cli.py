@@ -29,16 +29,15 @@ def test_run_app_使用启动目录透传session_id并返回textual结果(monkey
 
         def __init__(
             self,
+            config,
             *,
-            runtime_factory,
-            initial_session_id,
-            workspace_path,
-            resource_root,
+            client_factory,
+            attachments,
         ):
-            captured["runtime_factory"] = runtime_factory
-            captured["app_workspace"] = workspace_path
-            captured["initial_session_id"] = initial_session_id
-            captured["resource_root"] = resource_root
+            captured["runtime_factory"] = client_factory
+            captured["app_workspace"] = config.workspace_path
+            captured["initial_session_id"] = config.session_id
+            captured["resource_root"] = config.resource_root
             captured["app_run_entered"] = False
 
         def run(self):

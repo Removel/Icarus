@@ -1,5 +1,10 @@
 # TUI Clipboard Image Paste Design｜TUI 剪贴板图片粘贴设计
 
+> 本文保留首期 macOS 图片粘贴基础的历史设计；2026-10-28 已扩展的类型化系统读取、
+> Windows/Linux/WSL 平台代码与图片校验以
+> [桌面平台实现记录](../2026-10-28-tui-desktop-integration/arch.md) 为准。
+> 实机矩阵仍未验收；不能把下文首期目标直接视为最新源码结构。
+>
 > 本文记录剪贴板读取和 Composer Marker 的已实现基础。提交链已从本地 Path 直传迁移为
 > `$ICARUS_DATA_DIR/incoming/` ResourceRef，经 Gateway 交给 AgentRuntime，并在返回 task_id 前导入
 > Session Asset。
