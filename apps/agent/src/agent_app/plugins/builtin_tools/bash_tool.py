@@ -373,7 +373,8 @@ class BashTool(BaseTool):
         return ToolExecutionResult(
             success=return_code == 0,
             output=output,
-            error=None if return_code == 0 else stderr,
+            error=(None if return_code == 0 else stderr if stderr.strip()
+                   else f"exit_code={output['exit_code']}, no stderr"),
         )
 
     def can_run_parallel(self, arguments: dict[str, Any]) -> bool:

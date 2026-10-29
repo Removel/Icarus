@@ -26,7 +26,9 @@ class ReadTool(BaseTool):
         return ToolDefinition(
             name="read",
             description=(
-                "按行分页读取本地 UTF-8 文本文件；使用 offset/limit 继续读取。"
+                "按行分页读取本地 UTF-8 文本，每次默认最多2000字符。"
+                "先用相同行页的 next_text_offset 续读，truncated=false 后再用 next_offset 翻行页。"
+                "预算裁剪时用原 offset/text_offset 减小 max_chars 重读，不能跳过隐藏正文；文件修改后重新读取。"
             ),
             input_schema={
                 "type": "object",
@@ -37,6 +39,10 @@ class ReadTool(BaseTool):
                     },
                     "offset": {
                         "type": "integer", "minimum": 1, "default": 1
+                    },
+                    "text_offset": {"type": "integer", "minimum": 0, "default": 0},
+                    "max_chars": {
+                        "type": "integer", "minimum": 1, "maximum": 20000, "default": 2000,
                     },
                     "limit": {
                         "type": "integer", "minimum": 1,
@@ -60,7 +66,7 @@ class ReadTool(BaseTool):
     ) -> ToolExecutionResult:
         del task_id, run_id, step, task_messages
         path = Path(self._required_string(arguments, "path"))
-        unknown = set(arguments) - {"path", "offset", "limit"}
+        unknown = set(arguments) - {"path", "offset", "limit", "text_offset", "max_chars"}
         if unknown:
             raise ValueError("unknown arguments: " + ", ".join(sorted(unknown)))
         offset = self._bounded_int(arguments.get("offset"), "offset", 1, 1_000_000_000)
@@ -70,6 +76,10 @@ class ReadTool(BaseTool):
             self.default_limit,
             self.maximum_limit,
         )
+        text_offset = arguments.get("text_offset", 0)
+        if isinstance(text_offset, bool) or not isinstance(text_offset, int) or text_offset < 0:
+            raise ValueError("text_offset must be a non-negative integer")
+        max_chars = self._bounded_int(arguments.get("max_chars"), "max_chars", 2000, 20000)
         try:
             with path.open("r", encoding="utf-8") as file:
                 rows = list(islice(file, offset - 1, offset - 1 + limit + 1))
@@ -77,11 +87,20 @@ class ReadTool(BaseTool):
             return ToolExecutionResult(success=False, error=str(error))
         has_more = len(rows) > limit
         visible = rows[:limit]
+        text = "".join(visible)
+        if text_offset > len(text):
+            raise ValueError("text_offset exceeds the current line page length")
+        end = min(len(text), text_offset + max_chars)
+        truncated = end < len(text)
         return ToolExecutionResult(
             success=True,
             output={
                 "path": str(path),
-                "content": "".join(visible),
+                "content": text[text_offset:end],
+                "text_offset": text_offset,
+                "max_chars": max_chars,
+                "truncated": truncated,
+                "next_text_offset": end if truncated else None,
                 "offset": offset,
                 "limit": limit,
                 "has_more": has_more,

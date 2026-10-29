@@ -97,6 +97,89 @@ def test_read_拒绝非法limit(tmp_path, value):
         ReadTool().invoke({"path": str(path), "limit": value})
 
 
+def test_readUnicode字符分片可完整重组(tmp_path):
+    path = tmp_path / "unicode.txt"
+    page = "中🙂" * 1500 + "\n"
+    path.write_text(page + "second\n", encoding="utf-8")
+    tool = ReadTool()
+    pieces = []
+    offset = 0
+    while True:
+        arguments = {"path": str(path), "limit": 1, "text_offset": offset}
+        result = tool.invoke(arguments)
+        assert asyncio.run(tool.ainvoke(arguments)).output == result.output
+        assert len(result.output["content"]) <= 2000
+        assert result.output["has_more"] is True
+        assert result.output["next_offset"] == 2
+        pieces.append(result.output["content"])
+        if not result.output["truncated"]:
+            assert result.output["next_text_offset"] is None
+            break
+        offset = result.output["next_text_offset"]
+    assert "".join(pieces) == page
+    assert tool.invoke({"path": str(path) }).output["truncated"] is True
+
+
+@pytest.mark.parametrize("field,value", [
+    ("text_offset", -1), ("text_offset", True),
+    ("max_chars", 0), ("max_chars", True), ("max_chars", 20001),
+])
+def test_read拒绝非法字符参数(tmp_path, field, value):
+    path = tmp_path / "text.txt"
+    path.write_text("abc", encoding="utf-8")
+    with pytest.raises(ValueError):
+        ReadTool().invoke({"path": str(path), field: value})
+
+
+def test_read字符页尾与重新读取修改文件(tmp_path):
+    path = tmp_path / "text.txt"
+    path.write_text("abc", encoding="utf-8")
+    tool = ReadTool()
+    result = tool.invoke({"path": str(path), "text_offset": 3})
+    assert result.output["content"] == ""
+    assert result.output["truncated"] is False
+    assert result.output["next_text_offset"] is None
+    with pytest.raises(ValueError):
+        tool.invoke({"path": str(path), "text_offset": 4})
+    path.write_text("changed", encoding="utf-8")
+    assert tool.invoke({"path": str(path), "max_chars": 20000}).output["content"] == "changed"
+
+
+@pytest.mark.parametrize("stderr", ["", "   "])
+def test_bash非零空stderr仍提供退出原因(tmp_path, stderr):
+    result = BashTool().invoke({
+        "command": f"printf '{stderr}' >&2; exit 7", "workdir": str(tmp_path),
+    })
+    assert result.success is False
+    assert result.output["stderr"] == stderr
+    assert result.output["exit_code"] == 7
+    assert result.error == "exit_code=7, no stderr"
+
+
+def test_read预算裁剪后原游标缩片可恢复(tmp_path):
+    from icarus.core.tools import ToolExecutor, ToolRegistry
+    from icarus.core.models.messages import ToolCall
+
+    path = tmp_path / "large.txt"
+    path.write_text("x" * 5000, encoding="utf-8")
+    registry = ToolRegistry()
+    registry.register(ReadTool())
+    executor = ToolExecutor(registry)
+    original = {"path": str(path), "text_offset": 0, "max_chars": 2000,
+                "_execution": {"max_output_tokens": 1000}}
+    result = executor.execute_many([ToolCall("first", "read", original)])[0][1]
+    assert result.metadata["result_truncated"] is True
+    assert result.output["next_text_offset"] == 2000
+    assert result.output["text_offset"] == 0
+    assert "truncated" in str(result.output)
+    recovered = executor.execute_many([ToolCall("again", "read", {
+        **original, "max_chars": 100,
+    })])[0][1]
+    assert recovered.output["content"] == "x" * 100
+    assert recovered.output["next_text_offset"] == 100
+    assert recovered.metadata["result_truncated"] is False
+
+
 def test_bash_返回退出码标准输出和标准错误(tmp_path):
     success = BashTool().invoke(
         {
