@@ -1,6 +1,6 @@
 # CI 改造实施与验证记录
 
-日期：2026-10-29。实施基线：`885a4318cfaec7742da9ff0986ceb09f5b79f234`，当前分支 `feat/webui`；已按授权从 `upstream/feature` 快进同步。验收以 Linux 为准，Windows 结果仅作辅助。最初仅进行本地实现；随后用户授权提交并推送到个人仓库 `origin = xilele777/Icarus`，以草稿 PR 验证真实 Actions。未授权或执行合并、修改分支保护及镜像发布。
+日期：2026-10-29。实施基线：`885a4318cfaec7742da9ff0986ceb09f5b79f234`，当前分支 `feat/webui`；已按授权从 `upstream/feature` 快进同步。验收以 Linux 为准，Windows 结果仅作辅助。最初仅进行本地实现；随后用户授权提交并推送到个人仓库 `origin = xilele777/Icarus`，并将个人仓库 `feature` 快进同步到本地最新提交，直接通过 push 验证 Actions。未创建 PR，未修改 upstream、分支保护或发布镜像。
 
 ## 已实施
 
@@ -44,9 +44,34 @@ Linux Python 3.12 验证使用临时 ext4 副本，保留当前 Git 基线的应
 
 测试容器、匿名卷及网络已清理。自动审批对临时目录递归清理返回 `blocked by policy`，因此临时源码/工具链保留在 WSL `/tmp/icarus-ci-linux-4tx3pjsa` 与 Windows `%TEMP%\icarus-ci-linux-4tx3pjsa`；不混入仓库提交。
 
+## 个人仓库真实 Actions 验证
+
+目标为 `xilele777/Icarus`，不是 upstream。用户启用 fork 的 Actions 后，新增 workflow 尚未注册，按文件名手动触发返回 404；补充可追踪 event/ref/SHA 的 run-name 后正常推送，触发 [运行 40832597210](https://github.com/xilele777/Icarus/actions/runs/40832597210)，源码为 `39b34f8085b72405d62d70ee99780c8d0472b206`。
+
+首次 push 与随后误重复的手动触发发生并发取消；已取消额外运行，并仅重跑原运行的 attempt 2。取消后的 `ci-required` 返回失败，说明漏跑/取消未被误报为成功。第二轮不再叠加手动触发，不将被取消的首轮计为通过。
+
+| 远端检查 | attempt 2 实际结果 |
+| --- | --- |
+| changes、syntax | 通过 |
+| 根控制层 | 430 passed，1 skipped；原工作区未提交的安装脚本删除未上传，因此该环境下完整通过 |
+| Linux Agent、Gateway | 1197 passed、50 passed |
+| Linux mypy、wheel | 273 文件通过；资源和纯净安装发现通过 |
+| TUI | 513 passed |
+| Mem0 默认契约 | 86 passed |
+| OpenKB 默认契约及锁检查 | 335 passed；`uv lock --check` 通过 |
+| rela-mem | 离线 41 passed、29 deselected；隔离数据库全套 70 passed |
+| Windows 后端辅助验证 | Agent 契约 107 passed；Gateway 50 passed |
+| WebUI | 静态检查和构建通过；354 passed、13 skipped，浏览器套件 840.17 秒（14 分钟） |
+| 四个 amd64 运行镜像 | WebUI、rela-mem、Mem0、OpenKB 全部构建成功，各自实际启动及健康 smoke 通过 |
+| 最终 ci-required 与整轮运行 | success；所选任务均正常通过，仅明确不适用的内嵌重复 control job 跳过 |
+
+attempt 2 已完整结束，整轮 `conclusion=success`。应用测试报告已按 workflow 上传，普通 CI 未登录镜像仓库或执行发布。运行与各 job 的日志、JUnit、截图及 build record 可在上述 Actions 页面复查。
+
+WebUI 性能基线：本地 367 个 collection 项中 354 passed、13 skipped，串行累计 741.17 秒。聊天文件 83 项约 204.75 秒，最慢单项约 7.77 秒。公共 page 夹具每项创建独立上下文并先初始化记忆页面；当前慢主要来自完整浏览器覆盖的累积时间。远端本轮浏览器套件 14 分钟，最慢单次 setup 为生产构建/服务夹具 13.25 秒。用户确认先完成 CI 改造，本轮不做测试层级迁移、分片或减覆盖。
+
 ## 待远端验收与后续任务
 
-1. 先按用户授权在 `origin = xilele777/Icarus` 完成真实 Actions 对照运行；`upstream = Removel/Icarus` 的正式迁移另行进行。当前保留旧触发器，因此迁移期间会有重复任务。
+1. `origin = xilele777/Icarus` 的真实 push 全量已通过；准备从 `xilele777:feat/webui` 向 `Removel/Icarus:feature` 提交 PR，提交前核验目标分支基线。当前保留旧触发器，因此迁移期间会有重复任务。
 2. 真实 PR 验证失败/跳过/取消阻止门禁，纯文档正常完成；再切换必需检查至稳定的 `ci-required`，移除旧重复触发器。未修改远端设置。
 3. ARM 构建、真实候选推送和 manifest 晋级尚未执行；既有 `latest` 可能没有版本 annotation，首次正式晋级前必须核验并建立基线。未进行真实发布。
 4. 应用 Python 依赖锁消费、完整 retained 环境补齐、耗时统计、长期发布归档、扫描与来源证明仍按计划后续推进，不把一次本地运行称为完成长期治理。

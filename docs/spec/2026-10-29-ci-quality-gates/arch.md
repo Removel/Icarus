@@ -1,6 +1,6 @@
 # 当前 CI 检查与发布架构
 
-本文描述工作区中已实现的配置，源码基线为 `885a4318cfaec7742da9ff0986ceb09f5b79f234` 加本次未提交改动。它不表示这些 workflow 已部署到远端或分支保护已启用。实施范围与后续任务见 [plan.md](plan.md)，验证证据见 [execution.md](execution.md)。
+本文描述已实现的配置，源码基线为 `885a4318cfaec7742da9ff0986ceb09f5b79f234` 加本次 CI 改造提交。配置已按授权推送到个人仓库 `xilele777/Icarus` 的 `feature`、`feat/webui`，进行真实 Actions 验证；尚未迁移 upstream 或启用分支保护。实施范围与后续任务见 [plan.md](plan.md)，验证证据见 [execution.md](execution.md)。
 
 ## 调度与结果
 
@@ -40,4 +40,4 @@ smoke 发现 Mem0 生产镜像缺少 psycopg 所需 `libpq`；[Dockerfile](../..
 
 普通 CI 维持 `contents: read` 和不持久化 checkout 凭据，不消费发布 Secret，不以高权限 PR 事件运行用户代码。仓库的生产拓扑没有被 CI 测试调度改写，应用继续拥有依赖和测试语义。
 
-代码层面已具备统一门禁；远端运行、ARM 验证、仓库 Ruleset/必需检查切换、DOCKER Environment 设置和真实发布尚未执行。具体本地失败与未验证范围必须以执行记录为准。
+统一门禁已在个人 fork 的真实 push 全量运行通过，四个 amd64 镜像的构建/启动及 `ci-required` 均成功。upstream 的真实 PR 事件、ARM 验证、仓库 Ruleset/必需检查切换、DOCKER Environment 设置和真实发布尚未执行。具体本地失败与未验证范围必须以执行记录为准。
