@@ -59,6 +59,7 @@ class ChatScreen(Screen):
         self._render_dirty = False
         self._rendered_window_generation = 0
         self._view_failed = False
+        self._rendered_chrome = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="conversation-shell"):
@@ -146,7 +147,17 @@ class ChatScreen(Screen):
                 return
             view = self.query_one(ConversationView)
             if view.window_generation != self._rendered_window_generation:
-                self._render_dirty = True
+                if (self.rendered_revision >= self.store.conversation_revision
+                        and self.rendered_generation == self.store.generation
+                        and not self._render_dirty):
+                    self._rendered_window_generation = view.window_generation
+                else:
+                    self._render_dirty = True
+            chrome = build_chat_viewmodel(self.store), self.store.interaction.pending_items
+            if (self.rendered_revision == self.store.revision
+                    and self.rendered_generation == self.store.generation
+                    and not self._render_dirty and chrome == self._rendered_chrome):
+                return
             revision, generation = self.store.revision, self.store.generation
             if generation != self.rendered_generation:
                 view.action_cancel_selection()
@@ -256,6 +267,7 @@ class ChatScreen(Screen):
                 await self.query_one(InputDock).show_viewmodel(
                     vm, self.store.interaction.pending_items
                 )
+                self._rendered_chrome = vm, self.store.interaction.pending_items
             except Exception as error:
                 raise RuntimeError(f"UI rendering: {error}") from error
             self.query_one(TurnRail).set_turns(
@@ -277,7 +289,6 @@ class ChatScreen(Screen):
                     SessionPicker(ready[1], current_session_id=self.store.session_id),
                     lambda selected: self.app.resume_session(selected, ready[0]),
                 )
-            self.call_after_refresh(view.restore_reading_offsets)
             if self.store.revision > self.rendered_revision:
                 self.call_later(self.refresh_chat)
 
@@ -361,6 +372,11 @@ class ChatScreen(Screen):
     async def on_turn_rail_turn_selected(self, message):
         message.stop()
         await self.query_one(ConversationView).jump_to_turn(message.index)
+
+    def on_conversation_view_current_turn_changed(self, message):
+        message.stop()
+        rail = self.query_one(TurnRail)
+        rail.set_turns([turn.text for turn in self.store.conversation.turns], message.index)
 
     def on_conversation_view_follow_changed(self, message):
         message.stop()

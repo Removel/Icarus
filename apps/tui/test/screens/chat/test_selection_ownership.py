@@ -8,7 +8,55 @@ from apps.tui.test.support import make_app, wait_ready
 from apps.tui.src.services.desktop import DesktopService
 from apps.tui.src.widgets.chat.composer import PersistentComposer
 from apps.tui.src.widgets.chat.conversation import ConversationView
-from apps.tui.src.event_pipeline import AppendUserMessage
+from apps.tui.src.event_pipeline import AppendUserMessage, CompleteAssistantMessage
+from apps.tui.src.widgets.chat.turn_rail import TurnRail
+
+
+def test_turn_rail_tracks_scrolled_content_and_jump_without_runtime_updates():
+    async def run():
+        app = make_app()
+        async with app.run_test(size=(100, 32)) as pilot:
+            await wait_ready(pilot)
+            app.chat_store.apply_actions(tuple(action for index in range(30) for action in (
+                AppendUserMessage(f"t{index}", f"question {index}"),
+                CompleteAssistantMessage(f"t{index}", "\n\n".join(["body " * 20] * 5)),
+            )))
+            await app.chat_screen.refresh_chat()
+            await pilot.pause()
+            view = app.chat_screen.query_one(ConversationView)
+            rail = app.chat_screen.query_one(TurnRail)
+            view.anchor(False)
+            view.scroll_home(animate=False, immediate=True)
+            await pilot.pause()
+            assert view.current_turn_index == 6
+            assert rail.current == 6
+            assert rail.window_start <= 6 < rail.window_start + rail.capacity
+            rail.post_message(TurnRail.TurnSelected(0))
+            await pilot.pause()
+            assert view.current_turn_index == 0
+            assert rail.current == 0
+            assert view.mounted_turn_range == (0, 24)
+            app.request_shutdown()
+    asyncio.run(run())
+
+
+def test_jump_inside_current_window_stops_follow_until_reader_returns():
+    async def run():
+        app = make_app()
+        async with app.run_test(size=(100, 32)) as pilot:
+            await wait_ready(pilot)
+            app.chat_store.apply_actions(tuple(action for index in range(4) for action in (
+                AppendUserMessage(f"t{index}", f"question {index}"),
+                CompleteAssistantMessage(f"t{index}", "\n\n".join(["body " * 20] * 5)),
+            )))
+            await app.chat_screen.refresh_chat()
+            await pilot.pause()
+            view = app.chat_screen.query_one(ConversationView)
+            await view.jump_to_turn(0)
+            await pilot.pause()
+            assert not view.following_live_tail
+            app.request_shutdown()
+    asyncio.run(run())
 
 
 def test_new_composer_selection_takes_ownership_from_chat_selection():

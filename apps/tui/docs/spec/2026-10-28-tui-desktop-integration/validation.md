@@ -63,6 +63,29 @@ WSL 内能够运行命令不代表剪贴板互操作验收通过。
 - 宿主浏览器请求是外部副作用，待用户在真实桌面明确选择测试目标后进行；不得以 AST parser 的 syntax OK 替代真实打开。
 - 记录通过/失败/未验证三态，不把 headless Pilot 或 monkeypatch 结果填入实机通过栏。
 
+## 2026-10-29 折叠摘要点击崩溃回归
+
+- `feat/tui` 已 rebase 同步 `origin/feature=ba0dd68`；隔离环境Textual 8.2.8，与截图所在原环境一致。
+- 同步后迁移前基线：`make test-tui` **513 passed，191.17s**。旧文档中的快照失败记录不作为当前失败基线。
+- 确认根因：重绘前 compositor 仍可能命中已卸载的 `DisclosureSummary`（parent=None）；Static默认允许文本选择，Screen在MouseDown的选择初始化里读取container.region而崩溃。真实App/process内复现与截图同一行AttributeError，无hit-test替身。
+- 修复限定为摘要控件 `ALLOW_SELECT=False`，不改Textual依赖/私有实现，不全局禁用正文选择；点击和Enter/Space切换保留。
+- 新回归在 `App.batch_update()` 内卸载真实摘要并在旧帧坐标投递MouseDown，修前 **1 failed / 3 passed**（相同AttributeError），修后文件 **4 passed**；宽100×32、窄短60×12验证点击及键盘折叠。
+- 摘要回归 + 正文跨消息/中文emoji拖选/跨窗口选择聚焦组合：**13 passed，21.41s**。此次不改变布局，不恢复SVG基线；未进行真实Gateway/模型或宿主剪贴板调用。
+- 修后 `make test-tui` **516 passed，191.67s**；`compileall apps/tui/src apps/tui/test packages`、`git diff --check`通过。原process内复现脚本再次执行exit0，仍命中parent=None的旧摘要，但不再启动选择或崩溃。本修复尚未提交/推送。
+
+## 2026-10-29 导航与流式响应性回归
+
+- 用户报告：右侧输入轮次轨道不跟随正文、长内容卡顿、第一Thinking后延迟/批量展示、流式输出时拖滑块卡顿。
+- 已确认存在24轮窗口化，而非段落级可见区虚拟化；35轮真实App探针中滚到窗口顶部时可见11/12轮，旧current/rail仍34；跳0后rail仍34。现通过滚动/布局变化消息同步，显式jump停止follow且布局后定位。
+- 性能诊断（本地合成数据，无Gateway/模型）：23轮×30段+当前Thinking，868 DOM节点、300条折叠Thinking追赶，原3.942s且UI计时器无法推进；仅禁用无效选区捕获的进程内对照0.046s。修复前无选区也逐delta扫描完整DOM，这是主要已证实瓶颈，不归因网络。
+- 修复：空选区早退、ChatChanged连续合并而不合并业务更新、revision/generation/window/chrome均不变的刷新早退、取消每delta全DOM滚动偏移恢复、每32个按序动作让出事件循环。最新相同规模探针0.0361s，首个UI回调0.0024s；数值为本机证据，不承诺跨环境固定时延。
+- 历史分页由整24轮重建改为复用16轮重叠、只装卸进入/离开8轮；真实App保留身份16/16，24轮上限不变，局部探针含一次Pilot刷新0.793s。锚点依layout-refresh后的虚拟位置恢复，不用旧屏幕坐标。
+- 回归先失败再通过：rail实际滚动、空选区扫描、空转chrome、128动作公平性、100通知合并、overlap身份/阅读offset。已有取消追赶/选择/跨窗口/源文本完整性测试保留。
+- 独立审查两项Important已复现并修复：取消中的shift留下卸载引用（WidgetError）、旧分页anchor覆盖新jump。新增取消后再分页/立即jump测试修前2 failed，修后核心组合19 passed。
+- 中间全量3 failed/519 passed（chrome直接赋值、历史tail rail、fatal状态）已修复；后续全量523 passed（188.10s）。审查修复后最终 `make test-tui` **526 passed，192.95s**，compileall/diff及文档链接检查通过。
+- 实际离线App capture在100×32和60×12完成welcome/chat/details/commands及关闭，未建SVG基线；无可用SVG rasterizer，未声称逐像素审图。正文选择和键盘折叠已通过Pilot实测。
+- 未新增单条长回复段落级虚拟化：窗口内长Markdown仍完整解析/挂载，极长单轮成本仍为限制，不以隐藏正文或截断规避。
+
 ## 依赖安装
 
 Pillow 是 TUI app-owned 显式依赖；用户明确授权安装到 `apps/tui/.venv`。

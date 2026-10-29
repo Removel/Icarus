@@ -36,12 +36,18 @@ OperationScope 包含 generation、epoch、client identity、operation_id；派�
 
 跨页保留同一个聊天页面/Composer；网络在 App 中继续处理，被遮挡时不持续挂载新的 Markdown。同 generation 且缓存完整时，返回页面或连续更新积压均按修订顺序补齐动作，不销毁现有消息、展开项和滚动容器。首次渲染、generation 替换、未完成渲染或缓存过期才重建窗口；重建使用 App.batch_update 抑制中间帧绘制，不将对话区设为 hidden，避免黑帧和中断后残留隐藏状态。多轮补齐用 task_id 定位各 turn，不把积压消息都绑定到投影的最后一轮。历史导航重建与 Screen 绘制共享 ConversationView 的 render_lock；导航替换递增 window_generation，页面发现窗口代次变化便使用快照校准，不将已被导航快照消费的 delta 再次追加。绘制开始即标 dirty，成功确认修订后才清除，协程取消后的下一次刷新因此重建而非重复应用部分动作。其他真实业务页面尚未新增，仅测试 SecondaryScreen 验证这种生命周期。
 
+2026-10-29 响应性补强：ChatChanged仅合并连续视图失效通知，原Runtime更新/Store顺序不合并；Screen仅在revision、generation、窗口代次与chrome值均未改变且不dirty时早退。正常delta不再反复恢复整个DOM的内部滚动偏移，重建仍负责恢复。没有native/语义选区、锚点或拖选时，ConversationView跳过正文选区扫描；有选区路径保留。追赶批次每32动作让出一次事件循环，避免折叠Thinking的无await路径饿死输入/滚动/计时器，不丢弃或跨结构事件重排delta。
+
+右侧当前轮由实际视口内的用户轮次及滚动/布局通知驱动，滑到最新底部选最后一轮；显式跳转先停止follow，再在目标完成布局后定位，轨道同步滚入当前标记。历史窗口重叠时只卸载离开轮次/挂载进入轮次，复用重叠消息及Markdown实例；依据layout-refresh信号按用户消息虚拟坐标恢复阅读锚点，而非用重排前坐标。窗口装卸期间标dirty，取消/失败后下一次不复用半完成树而完整重建；显式jump/reset/恢复追尾取消旧分页锚点，防止延迟恢复抢占新导航。导航后无待消费conversation修订时Screen只确认窗口代次，不为状态/chrome刷新再销毁重叠窗口；有待消费内容仍从Store快照校准，避免重复delta。
+
+
 ## 样式
 
 App 明确加载 8 个文件：tokens、base、chat screen、session picker、welcome、conversation、input dock、command menu。Textual 的每份 stylesheet 变量解析不能仅靠前一个文件的定义，App.get_css_variables 从 tokens.tcss 提供共享变量；相对路径不依赖启动 cwd。聊天响应式类限制在 ChatScreen，避免污染未来页面。
 
 ## 当前限制与验收边界
 
+- 挂载上界按24个用户轮次控制，不是按屏幕可见段落虚拟化；窗口内的长Assistant正文仍完整Markdown挂载，极长单轮仍有解析/布局开销，本次不以截断或隐藏正文冒充动态加载。
 - 元信息模型和当前上下文占用缺公共来源，显示未知/—；最新版本未检查。版本可由配置注入，不在线查询。
 - psutil 未加入；它不处理剪贴板和终端协议。
 - `icarus tui` 根启动器检查 Gateway 依赖就绪，未为 preview 修改仓库基础设施。离线真实界面运行 `./apps/tui/scripts/start.sh --preview`；正式会话先启动 Gateway 后 `icarus tui`。

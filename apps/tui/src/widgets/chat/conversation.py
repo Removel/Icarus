@@ -44,6 +44,11 @@ from apps.tui.src.widgets.chat.welcome import WelcomeMessage
 class ConversationView(VerticalScroll):
     """Render only conversation-target UiActions."""
 
+    class CurrentTurnChanged(Message):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
     class FollowChanged(Message):
         """The view started or stopped following the live tail."""
 
@@ -84,6 +89,8 @@ class ConversationView(VerticalScroll):
         self._restoring_history = False
         self._following = True
         self._reading_offsets = {}
+        self._pending_window_anchor = None
+        self._window_dirty = False
         self._selection = ConversationSelection()
 
 
@@ -132,6 +139,10 @@ class ConversationView(VerticalScroll):
 
     def _capture_selection(self):
         if not self.is_mounted:
+            return
+        if (not self.screen.selections and not self._selection.fragments
+                and self._selection.anchor is None and not self._selection.keyboard
+                and not self._selection.dragging):
             return
         bodies = list(self._selection_bodies())
         mounted_turns = {turn for turn, _ in self._visible_turns}
@@ -303,10 +314,12 @@ class ConversationView(VerticalScroll):
 
 
     async def apply_change(self, change):
-        for action in change.actions:
+        for index, action in enumerate(change.actions):
             if not self.render_valid():
                 return
             await self.apply_action(action)
+            if (index + 1) % 32 == 0:
+                await asyncio.sleep(0)
 
     @property
     def following_live_tail(self) -> bool:
@@ -373,12 +386,23 @@ class ConversationView(VerticalScroll):
     async def on_mount(self) -> None:
         await self.mount(WelcomeMessage(self.workspace_path))
         self.watch(self.screen, "selections", self._capture_selection, init=False)
+        self.screen.screen_layout_refresh_signal.subscribe(self, self._on_screen_layout)
+
+    def _on_screen_layout(self, screen):
+        if self._pending_window_anchor is not None:
+            index, offset = self._pending_window_anchor
+            self._pending_window_anchor = None
+            self._restore_window_anchor(index, offset)
+        else:
+            self._update_current_turn()
 
     async def reset(self) -> None:
         """Replace the current Session projection with an empty one."""
 
         self.action_cancel_selection()
+        self._pending_window_anchor = None
         await self._finish_all_streams()
+        self._window_dirty = False
         self._window_start = self._window_end = 0
         self._window_widgets.clear()
         self._rendered_turn = None
@@ -544,11 +568,13 @@ class ConversationView(VerticalScroll):
 
     async def jump_to_turn(self, index: int) -> None:
         self.action_cancel_selection()
+        self._pending_window_anchor = None
         if self._history_worker is not None and not self._history_worker.is_finished:
             await self._history_worker.wait()
         if not 0 <= index < self.turn_count:
             raise IndexError(index)
-        if self._window_start <= index < self._window_end:
+        self._set_reading_history(True)
+        if not self._window_dirty and self._window_start <= index < self._window_end:
             self._rendered_turn = index
             self.anchor(False)
             user = next(
@@ -562,7 +588,8 @@ class ConversationView(VerticalScroll):
                 None,
             )
             if user is not None:
-                self.scroll_to_widget(user, animate=False, immediate=True)
+                self.scroll_to_widget(user, animate=False, immediate=True, top=True)
+            self.post_message(self.CurrentTurnChanged(index))
             return
         start = min(max(0, index - 12), max(0, self.turn_count - 24))
         end = min(self.turn_count, start + 24)
@@ -578,15 +605,69 @@ class ConversationView(VerticalScroll):
             None,
         )
         if user is not None:
-            self.scroll_to_widget(user, animate=False, immediate=True)
+            self.call_after_refresh(self._scroll_to_turn, index, user)
+
+    def _scroll_to_turn(self, index, user):
+        if user.is_attached:
+            self.scroll_to_widget(user, animate=False, immediate=True, top=True)
+            self._rendered_turn = index
+            self.post_message(self.CurrentTurnChanged(index))
 
     async def _render_window(self, start: int, end: int) -> None:
         self._capture_selection()
         async with self.render_lock:
             self.window_generation += 1
             with self.app.batch_update():
-                await self._replace_window(start, end)
+                if (not self._window_dirty and self._visible_turns and not self._live_tail_widgets
+                        and all(widget.parent is self for _, widgets in self._visible_turns for widget in widgets)
+                        and any(start <= index < end for index, _ in self._visible_turns)):
+                    self._window_dirty = True
+                    await self._shift_window(start, end)
+                else:
+                    self._window_dirty = True
+                    await self._replace_window(start, end)
+                self._window_dirty = False
         self.call_after_refresh(self._restore_selection_highlights)
+
+    async def _shift_window(self, start: int, end: int) -> None:
+        from copy import deepcopy
+
+        retained = {}
+        for index, widgets in self._visible_turns:
+            if start <= index < end:
+                retained[index] = widgets
+                continue
+            self._save_disclosures(index, widgets)
+            self._forget_widgets(widgets)
+            for widget in widgets:
+                if widget.is_mounted:
+                    await widget.remove()
+        if start:
+            for hero in self.query(WelcomeMessage):
+                await hero.remove()
+        elif not self.query(WelcomeMessage):
+            await self.mount(WelcomeMessage(self.workspace_path), before=0)
+        for index in range(start, end):
+            if index in retained:
+                continue
+            widgets = []
+            for unit in deepcopy(self.projection.snapshot_for_turn(index)):
+                widget = await self._mount_unit(unit)
+                if widget is not None:
+                    widgets.append(widget)
+            retained[index] = widgets
+        self._visible_turns = [(index, retained[index]) for index in range(start, end)]
+        self._window_widgets = [(index, widget) for index, widgets in self._visible_turns for widget in widgets]
+        previous = next(iter(self.query(WelcomeMessage)), None)
+        for _, widget in self._window_widgets:
+            if previous is None:
+                self.move_child(widget, before=0)
+            else:
+                self.move_child(widget, after=previous)
+            previous = widget
+        self._window_start, self._window_end = start, end
+        self._set_detached_window(end < self.turn_count)
+        self.refresh(layout=True)
 
     async def _replace_window(self, start: int, end: int) -> None:
         from copy import deepcopy
@@ -697,6 +778,7 @@ class ConversationView(VerticalScroll):
         if not self.render_valid():
             return
         self._window_start, self._window_end = snapshot.start, snapshot.end
+        self._window_widgets = [(index, widget) for index, widgets in self._visible_turns for widget in widgets]
         self._set_detached_window(snapshot.end < self.turn_count)
         self._rendered_turn = snapshot.end - 1 if snapshot.end else None
         self.call_after_refresh(self.restore_reading_offsets)
@@ -1061,39 +1143,53 @@ class ConversationView(VerticalScroll):
             if start == self._window_start:
                 return
             top = self._top_visible_turn()
+            self._pending_window_anchor = top
             await self._render_window(start, min(self.turn_count, start + 24))
             self.anchor(False)
-            if top is not None:
-                index, offset = top
-                user = next(
-                    (
-                        widget
-                        for n, widget in self._window_widgets
-                        if n == index and isinstance(widget, UserMessage)
-                    ),
-                    None,
-                )
-                if user is not None:
-                    self.scroll_to(
-                        y=max(
-                            0, user.region.y - self.region.y - offset + self.scroll_y
-                        ),
-                        animate=False,
-                        immediate=True,
-                    )
-            self._rendered_turn = (
-                self._top_visible_turn()[0] if self._top_visible_turn() else start
-            )
+            if top is None:
+                self.call_after_refresh(self._update_current_turn)
         finally:
             self._window_loading = False
 
+    def _restore_window_anchor(self, index, offset):
+        user = next((widget for turn, widgets in self._visible_turns if turn == index
+                     for widget in widgets if isinstance(widget, UserMessage)), None)
+        if user is not None:
+            self.scroll_to(
+                y=max(0, user.virtual_region.y - offset),
+                animate=False, immediate=True,
+            )
+        self._update_current_turn()
+
     def _top_visible_turn(self) -> tuple[int, int] | None:
-        for index, widget in self._window_widgets:
-            if isinstance(widget, UserMessage) and widget.region.bottom > self.region.y:
-                return index, widget.region.y - self.region.y
-        return None
+        current = None
+        for index, widgets in self._visible_turns:
+            user = next((widget for widget in widgets if isinstance(widget, UserMessage)), None)
+            if user is None or not user.is_attached:
+                continue
+            offset = user.region.y - self.region.y
+            if offset > 0:
+                return current or (index, offset)
+            current = index, offset
+        return current
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        if round(old_value) != round(new_value) and self.is_mounted:
+            self.call_after_refresh(self._update_current_turn)
+
+    def _update_current_turn(self) -> None:
+        if not self.is_attached or self._window_loading:
+            return
+        top = self._top_visible_turn()
+        if self.is_vertical_scroll_end and self._visible_turns:
+            top = self._visible_turns[-1][0], 0
+        if top is not None and top[0] != self._rendered_turn:
+            self._rendered_turn = top[0]
+            self.post_message(self.CurrentTurnChanged(top[0]))
 
     def resume_follow(self) -> None:
+        self._pending_window_anchor = None
         self._set_reading_history(False)
         if self._detached_window and self.turn_count:
             self.run_worker(

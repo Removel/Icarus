@@ -7,6 +7,10 @@ from textual.screen import Screen
 
 from apps.tui.src.event_pipeline import (
     AppendAssistantDelta,
+    AppendThinkingDelta,
+    CompleteThinking,
+    AppendToolStarted,
+    FinishTurn,
     AppendUserMessage,
     CompleteAssistantMessage,
 )
@@ -14,6 +18,103 @@ from apps.tui.src.widgets.chat.conversation import ConversationView
 from apps.tui.src.widgets.chat.message_cards import AssistantMessage
 from apps.tui.src.widgets.chat.markdown import StreamingMarkdown
 from apps.tui.test.test_final_review_regressions import app_for
+
+
+def test_stream_without_selection_does_not_walk_historical_bodies(tmp_path, monkeypatch):
+    async def run():
+        app, _ = app_for(tmp_path)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            app.chat_store.apply_actions((AppendUserMessage("t", "question"), AppendThinkingDelta("t", 1, "first")))
+            await app.chat_screen.refresh_chat()
+            await pilot.pause()
+            view = app.chat_screen.query_one(ConversationView)
+            def unexpected_scan():
+                raise AssertionError("no selection: historical body scan is unnecessary")
+            monkeypatch.setattr(view, "_selection_bodies", unexpected_scan)
+            for _ in range(100):
+                app.chat_store.apply_actions((AppendThinkingDelta("t", 1, "x"),))
+            await app.chat_screen.refresh_chat()
+            assert not app.chat_store.fatal_message
+            from apps.tui.src.widgets.chat.execution_panel import ThinkingBlock
+            assert view.query_one(ThinkingBlock).markdown_text == "first" + "x" * 100
+            app.request_shutdown()
+    asyncio.run(run())
+
+
+def test_unchanged_refresh_does_not_rebuild_chrome(tmp_path, monkeypatch):
+    async def run():
+        app, _ = app_for(tmp_path)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            await app.chat_screen.refresh_chat()
+            from apps.tui.src.widgets.chat.input_dock import InputDock
+            dock = app.chat_screen.query_one(InputDock)
+            count = 0
+            original = dock.show_viewmodel
+            async def tracked(*args):
+                nonlocal count
+                count += 1
+                return await original(*args)
+            monkeypatch.setattr(dock, "show_viewmodel", tracked)
+            for _ in range(30):
+                await app.chat_screen.refresh_chat()
+            assert count == 0
+            app.request_shutdown()
+    asyncio.run(run())
+
+
+def test_collapsed_thinking_catchup_yields_to_pending_ui_work(tmp_path, monkeypatch):
+    async def run():
+        app, _ = app_for(tmp_path)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            app.chat_store.apply_actions((AppendUserMessage("t", "question"), AppendThinkingDelta("t", 1, "first")))
+            await app.chat_screen.refresh_chat()
+            await pilot.pause()
+            view = app.chat_screen.query_one(ConversationView)
+            applied = 0
+            progress = []
+            original = view.apply_action
+            async def tracked(action):
+                nonlocal applied
+                result = await original(action)
+                applied += 1
+                return result
+            monkeypatch.setattr(view, "apply_action", tracked)
+            for _ in range(128):
+                app.chat_store.apply_actions((AppendThinkingDelta("t", 1, "x"),))
+            asyncio.get_running_loop().call_soon(lambda: progress.append(applied))
+            await app.chat_screen.refresh_chat()
+            await pilot.pause()
+            assert progress and progress[0] < 128
+            assert applied == 128
+            app.request_shutdown()
+    asyncio.run(run())
+
+
+def test_chat_changed_burst_coalesces_view_notifications(tmp_path, monkeypatch):
+    async def run():
+        app, _ = app_for(tmp_path)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            from apps.tui.src.screens.chat.messages import ChatChanged
+            count = 0
+            original = app.chat_screen.refresh_chat
+            async def tracked():
+                nonlocal count
+                count += 1
+                await original()
+            monkeypatch.setattr(app.chat_screen, "refresh_chat", tracked)
+            for _ in range(100):
+                app.chat_store.apply_actions((AppendThinkingDelta("t", 1, "x"),))
+                app.chat_screen.post_message(ChatChanged(app.chat_store.revision))
+            await pilot.pause()
+            assert count <= 2
+            from apps.tui.src.widgets.chat.execution_panel import ThinkingBlock
+            assert app.chat_screen.query_one(ThinkingBlock).markdown_text == "x" * 100
+            app.request_shutdown()
+    asyncio.run(run())
 
 
 def test_navigation_snapshot_does_not_replay_consumed_deltas(tmp_path):
