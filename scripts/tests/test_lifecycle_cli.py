@@ -314,5 +314,5 @@ def test_repository_default_configuration_validates_without_runtime():
     result = subprocess.run([str(CLI), "config", "show"], cwd=ROOT, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     components = json.loads(result.stdout)["components"]
-    assert set(components) == {"gateway", "agent", "tui", "webui", "mem0", "openkb", "rela-mem", "postgres", "falkordb"}
+    assert set(components) == {"gateway", "agent", "tui", "webui", "argus", "mem0", "openkb", "rela-mem", "postgres", "falkordb"}
     assert all(not c["default_stack"] for c in components.values() if c["kind"] == "middleware")

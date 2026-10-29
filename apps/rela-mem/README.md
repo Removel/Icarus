@@ -12,13 +12,15 @@
 在仓库根 `.env` 或进程环境填写（不要提交真实值）：
 
 ```dotenv
-ICARUS_DATA_DIR=/absolute/path/to/icarus-data
 RELA_MEM_API_TOKEN=<nonempty-token>
 RELA_MEM_FALKORDB_PASSWORD=<nonempty-password>
 RELA_MEM_PG_PASSWORD=<nonempty-password>
 # 可选；不设置时挂载 settings.example.json，不要设置为空的路径覆盖。
 # RELA_MEM_SETTINGS_FILE=/absolute/path/to/settings.json
 ```
+
+数据根目录在 TOML 的 `[runtime].data_dir` 声明（默认 `~/.icarus`）。部署配置路径放在
+`components.rela-mem.env.RELA_MEM_SETTINGS_FILE`，不写入密钥文件。
 
 ```bash
 ./bin/icarus config validate
@@ -36,23 +38,23 @@ RELA_MEM_PG_PASSWORD=<nonempty-password>
 统一入口通过注册表注入监听与连接字段；不要再用旧 `RELA_MEM_DB_BIND_ADDRESS` 管理拆出的数据库。
 
 已有远程数据库在 ignored `icarus.local.toml` 中设置 `components.postgres` / `components.falkordb`
-的 `mode = "remote"`、`host` 和 `port`。可复制根 `icarus.local.toml.example`；它默认是 remote 隧道示例，
-全本地部署请删除这两个覆盖表。remote 只探测，不创建、安装或停止远程数据库。
+的 `mode = "remote"`、`host` 和 `port`。根 `icarus.local.toml.example` 默认沿用本地拓扑，
+远程覆盖示例为注释。remote 只探测，不创建、安装或停止远程数据库。
 PostgreSQL 角色/数据库及权限必须预先存在；应用可初始化自己的 schema/表，但不创建远端登录角色或数据库。
 密码仍来自环境。原生进程可用宿主机隧道；容器必须使用容器可达地址，不能把容器内 `localhost` 当作宿主机。
 完整工作流见 [infra 运维说明](../../infra/README.md)。
 
 **迁移部署方式前，必须手动停止旧三合一 Compose 项目；新旧容器不能同时挂载相同数据库目录。**
-没有自动挂载碰撞保护，不做自动数据迁移。独立数据库保留原路径：
+没有自动挂载碰撞保护，不做自动数据迁移。新部署使用中立的基础设施数据路径：
 
 ```text
-$ICARUS_DATA_DIR/services/rela-mem/falkordb
-$ICARUS_DATA_DIR/services/rela-mem/postgres
+$ICARUS_DATA_DIR/services/falkordb
+$ICARUS_DATA_DIR/services/postgres
 ```
 
 根 `infra/` 分别管理数据库；`apps/rela-mem/docker-compose.yaml` **只含应用服务**，加入共享外部网络。
 统一入口会创建需要的网络并注入 `postgres:5432`、`falkordb:6379`；身份等业务 JSON 不被改写。
-镜像默认本地构建为 `rela-mem:dev`，可用 `RELA_MEM_IMAGE` 选择独立标签，不自动推送。
+本地开发镜像是 `icarus-rela-mem:dev`，可用 TOML env 的 `ICARUS_RELA_MEM_IMAGE` 选择独立标签；不覆盖发布镜像、不自动推送。
 `stop` / Compose `down` 不删除上述 bind mount 数据；裸 `icarus stop` 会停止默认 required 闭包中的本地数据库。
 
 ### 手动 app-only Compose

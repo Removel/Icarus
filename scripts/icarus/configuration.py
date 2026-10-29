@@ -58,5 +58,5 @@ def configuration_document(registry: Registry, repo_root: Path, config_path=None
     local = base.with_name(f"{base.stem}.local.toml")
     components = [registry.get(name)] if name else registry.components.values()
     # Only strict registry metadata is serialized: dotenv/process values are never read.
-    return {"version": registry.version, "sources": [str(base), *([str(local)] if local.exists() else [])],
+    return {"version": registry.version, "runtime": {"data_dir": registry.data_dir, "env": registry.env}, "sources": [str(base), *([str(local)] if local.exists() else [])],
             "components": {c.name: asdict(c) for c in components}}

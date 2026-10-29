@@ -85,7 +85,8 @@ def test_failed_service_dev_install_does_not_continue_to_command_links(tmp_path,
 
 def test_infra_compose_files_preserve_data_paths_and_network():
     import yaml
-    for name, image in (("postgres", "pgvector/pgvector:pg17"), ("falkordb", "falkordb/falkordb:v4.22.1")):
+    for name, image in (("postgres", "${ICARUS_POSTGRES_IMAGE:-pgvector/pgvector:pg17}"),
+                        ("falkordb", "${ICARUS_FALKORDB_IMAGE:-falkordb/falkordb:v4.22.1}")):
         path = ROOT / "infra" / name / "compose.yaml"
         assert path.exists(), f"{name} must have independently managed infrastructure"
         doc = yaml.safe_load(path.read_text())
@@ -94,7 +95,7 @@ def test_infra_compose_files_preserve_data_paths_and_network():
         assert doc["networks"]["icarus"]["name"] == "${ICARUS_NETWORK:-icarus}"
         service = doc["services"][name]
         assert service["image"] == image
-        assert f"services/rela-mem/{name}" in str(service["volumes"])
+        assert f"services/{name}" in str(service["volumes"])
         assert service["healthcheck"]
 
 
@@ -105,7 +106,7 @@ def test_rela_mem_compose_is_app_only_and_connection_injectable():
     assert compose["networks"]["icarus"]["external"] is True
     app = compose["services"]["rela-mem"]
     assert compose["networks"]["icarus"]["name"] == "${ICARUS_NETWORK:-icarus}"
-    assert app["image"] == "${RELA_MEM_IMAGE:-rela-mem:dev}"
+    assert app["image"] == "${ICARUS_RELA_MEM_IMAGE:-icarus-rela-mem:dev}"
     assert "depends_on" not in app
     for key in ("RELA_MEM_PG_HOST", "RELA_MEM_PG_PORT", "RELA_MEM_PG_DATABASE", "RELA_MEM_PG_USER", "RELA_MEM_PG_SCHEMA", "RELA_MEM_FALKORDB_HOST", "RELA_MEM_FALKORDB_PORT", "RELA_MEM_FALKORDB_GRAPH"):
         assert key in app["environment"]

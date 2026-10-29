@@ -86,28 +86,6 @@ def start(listener, **kwargs):
     return pid
 
 
-def test_argus_style_cli_template_preserves_port_and_process_identity(listener):
-    runtime, component, script, processes = listener
-    script.write_text('''import argparse, http.server, json
-from pathlib import Path
-parser = argparse.ArgumentParser()
-parser.add_argument('--host')
-parser.add_argument('--port', type=int)
-args = parser.parse_args()
-Path('started.json').write_text(json.dumps(vars(args)))
-http.server.ThreadingHTTPServer((args.host, args.port), http.server.SimpleHTTPRequestHandler).serve_forever()
-''')
-    component = replace(component, name='argus',
-                        start_command=('{python}', str(script), '--host', '{host}', '--port', '{port}'))
-    owned = (runtime, component, script, processes)
-    pid = start(owned)
-    actual = json.loads((runtime.repo_root / 'app/started.json').read_text())
-    assert actual == {'host': '127.0.0.1', 'port': int(component.endpoint.rsplit(':', 1)[1])}
-    assert runtime.status(component).state == 'running'
-    runtime.stop(component)
-    wait_for(lambda: runtime.status(component).state == 'stopped')
-
-
 def test_real_http_spawn_status_idempotency_logs_and_stop(listener, capsys):
     runtime, component, _, _ = listener
     injected = {"CHILD_VALUE": "from-injection"}

@@ -95,6 +95,8 @@ class Component:
 class Registry:
     version: int
     components: dict[str, Component]
+    data_dir: str | None = None
+    env: dict[str, str | int | bool] = field(default_factory=dict)
 
     def get(self, name: str) -> Component:
         try:
@@ -375,7 +377,21 @@ def load_registry(
     overlay_path = base_path.with_name(f"{base_path.stem}.local.toml")
     if overlay_path.exists():
         data = _deep_merge(data, _read_config(overlay_path))
-    _keys(data, {"version", "defaults", "components"}, "registry")
+    _keys(data, {"version", "defaults", "components", "runtime"}, "registry")
+    runtime = _table(data.get("runtime", {}), "runtime")
+    _keys(runtime, {"data_dir", "env"}, "runtime")
+    data_dir = runtime.get("data_dir")
+    if data_dir is not None:
+        _string(data_dir, "runtime.data_dir")
+        if not Path(data_dir).expanduser().is_absolute():
+            raise RegistryError("runtime.data_dir must be an absolute path or start with ~/")
+    runtime_env = _table(runtime.get("env", {}), "runtime.env")
+    for key, value in runtime_env.items():
+        _env_name(key, "runtime.env destination")
+        if _secret_name(key):
+            raise RegistryError(f"runtime.env.{key}: secret literals are forbidden")
+        if type(value) not in (str, int, bool):
+            raise RegistryError(f"runtime.env.{key} must be a string, int or bool")
     if type(data.get("version")) is not int or data["version"] != 1:
         raise RegistryError("registry.version must be 1")
     defaults = _table(data.get("defaults", {}), "defaults")
@@ -404,4 +420,4 @@ def load_registry(
                 raise RegistryError(f"components.{name} forbids self dependency")
             if dependency not in components:
                 raise RegistryError(f"components.{name}: unknown dependency: {dependency}")
-    return Registry(version=1, components=components)
+    return Registry(version=1, components=components, data_dir=data_dir, env=runtime_env)

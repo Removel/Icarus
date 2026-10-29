@@ -1,6 +1,9 @@
-# Public topology only. Secrets and ICARUS_DATA_DIR belong in .env / process environment.
-# Copy icarus.local.toml.example to ignored icarus.local.toml for machine overrides.
+# Public topology only. Credentials belong in .env; local overrides stay ignored.
 version = 1
+
+[runtime]
+data_dir = "~/.icarus"
+
 
 [components.gateway]
 kind = "app"
@@ -74,8 +77,7 @@ endpoint_env = "ICARUS_OPENKB_ENDPOINT"
 required = false
 endpoint_env = "ICARUS_RELATIONSHIP_ENDPOINT"
 
-# QQ observation process; PostgreSQL URL comes from ARGUS_DATABASE_URL.
-# Phase one uses a local mock processor and does not require Gateway.
+# QQ observations are persisted independently and handed to the local Gateway.
 [components.argus]
 kind = "app"
 provisioning = "process"
@@ -86,7 +88,20 @@ start_command = ["bash", "{repo_root}/apps/argus/scripts/start.sh", "--host", "{
 install_command = ["bash", "{repo_root}/apps/argus/scripts/install.sh"]
 dev_install_command = ["bash", "{repo_root}/apps/argus/scripts/install.sh", "--dev"]
 process_markers = ["apps.argus.src.main", "apps.argus/scripts/start.sh"]
+secret_env = { ARGUS_POSTGRES_PASSWORD = "ARGUS_POSTGRES_PASSWORD" }
 probe = { type = "http", path = "/health", expect_body = { status = "ready" } }
+[components.argus.requires.gateway]
+required = true
+[components.argus.requires.postgres]
+required = true
+[components.argus.requires.postgres.connection]
+host_env = "ARGUS_POSTGRES_HOST"
+port_env = "ARGUS_POSTGRES_PORT"
+database_env = "ARGUS_POSTGRES_DB"
+user_env = "ARGUS_POSTGRES_USER"
+password_env = "ARGUS_POSTGRES_PASSWORD"
+database = "argus"
+user = "argus"
 
 [components.mem0]
 kind = "app"
@@ -97,14 +112,24 @@ host_env = "ICARUS_MEM0_BIND_HOST"
 port_env = "ICARUS_MEM0_PORT"
 endpoint_env = "ICARUS_MEM0_ENDPOINT"
 compose = "apps/mem0/server/docker-compose.yaml"
-compose_project = "mem0-dev"
+compose_project = "icarus-mem0"
+shared_network = true
 compose_command = ["bash", "apps/mem0/scripts/icarus-compose.sh"]
 expected_containers = 1
 data_dir = "services/mem0"
 dev_install_command = ["bash", "{repo_root}/apps/mem0/scripts/install.sh", "--dev"]
 probe = { type = "http", path = "/docs" }
-# The external PostgreSQL/pgvector endpoint is required; no bundled database is shipped.
 secret_env = { ICARUS_MEM0_POSTGRES_PASSWORD = "ICARUS_MEM0_POSTGRES_PASSWORD", ICARUS_MEM0_JWT_SECRET = "ICARUS_MEM0_JWT_SECRET" }
+[components.mem0.requires.postgres]
+required = true
+[components.mem0.requires.postgres.connection]
+host_env = "ICARUS_MEM0_POSTGRES_HOST"
+port_env = "ICARUS_MEM0_DB_PORT"
+database_env = "ICARUS_MEM0_POSTGRES_DB"
+user_env = "ICARUS_MEM0_POSTGRES_USER"
+password_env = "ICARUS_MEM0_POSTGRES_PASSWORD"
+database = "mem0_app"
+user = "mem0_local"
 
 [components.openkb]
 kind = "app"
@@ -114,7 +139,7 @@ endpoint = "http://127.0.0.1:7566"
 host_env = "ICARUS_OPENKB_BIND_HOST"
 port_env = "ICARUS_OPENKB_PORT"
 compose = "apps/openkb/docker-compose.yaml"
-compose_project = "openkb-dev"
+compose_project = "icarus-openkb"
 compose_command = ["bash", "apps/openkb/scripts/icarus-compose.sh"]
 expected_containers = 1
 data_dir = "services/openkb"
@@ -170,9 +195,9 @@ shared_network = true
 compose = "infra/postgres/compose.yaml"
 compose_project = "icarus-postgres"
 image_action = "pull"
-data_dir = "services/rela-mem/postgres"
-env = { ICARUS_POSTGRES_USER = "rela_mem", ICARUS_POSTGRES_DATABASE = "rela_mem" }
-secret_env = { RELA_MEM_PG_PASSWORD = "RELA_MEM_PG_PASSWORD" }
+data_dir = "services/postgres"
+env = { ICARUS_POSTGRES_USER = "icarus_admin", ICARUS_POSTGRES_DATABASE = "postgres" }
+secret_env = { ICARUS_POSTGRES_PASSWORD = "ICARUS_POSTGRES_PASSWORD", RELA_MEM_PG_PASSWORD = "RELA_MEM_PG_PASSWORD", ICARUS_MEM0_POSTGRES_PASSWORD = "ICARUS_MEM0_POSTGRES_PASSWORD", ARGUS_POSTGRES_PASSWORD = "ARGUS_POSTGRES_PASSWORD" }
 probe = { type = "tcp" }
 
 [components.falkordb]
@@ -188,6 +213,6 @@ shared_network = true
 compose = "infra/falkordb/compose.yaml"
 compose_project = "icarus-falkordb"
 image_action = "pull"
-data_dir = "services/rela-mem/falkordb"
+data_dir = "services/falkordb"
 secret_env = { RELA_MEM_FALKORDB_PASSWORD = "RELA_MEM_FALKORDB_PASSWORD" }
 probe = { type = "tcp" }
