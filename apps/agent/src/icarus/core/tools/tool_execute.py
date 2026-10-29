@@ -15,6 +15,20 @@ if TYPE_CHECKING:
     from icarus.core.tools.tool_executor import BaseToolExecutor
 
 
+DISPATCHED_TOOL_METADATA = "dispatched_tool"
+
+
+def _dispatched(tool_call: ToolCall, result: ToolExecutionResult) -> ToolExecutionResult:
+    arguments = deepcopy(tool_call.arguments)
+    arguments.pop("_execution", None)
+    return ToolExecutionResult(result.success, result.output, result.error, result.images, {
+        **result.metadata,
+        DISPATCHED_TOOL_METADATA: {
+            "id": tool_call.id, "name": tool_call.name, "arguments": arguments,
+        },
+    })
+
+
 class _ArgumentValidationError(ValueError):
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         self.errors = errors
@@ -91,13 +105,13 @@ class ToolExecuteTool(BaseTool):
         if executor is None:
             return self._failure(RuntimeError("Tool Registry is not bound"))
         try:
-            return executor.execute(
+            return _dispatched(tool_call, executor.execute(
                 tool_call,
                 task_id=task_id,
                 run_id=run_id,
                 step=step,
                 task_messages=task_messages,
-            )
+            ))
         except Exception as error:
             return self._failure(error)
 
@@ -135,13 +149,13 @@ class ToolExecuteTool(BaseTool):
         if executor is None:
             return self._failure(RuntimeError("Tool Registry is not bound"))
         try:
-            return await executor.aexecute(
+            return _dispatched(tool_call, await executor.aexecute(
                 tool_call,
                 task_id=task_id,
                 run_id=run_id,
                 step=step,
                 task_messages=task_messages,
-            )
+            ))
         except Exception as error:
             return self._failure(error)
 

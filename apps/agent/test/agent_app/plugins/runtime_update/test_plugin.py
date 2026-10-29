@@ -50,6 +50,21 @@ def project(events):
     return asyncio.run(run())
 
 
+def test_public分发事件保持外层配对且不暴露内部参数():
+    call = ToolCall("outer", "tool_execute", {"name": "target", "arguments": {}})
+    result = ToolExecutionResult(True, "ok", metadata={"dispatched_tool": {
+        "id": "outer", "name": "target", "arguments": {"password": "internal-secret"},
+    }})
+    updates = project([
+        ("agent", AgentToolStartedEvent(task_id="task", step=1, tool_call=call)),
+        ("agent", AgentToolCompletedEvent(task_id="task", step=1, tool_call=call, result=result)),
+    ])
+    assert [update.payload["tool_name"] for update in updates] == ["tool_execute", "tool_execute"]
+    assert [update.payload["call_id"] for update in updates] == ["outer", "outer"]
+    assert "internal-secret" not in str([dict(update.payload) for update in updates])
+    assert "dispatched_tool" not in str(result.as_dict())
+
+
 def test_runtime_update_plugin投影首期公共事件并保留时间顺序():
     call = ToolCall(id="call-1", name="read", arguments={"path": "a"})
     completed = AgentCompletedEvent(

@@ -1,6 +1,8 @@
 """Agent 能力层统一类型。"""
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
+from copy import deepcopy
 from typing import ClassVar
 
 from icarus.core.events import Event
@@ -81,6 +83,24 @@ class AgentToolCompletedEvent(Event):
     step: int
     tool_call: ToolCall
     result: ToolExecutionResult
+
+    @property
+    def target_tool_call(self) -> ToolCall:
+        """Return the dispatch request, not proof of target side effects."""
+        from icarus.core.tools.tool_execute import DISPATCHED_TOOL_METADATA
+
+        if self.tool_call.name != "tool_execute" or not isinstance(self.result.metadata, Mapping):
+            return self.tool_call
+        dispatched = self.result.metadata.get(DISPATCHED_TOOL_METADATA)
+        if not isinstance(dispatched, Mapping):
+            return self.tool_call
+        name, call_id = dispatched.get("name"), dispatched.get("id")
+        arguments = dispatched.get("arguments")
+        if (not isinstance(name, str) or not name.strip()
+                or not isinstance(call_id, str) or not call_id.strip()
+                or call_id != self.tool_call.id or not isinstance(arguments, dict)):
+            return self.tool_call
+        return ToolCall(call_id, name, deepcopy(arguments))
 
 
 @dataclass(frozen=True, kw_only=True)

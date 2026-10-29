@@ -53,7 +53,9 @@ def test_async_result_hook_runs_before_final_output_budget():
         tools = ToolRegistry(); tools.register(ExampleTool())
         hooks = HookRegistry(); hooks.register("tool.execute", Rewrite(), priority=1)
         executor = ObservableToolExecutor(ToolExecutor(tools), HookDispatcher(hooks))
-        result = await executor.aexecute_many([ToolCall("one", "example", {})])
+        result = await executor.aexecute_many([
+            ToolCall("one", "example", {"_execution": {"max_output_tokens": 4000}})
+        ])
         assert visited == ["after"]
         assert conservative_token_count(serialize_tool_result(result[0][1])) <= 4000
         assert result[0][1].metadata["result_truncated"] is True

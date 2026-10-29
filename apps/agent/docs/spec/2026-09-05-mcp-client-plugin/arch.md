@@ -720,6 +720,15 @@ RuntimeUpdate 链路。整个闭环不要求新增具体 Browser、Blender 或 U
 
 ## 15. 当前实现状态
 
+2026-10-29 工具调用质量补强（[架构](../2026-10-29-tool-call-quality/arch.md)）：
+
+- 文本中的完整JSON object/list转换为text/data，原始语义相同的structured副本去重（布尔不同于数字）；标量保留文本，不递归改变字符串类型，继续嵌套脱敏。
+- 先收集脱敏错误文本再转换/去重；success仍只看is_error，不解释业务code/receipt，只有structured错误时保留证据并允许通用error。
+- 参数诊断输出限制8条/4层/每条240字符，tool_ref128字符；未知动态键不回显，外层operation不拼回未脱敏标识。保持远端调用前验证、无外部ref和不自动重放。
+- list Schema缺省与实例page_size一致；search Schema与运行缺省均为min(5,max_page_size)。不增加每Run发现授权或连接机制。
+
+以下测试数量是早期实施记录，非本次质量补强的验收数；最新验证见本feature plan。
+
 - 已引入 `fastmcp-slim[client]==4.0.3` 与 `jsonschema>=4,<5`；
 - 已实现顶层 `mcpServers` 配置、stdio/Streamable HTTP 推断、`enabled` 和环境变量引用；
 - 已实现 Session 级按需连接、并发首次连接合并、Catalog Snapshot 和 list-changed 懒失效；

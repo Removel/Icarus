@@ -16,6 +16,11 @@ from icarus.core.tools.types import ToolExecutionResult
 
 TokenCounter = Callable[[str], int]
 DEFAULT_OMISSION_MARKER = "complete Tool Result was not saved"
+FAILED_RESULT_PREVIEW_TOKENS = 1000
+_RECOVERY_KEYS = frozenset({
+    "offset", "limit", "has_more", "next_offset", "page", "page_size", "total",
+    "next_page", "text_offset", "max_chars", "truncated", "next_text_offset", "next_cursor",
+})
 
 
 def conservative_token_count(text: str) -> int:
@@ -94,41 +99,36 @@ def render_tool_result(
     counter = token_counter_with_fallback(counter)
     original_text = serialize_tool_result(result)
     original_tokens = counter(original_text)
-    if original_tokens <= max_tokens:
-        return replace(
-            result,
-            metadata={
-                **result.metadata,
-                "original_tokens": original_tokens,
-                "visible_tokens": original_tokens,
-                "result_truncated": False,
-            },
-        )
-    target = max(1, min(preview_tokens, max_tokens))
-    low, high = 0, target
-    best: ToolExecutionResult | None = None
-    while low <= high:
-        content_budget = (low + high) // 2
-        preview = _preview_result(
-            result, content_budget, counter, stored, head_ratio
-        )
-        visible = counter(serialize_tool_result(preview))
-        if visible <= max_tokens:
-            best = replace(
-                preview,
-                metadata={
-                    **preview.metadata,
-                    "original_tokens": original_tokens,
-                    "visible_tokens": visible,
-                    "result_truncated": True,
+    short_failure = (
+        not result.success and stored is not None and stored.complete
+        and original_tokens > FAILED_RESULT_PREVIEW_TOKENS
+    )
+    actual_max_tokens = max_tokens
+    preferred = min(max_tokens, FAILED_RESULT_PREVIEW_TOKENS) if short_failure else max_tokens
+    for render_cap in dict.fromkeys((preferred, actual_max_tokens)):
+        if original_tokens <= render_cap:
+            return replace(result, metadata={
+                **result.metadata, "original_tokens": original_tokens,
+                "visible_tokens": original_tokens, "result_truncated": False,
+                **_stored_metadata(stored),
+            })
+        low, high = 0, max(1, min(preview_tokens, render_cap))
+        best: ToolExecutionResult | None = None
+        while low <= high:
+            content_budget = (low + high) // 2
+            preview = _preview_result(result, content_budget, counter, stored, head_ratio)
+            visible = counter(serialize_tool_result(preview))
+            if visible <= render_cap:
+                best = replace(preview, metadata={
+                    **preview.metadata, "original_tokens": original_tokens,
+                    "visible_tokens": visible, "result_truncated": True,
                     **_stored_metadata(stored),
-                },
-            )
-            low = content_budget + 1
-        else:
-            high = content_budget - 1
-    if best is not None:
-        return best
+                })
+                low = content_budget + 1
+            else:
+                high = content_budget - 1
+        if best is not None:
+            return best
     minimal = ToolExecutionResult(
         success=result.success,
         output=_minimal_value(result.output, stored),
@@ -154,6 +154,8 @@ def render_tool_result(
 
 
 def _preview_result(result, budget, counter, stored, head_ratio):
+    if not result.success and stored is not None and stored.complete:
+        return _preview_failure_result(result, budget, counter, stored, head_ratio)
     output_budget = max(0, budget * 4 // 5)
     error_budget = max(0, budget - output_budget)
     return ToolExecutionResult(
@@ -171,6 +173,55 @@ def _preview_result(result, budget, counter, stored, head_ratio):
         images=result.images,
         metadata=result.metadata,
     )
+
+
+def _preview_failure_result(result, budget, counter, stored, head_ratio):
+    error_budget = budget // 3 if result.error else 0
+    diagnostic = result.error
+    if diagnostic and counter(_json(diagnostic)) > error_budget:
+        diagnostic = diagnostic.rstrip().rsplit("\n", 1)[-1]
+    error = _clip_failure_text(diagnostic, error_budget, counter, 0.25) if diagnostic else None
+    output_budget = max(0, budget - error_budget)
+    if isinstance(result.output, dict) and any(key in result.output for key in _RECOVERY_KEYS):
+        output = _preview_mapping(result.output, output_budget, counter, stored, head_ratio, 0)
+    elif isinstance(result.output, dict):
+        values = {key: value for key, value in result.output.items()
+                  if not (key == "stderr" and result.error and value == result.error)}
+        keys = [key for key in ("exit_code", "stdout") if key in values]
+        keys.extend(key for key in values if key not in keys)
+        output = {_omitted_key([result.output]): _marker_payload(stored)}
+        for key in keys:
+            value = values[key]
+            if counter(_json({**output, key: value})) > output_budget:
+                allowance = max(0, output_budget - counter(_json({**output, key: ""})) + 2)
+                value = (_clip_failure_text(value, allowance, counter, head_ratio)
+                         if isinstance(value, str) else
+                         _preview_value(value, allowance, counter, stored, head_ratio))
+            if counter(_json({**output, key: value})) <= output_budget:
+                output[key] = value
+    else:
+        output = _preview_value(result.output, output_budget, counter, stored, head_ratio)
+        if output == result.output:
+            output = {"value": output, "_icarus_omitted": _marker_payload(stored)}
+    return ToolExecutionResult(False, output, error, result.images, result.metadata)
+
+
+def _clip_failure_text(value, budget, counter, head_ratio):
+    if counter(_json(value)) <= budget:
+        return value
+    low, high = 0, len(value)
+    best = "…"
+    while low <= high:
+        kept = (low + high) // 2
+        head = int(kept * head_ratio)
+        tail = kept - head
+        candidate = value[:head] + "…" + (value[-tail:] if tail else "")
+        if counter(_json(candidate)) <= budget:
+            best = candidate
+            low = kept + 1
+        else:
+            high = kept - 1
+    return best
 
 
 def _preview_value(
@@ -305,6 +356,27 @@ def _preview_sequence(
 def _preview_mapping(
     value, budget, counter, stored, head_ratio, depth, omission_marker=None
 ):
+    recovery = {key: child for key, child in value.items()
+                if key in _RECOVERY_KEYS and (child is None or isinstance(child, (str, bool, int, float)))}
+    if recovery:
+        marker_key = _omitted_key([value])
+        recovery_marker = {marker_key: _marker_payload(stored)}
+        if counter(_json({**recovery, **recovery_marker})) > budget:
+            return recovery_marker
+        body = {key: child for key, child in value.items() if key not in recovery}
+        low, high = 0, budget
+        best = {**recovery, **recovery_marker}
+        while low <= high:
+            body_budget = (low + high) // 2
+            preview = _preview_mapping(body, body_budget, counter, stored, head_ratio,
+                                       depth + 1, omission_marker) if body else {}
+            candidate = {**recovery, **preview, **recovery_marker}
+            if counter(_json(candidate)) <= budget:
+                best = candidate
+                low = body_budget + 1
+            else:
+                high = body_budget - 1
+        return best
     items = list(value.items())
     if len(items) == 1:
         field, child = items[0]
@@ -402,7 +474,7 @@ def _omitted_key(values) -> str:
 
 def _marker_payload(stored, *, omission_marker=None, **counts):
     if omission_marker is not None:
-        return {**counts, "note": omission_marker}
+        return {"truncated": True, **counts, "note": omission_marker}
     reference: dict[str, object]
     if stored is None:
         reference = {"note": "complete Tool Result was not saved"}
@@ -414,7 +486,7 @@ def _marker_payload(stored, *, omission_marker=None, **counts):
             "complete": False,
             "note": "Tool Result file is incomplete",
         }
-    return {**counts, **reference}
+    return {"truncated": True, **counts, **reference}
 
 
 def _marker_text(stored, *, omitted_tokens=None, omission_marker=None):
@@ -424,16 +496,16 @@ def _marker_text(stored, *, omitted_tokens=None, omission_marker=None):
         else ""
     )
     if omission_marker is not None:
-        return f"\n... content omitted{count}; {omission_marker} ...\n"
+        return f"\n... content omitted (truncated){count}; {omission_marker} ...\n"
     if stored and stored.complete:
-        return f"\n... content omitted{count}; full Tool Result: {stored.path} ...\n"
+        return f"\n... content omitted (truncated){count}; full Tool Result: {stored.path} ...\n"
     if stored is not None:
         return (
-            f"\n... content omitted{count}; incomplete Tool Result file: "
+            f"\n... content omitted (truncated){count}; incomplete Tool Result file: "
             f"{stored.path} ...\n"
         )
     return (
-        f"\n... content omitted{count}; "
+        f"\n... content omitted (truncated){count}; "
         "complete Tool Result was not saved ...\n"
     )
 

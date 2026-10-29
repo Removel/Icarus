@@ -150,7 +150,7 @@ class MCPClientManager:
         await self.ensure_catalog(server)
         descriptor = self.catalog.get(tool_ref)
         if descriptor is None:
-            raise KeyError(f"MCP Tool is not found: {tool_ref}")
+            raise KeyError(f"MCP Tool is not found: {_safe_validation_text(tool_ref, 128)}")
         self._argument_validator(descriptor, arguments)
         runtime = self._require_server(server)
         backend = runtime.backend
@@ -245,23 +245,74 @@ def _validate_arguments(
             ).iter_errors(dict(arguments)),
             key=lambda error: tuple(str(part) for part in error.absolute_path),
         )
-    except jsonschema_exceptions.SchemaError as error:
+    except jsonschema_exceptions.SchemaError:
         raise ValueError(
-            f"MCP Tool has an invalid input schema: {descriptor.tool_ref}: {error.message}"
-        ) from error
-    except Unresolvable as error:
+            f"MCP Tool has an invalid input schema: {_safe_validation_text(descriptor.tool_ref, 128)}"
+        ) from None
+    except Unresolvable:
         raise ValueError(
-            f"MCP Tool input schema cannot resolve external reference: {descriptor.tool_ref}"
-        ) from error
+            "MCP Tool input schema cannot resolve external reference: "
+            + _safe_validation_text(descriptor.tool_ref, 128)
+        ) from None
     if not errors:
         return
-    details = []
-    for validation_error in errors[:8]:
-        path = "$." + ".".join(str(part) for part in validation_error.absolute_path)
-        details.append(
-            f"{path.rstrip('.')}: failed {validation_error.validator} validation"
-        )
+    details: list[str] = []
+    for validation_error in errors:
+        _validation_details(validation_error, schema, details)
+        if len(details) >= 8:
+            break
     raise ValueError(
-        f"MCP Tool arguments are invalid: {descriptor.tool_ref}: "
+        "MCP Tool arguments are invalid: "
+        + _safe_validation_text(descriptor.tool_ref, 128) + ": "
         + "; ".join(details)
-    )
+    ) from None
+
+
+def _safe_validation_text(value: object, limit: int = 240) -> str:
+    return Redactor().redact_text(str(value))[:limit]
+
+
+def _validation_path(error: Any, schema: Any) -> str:
+    path = "$"
+    current = schema
+    for part in error.absolute_path:
+        if isinstance(part, int):
+            path += f"[{part}]"
+            current = current.get("items", {}) if isinstance(current, dict) else {}
+        else:
+            properties = current.get("properties", {}) if isinstance(current, dict) else {}
+            if part in properties:
+                path += "." + _safe_validation_text(part, 80)
+                current = properties[part]
+            else:
+                path += ".<field>"
+                current = {}
+    return path[:160]
+
+
+def _validation_details(error: Any, schema: Any, details: list[str], depth: int = 0) -> None:
+    if len(details) >= 8:
+        return
+    rule = error.validator
+    constraint = error.validator_value
+    if rule == "required":
+        missing = [key for key in constraint if key not in error.instance]
+        description = "missing required field " + ", ".join(
+            _safe_validation_text(key, 80) for key in missing
+        )
+    elif rule == "additionalProperties":
+        description = "unknown field is not allowed"
+    elif rule == "type":
+        description = "expected type " + _safe_validation_text(constraint, 80)
+    elif rule == "enum":
+        description = "value must match an allowed enum option"
+    elif rule in {"anyOf", "oneOf"}:
+        description = f"must satisfy {rule} branches"
+    else:
+        description = f"failed {rule} validation"
+    details.append(_safe_validation_text(f"{_validation_path(error, schema)}: {description}"))
+    if depth < 3:
+        for child in error.context:
+            _validation_details(child, schema, details, depth + 1)
+            if len(details) >= 8:
+                break

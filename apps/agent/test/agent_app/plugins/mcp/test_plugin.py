@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from agent_app.plugins.mcp.plugin import MCPPlugin
 
 
@@ -56,6 +58,64 @@ class PartialManagerStub:
     async def search_tools(self, **kwargs):
         del kwargs
         return (), {"offline": "ConnectionError: unavailable"}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_plugin最终错误不拼回原始tool_ref(asynchronous):
+    seen = []
+    reference = "server/tool?token=synthetic-secret&suffix=" + "x" * 400
+
+    class FailingManager(ManagerStub):
+        async def call_tool(self, tool_ref, arguments):
+            seen.append((tool_ref, arguments))
+            raise ValueError("invalid arguments")
+
+    class SyncBridge(BridgeStub):
+        def run(self, operation):
+            return asyncio.run(operation())
+
+    plugin = MCPPlugin("mcp", manager=FailingManager(), bridge=SyncBridge())
+    asyncio.run(plugin.start())
+    if asynchronous:
+        result = asyncio.run(plugin.aexecute_tool(tool_ref=reference, arguments={}))
+    else:
+        result = plugin.execute_tool(tool_ref=reference, arguments={})
+
+    assert result.success is False
+    assert seen == [(reference, {})]
+    assert "synthetic-secret" not in result.error
+    assert "x" * 129 not in result.error
+    assert len(result.error) < 220
+    assert "invalid arguments" in result.error
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_plugin真实manager缺失目标诊断有界(asynchronous):
+    from agent_app.plugins.mcp.client_manager import MCPClientManager
+    from agent_app.plugins.mcp.config import parse_mcp_servers
+    from agent_app.plugins.mcp.models import MCPServerInfo
+
+    class Backend:
+        async def connect(self):
+            return MCPServerInfo("server", supports_tools=True)
+        async def list_tools(self):
+            return ()
+        async def close(self):
+            pass
+    class Bridge(BridgeStub):
+        def run(self, operation):
+            return asyncio.run(operation())
+    manager = MCPClientManager(parse_mcp_servers({"server": {"url": "https://example.test/mcp"}}),
+                               workspace_path="/workspace", backend_factory=lambda *_: Backend())
+    plugin = MCPPlugin("mcp", manager=manager, bridge=Bridge())
+    asyncio.run(plugin.start())
+    reference = "server/" + "r" * 5000
+    result = (asyncio.run(plugin.aexecute_tool(tool_ref=reference, arguments={})) if asynchronous
+              else plugin.execute_tool(tool_ref=reference, arguments={}))
+    assert result.success is False
+    assert "not found" in result.error
+    assert "r" * 129 not in result.error
+    assert len(result.error) < 2400
 
 
 def test_plugin生命周期不启动bridge且首次工具调用才启动():

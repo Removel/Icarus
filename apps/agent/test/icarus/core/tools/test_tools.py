@@ -310,6 +310,56 @@ def test_tool_executor_按照连续可并行调用分批():
     ]
 
 
+@pytest.mark.parametrize("budget", [512, 25000])
+def test_failed_result先保存再按实际预算短预览(tmp_path, budget):
+    class FailedTool(EchoTool):
+        def invoke(self, arguments):
+            return ToolExecutionResult(False, {"stdout": "x" * 1500, "exit_code": 7},
+                                       error="final reason", metadata={"internal": "kept"})
+    registry = ToolRegistry()
+    registry.register(FailedTool())
+    executor = ToolExecutor(registry, result_store=ToolResultStore(tmp_path, max_file_bytes=1_000_000))
+    call = ToolCall("failure", "echo", {"_execution": {"max_output_tokens": budget}})
+    result = executor.execute_many([call], task_id="task-1")[0][1]
+    assert result.success is False
+    assert conservative_token_count(serialize_tool_result(result)) <= min(1000, budget)
+    assert result.metadata["result_file_complete"] is True
+    saved = json.loads(Path(result.metadata["result_file"]).read_text())
+    assert saved["output"]["stdout"] == "x" * 1500
+    assert saved["error"] == "final reason"
+    assert "internal" not in saved
+    assert result.metadata["internal"] == "kept"
+    assert "final reason" in result.error
+    assert result.output["exit_code"] == 7
+
+
+@pytest.mark.parametrize("mode", ["no-store", "no-task", "write-error", "size-limit", "incomplete"])
+def test_failed_result无完整存储不强制1000(tmp_path, mode):
+    class FailedTool(EchoTool):
+        def invoke(self, arguments):
+            return ToolExecutionResult(False, "x" * 1500, error="reason", metadata={
+                "output_capture_incomplete": mode == "incomplete",
+            })
+    class BrokenStore(ToolResultStore):
+        def save(self, **kwargs):
+            raise OSError("synthetic write error")
+    registry = ToolRegistry()
+    registry.register(FailedTool())
+    store = None if mode == "no-store" else (
+        BrokenStore(tmp_path, max_file_bytes=10000) if mode == "write-error"
+        else ToolResultStore(tmp_path, max_file_bytes=100 if mode == "size-limit" else 10000)
+    )
+    executor = ToolExecutor(registry, result_store=store)
+    result = executor.execute_many([ToolCall("failure", "echo", {})],
+                                   task_id=None if mode == "no-task" else "task-1")[0][1]
+    assert result.output == "x" * 1500
+    assert result.metadata.get("result_file_complete") is not True
+    if mode in {"no-store", "no-task", "write-error"}:
+        assert result.metadata.get("result_file_error")
+    else:
+        assert result.metadata["result_file_complete"] is False
+
+
 def test_tool_executor_batch超限外置并确保所有结果在预算内(tmp_path):
     settings = ToolExecutionSettings(
         default_output_tokens=700,

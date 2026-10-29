@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 from typing import Any
 
 from agent_app.plugins.mcp.models import MCPCallResult
@@ -16,6 +17,20 @@ from icarus.core.tools import ToolExecutionResult
 
 
 MAX_MCP_IMAGES = 16
+
+
+def _same_json(left: Any, right: Any) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _same_json(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _same_json(a, b) for a, b in zip(left, right)
+        )
+    return left == right
 
 
 class MCPResultConverter:
@@ -33,10 +48,22 @@ class MCPResultConverter:
         image_bytes = 0
         for content in result.content:
             if content.type == "text":
-                text = self.redactor.redact_text(str(content.data))
-                contents.append({"type": "text", "text": text})
+                raw = str(content.data)
+                text = self.redactor.redact_text(raw)
                 if text.strip():
                     error_texts.append(text)
+                try:
+                    decoded = json.loads(raw)
+                except (ValueError, TypeError):
+                    decoded = None
+                if isinstance(decoded, (dict, list)):
+                    if result.structured_content is not None and _same_json(
+                        decoded, result.structured_content
+                    ):
+                        continue
+                    contents.append({"type": "text", "data": self.redactor.redact(decoded)})
+                else:
+                    contents.append({"type": "text", "text": text})
                 continue
             if content.type == "image":
                 self._check_image_count(images)

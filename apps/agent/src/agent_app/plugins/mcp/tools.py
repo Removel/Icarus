@@ -82,7 +82,7 @@ class MCPToolList(_MCPTool):
                     "page_size": {
                         "type": "integer", "minimum": 1,
                         "maximum": self.max_page_size,
-                        "default": DEFAULT_SEARCH_LIMIT,
+                        "default": self.default_page_size,
                     },
                 },
                 "additionalProperties": False,
@@ -138,7 +138,7 @@ class MCPToolSearch(_MCPTool):
                     "limit": {
                         "type": "integer", "minimum": 1,
                         "maximum": self.max_page_size,
-                        "default": self.default_page_size,
+                        "default": min(DEFAULT_SEARCH_LIMIT, self.max_page_size),
                     },
                 },
                 "required": ["query"],
@@ -174,7 +174,7 @@ class MCPToolSearch(_MCPTool):
             "limit": self._positive_int(
                 arguments,
                 "limit",
-                DEFAULT_SEARCH_LIMIT,
+                min(DEFAULT_SEARCH_LIMIT, self.max_page_size),
                 self.max_page_size,
             ),
         }

@@ -11,10 +11,10 @@ class ToolExecutionSettings(pydantic.BaseModel):
 
     default_timeout_seconds: StrictFloat = pydantic.Field(default=120.0, ge=1)
     max_timeout_seconds: StrictFloat = pydantic.Field(default=600.0, ge=1)
-    default_output_tokens: StrictInt = pydantic.Field(default=4000, ge=1)
+    default_output_tokens: StrictInt = pydantic.Field(default=25000, ge=1)
     min_output_tokens: StrictInt = pydantic.Field(default=512, ge=1)
-    max_output_tokens: StrictInt = pydantic.Field(default=16000, ge=1)
-    batch_output_tokens: StrictInt = pydantic.Field(default=16000, ge=1)
+    max_output_tokens: StrictInt = pydantic.Field(default=25000, ge=1, le=25000)
+    batch_output_tokens: StrictInt = pydantic.Field(default=100000, ge=1, le=100000)
     max_calls_per_batch: StrictInt = pydantic.Field(default=8, ge=1)
     preview_target_ratio: StrictFloat = pydantic.Field(default=0.9, gt=0, le=1)
     head_ratio: StrictFloat = pydantic.Field(default=0.5, gt=0, lt=1)
