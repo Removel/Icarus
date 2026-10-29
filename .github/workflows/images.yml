@@ -6,10 +6,6 @@ on:
         type: string
         default: '["webui","mem0","openkb","rela-mem"]'
   workflow_dispatch:
-  push:
-    paths: ['apps/webui/**', 'apps/mem0/**', 'apps/openkb/**', 'apps/rela-mem/**', '.gitattributes', '.gitignore', '.github/workflows/images.yml']
-  pull_request:
-    paths: ['apps/webui/**', 'apps/mem0/**', 'apps/openkb/**', 'apps/rela-mem/**', '.gitattributes', '.gitignore', '.github/workflows/images.yml']
 permissions:
   contents: read
 concurrency:

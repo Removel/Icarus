@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import yaml
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,13 +13,24 @@ def workflow(name):
     return yaml.safe_load((ROOT / ".github/workflows" / name).read_text(encoding="utf-8"))
 
 
-def test_services_cover_rela_mem_and_root_configuration_inputs():
+def test_services_cover_rela_mem_through_the_unified_entrypoint():
     doc = workflow("apps.yml")
     events = doc.get("on", doc.get(True))
-    for event in ("push", "pull_request"):
-        paths = events[event]["paths"]
-        assert {"icarus.toml", "bin/**", "infra/**", "apps/rela-mem/**"} <= set(paths)
+    assert "rela-mem" in events["workflow_call"]["inputs"]["apps"]["default"]
+    assert workflow("ci.yml")["jobs"]["services"]["uses"] == "./.github/workflows/apps.yml"
     assert "rela-mem" in str(doc["jobs"]["contracts"])
+
+
+@pytest.mark.parametrize("name", [
+    "apps.yml", "backend-contracts.yml", "images.yml", "lint.yml",
+    "webui.yml", "tui.yml", "control.yml",
+])
+def test_execution_workflows_have_no_duplicate_automatic_triggers(name):
+    doc = workflow(name)
+    events = doc.get("on", doc.get(True))
+    assert set(events) == {"workflow_call", "workflow_dispatch"}
+    callers = workflow("ci.yml")["jobs"].values()
+    assert any(job.get("uses") == f"./.github/workflows/{name}" for job in callers)
 
 
 def test_tui_has_a_real_application_test_job():

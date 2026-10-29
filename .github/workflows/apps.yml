@@ -9,10 +9,6 @@ on:
         type: boolean
         default: false
   workflow_dispatch:
-  push:
-    paths: ['apps/mem0/**', 'apps/openkb/**', 'apps/rela-mem/**', 'apps/agent/**', 'packages/**', 'scripts/**', 'bin/**', 'infra/**', 'icarus.toml', 'icarus.local.toml.example', '.env.example', 'Makefile', '.gitattributes', '.gitignore', '.github/workflows/apps.yml']
-  pull_request:
-    paths: ['apps/mem0/**', 'apps/openkb/**', 'apps/rela-mem/**', 'apps/agent/**', 'packages/**', 'scripts/**', 'bin/**', 'infra/**', 'icarus.toml', 'icarus.local.toml.example', '.env.example', 'Makefile', '.gitattributes', '.gitignore', '.github/workflows/apps.yml']
 permissions:
   contents: read
 concurrency:

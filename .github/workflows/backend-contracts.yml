@@ -2,20 +2,6 @@ name: Backend contracts
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    paths:
-      - 'apps/agent/**'
-      - 'apps/gateway/**'
-      - 'apps/webui/**'
-      - 'packages/**'
-      - '.github/workflows/backend-contracts.yml'
-  pull_request:
-    paths:
-      - 'apps/agent/**'
-      - 'apps/gateway/**'
-      - 'apps/webui/**'
-      - 'packages/**'
-      - '.github/workflows/backend-contracts.yml'
 permissions:
   contents: read
 concurrency:

@@ -2,10 +2,6 @@ name: WebUI
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    paths: ['apps/webui/**', '.github/workflows/webui.yml']
-  pull_request:
-    paths: ['apps/webui/**', '.github/workflows/webui.yml']
 permissions:
   contents: read
 concurrency:

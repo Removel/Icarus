@@ -2,10 +2,6 @@ name: Repository syntax
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    paths: ['apps/**', 'packages/**', 'scripts/**', 'bin/**', 'infra/**', 'icarus.toml', 'icarus.local.toml.example', '.env.example', 'Makefile', '.gitattributes', '.gitignore', '.editorconfig', '.github/workflows/**']
-  pull_request:
-    paths: ['apps/**', 'packages/**', 'scripts/**', 'bin/**', 'infra/**', 'icarus.toml', 'icarus.local.toml.example', '.env.example', 'Makefile', '.gitattributes', '.gitignore', '.editorconfig', '.github/workflows/**']
 permissions:
   contents: read
 concurrency:

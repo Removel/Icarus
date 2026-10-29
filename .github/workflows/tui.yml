@@ -2,10 +2,6 @@ name: TUI
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    paths: ['apps/tui/**', 'apps/gateway/**', 'packages/**', 'scripts/**', '.github/workflows/tui.yml']
-  pull_request:
-    paths: ['apps/tui/**', 'apps/gateway/**', 'packages/**', 'scripts/**', '.github/workflows/tui.yml']
 permissions:
   contents: read
 concurrency:
