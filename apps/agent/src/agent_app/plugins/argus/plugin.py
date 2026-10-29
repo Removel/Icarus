@@ -270,10 +270,12 @@ class ArgusPlugin(BasePlugin):
         if (source != self.agent_source or event.task_id != self.task_context.metadata.get('task_id')
                 or self._task_finished):
             return
-        key = (event.task_id, event.tool_call.id)
+        # Tools reached through tool_execute report the dispatcher; use the real target.
+        tool_call = event.target_tool_call
+        key = (event.task_id, tool_call.id)
         if self.protocol_version == 2:
             pending = self.delivery.pending.get(key)
-            if pending is not None and event.tool_call.name != 'argus_' + pending[0]:
+            if pending is not None and tool_call.name != 'argus_' + pending[0]:
                 return
             await self.actions.completed(event)
             try:
@@ -292,7 +294,7 @@ class ArgusPlugin(BasePlugin):
         for item in items:
             self.exposed.add(item['observation_id'])
             self.roles[item['observation_id']] = item['role']
-        if event.tool_call.name == 'argus_wait':
+        if tool_call.name == 'argus_wait':
             self.last_cursor = pending['next_cursor']
             if self.append_record:
                 await self.append_record(task_id=event.task_id, update_type='argus_wait_cursor',

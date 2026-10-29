@@ -201,3 +201,21 @@ def test_tool_execute_observable链路只看到目标工具身份():
         if event.name == "tool.execute" and "tool_call" in event.data
     ]
     assert observed == ["echo", "echo"]
+
+
+def test_tool_execute结果携带被分发目标身份且不改动原有metadata():
+    tool, executor = make_tools()
+
+    result = tool.invoke(
+        {"name": "echo", "arguments": {"value": "hello"}},
+        loaded_tools=["echo"],
+        tool_executor=executor,
+        tool_call_id="outer",
+    )
+
+    assert result.metadata["target"] == "echo"
+    assert result.metadata["dispatched_tool"] == {
+        "id": "outer",
+        "name": "echo",
+        "arguments": {"value": "hello"},
+    }

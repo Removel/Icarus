@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from icarus.core.models.messages import Message, ToolCall, ToolDefinition
 from icarus.core.tools.base_tool import BaseTool
+from icarus.core.tools.execution_policy import CONTROL_KEY
 from icarus.core.tools.tool_registry import ToolRegistry
 from icarus.core.tools.types import ToolExecutionResult
 
@@ -91,12 +92,15 @@ class ToolExecuteTool(BaseTool):
         if executor is None:
             return self._failure(RuntimeError("Tool Registry is not bound"))
         try:
-            return executor.execute(
+            return _dispatched(
                 tool_call,
-                task_id=task_id,
-                run_id=run_id,
-                step=step,
-                task_messages=task_messages,
+                executor.execute(
+                    tool_call,
+                    task_id=task_id,
+                    run_id=run_id,
+                    step=step,
+                    task_messages=task_messages,
+                ),
             )
         except Exception as error:
             return self._failure(error)
@@ -135,12 +139,15 @@ class ToolExecuteTool(BaseTool):
         if executor is None:
             return self._failure(RuntimeError("Tool Registry is not bound"))
         try:
-            return await executor.aexecute(
+            return _dispatched(
                 tool_call,
-                task_id=task_id,
-                run_id=run_id,
-                step=step,
-                task_messages=task_messages,
+                await executor.aexecute(
+                    tool_call,
+                    task_id=task_id,
+                    run_id=run_id,
+                    step=step,
+                    task_messages=task_messages,
+                ),
             )
         except Exception as error:
             return self._failure(error)
@@ -199,6 +206,34 @@ class ToolExecuteTool(BaseTool):
     @staticmethod
     def _failure(error: Exception) -> ToolExecutionResult:
         return ToolExecutionResult(False, error=f"{type(error).__name__}: {error}")
+
+
+DISPATCHED_TOOL_METADATA = "dispatched_tool"
+
+
+def _dispatched(
+    tool_call: ToolCall, result: ToolExecutionResult
+) -> ToolExecutionResult:
+    """Carry the unwrapped target identity so observers see the real Tool."""
+    arguments = {
+        key: value
+        for key, value in deepcopy(tool_call.arguments).items()
+        if key != CONTROL_KEY
+    }
+    return ToolExecutionResult(
+        result.success,
+        result.output,
+        result.error,
+        result.images,
+        {
+            **result.metadata,
+            DISPATCHED_TOOL_METADATA: {
+                "id": tool_call.id,
+                "name": tool_call.name,
+                "arguments": arguments,
+            },
+        },
+    )
 
 
 def _validation_errors(

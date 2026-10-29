@@ -40,22 +40,25 @@ class ActionFacts:
                 self.seen.add((row.task_id, row.payload.get('tool_call_id')))
 
     async def completed(self, event):
-        key = (event.task_id, event.tool_call.id)
+        # Use the unwrapped target: an MCP call routed through tool_execute must
+        # still be recognisable as ``mcp_tool_execute``.
+        tool_call = event.target_tool_call
+        key = (event.task_id, tool_call.id)
         if key in self.seen or self.plugin.append_record is None:
             return
         receipt = business_receipt(event.result.output)
         # Only the existing MCP execute envelope or an explicit receipt represents
         # an external-action attempt; don't fabricate actions from arbitrary tools.
-        if event.tool_call.name != 'mcp_tool_execute' and receipt is None:
+        if tool_call.name != 'mcp_tool_execute' and receipt is None:
             return
         if not event.result.success:
             status = 'failed' if receipt is not None and not receipt['success'] else 'unconfirmed'
         else:
             status = 'unconfirmed' if receipt is None else 'confirmed' if receipt['success'] else 'failed'
-        arguments = event.tool_call.arguments
+        arguments = tool_call.arguments
         await self.plugin._append(task_id=event.task_id, update_type='argus_action', payload={
             'session_id': self.plugin.session_id or self.plugin.context.metadata.get('session_id'),
-            'tool_call_id': event.tool_call.id, 'tool_name': event.tool_call.name,
+            'tool_call_id': tool_call.id, 'tool_name': tool_call.name,
             'tool_ref': arguments.get('tool_ref') if isinstance(arguments, dict) else None,
             'occurred_at': event.occurred_at.isoformat() if event.occurred_at else datetime.now(UTC).isoformat(),
             'target': receipt['target'] if receipt else None,

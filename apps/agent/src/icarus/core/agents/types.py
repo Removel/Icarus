@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from icarus.core.events import Event
+from icarus.core.tools.tool_execute import DISPATCHED_TOOL_METADATA
 from icarus.core.tools.types import ToolExecutionResult
 from icarus.core.models.messages import (
     FinishReason,
@@ -81,6 +82,18 @@ class AgentToolCompletedEvent(Event):
     step: int
     tool_call: ToolCall
     result: ToolExecutionResult
+
+    @property
+    def target_tool_call(self) -> ToolCall:
+        """The Tool that actually ran; unwraps ``tool_execute`` dispatch."""
+        dispatched = self.result.metadata.get(DISPATCHED_TOOL_METADATA)
+        if not isinstance(dispatched, dict):
+            return self.tool_call
+        name, call_id = dispatched.get("name"), dispatched.get("id")
+        arguments = dispatched.get("arguments")
+        if not isinstance(name, str) or not isinstance(call_id, str) or not isinstance(arguments, dict):
+            return self.tool_call
+        return ToolCall(call_id, name, arguments)
 
 
 @dataclass(frozen=True, kw_only=True)

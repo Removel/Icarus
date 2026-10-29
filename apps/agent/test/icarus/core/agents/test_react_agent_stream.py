@@ -714,3 +714,31 @@ def test_stream_非法工具参数超过重试上限后失败且不增加step():
 
     assert len(llm.calls) == 3
     assert channel.current_step == 1
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+def test_stream分发执行的事件暴露真实目标工具(method):
+    agent, llm = make_surface_agent(
+        [
+            surface_stream("search-1", "tool_search", {"query": "alpha"}),
+            surface_stream(
+                "execute-1",
+                "tool_execute",
+                {"name": "echo", "arguments": {"value": "hello"}},
+            ),
+            final_stream(),
+        ]
+    )
+
+    completed = [
+        event
+        for event in run_surface_agent(agent, method)
+        if isinstance(event, AgentToolCompletedEvent)
+    ]
+
+    # The dispatcher stays the visible call, while observers read the real target.
+    assert completed[1].tool_call.name == "tool_execute"
+    assert completed[1].target_tool_call.name == "echo"
+    assert completed[1].target_tool_call.id == "execute-1"
+    assert completed[1].target_tool_call.arguments == {"value": "hello"}
+    assert completed[0].target_tool_call is completed[0].tool_call

@@ -128,3 +128,45 @@ def test_duplicate_report_items_are_rejected_before_outbox_write():
         assert not result.success and result.error == 'invalid_report'
         assert records == []
     asyncio.run(run())
+
+
+def test_wait_cursor_is_recorded_when_reached_through_tool_execute():
+    async def run():
+        from agent_app.plugins.argus.plugin import ArgusPlugin
+
+        calls, records = [], []
+        item = {'observation_id': ITEM, 'role': 'work', 'origin': 'initial', 'excerpt': 'question'}
+        next_item = {'observation_id': NEW, 'role': 'work', 'origin': 'incidental', 'excerpt': 'reply'}
+        context = SessionContext(kind='argus_background', scope={'source': 'qq'}, metadata={
+            'wake_id': 'wake', 'task_id': TASK,
+            'binding': {'binding_id': 'binding', 'initial_items': [item], 'initial_cursor': 'initial'},
+        })
+
+        class Client:
+            async def call(self, wake, operation, payload):
+                calls.append(operation)
+                if operation == 'wait':
+                    return {'items': [next_item], 'next_cursor': 'next', 'has_more': False, 'truncated': False}
+                return {'delivered_ids': [ITEM]}
+            async def aclose(self): pass
+
+        async def append(**kwargs):
+            records.append(kwargs)
+            return len(records)
+
+        plugin = ArgusPlugin('argus', context=context, client=Client(), append_record=append)
+        plugin.bind_publisher(lambda event: asyncio.sleep(0))
+        await plugin.on_input('user-input', UserInputEvent(task_id=TASK, prompt='work'))
+        result = await plugin.execute('wait', {}, task_id=TASK, tool_call_id='call')
+        result.metadata['dispatched_tool'] = {
+            'id': 'call', 'name': 'argus_wait', 'arguments': {},
+        }
+        # The model saw tool_execute; the plugin must still see the real argus_wait.
+        await plugin.on_tool_completed('agent', AgentToolCompletedEvent(
+            task_id=TASK, step=1, tool_call=ToolCall('call', 'tool_execute', {}), result=result,
+        ))
+        assert NEW in plugin.exposed
+        assert records[-1]['update_type'] == 'argus_wait_cursor'
+        assert records[-1]['payload']['last_returned_cursor'] == 'next'
+
+    asyncio.run(run())

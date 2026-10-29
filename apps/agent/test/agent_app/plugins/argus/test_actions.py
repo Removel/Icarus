@@ -51,3 +51,28 @@ def test_explicit_business_receipt_success_and_failure_are_validated_and_restore
         assert [value['business_status'] for value in actions] == ['failed', 'confirmed']
         assert all(value['receipt']['kind'] == 'business_action_receipt' for value in actions)
     asyncio.run(run())
+
+
+def test_mcp_action_reached_through_tool_execute_keeps_its_target_identity():
+    async def run():
+        harness = Harness()
+        plugin = harness.plugin()
+        plugin.session_id = 'semantic'
+        await plugin.on_input(plugin.input_source, UserInputEvent(task_id='task', prompt='work'))
+        arguments = {'tool_ref': 'snowluma/invoke_action',
+                     'arguments': {'action': 'send_group_msg', 'params': {'group_id': '9', 'message': 'hi'}}}
+        result = ToolExecutionResult(True, output={'structured_content': {'status': 'ok', 'retcode': 0}})
+        result.metadata['dispatched_tool'] = {
+            'id': 'send', 'name': 'mcp_tool_execute', 'arguments': arguments,
+        }
+        # The model only ever saw tool_execute; the action fact must still be recorded.
+        await plugin.on_tool_completed(plugin.agent_source, AgentToolCompletedEvent(
+            task_id='task', step=1,
+            tool_call=ToolCall('send', 'tool_execute', {'name': 'mcp_tool_execute', 'arguments': arguments}),
+            result=result,
+        ))
+        actions = [row.payload for row in harness.rows if row.update_type == 'argus_action']
+        assert len(actions) == 1
+        assert actions[0]['tool_name'] == 'mcp_tool_execute'
+        assert actions[0]['tool_ref'] == 'snowluma/invoke_action'
+    asyncio.run(run())
