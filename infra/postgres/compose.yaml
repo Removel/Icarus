@@ -1,14 +1,18 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    image: ${ICARUS_POSTGRES_IMAGE:-pgvector/pgvector:pg17}
     environment:
       POSTGRES_USER: ${ICARUS_POSTGRES_USER:?Set ICARUS_POSTGRES_USER}
       POSTGRES_DB: ${ICARUS_POSTGRES_DATABASE:?Set ICARUS_POSTGRES_DATABASE}
-      POSTGRES_PASSWORD: ${RELA_MEM_PG_PASSWORD:?Set RELA_MEM_PG_PASSWORD}
+      POSTGRES_PASSWORD: ${ICARUS_POSTGRES_PASSWORD:?Set ICARUS_POSTGRES_PASSWORD}
+      RELA_MEM_PG_PASSWORD: ${RELA_MEM_PG_PASSWORD:?Set RELA_MEM_PG_PASSWORD}
+      ICARUS_MEM0_POSTGRES_PASSWORD: ${ICARUS_MEM0_POSTGRES_PASSWORD:?Set ICARUS_MEM0_POSTGRES_PASSWORD}
+      ARGUS_POSTGRES_PASSWORD: ${ARGUS_POSTGRES_PASSWORD:?Set ARGUS_POSTGRES_PASSWORD}
     ports:
       - "${ICARUS_POSTGRES_BIND_HOST:-127.0.0.1}:${ICARUS_POSTGRES_PORT:?Set ICARUS_POSTGRES_PORT}:5432"
     volumes:
-      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/rela-mem/postgres:/var/lib/postgresql/data
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/postgres:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s

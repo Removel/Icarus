@@ -64,6 +64,8 @@ class ComposeRuntime:
         # Wrappers own argv (including their -f); scope is passed without moving the action.
         environment["COMPOSE_PROJECT_NAME"] = project
         environment["COMPOSE_FILE"] = str(path)
+        if component.shared_network:
+            environment["ICARUS_NETWORK"] = component.network
         return environment
 
     def ensure_network(self, name: str = "icarus") -> None:

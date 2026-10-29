@@ -1,10 +1,14 @@
 # PostgreSQL
 
-Managed independently by `icarus start postgres`; configuration and safe stop
-semantics are described in [shared middleware](../README.md). The registry
-exports the loopback bind port, bootstrap user/database and password reference.
-The preserved relationship-memory PostgreSQL data path is not migrated or reset.
-`icarus install postgres` pulls the configured image without production credentials.
-Bootstrap user/database/password apply only to an empty data directory: changing environment
-values does not migrate a database, create roles in an existing instance or rotate passwords.
-The provider declares bootstrap in `components.postgres.env`, independently of consumer edges.
+`icarus start postgres` manages the shared `pgvector/pgvector:pg17` service. The
+loopback port is declared in TOML (default `15432`), with neutral persistent path
+`$ICARUS_DATA_DIR/services/postgres`.
+
+`init/db-init.sh` initializes an empty cluster with independent application accounts
+and databases for Mem0, rela-mem and Argus. It installs vector before unprivileged
+application use. Administrator credentials are separate from application credentials.
+See [shared middleware](../README.md) for the database/credential table.
+
+Initialization happens once. Changing TOML or dotenv does not migrate existing data,
+create additional roles in an already initialized cluster or rotate its passwords.
+`icarus install postgres` pulls the image without starting or resetting the service.
