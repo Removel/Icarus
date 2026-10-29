@@ -19,6 +19,7 @@ from icarus.core.tools.execution_policy import (
     ToolExecutionPolicy,
 )
 from icarus.core.tools.result_budget import (
+    FAILED_RESULT_PREVIEW_TOKENS,
     TokenCounter,
     conservative_token_count,
     render_tool_result,
@@ -28,6 +29,7 @@ from icarus.core.tools.result_budget import (
 from icarus.core.tools.result_store import ToolResultStore
 from icarus.core.tools.tool_registry import ToolRegistry
 from icarus.core.tools.tool_execute import ToolExecuteTool
+from icarus.core.tools.tool_search import ToolSearchTool
 from icarus.core.tools.types import ToolExecutionResult
 from icarus.core.models.messages import Message, ToolCall, ToolDefinition
 
@@ -296,7 +298,9 @@ class ToolExecutor(BaseToolExecutor):
             result = results_by_id[call.id]
             budget = allocations[call.id]
             stored = None
-            if sizes[call.id] > budget:
+            if sizes[call.id] > budget or (
+                not result.success and sizes[call.id] > FAILED_RESULT_PREVIEW_TOKENS
+            ):
                 stored_result = ToolExecutionResult(
                     result.success,
                     result.output,
@@ -345,6 +349,14 @@ class ToolExecutor(BaseToolExecutor):
             if self.token_counter(serialize_tool_result(rendered)) > budget:
                 raise ToolContextBudgetExceededError(
                     f"Tool Result cannot fit budget: call_id={call.id}"
+                )
+            tool = self.registry.get(call.name)
+            if isinstance(tool, ToolSearchTool):
+                rendered = tool.finalize_loaded_tools(rendered)
+            elif "tools_loaded" in rendered.metadata:
+                rendered = ToolExecutionResult(
+                    rendered.success, rendered.output, rendered.error, rendered.images,
+                    {key: value for key, value in rendered.metadata.items() if key != "tools_loaded"},
                 )
             finalized[call.id] = rendered
         if sum(

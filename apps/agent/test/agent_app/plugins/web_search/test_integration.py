@@ -108,8 +108,9 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
                 loaded = next(m for m in llm.calls[1][0] if m.role == "tool")
                 loaded_result = json.loads(loaded.content[0].text)
                 assert loaded_result["success"]
-                assert "web_search" in loaded_result["output"]
-                assert "web_fetch" in loaded_result["output"]
+                assert {item["name"] for item in loaded_result["output"]["tools"]} == {
+                    "web_search", "web_fetch",
+                }
             assert llm.calls[0][0][0].content[0].text == system
             user = llm.calls[0][0][-1].content[0].text
             assert "2026-10-26 20:00:00+08:00" in user

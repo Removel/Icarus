@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 from icarus.core.models.messages import Message, ToolDefinition
@@ -23,7 +24,9 @@ class ToolSearchTool(BaseTool):
         description = (
             "Search for a tool scope by exact plugin_id. Returns complete tool "
             "definitions; call returned tools with tool_execute(name, arguments). "
-            "Use an empty query to list scopes. Available scopes:"
+            "Use optional name for an exact tool in that scope. Only complete returned "
+            "definitions are loaded. If truncated, search one name or request more budget; "
+            "reading a saved result does not load tools. Use an empty query to list scopes. Available scopes:"
         )
         directory = self._catalog.directory()
         if directory:
@@ -36,6 +39,8 @@ class ToolSearchTool(BaseTool):
             {
                 "type": "object",
                 "properties": {
+                    "name": {"type": "string", "minLength": 1,
+                             "description": "Optional exact tool name within this scope."},
                     "query": {
                         "type": "string",
                         "description": "Exact plugin_id scope, or empty to list scopes.",
@@ -58,37 +63,45 @@ class ToolSearchTool(BaseTool):
         del task_id, run_id, step, task_messages
         try:
             query = self._query(arguments)
+            name = arguments.get("name")
+            if name is not None and (not isinstance(name, str) or not name.strip()):
+                raise ValueError("name must be a non-empty string")
         except Exception as error:
             return ToolExecutionResult(
                 False, error=f"{type(error).__name__}: {error}"
             )
         definitions = self._catalog.search(query) if query else ()
+        if name is not None:
+            definitions = tuple(item for item in definitions if item.name == name.strip())
         if not definitions:
             return ToolExecutionResult(True, self._directory_output())
-        output = [
-            f"Loaded tools from scope '{query}'. "
-            "Call them with tool_execute(name, arguments)."
-        ]
-        for definition in definitions:
-            output.extend(
-                [
-                    "",
-                    definition.name,
-                    definition.description,
-                    json.dumps(
-                        definition.input_schema,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                ]
-            )
-        return ToolExecutionResult(
-            True,
-            "\n".join(output),
-            metadata={
-                "tools_loaded": [definition.name for definition in definitions]
-            },
-        )
+        return ToolExecutionResult(True, {
+            "scope": query,
+            "tools": [{"name": item.name, "description": item.description,
+                       "input_schema": item.input_schema} for item in definitions],
+            "usage": "Call complete definitions with tool_execute(name, arguments). "
+                     "If truncated, search an exact name or request more budget; saved files do not load tools.",
+        }, metadata={"tools_loaded": [item.name for item in definitions]})
+
+    def finalize_loaded_tools(self, result: ToolExecutionResult) -> ToolExecutionResult:
+        loaded: list[str] = []
+        output = result.output
+        candidates = result.metadata.get("tools_loaded", [])
+        if (result.success and isinstance(output, dict)
+                and isinstance(output.get("scope"), str)
+                and isinstance(output.get("tools"), list) and isinstance(candidates, list)):
+            definitions = {item.name: {
+                "name": item.name, "description": item.description,
+                "input_schema": item.input_schema,
+            } for item in self._catalog.search(output["scope"])}
+            for name in candidates:
+                if not isinstance(name, str) or name in loaded or name not in definitions:
+                    continue
+                expected = json.dumps(definitions[name], ensure_ascii=False, sort_keys=True)
+                if any(isinstance(item, dict) and json.dumps(item, ensure_ascii=False, sort_keys=True) == expected
+                       for item in output["tools"]):
+                    loaded.append(name)
+        return replace(result, metadata={**result.metadata, "tools_loaded": loaded})
 
     async def ainvoke(
         self,
@@ -119,7 +132,7 @@ class ToolSearchTool(BaseTool):
     def _query(arguments: dict[str, Any]) -> str:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
-        unknown = set(arguments) - {"query"}
+        unknown = set(arguments) - {"query", "name"}
         if unknown:
             raise ValueError("unknown arguments: " + ", ".join(sorted(unknown)))
         query = arguments.get("query", "")

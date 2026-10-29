@@ -140,6 +140,31 @@ def run_surface_agent(agent, method):
 
 
 @pytest.mark.parametrize("method", ["invoke", "ainvoke"])
+def test_react_agent裁剪搜索不授权而精确恢复后可执行(method):
+    registry = ToolRegistry()
+    class LargeTool(EchoTool):
+        @property
+        def definition(self):
+            return ToolDefinition("large", "x" * 5000, {"type": "object"})
+    registry.register_many([EchoTool(), LargeTool()])
+    registry.register(ToolSearchTool(ToolSurfaceCatalog.build([("echo", "alpha"), ("large", "alpha")], registry)))
+    registry.register(ToolExecuteTool(registry))
+    llm = QueueLLM([
+        surface_response("s", "tool_search", {"query": "alpha", "_execution": {"max_output_tokens": 512}}),
+        surface_response("e", "tool_execute", {"name": "large", "arguments": {"value": "x"}}),
+        surface_response("r", "tool_search", {"query": "alpha", "name": "echo"}),
+        surface_response("ok", "tool_execute", {"name": "echo", "arguments": {"value": "hello"}}),
+        final_response(),
+    ])
+    run_surface_agent(ReActAgent("thinking", llm, ToolExecutor(registry)), method)
+    results = [json.loads(message.content[0].text) for message in llm.calls[-1][0] if message.role == "tool"]
+    assert results[1]["success"] is False
+    assert "not loaded" in results[1]["error"]
+    assert results[3]["output"] == {"echo": "hello"}
+    assert all(definitions == llm.calls[0][1] for _, definitions in llm.calls)
+
+
+@pytest.mark.parametrize("method", ["invoke", "ainvoke"])
 def test_react_agent搜索后分发执行且定义数组冻结(method):
     agent, llm, _ = make_surface_agent(
         [
@@ -222,11 +247,9 @@ def test_react_agent加载名单不跨run继承():
 def test_react_agent加载名与可执行全集求交并保序去重():
     class SearchTool(ToolSearchTool):
         def invoke(self, arguments):
-            return ToolExecutionResult(
-                True,
-                "loaded",
-                metadata={"tools_loaded": ["echo", "missing", "echo"]},
-            )
+            result = super().invoke(arguments)
+            return ToolExecutionResult(True, result.output,
+                metadata={"tools_loaded": ["echo", "missing", "echo"]})
 
     class RecordingExecuteTool(ToolExecuteTool):
         def __init__(self):
@@ -239,7 +262,7 @@ def test_react_agent加载名与可执行全集求交并保序去重():
 
     registry = ToolRegistry()
     registry.register(EchoTool())
-    registry.register(SearchTool())
+    registry.register(SearchTool(ToolSurfaceCatalog.build([("echo", "alpha")], registry)))
     dispatch = RecordingExecuteTool()
     dispatch.bind_registry(registry)
     registry.register(dispatch)

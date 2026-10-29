@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from icarus.core.tools.result_budget import (
     conservative_token_count,
     preview_json_value,
@@ -8,6 +10,75 @@ from icarus.core.tools.result_budget import (
 )
 from icarus.core.tools.result_store import StoredToolResult
 from icarus.core.tools.types import ToolExecutionResult
+
+
+@pytest.mark.parametrize("budget", [512, 25000])
+@pytest.mark.parametrize("cursor_first", [False, True])
+@pytest.mark.parametrize("cursor", ["exact-cursor", "cursor-" * 300])
+def test_failed_preview游标完整或整体省略(tmp_path, budget, cursor_first, cursor):
+    fields = [("next_cursor", cursor), ("content", "body" * 1000)]
+    if not cursor_first:
+        fields.reverse()
+    original = ToolExecutionResult(False, dict(fields), error="partial operation failed")
+    stored = StoredToolResult(tmp_path / "full.txt", 10000, 10000, True)
+    result = render_tool_result(original, max_tokens=budget, preview_tokens=int(budget * .9), stored=stored)
+    if cursor == "exact-cursor":
+        assert result.output["next_cursor"] == cursor
+    else:
+        assert "next_cursor" not in result.output
+    assert conservative_token_count(serialize_tool_result(result)) <= min(budget, 1000)
+    assert "partial operation failed" in result.error
+
+
+def test_failed_preview保留最终诊断退出码及metadata(tmp_path):
+    diagnostic = "trace line\n" * 200 + "final diagnostic"
+    original = ToolExecutionResult(False, {
+        **{f"optional{i}": "z" * 300 for i in range(20)},
+        "stdout": "useful stdout", "exit_code": 9, "stderr": diagnostic,
+    }, error=diagnostic, metadata={"dispatched_tool": {"name": "target"}})
+    stored = StoredToolResult(tmp_path / "full.txt", 10000, 10000, True)
+    result = render_tool_result(original, max_tokens=25000, preview_tokens=22500, stored=stored)
+    assert conservative_token_count(serialize_tool_result(result)) <= 1000
+    assert "final diagnostic" in result.error
+    assert result.output["exit_code"] == 9
+    assert "useful stdout" in result.output["stdout"]
+    assert "stderr" not in result.output
+    assert result.metadata["dispatched_tool"] == {"name": "target"}
+
+
+def test_failed_preview图片信封超过短目标回实际预算(tmp_path):
+    from icarus.core.models.messages import ImagePart
+    image = ImagePart(source="https://example.test/" + "x" * 1500, source_type="url", media_type="image/png")
+    original = ToolExecutionResult(False, "x" * 3000, error="reason", images=(image,))
+    stored = StoredToolResult(tmp_path / "full.txt", 10000, 10000, True)
+    result = render_tool_result(original, max_tokens=5000, preview_tokens=4500, stored=stored)
+    assert result.images == (image,)
+    assert conservative_token_count(serialize_tool_result(result)) <= 5000
+    assert result.metadata["result_file_complete"] is True
+
+
+def test_preview分页恢复标量先于正文保留():
+    original = ToolExecutionResult(True, {
+        "content": "body" * 4000, "offset": 1, "limit": 20,
+        "has_more": True, "next_offset": 21, "text_offset": 0,
+        "max_chars": 2000, "truncated": True, "next_text_offset": 2000,
+        "next_cursor": "exact-cursor", "page": 1, "next_page": 2,
+    })
+    result = render_tool_result(original, max_tokens=600, preview_tokens=540)
+    for key in ("offset", "limit", "has_more", "next_offset", "text_offset",
+                "max_chars", "truncated", "next_text_offset", "next_cursor", "page", "next_page"):
+        assert result.output[key] == original.output[key]
+    assert result.metadata["result_truncated"] is True
+    assert conservative_token_count(serialize_tool_result(result)) <= 600
+
+
+def test_preview超长游标不返回半截或建议重放():
+    result = render_tool_result(ToolExecutionResult(True, {
+        "content": "x" * 2000, "next_cursor": "cursor" * 2000,
+    }), max_tokens=512, preview_tokens=460)
+    assert "next_cursor" not in result.output
+    assert "retry" not in serialize_tool_result(result).lower()
+    assert result.metadata["result_truncated"] is True
 
 
 def test_result_budget未超限保持原结果():
@@ -63,6 +134,7 @@ def test_result_budget占位字段自动避让(tmp_path):
     )
     encoded = serialize_tool_result(rendered)
     assert "_icarus_omitted_2" in encoded
+    assert '"truncated": true' in encoded
     assert conservative_token_count(encoded) <= 500
 
 
@@ -95,6 +167,7 @@ def test_result_budget非json对象按实际字符串序列化后降级():
 
     assert isinstance(rendered.output, str)
     assert "content omitted" in rendered.output
+    assert "truncated" in rendered.output
     assert conservative_token_count(serialize_tool_result(rendered)) <= 300
 
 

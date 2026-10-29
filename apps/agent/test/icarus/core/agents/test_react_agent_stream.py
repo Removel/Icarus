@@ -37,6 +37,37 @@ from icarus.core.models.messages import (
 )
 
 
+@pytest.mark.parametrize("metadata", [None, [], "invalid"])
+@pytest.mark.parametrize("name", ["tool_execute", "ordinary"])
+def test_completed外层metadata非法时回退原调用(metadata, name):
+    call = ToolCall("outer", name, {})
+    result = ToolExecutionResult(True, metadata=metadata)
+    event = AgentToolCompletedEvent(step=1, tool_call=call, result=result)
+
+    assert event.target_tool_call is call
+    assert result.metadata is metadata
+
+
+def test_completed目标属性安全回退且深拷贝():
+    call = ToolCall("outer", "tool_execute", {})
+    target = {"id": "outer", "name": "target", "arguments": {"nested": [1]}}
+    event = AgentToolCompletedEvent(step=1, tool_call=call,
+        result=ToolExecutionResult(True, metadata={"dispatched_tool": target}))
+    assert event.target_tool_call.name == "target"
+    assert event.tool_call is call
+    event.target_tool_call.arguments["nested"].append(2)
+    assert target["arguments"] == {"nested": [1]}
+    for malformed in (None, {}, {**target, "id": "other"}, {**target, "name": " "},
+                      {**target, "arguments": []}, {**target, "id": 1}):
+        invalid = AgentToolCompletedEvent(step=1, tool_call=call,
+            result=ToolExecutionResult(True, metadata={"dispatched_tool": malformed}))
+        assert invalid.target_tool_call is call
+    ordinary = ToolCall("outer", "ordinary", {})
+    invalid = AgentToolCompletedEvent(step=1, tool_call=ordinary,
+        result=ToolExecutionResult(True, metadata={"dispatched_tool": target}))
+    assert invalid.target_tool_call is ordinary
+
+
 class StreamQueueLLM(BaseLLM):
     def __init__(self, streams):
         self.streams = list(streams)
@@ -152,6 +183,33 @@ def run_surface_agent(agent, method):
         return [event async for event in agent.astream(**arguments)]
 
     return asyncio.run(collect())
+
+
+@pytest.mark.parametrize("method", ["stream", "astream"])
+def test_stream裁剪搜索不授权而精确恢复后可执行(method):
+    registry = ToolRegistry()
+    class LargeTool(EchoTool):
+        @property
+        def definition(self):
+            return ToolDefinition("large", "x" * 5000, {"type": "object"})
+    registry.register_many([EchoTool(), LargeTool()])
+    registry.register(ToolSearchTool(ToolSurfaceCatalog.build([("echo", "alpha"), ("large", "alpha")], registry)))
+    registry.register(ToolExecuteTool(registry))
+    llm = StreamQueueLLM([
+        surface_stream("s", "tool_search", {"query": "alpha", "_execution": {"max_output_tokens": 512}}),
+        surface_stream("e", "tool_execute", {"name": "large", "arguments": {"value": "x"}}),
+        surface_stream("r", "tool_search", {"query": "alpha", "name": "echo"}),
+        surface_stream("ok", "tool_execute", {"name": "echo", "arguments": {"value": "hello"}}),
+        final_stream(),
+    ])
+    events = run_surface_agent(ReActAgent("thinking", llm, ToolExecutor(registry)), method)
+    completed = [event for event in events if isinstance(event, AgentToolCompletedEvent)]
+    assert completed[1].result.success is False
+    assert "not loaded" in completed[1].result.error
+    assert completed[3].result.output == {"echo": "hello"}
+    assert completed[3].target_tool_call.name == "echo"
+    assert completed[3].tool_call.name == "tool_execute"
+    assert all(definitions == llm.calls[0][1] for _, definitions in llm.calls)
 
 
 @pytest.mark.parametrize("method", ["stream", "astream"])

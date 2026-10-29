@@ -1,6 +1,7 @@
 import asyncio
+from dataclasses import replace
 
-from icarus.core.hooks import HookDispatcher, HookRegistry
+from icarus.core.hooks import BaseHook, HookDispatcher, HookRegistry
 from icarus.core.hooks.wrappers import ObservableToolExecutor
 from icarus.core.models.messages import ToolCall, ToolDefinition
 from icarus.core.tools import BaseTool, ToolExecutionResult, ToolExecutor, ToolRegistry
@@ -51,6 +52,58 @@ def make_tools():
     tool = ToolExecuteTool(registry)
     executor = RecordingExecutor(registry)
     return tool, executor
+
+
+def test_tool_execute分发记录保留身份且隔离参数():
+    tool, executor = make_tools()
+    for asynchronous in (False, True):
+        kwargs = dict(loaded_tools=["echo"], tool_executor=executor,
+                      tool_call_id="dispatch-1", execution_control={"max_output_tokens": 512})
+        args = {"name": "echo", "arguments": {"value": "hello"}}
+        result = (asyncio.run(tool.ainvoke(args, **kwargs)) if asynchronous
+                  else tool.invoke(args, **kwargs))
+        assert result.metadata["dispatched_tool"] == {
+            "id": "dispatch-1", "name": "echo", "arguments": {"value": "hello"},
+        }
+        assert result.metadata["target"] == "echo"
+        args["arguments"]["value"] = "changed"
+        assert result.metadata["dispatched_tool"]["arguments"]["value"] == "hello"
+        assert "dispatched_tool" not in str(result.as_dict())
+    denied = tool.invoke({"name": "echo", "arguments": {"value": "hello"}})
+    assert "dispatched_tool" not in denied.metadata
+
+
+def test_tool_execute目标失败仍记录分发但异常不伪造完成():
+    class FailedExecutor(RecordingExecutor):
+        def execute(self, call, **execution):
+            return ToolExecutionResult(False, error="target rejected", metadata={"original": 1})
+    tool, executor = make_tools()
+    failed = tool.invoke({"name": "echo", "arguments": {"value": "hello"}},
+                         loaded_tools=["echo"], tool_executor=FailedExecutor(executor.registry),
+                         tool_call_id="failure")
+    assert failed.success is False
+    assert failed.error == "target rejected"
+    assert failed.metadata["original"] == 1
+    assert failed.metadata["dispatched_tool"]["id"] == "failure"
+
+
+def test_tool_execute记录分发参数不是Hook后实参():
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    registry.register(ToolExecuteTool(registry))
+    class Rewrite(BaseHook):
+        def handle(self, event, value):
+            if event.phase == "before":
+                return replace(value, arguments={"value": "rewritten"})
+            return value
+    hooks = HookRegistry()
+    hooks.register("tool.execute", Rewrite(), priority=1)
+    executor = ObservableToolExecutor(ToolExecutor(registry), HookDispatcher(hooks))
+    result = executor.execute(ToolCall("outer", "tool_execute", {
+        "name": "echo", "arguments": {"value": "original"},
+    }), loaded_tools=["echo"], tool_executor=executor)
+    assert result.output == {"echo": "rewritten"}
+    assert result.metadata["dispatched_tool"]["arguments"] == {"value": "original"}
 
 
 def test_tool_execute未加载时硬门拒绝并引导搜索():
