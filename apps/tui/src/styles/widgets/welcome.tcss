@@ -15,6 +15,6 @@
     text-style: bold;
 }
 
-.welcome-workspace, .welcome-help {
+.welcome-version {
     color: $icarus-muted;
 }

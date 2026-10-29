@@ -93,8 +93,12 @@
 }
 
 InputDock { height: auto; padding: 0 2; }
-#task-status { height: 1; color: $icarus-muted; margin-bottom: 0; }
-#session-metadata { height: 1; color: $icarus-muted; text-overflow: ellipsis; }
+#composer-activity { height: 1; min-width: 0; }
+#task-status { width: auto; max-width: 50%; height: 1; color: $icarus-muted; margin-bottom: 0; text-wrap: nowrap; text-overflow: ellipsis; }
+#composer-tip { width: 1fr; min-width: 0; height: 1; padding-left: 1; color: $icarus-muted; text-align: right; text-wrap: nowrap; text-overflow: ellipsis; }
+#session-metadata { height: 1; color: $icarus-muted; text-wrap: nowrap; text-overflow: ellipsis; }
+SessionMetadataBar > .metadata--key { color: $icarus-tool; }
+SessionMetadataBar > .metadata--value { color: $icarus-user; text-style: bold; }
 InputDock #composer-shell { margin: 0; min-height: 3; border: solid $icarus-border; background: $icarus-surface; }
 InputDock #composer-shell:focus-within { border: solid $icarus-accent; }
 InputDock #composer { background: $icarus-surface; }

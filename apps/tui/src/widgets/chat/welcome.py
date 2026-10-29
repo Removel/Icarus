@@ -76,19 +76,3 @@ class WelcomeMessage(Vertical):
             markup=False,
             classes="welcome-version",
         )
-        yield Static(
-            f"Workspace  {self.workspace_path}",
-            markup=False,
-            classes="welcome-workspace",
-        )
-        yield Static(
-            (
-                "Enter submit · Shift+Enter/Ctrl+J newline · "
-                "Ctrl+V system text/image paste · terminal Paste inserts text once\n"
-                "Ctrl+C copy selection / actions · Ctrl+X cut selection (input only)\n"
-                "Ctrl+Shift+S select chat · Shift+arrows extend · Esc cancel\n"
-                "Ctrl+Shift+O open links · select message, then URL"
-            ),
-            markup=False,
-            classes="welcome-help",
-        )

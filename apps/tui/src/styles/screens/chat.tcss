@@ -5,7 +5,7 @@
 
 #conversation {
     width: 1fr;
-    padding: 1 2;
+    padding: 0 2;
     scrollbar-size-vertical: 1;
     scrollbar-color: $icarus-tool;
     scrollbar-color-hover: $icarus-user;
@@ -68,10 +68,6 @@ ChatScreen.-narrow #conversation {
 ChatScreen.-narrow #queue-panel,
 ChatScreen.-narrow #composer-shell {
     margin: 0 1;
-}
-
-ChatScreen.-narrow .welcome-help {
-    display: none;
 }
 
 ChatScreen.-compact-logo .welcome-logo,

@@ -22,7 +22,7 @@ class TaskStatusLine(Static):
             style="#75bd92" if vm.status_kind == RuntimePhase.READY else "#e0a8b6",
         )
         if not vm.show_phase:
-            text = Text("Enter submit · / commands", style="#97979e")
+            text = Text()
         if vm.status_text and vm.show_phase:
             text.append(f"  {vm.status_text}", style="#97979e")
         if vm.pending_count:
@@ -31,12 +31,21 @@ class TaskStatusLine(Static):
 
 
 class SessionMetadataBar(Static):
+    COMPONENT_CLASSES = {"metadata--key", "metadata--value"}
+
     def show_viewmodel(self, vm):
-        self.update(
-            Text(
-                f"模型 {vm.model_label}   思考 {vm.reasoning_label}   上下文 {vm.context_label}   会话 {vm.session_title}   uid {vm.session_id}   工作区 {vm.workspace_path}",
-                style="#97979e",
-                overflow="ellipsis",
-                no_wrap=True,
-            )
-        )
+        key_style = self.get_component_rich_style("metadata--key")
+        value_style = self.get_component_rich_style("metadata--value")
+        text = Text(overflow="ellipsis", no_wrap=True)
+        for key, value in (
+            ("model", vm.model_label),
+            ("context", vm.context_label),
+            ("session", vm.session_title),
+            ("uid", vm.session_id),
+            ("workspace", vm.workspace_path),
+        ):
+            if text:
+                text.append("  ")
+            text.append(f"{key} ", style=key_style)
+            text.append(value, style=value_style)
+        self.update(text)

@@ -7,6 +7,7 @@ from apps.tui.src.widgets.chat.command_menu import CommandMenu
 from apps.tui.src.widgets.chat.composer import PersistentComposer
 from apps.tui.src.widgets.chat.queue_panel import QueuePanel
 from apps.tui.src.widgets.chat.status import SessionMetadataBar, TaskStatusLine
+from apps.tui.src.widgets.chat.tips import ComposerTip
 
 
 class InputDock(Vertical):
@@ -17,7 +18,9 @@ class InputDock(Vertical):
         self._last_text = ""
 
     def compose(self):
-        yield TaskStatusLine(id="task-status")
+        with Horizontal(id="composer-activity"):
+            yield TaskStatusLine(id="task-status")
+            yield ComposerTip()
         yield QueuePanel(id="queue-panel")
         with Horizontal(id="composer-shell"):
             yield Static("❯", id="composer-prompt")
