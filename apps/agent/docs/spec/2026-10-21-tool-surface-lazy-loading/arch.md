@@ -151,16 +151,17 @@ scope_id(N): tool1, tool2, ...
 
 ### 5.3 搜索结果
 
-- 命中时，以内联文本直通工具名称、description 和完整 input schema；渲染层不改写 description。
+- 命中时返回结构化 `{scope, tools:[{name,description,input_schema}], usage}`，不注入 `_execution`；新增可选 `name` 仅精确筛选当前 scope 单项，省略仍召回整组。
 - 插件作者的 description 必须说明何时使用、注意事项和示例调用，这是模型正确走双桥流程的主要引导。
-- 命中结果的 `ToolExecutionResult.metadata["tools_loaded"]` 携带本次加载名，由 Agent 循环并入
-  `loaded_tools` 并去重。
+- 搜索 metadata 的 `tools_loaded` 起初仅为候选。ToolExecutor 在最终预算渲染后，按注册的 ToolSearchTool 实例调用 `finalize_loaded_tools`，逐项验证名称、完整说明与 Schema（含 JSON 类型）完全相同后才授权。部分完整条目可加载，残缺条目不加载。
+- 非搜索工具（包括分发目标）的同名 metadata 在 finalize 被移除，不能伪造授权。Agent 再与可执行全集求交、保序去重。
 - 未命中或空 query 时返回全部功能面目录，不写入新增加载名；模型需使用正确功能面名称重试。
 - 不做模糊匹配、拼写纠正、关键词/token 评分或模型辅助选面。
 - `tool_search.can_run_parallel=True`，sync/async 行为一致。
 
-`tools_loaded` 只供 Agent 循环消费。它随既有 finalize/metadata 链路保留，但不通过 `as_dict()` 进入
-模型消息，不产生额外消息 token；结果 Hook 的 `_preserve_result` 也不得改写该控制信息。
+`tools_loaded` 只供 Agent 循环消费。最终检查只改变 metadata，不改变输出或 token 统计，不通过 `as_dict()` 进入模型消息；结果 Hook 的 `_preserve_result` 也不得改写该控制信息。
+
+2026-10-29 补强的保证终点是最终 Tool Result/Agent 历史，不覆盖下游 LLM before Hook 改写或模型实际送达；MCP 自有 Catalog/执行协议不新增 Run 内发现授权。单项超硬预算可无法加载，读完整结果文件也不产生授权。分发结果新增内部目标访问属性，不修改外层 ToolCall/公共事件身份。详见[工具调用质量架构](../2026-10-29-tool-call-quality/arch.md)。
 
 ## 6. Run 数据流与执行门控
 
@@ -175,7 +176,7 @@ scope_id(N): tool1, tool2, ...
 模型调用 tool_search(scope)
   → ToolSurfaceCatalog 精确查组
   → 完整工具说明写入 Tool Result
-  → finalize 后扫描 metadata["tools_loaded"]
+  → finalize 最终预算渲染后仅保留完整条目的加载 metadata
   → 与可执行全集求交，保序去重并入 loaded_tools
   → 下一模型 Step 复用原 tool_definitions
 
