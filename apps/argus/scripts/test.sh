@@ -19,7 +19,7 @@ trap 'exit 143' TERM
 if [ -z "${ARGUS_TEST_DATABASE_URL:-}" ]; then
     container=$(docker run -d --rm --name "argus-test-pg-$$" \
         -e POSTGRES_PASSWORD=argus_test -e POSTGRES_USER=argus_test -e POSTGRES_DB=argus_test \
-        -p 127.0.0.1::5432 pgvector/pgvector:pg17)
+        -p 127.0.0.1::5432 "${ICARUS_POSTGRES_IMAGE:-pgvector/pgvector:pg17}")
     ready=false
     for ((i=0; i<30; i++)); do
         if docker exec "$container" pg_isready -U argus_test -d argus_test >/dev/null 2>&1; then

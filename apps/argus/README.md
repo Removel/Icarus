@@ -8,21 +8,16 @@ Argus 是常驻观测入口。第一阶段持续接收 QQ 消息，经规则和�
 
 ```bash
 ./bin/icarus install argus --dev
-export ARGUS_DEV_POSTGRES_PASSWORD='your-local-development-password'
-docker compose -f apps/argus/compose.dev.yaml up -d
 ```
 
-开发 Compose 使用 `pgvector/pgvector:pg17`，独立项目 `argus-dev`、数据库/账号 `argus`，默认仅
-绑定 `127.0.0.1:55433`。不复用或修改 mem0、rela-mem 的真实数据库；不要删除它们的数据卷。
-正式 PG 的建库、账号、授权和部署在本地功能确认后由用户手动完成，不由 Argus 自动执行。
+Argus 不再自带 PostgreSQL 容器。本地使用与 rela-mem、Mem0 共享的 `components.postgres`
+（`pgvector/pgvector:pg17`，`127.0.0.1:15432`），由 `infra/postgres/init/db-init.sh`
+在空数据目录首次启动时创建 `argus` 数据库与账号。不复用它们的库，不要删除数据卷。
 
-在仓库根 `.env` 或进程环境提供 `ARGUS_DATABASE_URL`，格式为：
-
-```text
-postgresql+asyncpg://argus:<URL编码后的密码>@127.0.0.1:55433/argus
-```
-
-连接串必填，QQ 关闭时也需要数据库；密码含特殊字符时必须 URL 编码，不把真实连接串提交到 Git。
+统一入口从 TOML 的 `requires.postgres.connection` 注入 host/port/database/user，
+密码通过 `.env` 的 `ARGUS_POSTGRES_PASSWORD` 提供；应用负责安全组装连接串。
+直接启动时也可显式提供 `ARGUS_DATABASE_URL`，但不要把带密码的连接串写入 TOML 或提交到 Git。
+QQ 关闭时仍需要数据库。
 SQLite 不再使用，不迁移、不自动删除旧数据库文件。未知 schema 版本拒绝启动，不自动清库。
 
 ## 应用级生命周期

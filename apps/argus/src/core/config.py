@@ -118,7 +118,16 @@ def load_config(*, settings_path: Path | None = None) -> ArgusConfig:
     values = json.loads(path.read_text(encoding='utf-8'))
     dsn = os.environ.get('ARGUS_DATABASE_URL')
     if not dsn:
-        raise ValueError('ARGUS_DATABASE_URL is required')
+        from sqlalchemy.engine import URL
+        host = os.environ.get('ARGUS_POSTGRES_HOST')
+        password = os.environ.get('ARGUS_POSTGRES_PASSWORD')
+        if not host or not password:
+            raise ValueError('ARGUS_DATABASE_URL or injected PostgreSQL topology and password is required')
+        dsn = URL.create(
+            'postgresql+asyncpg', username=os.environ.get('ARGUS_POSTGRES_USER', 'argus'),
+            password=password, host=host, port=int(os.environ.get('ARGUS_POSTGRES_PORT', '5432')),
+            database=os.environ.get('ARGUS_POSTGRES_DB', 'argus'),
+        ).render_as_string(hide_password=False)
     values['database_url'] = SecretStr(dsn)
     config = ArgusConfig.model_validate(values)
     if config.qq.enabled and not os.getenv('ARGUS_QQ_REPORT_SECRET'):

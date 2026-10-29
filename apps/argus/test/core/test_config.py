@@ -68,11 +68,31 @@ def test_qq_history_enabled_requires_its_token(tmp_path, monkeypatch):
         config.load_config(settings_path=path)
 
 
+def test_database_url_can_be_built_from_injected_topology_and_secret(tmp_path, monkeypatch):
+    from apps.argus.src.core import config
+    from sqlalchemy.engine import make_url
+    path = tmp_path / 'settings.json'
+    path.write_text('{}')
+    monkeypatch.setattr(config, 'load_icarus_environment', lambda: None)
+    monkeypatch.delenv('ARGUS_DATABASE_URL', raising=False)
+    for key, value in {'ARGUS_POSTGRES_HOST': '::1', 'ARGUS_POSTGRES_PORT': '15432',
+                       'ARGUS_POSTGRES_DB': 'argus', 'ARGUS_POSTGRES_USER': 'argus',
+                       'ARGUS_POSTGRES_PASSWORD': 'p@ss:/?#word'}.items():
+        monkeypatch.setenv(key, value)
+    result = config.load_config(settings_path=path)
+    url = make_url(result.database_url.get_secret_value())
+    assert (url.host, url.port, url.database, url.username) == ('::1', 15432, 'argus', 'argus')
+    assert url.password == 'p@ss:/?#word'
+    assert 'p@ss' not in repr(result)
+
+
 def test_missing_database_url_is_explicit(tmp_path, monkeypatch):
     from apps.argus.src.core import config
     path = tmp_path / 'settings.json'
     path.write_text('{}')
     monkeypatch.delenv('ARGUS_DATABASE_URL', raising=False)
+    monkeypatch.delenv('ARGUS_POSTGRES_HOST', raising=False)
+    monkeypatch.delenv('ARGUS_POSTGRES_PASSWORD', raising=False)
     monkeypatch.setattr(config, 'load_icarus_environment', lambda: None)
     with pytest.raises(ValueError, match='ARGUS_DATABASE_URL'):
         config.load_config(settings_path=path)
