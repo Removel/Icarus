@@ -6,7 +6,11 @@ from agent_app.argus_protocol import HandoffError
 from agent_app.contracts.prompt import PromptSection, PromptUpdateEvent
 from icarus.core.run_control import TaskChannelStatus
 
-AVAILABILITY_NOTICE = '当前语境有新的待读消息，可在合适时通过 argus_wait 读取。'
+AVAILABILITY_NOTICE = '当前语境有新的待读消息，可在合适时通过工具面 {scope} 读取（先 tool_search，再 tool_execute）。'
+
+
+def availability_notice(plugin_id: str) -> str:
+    return AVAILABILITY_NOTICE.format(scope=plugin_id)
 
 
 async def watch_availability(plugin, task_id):
@@ -33,7 +37,7 @@ async def watch_availability(plugin, task_id):
                 channel = plugin.task_channels.get(task_id) if plugin.task_channels is not None else None
                 if channel is None or channel.status is TaskChannelStatus.RUNNING:
                     await plugin.publish(PromptUpdateEvent(task_id=task_id, sections=(
-                        PromptSection('available', 'runtime', AVAILABILITY_NOTICE),)))
+                        PromptSection('available', 'runtime', availability_notice(plugin.plugin_id)),)))
                     plugin._notice_sent = True
                 else:
                     # The same ContextReady fans out to both consumers. Wait for

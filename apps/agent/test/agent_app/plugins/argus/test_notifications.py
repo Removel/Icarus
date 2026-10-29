@@ -90,7 +90,7 @@ def test_notification_never_steers_cancels_or_contains_observation_text_and_drai
             notices = [event for event in events if isinstance(event, PromptUpdateEvent)]
             assert len(notices) == 1
             assert all(event.task_id == 'task' for event in notices)
-            assert 'argus_wait' in notices[0].sections[0].content
+            assert 'tool_search' in notices[0].sections[0].content and 'argus' in notices[0].sections[0].content
             assert 'NEW-SECRET-BODY' not in str(events) and TWO not in str(events)
             for _ in range(10): signal.set(); await asyncio.sleep(0)
             await argus.on_finished('forged-input', InputFinishedEvent(task_id='task', status='completed'))
@@ -100,7 +100,7 @@ def test_notification_never_steers_cancels_or_contains_observation_text_and_drai
             assert argus._watcher is None
             assert len([e for e in events if isinstance(e, PromptUpdateEvent)]) == 1
             assert len(provider_inputs) >= 2
-            assert 'argus_wait' in str(provider_inputs[-1])
+            assert 'tool_search' in str(provider_inputs[-1])
             assert 'NEW-SECRET-BODY' not in str(provider_inputs) and TWO not in str(provider_inputs)
             assert runtime.execution_exit_kind('task') == 'completed'
             assert not any(update.type == 'task.steered' for update in updates)
