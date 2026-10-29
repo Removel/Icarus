@@ -1,0 +1,11 @@
+{
+  "env": {
+    "OPENKB_API_TOKEN": "isolated-ci-smoke-api-key",
+    "OPENKB_CONFIG_DIR": "/tmp/ci-openkb/config",
+    "OPENKB_KB_ROOT": "/tmp/ci-openkb/kbs",
+    "OPENKB_ICARUS_DEFAULT_KB": "ci-smoke",
+    "OPENKB_ICARUS_MODEL": "openai/ci-placeholder",
+    "LLM_API_KEY": "isolated-ci-dummy-key",
+    "OPENAI_API_BASE": "http://127.0.0.1:9/v1"
+  }
+}

@@ -11,6 +11,10 @@ def open_navigation(page):
 
 
 def follow_link(page, name):
+    if page.url == 'about:blank':
+        page.goto({'对话': '/#/chat', '记忆': '/#/memory/all',
+                   '知识库': '/#/knowledge/sources', '人物': '/#/people'}[name])
+        return
     # Lazy chat may not have mounted immediately after a route change.
     if page.url.split('#')[-1].startswith('/chat'):
         expect(page.get_by_role('region', name='Agent 对话')).to_be_visible()

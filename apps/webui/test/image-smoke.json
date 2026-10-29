@@ -1,0 +1,6 @@
+{
+  "env": {
+    "ICARUS_WEBUI_USER": "ci-smoke",
+    "ICARUS_WEBUI_PASSWORD": "isolated-ci-smoke-password"
+  }
+}

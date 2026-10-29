@@ -26,6 +26,8 @@ Current modifications:
   lifecycle entrypoint.
 - The server image installs and runs the imported repository source instead of
   replacing it with the latest PyPI package at container startup.
+- The production image includes libpq for psycopg; isolated CI startup smoke
+  checks the real image and its PostgreSQL dependency without model API access.
 - The managed default uses an OpenAI-compatible Flash LLM and local FastEmbed
   embeddings; the configured embedding dimension is also passed to pgvector.
 - The REST add endpoint accepts `preserve_input_language`; Icarus enables it by

@@ -4,6 +4,11 @@ from playwright.sync_api import expect
 from test.navigation import follow_link
 
 
+@pytest.fixture
+def page(memory_page):
+    return memory_page
+
+
 @pytest.mark.parametrize('service,path,link', [
     ('记忆服务', '**/api/mem0/memories/page?**', None),
     ('知识服务', '**/api/v1/kbs', '知识库'),

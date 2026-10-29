@@ -23,7 +23,7 @@ with ZipFile(wheel) as archive:
     assert not any(name.startswith(('apps/', 'test/')) for name in names)
 print('Wheel resources verified')
 PY
-"$python_bin" -m venv --system-site-packages "$work/venv"
+"$python_bin" -m venv "$work/venv"
 "$work/venv/bin/python" -m pip install "$work"/dist/*.whl
 (cd "$work" && "$work/venv/bin/python" -I - <<'PY'
 from importlib.resources import files

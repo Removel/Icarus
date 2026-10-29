@@ -4,6 +4,11 @@ from test.navigation import follow_link, open_navigation, open_settings
 
 
 @pytest.fixture
+def page(memory_page):
+    return memory_page
+
+
+@pytest.fixture
 def knowledge_service(page):
     def respond(route):
         path = route.request.url.split('/api/v1/')[-1]

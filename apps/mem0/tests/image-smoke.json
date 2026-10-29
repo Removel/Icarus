@@ -1,0 +1,18 @@
+{
+  "services": [
+    {
+      "name": "postgres",
+      "image": "pgvector/pgvector:pg17",
+      "env": {"POSTGRES_DB": "mem0_test", "POSTGRES_PASSWORD": "ci-smoke-pg"},
+      "ready": ["pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "mem0_test"]
+    }
+  ],
+  "env": {
+    "POSTGRES_HOST": "postgres", "POSTGRES_PORT": "5432", "POSTGRES_USER": "postgres",
+    "POSTGRES_PASSWORD": "ci-smoke-pg", "POSTGRES_DB": "mem0_test", "APP_DB_NAME": "mem0_test",
+    "ADMIN_API_KEY": "isolated-ci-smoke-api-key", "JWT_SECRET": "isolated-ci-smoke-jwt-secret",
+    "OPENAI_API_KEY": "isolated-ci-dummy-key", "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
+    "MEM0_DEFAULT_EMBEDDER_PROVIDER": "openai", "MEM0_DEFAULT_EMBEDDER_MODEL": "ci-placeholder",
+    "MEM0_DEFAULT_EMBEDDING_DIMS": "384", "MEM0_TELEMETRY": "false"
+  }
+}

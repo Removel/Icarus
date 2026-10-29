@@ -79,7 +79,7 @@ def test_failed_workspace_connection_does_not_enter_history(page):
                  '/a', '/b', '/c', '/d', '/e']), ['F:\\项目\\Icarus', '/a', '/b', '/c', '/d']),
 ], ids=['invalid-json', 'invalid-shape', 'mixed-paths'])
 def test_workspace_history_recovers_from_invalid_local_data(page, stored, expected):
-    page.goto(page.url.split('#')[0] + '#/chat')
+    page.goto('/#/chat')
     page.evaluate('([key, value]) => localStorage.setItem(key, value)', [KEY, stored])
     page.reload()
     modal = workspace_settings(page)

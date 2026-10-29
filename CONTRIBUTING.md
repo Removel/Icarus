@@ -29,7 +29,7 @@ Do not use repository-root PYTHONPATH as a replacement for installing Agent. Gat
 own existing repository bootstrap for root-owned protocol/environment modules.
 
 `make typecheck-agent` checks both canonical Python packages; `make check-package-agent` builds a wheel,
-checks all 13 manifests and packaged defaults, and installs it into a disposable verification environment.
+checks all 15 manifests and packaged defaults, and installs it into a disposable verification environment.
 Gateway's suite includes a real TCP/WebSocket test with production runtime/plugins/SQLite and deterministic
 local HTTP fixtures for external services; it is not a remote-model smoke.
 
@@ -46,10 +46,18 @@ prerequisites, not passing tests. Compare failures by test identity against the 
 baseline and environment; do not fix unrelated failures or hide them with skip rules.
 
 The root `make test` first runs `scripts/tests/` with the existing Agent pytest interpreter,
-then aggregates application checks. No root test environment is installed. CI calls the same service scripts
+then aggregates Agent/Gateway/TUI, Mem0/OpenKB/rela-mem offline checks and WebUI tests.
+`make test-webui` starts and cleans up a dedicated dev server; isolated service tests remain
+explicit (`python apps/rela-mem/scripts/ci-integration.py`). No root test environment is installed. CI calls the same service scripts
 rather than defining a second list of test files. Real-service/model smoke tests use
 isolated data and require explicit execution/cost authorization. Never publish credentials
 or use production databases as test fixtures.
+
+CI check layers, change-impact rules and release validation are documented in the
+[CI implementation plan](docs/spec/2026-10-29-ci-quality-gates/plan.md) and
+[current CI architecture](docs/spec/2026-10-29-ci-quality-gates/arch.md).
+The [validation record](docs/spec/2026-10-29-ci-quality-gates/execution.md) distinguishes
+local verification from pending Actions runs and repository protection settings.
 
 ## Dependencies and builds
 

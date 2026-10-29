@@ -100,8 +100,11 @@ def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None
         (socket or state['sockets'][-1]).send(json.dumps({'jsonrpc': '2.0', 'method': 'runtime.update', 'params': record}))
 
     page.route_web_socket('**/rpc', route)
-    page.reload()
-    page.goto(page.url.split('#')[0] + '#/chat?workspace=%2Ftmp%2Fwebui-test&session=' + selected)
+    # Re-registering a mock must replace an existing connection, including when
+    # a test calls gateway twice. A blank document avoids bootstrapping Memory.
+    if page.url != 'about:blank':
+        page.goto('about:blank')
+    page.goto('/#/chat?workspace=%2Ftmp%2Fwebui-test&session=' + selected)
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
     # A connected socket precedes session subscription and history hydration.
     expect(page.get_by_role('textbox', name='发送消息')).to_be_enabled()

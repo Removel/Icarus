@@ -7,7 +7,7 @@ from test.rela_service import fake_rela
 
 def test_button_keeps_its_size_when_hovered_pressed_and_focused(page):
     fake_rela(page)
-    page.goto(page.url.split('#')[0] + '#/people')
+    page.goto('/#/people')
     button = page.get_by_role('button', name='添加人物', exact=True)
     expect(button).to_be_visible()
     page.mouse.move(0, 0)
@@ -26,12 +26,12 @@ def test_button_keeps_its_size_when_hovered_pressed_and_focused(page):
 
 def test_person_dialog_keeps_its_frame_while_loading(page):
     state = fake_rela(page)
-    page.goto(page.url.split('#')[0] + '#/people')
+    page.goto('/#/people')
     expect(page.locator('.person-card')).to_have_count(20)
     pending = []
     # A deep link outside the visible list has no card data to show provisionally.
     page.route(re.compile(r'/api/rela/v1/persons/p_000023_alpha(?:\?.*)?$'), lambda route: pending.append(route))
-    page.goto(page.url.split('#')[0] + '#/people?person=p_000023_alpha&section=profile')
+    page.goto('/#/people?person=p_000023_alpha&section=profile')
     dialog = page.get_by_role('dialog', name='人物档案', exact=True)
     expect(dialog.get_by_role('status', name='正在加载人物档案')).to_be_visible()
     before = dialog.bounding_box()
@@ -44,7 +44,7 @@ def test_person_dialog_keeps_its_frame_while_loading(page):
 
 def test_people_refresh_does_not_push_cards_down(page):
     fake_rela(page)
-    page.goto(page.url.split('#')[0] + '#/people')
+    page.goto('/#/people')
     card = page.locator('.person-card').first
     expect(page.locator('.person-card')).to_have_count(20)
     before = card.bounding_box()
@@ -58,7 +58,8 @@ def test_people_refresh_does_not_push_cards_down(page):
     assert abs(before['y'] - during['y']) <= 1
 
 
-def test_memory_detail_does_not_move_when_read_finishes(page):
+def test_memory_detail_does_not_move_when_read_finishes(memory_page):
+    page = memory_page
     pending = []
     page.route(re.compile(r'/api/mem0/memories/mem_a8f2c1(?:/history)?(?:\?.*)?$'), lambda route: pending.append(route))
     page.locator('.memory-entry-open').first.click()
@@ -76,7 +77,7 @@ def test_memory_detail_does_not_move_when_read_finishes(page):
 def test_person_card_supplies_header_before_detail_request_finishes(page):
     page.emulate_media(reduced_motion='no-preference')
     state = fake_rela(page)
-    page.goto(page.url.split('#')[0] + '#/people')
+    page.goto('/#/people')
     expect(page.locator('.person-card')).to_have_count(20)
     pending = []
     page.route(re.compile(r'/api/rela/v1/persons/p_000001_alpha(?:\?.*)?$'), lambda route: pending.append(route))
@@ -112,7 +113,7 @@ def test_person_card_supplies_header_before_detail_request_finishes(page):
 
 def test_failed_person_validation_keeps_card_identity_read_only(page):
     state = fake_rela(page)
-    page.goto(page.url.split('#')[0] + '#/people')
+    page.goto('/#/people')
     expect(page.locator('.person-card')).to_have_count(20)
     state['fail']['/v1/persons/p_000001_alpha'] = 503
     page.locator('.person-card').first.click()
@@ -127,7 +128,7 @@ def test_failed_person_validation_keeps_card_identity_read_only(page):
 def test_person_header_does_not_shift_when_profile_adds_scrollbar(page):
     page.emulate_media(reduced_motion='no-preference')
     fake_rela(page)
-    page.goto(page.url.split('#')[0] + '#/people')
+    page.goto('/#/people')
     expect(page.locator('.person-card')).to_have_count(20)
     pending = []
     page.route(re.compile(r'/api/rela/v1/persons/p_000001_alpha/profile\?.*'), lambda route: pending.append(route))
@@ -145,7 +146,7 @@ def test_person_header_does_not_shift_when_profile_adds_scrollbar(page):
 def test_circle_card_supplies_header_before_resolution_finishes(page):
     page.emulate_media(reduced_motion='no-preference')
     fake_rela(page)
-    page.goto(page.url.split('#')[0] + '#/people/circles')
+    page.goto('/#/people/circles')
     expect(page.locator('.rela-circle-row')).to_have_count(1)
     pending = []
     page.route(re.compile(r'/api/rela/v1/circles\?.*limit=200.*'), lambda route: pending.append(route))

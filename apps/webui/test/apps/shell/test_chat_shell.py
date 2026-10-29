@@ -6,9 +6,14 @@ from test.packages.chat_app.test_chat import gateway
 from test.navigation import open_settings, follow_link
 
 
+@pytest.fixture
+def page(app_page):
+    return app_page
+
+
 @pytest.mark.parametrize('suffix', ['', '#/unknown'])
 def test_chat_is_default_without_workbench_chrome(page, suffix):
-    page.goto(page.url.split('#')[0] + suffix)
+    page.goto('/' + suffix)
     expect(page.get_by_role('region', name='Agent 对话')).to_be_visible()
     expect(page.get_by_role('banner')).not_to_be_visible()
     expect(page.get_by_role('complementary', name='Icarus 导航')).not_to_be_visible()
@@ -83,7 +88,8 @@ def test_chat_sidebar_collapses_without_changing_management_preference(page):
     ('light', 'rgb(255, 255, 255)', 'rgb(15, 17, 21)'),
     ('dark', 'rgb(21, 21, 23)', 'rgb(250, 248, 249)'),
 ])
-def test_loading_chat_styles_does_not_restyle_memory(page, theme, canvas, ink):
+def test_loading_chat_styles_does_not_restyle_memory(memory_page, theme, canvas, ink):
+    page = memory_page
     page.emulate_media(color_scheme=theme)
     # Media-query changes arrive asynchronously; compare the same applied theme
     # before and after crossing lazy module boundaries. The attribute flips
