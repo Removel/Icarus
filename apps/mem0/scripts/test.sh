@@ -5,7 +5,7 @@ app_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 python_bin="$app_dir/.venv/bin/python"
 
 case "${1:-}" in
-  "") tests=(tests/memory/test_main.py tests/memory/test_storage.py tests/test_dev_scripts.py) ;;
+  "") tests=(tests/memory/test_main.py tests/memory/test_storage.py tests/test_dev_scripts.py tests/test_database_connection.py) ;;
   --full) tests=(tests) ;;
   *) echo "Usage: $0 [--full]" >&2; exit 2 ;;
 esac

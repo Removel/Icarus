@@ -20,9 +20,11 @@ icarus status mem0
 icarus stop mem0
 ```
 
-Configuration comes from the root `.env`; the only template is root `.example.env`.
-Durable data is bind-mounted under `$ICARUS_DATA_DIR/services/mem0`. Stop does not delete
-that data. This first cleanup retains API :8888, PostgreSQL, and dashboard :3000.
+Topology and the user data root come from `icarus.toml` / ignored `icarus.local.toml`;
+credentials come from root `.env` (template: `.example.env`). The default data root is
+`~/.icarus`. History/models are bind-mounted under `services/mem0`; the independent
+shared PostgreSQL service stores its cluster under `services/postgres`. The managed
+Compose runs only the API on port 8888, not the legacy dashboard. Stop preserves data.
 See [server operations](server/README.md).
 
 ## Development and tests
