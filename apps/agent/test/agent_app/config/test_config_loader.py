@@ -55,12 +55,25 @@ def test_get_config_default_resource_is_packaged():
     assert next(item for item in settings["model_settings"] if item["name"] == "thinking")["model_name"]
     assert settings["agent"]["tool_execution"] == {
         "default_timeout_seconds": 120.0,
-        "default_output_tokens": 3000,
+        "default_output_tokens": 25000,
     }
     config = get_config()
     assert config.agent.tool_execution.max_timeout_seconds == 600
-    assert config.agent.tool_execution.batch_output_tokens == 16000
+    assert config.agent.tool_execution.batch_output_tokens == 100000
     assert config.agent.tool_execution.max_result_file_bytes == 16 * 1024 * 1024
+
+
+def test_get_config_packaged_budget_defaults(monkeypatch):
+    from importlib.resources import files
+
+    resource = files("agent_app.resources").joinpath("default_settings.json")
+    monkeypatch.setattr(config_loader, "_settings_resource", lambda: resource)
+
+    config = get_config()
+
+    assert config.agent.tool_execution.default_output_tokens == 25000
+    assert config.agent.tool_execution.max_output_tokens == 25000
+    assert config.agent.tool_execution.batch_output_tokens == 100000
 
 
 def test_config_model_skill_permissions_default_disabled():

@@ -227,8 +227,8 @@ def test_observable_agent_llm_tool_共享同一个run_id():
             "requested_timeout_seconds": None,
             "requested_output_tokens": None,
             "effective_timeout_seconds": 120,
-            "effective_output_tokens": 4000,
-            "preview_tokens": 3600,
+            "effective_output_tokens": 25000,
+            "preview_tokens": 22500,
             "duration_seconds": tool_events[1].data["result"]["execution"]["duration_seconds"],
         },
     }

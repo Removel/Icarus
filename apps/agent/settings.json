@@ -9,7 +9,7 @@
     "max_steps": 1024,
     "tool_execution": {
       "default_timeout_seconds": 120.0,
-      "default_output_tokens": 3000
+      "default_output_tokens": 25000
     }
   },
   "runtime": {
