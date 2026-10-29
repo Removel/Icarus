@@ -77,6 +77,27 @@ def test_mcp_tools固定名称和最小schema():
     assert tools["mcp_tool_execute"].definition.input_schema["required"] == ["tool_ref"]
 
 
+def test_catalog_schema默认与实际调用一致():
+    for default, maximum in ((17, 200), (50, 200), (1, 1)):
+        manager = ManagerStub()
+        plugin = MCPPlugin("mcp", manager=manager, bridge=BridgeStub())
+        asyncio.run(plugin.start())
+        tools = {tool.definition.name: tool for tool in create_mcp_tools(
+            plugin, default_page_size=default, max_page_size=maximum,
+        )}
+        listed = tools["mcp_tool_list"]
+        searched = tools["mcp_tool_search"]
+        assert listed.definition.input_schema["properties"]["page_size"]["default"] == default
+        assert searched.definition.input_schema["properties"]["limit"]["default"] == min(5, maximum)
+        assert listed.invoke({}).success is True
+        assert searched.invoke({"query": "create"}).success is True
+        assert manager.calls == [
+            ("list", {"server": None, "page": 1, "page_size": default}),
+            ("search", {"query": "create", "server": None, "limit": min(5, maximum)}),
+        ]
+        assert searched.invoke({"query": "create", "limit": maximum + 1}).success is False
+
+
 def test_list使用默认分页并返回完整schema():
     manager, tools = make_tools()
     result = tools["mcp_tool_list"].invoke({})

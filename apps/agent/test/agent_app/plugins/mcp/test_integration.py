@@ -62,6 +62,26 @@ class ManagerStub:
     async def close(self): pass
 
 
+def test_MCP_JSON失败短预览仍有实际原因(tmp_path):
+    from agent_app.plugins.mcp.result_converter import MCPResultConverter
+    from icarus.core.tools.result_store import ToolResultStore
+    from icarus.core.tools.result_budget import conservative_token_count, serialize_tool_result
+
+    converted = MCPResultConverter().convert(MCPCallResult(
+        content=(MCPContent("text", '{"reason":"missing target","token":"secret"}'),),
+        structured_content={"reason": "missing target", "token": "secret", "log": "x" * 3000},
+        is_error=True,
+    ))
+    executor = ToolExecutor(ToolRegistry(), result_store=ToolResultStore(tmp_path, max_file_bytes=10000))
+    call = ToolCall("mcp-failure", "mcp_tool_execute", {})
+    result = executor.finalize_group([call], {call.id: converted}, task_id="test-task")[call.id]
+    assert result.success is False
+    assert "missing target" in result.error
+    assert "secret" not in serialize_tool_result(result)
+    assert conservative_token_count(serialize_tool_result(result)) <= 1000
+    assert result.metadata["result_file_complete"] is True
+
+
 class ScriptedLLM(BaseLLM):
     def __init__(self):
         self.index = 0

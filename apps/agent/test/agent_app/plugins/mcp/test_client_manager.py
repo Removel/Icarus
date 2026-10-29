@@ -98,6 +98,50 @@ def make_manager(*, failing=()):
     )
 
 
+def test_manager诊断包含修正信息且隐藏未知动态键和值():
+    descriptor = MCPToolDescriptor(
+        "server/tool?token=ref-secret", "server", "tool", "Test",
+        {"type": "object", "properties": {
+            "count": {"type": "integer"},
+            "kind": {"enum": ["private-enum"]},
+            "choice": {"anyOf": [{"type": "integer"}, {"type": "boolean"}]},
+        }, "required": ["required_field"], "additionalProperties": False},
+    )
+    with pytest.raises(ValueError) as captured:
+        _validate_arguments(descriptor, {
+            "count": "sensitive-value", "kind": "secret-kind",
+            "choice": "secret-choice", "unknown-secret-key": "unknown-value",
+        })
+    message = str(captured.value)
+    assert "required_field" in message
+    assert "integer" in message
+    assert "boolean" in message
+    assert "unknown" in message.lower()
+    for secret in ("ref-secret", "sensitive-value", "private-enum", "secret-kind",
+                   "secret-choice", "unknown-secret-key", "unknown-value"):
+        assert secret not in message
+    assert len(message) <= 2200
+    assert captured.value.__suppress_context__ is True
+
+
+def test_manager诊断条数和路径长度有界():
+    descriptor = MCPToolDescriptor(
+        "server/" + "r" * 300, "server", "tool", "Test",
+        {"type": "object", "properties": {
+            "field" + str(i) + "p" * 300: {"type": "integer"}
+            for i in range(12)
+        }},
+    )
+    with pytest.raises(ValueError) as captured:
+        _validate_arguments(descriptor, {
+            "field" + str(i) + "p" * 300: "hidden" for i in range(12)
+        })
+    message = str(captured.value)
+    assert "hidden" not in message
+    assert "r" * 129 not in message
+    assert len(message) <= 2200
+
+
 def test_manager按需连接并复用catalog():
     manager, backends = make_manager()
 

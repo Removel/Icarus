@@ -1,4 +1,5 @@
 import base64
+import json
 
 import pytest
 
@@ -17,6 +18,71 @@ from agent_app.plugins.persistence import (
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"mcp-image"
+
+
+@pytest.mark.parametrize("data", [{"items": [1, True]}, [1, {"ok": False}]])
+def test_converter仅object_list转换为data(data):
+    result = MCPResultConverter().convert(
+        MCPCallResult(content=(MCPContent("text", json.dumps(data)),))
+    )
+
+    assert result.success is True
+    assert result.output == {"content": [{"type": "text", "data": data}]}
+
+
+@pytest.mark.parametrize("structured,text,duplicate", [
+    ({"a": 1, "b": 2}, '{"b":2,"a":1}', True),
+    ({"a": True}, '{"a":1}', False),
+    ([1, 2], '[2,1]', False),
+    ({"token": "first"}, '{"token":"second"}', False),
+    ("scalar", '"scalar"', False),
+])
+def test_converter原始语义相同才去重(structured, text, duplicate):
+    result = MCPResultConverter().convert(MCPCallResult(
+        content=(MCPContent("text", text), MCPContent("text", "supplement")),
+        structured_content=structured,
+    ))
+
+    assert result.output["content"][-1] == {"type": "text", "text": "supplement"}
+    assert len(result.output["content"]) == (1 if duplicate else 2)
+    if not duplicate and isinstance(structured, (dict, list)):
+        assert "data" in result.output["content"][0]
+    if isinstance(structured, str):
+        assert result.output["content"][0]["text"] == '"scalar"'
+
+
+@pytest.mark.parametrize("structured", [None, {"reason": "missing target", "token": "secret"}])
+def test_converterJSON错误转data或去重仍有脱敏诊断(structured):
+    result = MCPResultConverter().convert(MCPCallResult(
+        content=(MCPContent("text", '{"reason":"missing target","token":"secret"}'),),
+        structured_content=structured, is_error=True,
+    ))
+
+    assert result.success is False
+    assert "missing target" in result.error
+    assert "secret" not in str(result.as_dict())
+    if structured is not None:
+        assert result.output["content"] == []
+    else:
+        assert result.output["content"][0]["data"]["reason"] == "missing target"
+
+
+def test_converter不推断业务成功且保留嵌套字符串脱敏():
+    result = MCPResultConverter().convert(MCPCallResult(content=(MCPContent(
+        "text", json.dumps({"retcode": 1, "nested": '{"token":"hidden"}'}),
+    ),)))
+    assert result.success is True
+    assert result.output["content"][0]["data"]["retcode"] == 1
+    assert isinstance(result.output["content"][0]["data"]["nested"], str)
+    assert "hidden" not in str(result.output)
+
+    failed = MCPResultConverter().convert(MCPCallResult(
+        structured_content={"retcode": 1}, is_error=True,
+    ))
+    assert failed.success is False
+    assert failed.error == "MCP Tool returned an error"
+    assert failed.output["structured_content"] == {"retcode": 1}
+
 
 
 def make_converter(tmp_path):

@@ -135,7 +135,7 @@ class MCPPlugin(BasePlugin):
 
         return self._run_sync(
             execute,
-            operation=f"execute MCP Tool {tool_ref}",
+            operation=f"execute MCP Tool {self.redactor.redact_text(tool_ref)[:128]}",
             transform=self.result_converter.convert,
         )
 
@@ -152,7 +152,7 @@ class MCPPlugin(BasePlugin):
 
         return await self._run_async(
             execute,
-            operation=f"execute MCP Tool {tool_ref}",
+            operation=f"execute MCP Tool {self.redactor.redact_text(tool_ref)[:128]}",
             transform=self.result_converter.convert,
         )
 
@@ -189,7 +189,7 @@ class MCPPlugin(BasePlugin):
             self.redactor.redact(
                 {"error": f"{type(error).__name__}: {error}"}
             )["error"]
-        )
+        )[:2200]
 
     def build_tools(self):
         return self._tools
