@@ -1,1 +1,4 @@
 -e .[test,dev]
+# Focused local PostgreSQL connection regression tests; no other providers needed.
+psycopg[binary]>=3.2.8,<4.0.0
+psycopg-pool>=3.2.6,<4.0.0

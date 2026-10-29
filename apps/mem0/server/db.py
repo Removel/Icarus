@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import URL, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -10,7 +10,8 @@ def _build_database_url() -> str:
     user = os.environ.get("POSTGRES_USER", "postgres")
     password = os.environ.get("POSTGRES_PASSWORD", "postgres")
     db = os.environ.get("APP_DB_NAME", "mem0_app")
-    return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}"
+    return URL.create('postgresql+psycopg', username=user, password=password,
+                      host=host, port=int(port), database=db).render_as_string(hide_password=False)
 
 
 engine = create_engine(_build_database_url(), pool_pre_ping=True)

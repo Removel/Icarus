@@ -136,17 +136,19 @@ cp -n .example.env .env
 
 | 配置 | 所有权 |
 | --- | --- |
-| `icarus.toml` | 公开拓扑、组件命令、依赖、端口与环境变量名 |
-| `icarus.local.toml`（不提交） | 本机 local/remote、地址与部署方式覆盖 |
-| `.env` 或进程环境（不提交） | Secret、绝对 `ICARUS_DATA_DIR` 及应用所需环境设置 |
+| `icarus.toml` | 公开拓扑、runtime 数据目录、非敏感环境设置、组件命令、依赖与端口 |
+| `icarus.local.toml`（不提交） | 本机数据目录、local/remote、地址与非敏感设置覆盖 |
+| `.env` 或进程环境（不提交） | API Key、Token、数据库密码等 Secret |
 | `apps/agent/settings.json`、rela-mem 身份 JSON | 模型、Plugin、用户/Agent 身份等业务配置 |
 
-填写 `.example.env` 中当前协议所需的模型 Key、Mem0/OpenKB 凭据，以及本地关系服务使用的
-`RELA_MEM_API_TOKEN`、`RELA_MEM_PG_PASSWORD`、`RELA_MEM_FALKORDB_PASSWORD`；不要将凭据写入 TOML。
-rela-mem 部署前复制并调整其 `settings.example.json` 中的身份，使用 `RELA_MEM_SETTINGS_FILE` 指向独立文件，
-不要把示例身份当作自己的部署身份。完整说明见 [rela-mem README](apps/rela-mem/README.md)。
+填写 `.example.env` 中所需的模型 Key、Mem0/OpenKB 凭据，以及 `RELA_MEM_API_TOKEN`、
+`RELA_MEM_PG_PASSWORD`、`RELA_MEM_FALKORDB_PASSWORD`。本地 PostgreSQL 首次初始化还需独立的
+`ICARUS_POSTGRES_PASSWORD` 和 `ICARUS_MEM0_POSTGRES_PASSWORD`；不要将凭据写入 TOML。
+rela-mem 部署前复制并调整其 `settings.example.json` 中的身份，在本地 TOML 的
+`components.rela-mem.env.RELA_MEM_SETTINGS_FILE` 中指定独立文件，不要把示例身份当作自己的部署身份。
+完整说明见 [rela-mem README](apps/rela-mem/README.md)。
 
-已有远程数据库时，才复制覆盖示例并修改地址：
+需要修改本机数据目录、地址或使用远程数据库时，复制覆盖示例；示例默认仍为全本地部署：
 
 ```bash
 cp -n icarus.local.toml.example icarus.local.toml
@@ -179,11 +181,13 @@ remote 组件只探测，不在远端安装、启动或停止，也不递归启�
 Compose 消费方必须使用容器可达的地址；不要把无 TLS 数据库开放到公网。
 
 拓扑优先级为本次 CLI 覆盖 > 旁侧 local TOML > base TOML > 默认值。`--config PATH` 可在动词前后使用一次，
-读取其旁侧 `<stem>.local.toml`；运维相对路径仍以仓库根解析。环境先合并 `.env` 与进程（进程优先），
-再由声明的拓扑导出覆盖连接变量，冲突告警仅列变量名。`ICARUS_ENV_FILE` 可为控制面选择替代 dotenv。
-应用不读取根 TOML；Agent 的三种插件端点和 rela-mem 的数据库字段通过环境覆盖，业务配置不被改写。
+读取其旁侧 `<stem>.local.toml`；运维相对路径仍以仓库根解析。非敏感 runtime 环境优先级为
+进程环境 > TOML runtime 设置 > dotenv；依赖连接字段由声明的拓扑导出覆盖，冲突告警仅列变量名。
+`ICARUS_ENV_FILE` 可为控制面选择替代 dotenv。独立应用入口只从默认根 TOML 读取 runtime 元数据，
+不解析组件拓扑；Agent 的三种插件端点和应用数据库字段由控制面通过环境注入，业务配置不被改写。
 
-`ICARUS_DATA_DIR` 保存 `icarus.db`、Plugin State、Trace、图片 Asset 和服务数据。
+`[runtime].data_dir` 默认 `~/.icarus`，控制面将其解析为绝对 `ICARUS_DATA_DIR`，保存 `icarus.db`、
+Plugin State、Trace、图片 Asset 和服务数据。显式进程 `ICARUS_DATA_DIR` 可用于临时隔离覆盖。
 本版本不迁移旧 JSONL Session 数据；首次使用需配置不包含旧 Session 目录的新数据目录。
 
 ### 2. 安装不等于启动
@@ -217,8 +221,9 @@ Mem0/OpenKB/rela-mem 的运行依赖在各自镜像内。需要独立 rela-mem P
 ./bin/icarus stop                 # 默认 required 闭包逆序停止、owner 去重，保留持久数据
 ```
 
-默认集合包含 Gateway、进程内 Agent、Mem0、OpenKB、rela-mem、WebUI 和前台 TUI；独立 PostgreSQL/FalkorDB
-由 rela-mem 的 required 边加入。Mem0 仍整体管理 API、私有 PostgreSQL 与 Dashboard。Argus 不登记。
+默认集合包含 Gateway、进程内 Agent、Mem0、OpenKB、rela-mem、WebUI 和前台 TUI；Mem0 与 rela-mem
+共享一个 PostgreSQL/pgvector 实例，但使用独立的 `mem0_app`、`rela_mem` 数据库和非管理员账号。
+FalkorDB 由 rela-mem 的 required 边加入。Mem0 Compose 只运行 API，不再包含数据库或 Dashboard。Argus 不登记。
 `agent` 没有独立进程，显式启停请操作 `gateway`。重复 start 复用就绪实例；配置改变需明确 stop/start。
 required 不可达阻止依赖分支，optional 只警告/降级；无关分支继续。未知端口服务不会被接管或停止。
 
@@ -236,8 +241,9 @@ icarus tui --gateway-url ws://127.0.0.1:8765/rpc --session-id my-session
 更多状态、安全停止与中间件操作见 [infra 运维说明](infra/README.md) 和
 [控制面架构](docs/spec/2026-10-19-component-lifecycle/arch.md)。
 
-Mem0 要求 Docker Compose，读取仓库根 `.env`，并把 PostgreSQL、history、模型缓存和备份放在
-`$ICARUS_DATA_DIR/services/mem0`。`ICARUS_MEM0_LLM_API_KEY` 为空时复用 `OPENAI_API_KEY`；默认 LLM
+Mem0 要求 Docker Compose；统一入口从 TOML 注入 PostgreSQL 连接，将 history 和模型缓存放在
+`$ICARUS_DATA_DIR/services/mem0`，共享数据库集群位于 `services/postgres`。
+`ICARUS_MEM0_LLM_API_KEY` 为空时复用 `OPENAI_API_KEY`；默认 LLM
 使用 OpenAI-compatible DeepSeek Endpoint 与 `deepseek-v4-flash`，Embedding 使用本地 FastEmbed。
 
 OpenKB 读取同一个根 `.env`，把 config、知识库与备份放在

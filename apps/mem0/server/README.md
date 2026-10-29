@@ -5,29 +5,37 @@ from the application-owned source. Start/stop/status through `icarus` from the r
 root, rather than the removed upstream Makefile, production image, or local env template.
 
 The runtime is API-only (`http://127.0.0.1:8888/docs`). The dashboard and bundled
-PostgreSQL were removed from the Compose file; Mem0 connects to an external
-PostgreSQL/pgvector endpoint configured by `ICARUS_MEM0_POSTGRES_*`. Auth, API-key
+PostgreSQL were removed from the Compose file. The default registry connects Mem0 to
+shared PostgreSQL as `mem0_local`, using the independent `mem0_app` database; the control
+plane derives `ICARUS_MEM0_POSTGRES_*` from its declared dependency. Auth, API-key
 management, rate limits, telemetry, and Alembic database migrations remain backend
-capabilities. Runtime config and credentials come from the root `.env`; secrets are
-never committed. Durable local state lives under `$ICARUS_DATA_DIR/services/mem0`
-(history, models, backups); the application database lives on the external host.
-Stopping containers does not remove the local data. Back up data before database
-upgrades or recovery.
+capabilities. Topology and the data root come from repository TOML; credentials come
+from the root `.env` and are never committed. History and models live under
+`$ICARUS_DATA_DIR/services/mem0`; the shared cluster lives under `services/postgres`.
+Stopping containers does not remove data. Back up data before database upgrades or recovery.
 
 ## Operations
 
 These scripts remain available inside the API service:
 
 ```bash
-# From the Icarus repository root, with the service already running:
-# seed uses the API port inside the container, not host-mapped :8888.
-bash apps/mem0/scripts/icarus-compose.sh exec -e API_URL=http://localhost:8000 mem0 bash scripts/seed.sh
+# From the Icarus repository root, with the managed service already running:
+# Resolve the running API by repository/project/service labels, without reloading Compose.
+mem0_container=$(docker ps -q \
+  --filter label=com.docker.compose.project=icarus-mem0 \
+  --filter label=com.docker.compose.service=mem0 \
+  --filter "label=com.docker.compose.project.config_files=$PWD/apps/mem0/server/docker-compose.yaml")
+# Refuse an empty or ambiguous selection. Adjust the project label for a custom topology.
+[ "$(printf '%s\n' "$mem0_container" | grep -c .)" -eq 1 ] || { printf '%s\n' 'Expected exactly one running Mem0 API'; exit 1; }
 
-# Password reset requires EMAIL and PASSWORD environment values; no --help parser.
-# Prune requires REQUEST_LOG_RETENTION_DAYS (default 30); running it deletes old logs.
+# Seed uses the API port inside the container, not the host-mapped port.
+docker exec -e API_URL=http://localhost:8000 "$mem0_container" bash scripts/seed.sh
+
+# Password reset requires exported EMAIL and PASSWORD; no --help parser.
+# Prune requires exported REQUEST_LOG_RETENTION_DAYS (default 30) and deletes old logs.
 # The Python scripts use the server's bare imports, so set PYTHONPATH=/app.
-bash apps/mem0/scripts/icarus-compose.sh exec -e PYTHONPATH=/app -e EMAIL -e PASSWORD mem0 python scripts/reset_admin_password.py
-bash apps/mem0/scripts/icarus-compose.sh exec -e PYTHONPATH=/app -e REQUEST_LOG_RETENTION_DAYS mem0 python scripts/prune_request_logs.py
+docker exec -e PYTHONPATH=/app -e EMAIL -e PASSWORD "$mem0_container" python scripts/reset_admin_password.py
+docker exec -e PYTHONPATH=/app -e REQUEST_LOG_RETENTION_DAYS "$mem0_container" python scripts/prune_request_logs.py
 ```
 
 Inspect each script's options and required environment before applying it. Seed initializes

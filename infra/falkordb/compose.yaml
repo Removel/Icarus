@@ -1,6 +1,6 @@
 services:
   falkordb:
-    image: falkordb/falkordb:v4.22.1
+    image: ${ICARUS_FALKORDB_IMAGE:-falkordb/falkordb:v4.22.1}
     environment:
       BROWSER: "0"
       RELA_MEM_FALKORDB_PASSWORD: ${RELA_MEM_FALKORDB_PASSWORD:?Set RELA_MEM_FALKORDB_PASSWORD}
@@ -10,7 +10,7 @@ services:
     ports:
       - "${ICARUS_FALKORDB_BIND_HOST:-127.0.0.1}:${ICARUS_FALKORDB_PORT:?Set ICARUS_FALKORDB_PORT}:6379"
     volumes:
-      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/rela-mem/falkordb:/var/lib/falkordb/data
+      - ${ICARUS_DATA_DIR:?Set ICARUS_DATA_DIR}/services/falkordb:/var/lib/falkordb/data
     healthcheck:
       test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$RELA_MEM_FALKORDB_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 5s

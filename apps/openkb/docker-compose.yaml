@@ -1,7 +1,9 @@
-name: openkb-dev
+name: icarus-openkb
 
 services:
   openkb:
+    image: ${ICARUS_OPENKB_IMAGE:-icarus-openkb:dev}
+    pull_policy: never
     build:
       context: .
       dockerfile: Dockerfile.icarus

@@ -45,7 +45,7 @@ mem0-down:
 	"$(REPO_ROOT)/bin/icarus" stop mem0
 
 mem0-logs:
-	bash "$(REPO_ROOT)/apps/mem0/scripts/icarus-compose.sh" logs -f
+	"$(REPO_ROOT)/bin/icarus" logs mem0
 
 openkb-up:
 	"$(REPO_ROOT)/bin/icarus" start openkb
@@ -54,7 +54,7 @@ openkb-down:
 	"$(REPO_ROOT)/bin/icarus" stop openkb
 
 openkb-logs:
-	bash "$(REPO_ROOT)/apps/openkb/scripts/icarus-compose.sh" logs -f
+	"$(REPO_ROOT)/bin/icarus" logs openkb
 
 webui-up:
 	"$(REPO_ROOT)/bin/icarus" start webui
@@ -63,7 +63,7 @@ webui-down:
 	"$(REPO_ROOT)/bin/icarus" stop webui
 
 webui-logs:
-	tail -f "$${ICARUS_DATA_DIR}/logs/webui.log"
+	"$(REPO_ROOT)/bin/icarus" logs webui
 
 test:
 	"$(REPO_ROOT)/scripts/test.sh"

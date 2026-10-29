@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,13 @@ REPO_ROOT = Path(__file__).resolve().parents[6]
 SCRIPT = REPO_ROOT / "apps" / "openkb" / "scripts" / "icarus_compose.py"
 COMPOSE = REPO_ROOT / "apps" / "openkb" / "docker-compose.yaml"
 PYPROJECT = REPO_ROOT / "apps" / "openkb" / "pyproject.toml"
+
+
+@pytest.fixture(autouse=True)
+def isolate_compose_environment(monkeypatch):
+    for name in tuple(os.environ):
+        if name.startswith("ICARUS_") or name == "OPENAI_API_KEY" or name.startswith("COMPOSE_"):
+            monkeypatch.delenv(name)
 
 
 def load_module():
@@ -101,7 +109,10 @@ def test_openkb_compose脚本缺少docker时给出明确错误(tmp_path, monkeyp
         module.main()
 
 
-def test_openkb_compose停止不依赖agent环境或完整运行配置(tmp_path, monkeypatch):
+@pytest.mark.parametrize("inherited_key", [None, "synthetic-inherited-key"])
+def test_openkb_compose停止不依赖agent环境或完整运行配置(tmp_path, monkeypatch, inherited_key):
+    if inherited_key is not None:
+        monkeypatch.setenv("ICARUS_OPENKB_LLM_API_KEY", inherited_key)
     module = load_module()
     fake_repo = tmp_path / "repo"
     script = fake_repo / "apps" / "openkb" / "scripts" / "icarus_compose.py"
@@ -122,4 +133,5 @@ def test_openkb_compose停止不依赖agent环境或完整运行配置(tmp_path,
 
     assert module.main() == 0
     assert recorded["command"][-1] == "down"
-    assert recorded["env"]["ICARUS_OPENKB_LLM_API_KEY"] == "not-used"
+    assert recorded["command"][recorded["command"].index("-p") + 1] == "icarus-openkb"
+    assert recorded["env"]["ICARUS_OPENKB_LLM_API_KEY"] == (inherited_key or "not-used")

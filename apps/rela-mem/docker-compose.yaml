@@ -1,8 +1,10 @@
 name: icarus-rela-mem
 services:
   rela-mem:
-    image: ${RELA_MEM_IMAGE:-rela-mem:dev}
-    build: .
+    image: ${ICARUS_RELA_MEM_IMAGE:-icarus-rela-mem:dev}
+    pull_policy: never
+    build:
+      context: .
     ports:
       - "${RELA_MEM_BIND_ADDRESS:-127.0.0.1}:${RELA_MEM_PORT:-8767}:8767"
     environment:

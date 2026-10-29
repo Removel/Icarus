@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,13 @@ REPO_ROOT = Path(__file__).resolve().parents[6]
 SCRIPT = REPO_ROOT / "apps" / "mem0" / "scripts" / "icarus_compose.py"
 COMPOSE = REPO_ROOT / "apps" / "mem0" / "server" / "docker-compose.yaml"
 RUNTIME_SMOKE = REPO_ROOT / "apps" / "agent" / "scripts" / "smoke_memory_runtime.py"
+
+
+@pytest.fixture(autouse=True)
+def isolate_compose_environment(monkeypatch):
+    for name in tuple(os.environ):
+        if name.startswith("ICARUS_") or name == "OPENAI_API_KEY" or name.startswith("COMPOSE_"):
+            monkeypatch.delenv(name)
 
 
 def load_module():
@@ -83,7 +91,8 @@ def test_mem0_compose脚本安全解析env并创建目录(tmp_path, monkeypatch)
     assert module.main() == 0
     assert recorded["env"]["ICARUS_MEM0_API_KEY"] == "key-with-$-chars"
     assert recorded["env"]["ICARUS_MEM0_LLM_API_KEY"] == "model$key"
-    assert (data_dir / "services" / "mem0" / "postgres").is_dir()
+    assert not (data_dir / "services" / "mem0" / "postgres").exists()
+    assert (data_dir / "services" / "mem0" / "history").is_dir()
     assert (data_dir / "services" / "mem0" / "models").is_dir()
     assert recorded["command"][-1] == "config"
     assert recorded["command"][0] == "/fake/docker-compose"
@@ -110,7 +119,10 @@ def test_mem0_compose脚本缺少docker时给出明确错误(tmp_path, monkeypat
         module.main()
 
 
-def test_mem0_compose停止不依赖agent环境或完整运行配置(tmp_path, monkeypatch):
+@pytest.mark.parametrize("inherited_key", [None, "synthetic-inherited-key"])
+def test_mem0_compose停止不依赖agent环境或完整运行配置(tmp_path, monkeypatch, inherited_key):
+    if inherited_key is not None:
+        monkeypatch.setenv("ICARUS_MEM0_LLM_API_KEY", inherited_key)
     module = load_module()
     fake_repo = tmp_path / "repo"
     script = fake_repo / "apps" / "mem0" / "scripts" / "icarus_compose.py"
@@ -131,7 +143,8 @@ def test_mem0_compose停止不依赖agent环境或完整运行配置(tmp_path, m
 
     assert module.main() == 0
     assert recorded["command"][-1] == "down"
-    assert recorded["env"]["ICARUS_MEM0_LLM_API_KEY"] == "not-used"
+    assert recorded["command"][recorded["command"].index("-p") + 1] == "icarus-mem0"
+    assert recorded["env"]["ICARUS_MEM0_LLM_API_KEY"] == (inherited_key or "not-used")
 
 
 def test_memory_runtime_smoke包含标准必需knowledge配置():

@@ -6,12 +6,16 @@ Icarus is an application-oriented Monorepo. Keep business code, dependency decla
 lockfiles, Dockerfiles, app-owned Compose definitions, and development environments in the
 owning `apps/<app>/`. The narrow exception is independently managed, repository-owned
 middleware: its Compose definitions live in `infra/<component>/`, while `icarus.toml`
-registers public topology, commands and environment bindings. Mem0's private PostgreSQL
-remains bundled in its app-owned Compose project.
+registers public topology, commands and environment bindings. Mem0 and rela-mem share
+one independently managed PostgreSQL/pgvector instance, with separate databases and
+restricted application accounts. Application Compose files contain only their own services.
 
 The repository root provides a Python 3.11+ stdlib-only lifecycle and validation control
 plane, not a shared Python distribution, dependency manifest or environment. Applications
-consume connection environment variables; they do not import the controller or read its TOML.
+consume connection environment variables and do not import the controller. The shared
+standalone loader reads only default root TOML runtime metadata, not component topology;
+managed children use the configuration already injected by the control plane. Keep public
+paths/addresses in TOML, credentials in ignored `.env`, and business settings in app-owned files.
 
 `bin/icarus` delegates to `scripts/icarus/`; Makefile targets are shortcuts to those
 same entry points. AgentRuntime runs inside Gateway; do not introduce a separate Agent

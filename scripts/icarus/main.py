@@ -48,8 +48,12 @@ Invocation-only explicit-component overrides: --mode local|remote --host HOST --
 Operational paths always resolve from the repository. Legacy 'icarus --session-id ID' opens the UI.""")
 
     def _runtime(self, registry, *, dev=False, foreground_args=()):
-        values = merged_environment(self.repo_root, self.environ)
-        data_value = values.get("ICARUS_DATA_DIR", "")
+        metadata = {key: str(value).lower() if type(value) is bool else str(value)
+                    for key, value in registry.env.items()}
+        selector = {"ICARUS_ENV_FILE": self.environ["ICARUS_ENV_FILE"]} if "ICARUS_ENV_FILE" in self.environ else {}
+        values = {**merged_environment(self.repo_root, selector), **metadata, **self.environ}
+        values["ICARUS_ENVIRONMENT_READY"] = "1"
+        data_value = self.environ.get("ICARUS_DATA_DIR") or registry.data_dir or values.get("ICARUS_DATA_DIR", "")
         data_value = expand_braced_variables(data_value, values)
         data_dir = Path(data_value).expanduser() if data_value else None
         if data_dir is not None:

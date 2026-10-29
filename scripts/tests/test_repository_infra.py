@@ -18,6 +18,24 @@ def git(*args):
     ).stdout
 
 
+@pytest.mark.parametrize("app", ["mem0", "openkb", "webui"])
+def test_make_log_shortcut_uses_registered_lifecycle(tmp_path, app):
+    import json
+    import os
+    import shutil
+    shutil.copy2(ROOT / "Makefile", tmp_path / "Makefile")
+    binary = tmp_path / "bin/icarus"
+    binary.parent.mkdir()
+    log = tmp_path / "arguments.json"
+    binary.write_text("#!/usr/bin/env python3\nimport json, os, sys\nfrom pathlib import Path\n"
+                      "Path(os.environ['CALL_LOG']).write_text(json.dumps(sys.argv[1:]))\n")
+    binary.chmod(0o755)
+    result = subprocess.run(["make", "-C", str(tmp_path), f"{app}-logs"],
+                            env={**os.environ, "CALL_LOG": str(log)}, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(log.read_text()) == ["logs", app]
+
+
 def test_snapshot_checkout_uses_lf_without_removing_trailing_space():
     attributes = git(
         "check-attr", "eol", "whitespace", "--",
@@ -85,7 +103,8 @@ def test_failed_service_dev_install_does_not_continue_to_command_links(tmp_path,
 
 def test_infra_compose_files_preserve_data_paths_and_network():
     import yaml
-    for name, image in (("postgres", "pgvector/pgvector:pg17"), ("falkordb", "falkordb/falkordb:v4.22.1")):
+    for name, image in (("postgres", "${ICARUS_POSTGRES_IMAGE:-pgvector/pgvector:pg17}"),
+                        ("falkordb", "${ICARUS_FALKORDB_IMAGE:-falkordb/falkordb:v4.22.1}")):
         path = ROOT / "infra" / name / "compose.yaml"
         assert path.exists(), f"{name} must have independently managed infrastructure"
         doc = yaml.safe_load(path.read_text())
@@ -94,7 +113,7 @@ def test_infra_compose_files_preserve_data_paths_and_network():
         assert doc["networks"]["icarus"]["name"] == "${ICARUS_NETWORK:-icarus}"
         service = doc["services"][name]
         assert service["image"] == image
-        assert f"services/rela-mem/{name}" in str(service["volumes"])
+        assert f"services/{name}" in str(service["volumes"])
         assert service["healthcheck"]
 
 
@@ -105,7 +124,7 @@ def test_rela_mem_compose_is_app_only_and_connection_injectable():
     assert compose["networks"]["icarus"]["external"] is True
     app = compose["services"]["rela-mem"]
     assert compose["networks"]["icarus"]["name"] == "${ICARUS_NETWORK:-icarus}"
-    assert app["image"] == "${RELA_MEM_IMAGE:-rela-mem:dev}"
+    assert app["image"] == "${ICARUS_RELA_MEM_IMAGE:-icarus-rela-mem:dev}"
     assert "depends_on" not in app
     for key in ("RELA_MEM_PG_HOST", "RELA_MEM_PG_PORT", "RELA_MEM_PG_DATABASE", "RELA_MEM_PG_USER", "RELA_MEM_PG_SCHEMA", "RELA_MEM_FALKORDB_HOST", "RELA_MEM_FALKORDB_PORT", "RELA_MEM_FALKORDB_GRAPH"):
         assert key in app["environment"]

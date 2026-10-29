@@ -10,7 +10,8 @@
 
 根层是 Python 3.11+ 标准库控制面，不是共享应用环境或业务配置服务。
 应用代码、Dockerfile、安装依赖、业务 JSON 与 app-only Compose 仍归 `apps/<app>/`；
-独立中间件 Compose 归 `infra/<component>/`。应用只消费连接环境变量，不读取根 TOML、不 import 控制面。
+独立中间件 Compose 归 `infra/<component>/`。应用通过环境消费组件连接，不 import 控制面；
+共享的独立入口 loader 只读取默认根 TOML 的 runtime 元数据，不解析组件依赖图。
 没有远程部署、SSH、镜像推送、数据库迁移或凭据轮换能力。
 
 ```text
@@ -34,7 +35,8 @@ bin/icarus
 `registry.py` 的 frozen dataclass 为 `Probe`、`Connection`、`Dependency`、`Component`、`Registry`。
 `load_registry` 读取 base → 旁侧 `<stem>.local.toml` → 本次 overrides：表递归合并，标量/列表替换。
 默认 base 为根 `icarus.toml`；`--config PATH` 选择其他 base，且不再叠加默认机器覆盖文件。
-相对配置路径和注册表运维路径都以仓库根为基准。
+相对配置路径和注册表运维路径都以仓库根为基准。`Registry` 另保存 `[runtime].data_dir` 和
+`[runtime.env]`；数据目录默认 `~/.icarus`，必须是绝对路径或 `~/` 路径，runtime 环境拒绝 Secret 字面量。
 
 严格校验 version=1、未知字段、类型、组件/owner 引用、环境变量名、无凭据 URL、相对路径越界及
 已存在 symlink 逃逸。`env` 的凭据型变量名拒绝字面值，Secret 用 `secret_env` 引用变量名。
@@ -55,15 +57,14 @@ CLI 地址覆盖同时调整 URL/listener，不写回文件。
 | gateway | 原生 process，根 workdir | agent | — |
 | agent | embedded，owner=gateway | mem0、openkb | rela-mem |
 | tui | foreground，调用者 Workspace | gateway | — |
-| webui | 原生 process，workdir=apps/webui | — | gateway、mem0、openkb |
-| mem0 | 应用 Compose，3 个容器（API/PG/Dashboard） | mem0-postgres | — |
-| mem0-postgres | bundled，owner=mem0 | — | — |
+| webui | 原生 process，workdir=apps/webui | — | gateway、mem0、openkb、rela-mem |
+| mem0 | app-only Compose，1 个 API 容器 | postgres | — |
 | openkb | 应用 Compose，1 个容器 | — | — |
 | rela-mem | app-only Compose，1 个容器 | postgres、falkordb | — |
 | postgres / falkordb | 独立 infra Compose，各 1 个容器 | — | — |
 
 七个 app 为 default_stack；middleware 自身不是默认根，通过 required 闭包加入。Argus 未登记。
-Gateway/Agent、Mem0/private PG 是生命周期 owner 关系，不是反向 required 边。
+Gateway/Agent 是生命周期 owner 关系；Mem0 与 rela-mem 通过 required 边共享 PostgreSQL。
 
 `graph.topological_order` / `required_closure` 返回稳定、去重、依赖优先顺序，`reverse_order` 反转停止顺序。
 embedded 节点的依赖在 owner 启动前预检，不等待尚未启动的 owner。bundled 节点归一到 owner，
@@ -73,8 +74,12 @@ embedded 节点的依赖在 owner 启动前预检，不等待尚未启动的 own
 ## 环境与应用配置边界
 
 `environment.merged_environment` 合并选定 dotenv 和进程，进程优先；`ICARUS_ENV_FILE` 替换而非追加
-根 `.env`，相对路径以根解析，显式不存在的文件报错。绝对 `ICARUS_DATA_DIR` 在 runtime 创建时校验，
-支持该路径中的 `${NAME}` 展开。各 standalone 应用仍保留自己的 dotenv 发现规则。
+根 `.env`，相对路径以根解析，显式不存在的文件报错。runtime 构建按进程 > TOML runtime.env > dotenv
+合并非敏感值；数据根目录按进程 `ICARUS_DATA_DIR` > TOML runtime.data_dir > dotenv 选择，
+展开 `${NAME}` 和 `~` 后校验绝对路径。共享 standalone loader 读取默认根 TOML 的 runtime 元数据，
+以现有进程优先并填充缺失值，再以 `override=False` 加载根 dotenv；控制面用
+`ICARUS_ENVIRONMENT_READY=1` 标记已完成配置选择的子进程，共享 loader 不再重复加载默认 TOML/dotenv，
+避免 `--config` 隔离被破坏。其他独立应用保持各自加载规则。
 
 `build_child_environment` 是无 I/O 纯转换：
 
@@ -93,8 +98,10 @@ rela-mem loader 仅覆盖八个 PG/Falkor 连接字段；显式空值校验失�
 两者都不回写业务 JSON，既有 HTTPS/鉴权规则不变。
 
 PostgreSQL 首次 bootstrap 使用 **provider 自己**的 `components.postgres.env`：
-`ICARUS_POSTGRES_USER` / `ICARUS_POSTGRES_DATABASE`，以及引用的 `RELA_MEM_PG_PASSWORD`。
-控制面不反向扫描第一个 consumer，不推断变量名；consumer 边另行声明其登录角色/数据库/schema。
+`ICARUS_POSTGRES_USER` / `ICARUS_POSTGRES_DATABASE`，以及引用的 `ICARUS_POSTGRES_PASSWORD`。
+默认管理员为 `icarus_admin`，空集群由 `infra/postgres/init/db-init.sh` 创建 `mem0_app`/`mem0_local` 与
+`rela_mem`/`rela_mem` 数据库和受限账号，并安装各库 vector 扩展及 rela-mem schema。
+控制面不反向扫描 consumer；consumer 边另行声明其登录角色/数据库/schema。
 已有数据库不会因环境改变而新建角色、迁移或旋转密码；remote 数据库须事先配置好访问权限。
 
 ## 生命周期与失败语义
@@ -140,8 +147,8 @@ foreground 每 PID 一条记录。身份同时包含 repo、marker argv token、
 **当前原生受管进程要求 Linux 可读 `/proc`；不是 macOS/Windows 原生管理支持声明。**
 
 **旧 rela-mem 三合一 Compose 必须由操作者先停止，新旧项目不得同时挂载保留数据库目录。**
-没有自动 active-mount 碰撞检查。拆分仍使用 `services/rela-mem/postgres` 与 `services/rela-mem/falkordb`，
-不迁移、不清空数据。具体 cutover 和 remote 网络注意事项见 infra README。
+没有自动 active-mount 碰撞检查。新部署使用 `services/postgres` 与 `services/falkordb`，
+不迁移、不清空旧目录。具体 cutover 和 remote 网络注意事项见 infra README。
 
 ## 验证与证据边界
 
