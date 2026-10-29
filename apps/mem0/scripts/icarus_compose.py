@@ -80,7 +80,7 @@ def _validate_start_environment(environment: dict[str, str], repo_root: Path) ->
     docker = shutil.which("docker")
     if compose is None and docker is None:
         raise SystemExit("Mem0 requires Docker with the compose plugin.")
-    for relative in ("postgres", "history", "models", "backups"):
+    for relative in ("history", "models"):
         (data_dir / "services" / "mem0" / relative).mkdir(
             parents=True, exist_ok=True
         )
@@ -99,7 +99,7 @@ def _run_compose(
         else [docker, "compose"]
     )
     env_args = ["--env-file", str(env_file) if env_file.is_file() else os.devnull]
-    scope = ["-p", environment.get("COMPOSE_PROJECT_NAME", "mem0-dev"),
+    scope = ["-p", environment.get("COMPOSE_PROJECT_NAME", "icarus-mem0"),
              "-f", environment.get("COMPOSE_FILE", str(compose_file))]
     completed = subprocess.run(
         [*command, *env_args, *scope, *sys.argv[1:]],

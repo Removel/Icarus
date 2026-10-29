@@ -1,7 +1,9 @@
-name: mem0-dev
+name: icarus-mem0
 
 services:
   mem0:
+    image: ${ICARUS_MEM0_IMAGE:-icarus-mem0:dev}
+    pull_policy: never
     build:
       context: ..
       dockerfile: server/dev.Dockerfile
@@ -40,4 +42,5 @@ services:
 
 networks:
   mem0_network:
-    driver: bridge
+    name: ${ICARUS_NETWORK:-icarus}
+    external: true

@@ -90,7 +90,7 @@ def _run_compose(
         raise SystemExit("OpenKB requires Docker with the compose plugin.")
     command = [compose] if compose is not None else [docker, "compose"]
     env_args = ["--env-file", str(env_file) if env_file.is_file() else os.devnull]
-    scope = ["-p", environment.get("COMPOSE_PROJECT_NAME", "openkb-dev"),
+    scope = ["-p", environment.get("COMPOSE_PROJECT_NAME", "icarus-openkb"),
              "-f", environment.get("COMPOSE_FILE", str(compose_file))]
     completed = subprocess.run(
         [*command, *env_args, *scope, *sys.argv[1:]],
