@@ -53,6 +53,25 @@ def test_webui_fast_checks_precede_browser_install_and_tests():
     browser = next(i for i, step in enumerate(steps) if "playwright install" in step.get("run", ""))
     assert fast < browser
     assert doc["concurrency"]["cancel-in-progress"] is True
+    assert steps[fast]["if"] == "matrix.shard == 1"
+
+
+def test_webui_shards_preserve_all_results_and_gate_complete_coverage():
+    jobs = workflow("webui.yml")["jobs"]
+    check = jobs["check"]
+    assert check["strategy"]["matrix"]["shard"] == [1, 2, 3, 4]
+    assert check["strategy"]["fail-fast"] is False
+    run = next(step["run"] for step in check["steps"] if step.get("name") == "Run WebUI tests")
+    assert "--shard-index=${{ matrix.shard }} --shard-total=4" in run
+    assert "--timings-json=test-results/timings.json" in run
+    artifact = next(step for step in check["steps"] if step.get("uses", "").startswith("actions/upload-artifact@"))
+    assert artifact["if"] == "always()"
+    assert artifact["with"]["name"] == "webui-test-results-${{ matrix.shard }}"
+    gate = jobs["reports"]
+    assert gate["if"] == "always()" and gate["needs"] == "check"
+    assert any("check_test_reports.py" in step.get("run", "") for step in gate["steps"])
+    assert any(step.get("if") == "needs.check.result != 'success'" and step["run"] == "exit 1"
+               for step in gate["steps"])
 
 
 def test_syntax_checks_use_full_git_history_and_shared_checked_commands():
