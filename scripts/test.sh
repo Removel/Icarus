@@ -10,7 +10,6 @@ bash "$repo_root/apps/mem0/scripts/test.sh"
 bash "$repo_root/apps/openkb/scripts/test.sh"
 "$repo_root/apps/agent/scripts/test.sh"
 "$repo_root/apps/gateway/scripts/test.sh"
-"$repo_root/apps/argus/scripts/test.sh"
 "$repo_root/apps/tui/scripts/test.sh"
 
 cd "$repo_root"

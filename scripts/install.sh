@@ -9,7 +9,7 @@ case "$mode" in
   *) echo "Usage: $0 [--dev]" >&2; exit 2 ;;
 esac
 
-for app in agent gateway argus tui; do
+for app in agent gateway tui; do
   if [ "$mode" = "--dev" ]; then
     "$repo_root/apps/$app/scripts/install.sh" --dev
   else
