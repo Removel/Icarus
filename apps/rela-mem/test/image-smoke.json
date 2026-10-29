@@ -1,0 +1,24 @@
+{
+  "services": [
+    {
+      "name": "postgres",
+      "image": "pgvector/pgvector:pg17",
+      "env": {"POSTGRES_DB": "rela_mem", "POSTGRES_USER": "rela_mem", "POSTGRES_PASSWORD": "ci-smoke-pg"},
+      "ready": ["pg_isready", "-h", "127.0.0.1", "-U", "rela_mem", "-d", "rela_mem"]
+    },
+    {
+      "name": "graph",
+      "image": "falkordb/falkordb:v4.22.1",
+      "entrypoint": "redis-server",
+      "command": ["--loadmodule", "/var/lib/falkordb/bin/falkordb.so", "--requirepass", "ci-smoke-graph"],
+      "ready": ["redis-cli", "-a", "ci-smoke-graph", "ping"]
+    }
+  ],
+  "env": {
+    "RELA_MEM_PG_HOST": "postgres", "RELA_MEM_PG_PORT": "5432",
+    "RELA_MEM_PG_PASSWORD": "ci-smoke-pg",
+    "RELA_MEM_FALKORDB_HOST": "graph", "RELA_MEM_FALKORDB_PORT": "6379",
+    "RELA_MEM_FALKORDB_PASSWORD": "ci-smoke-graph",
+    "RELA_MEM_API_TOKEN": "ci-smoke-api-token"
+  }
+}
