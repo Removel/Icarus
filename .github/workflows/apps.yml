@@ -1,10 +1,18 @@
 name: Service application contracts
 on:
+  workflow_call:
+    inputs:
+      apps:
+        type: string
+        default: '["mem0","openkb","rela-mem"]'
+      skip_control:
+        type: boolean
+        default: false
   workflow_dispatch:
   push:
-    paths: ['apps/mem0/**', 'apps/openkb/**', 'apps/agent/**', 'packages/**', 'scripts/**', 'Makefile', '.gitattributes', '.gitignore', '.github/workflows/apps.yml']
+    paths: ['apps/mem0/**', 'apps/openkb/**', 'apps/rela-mem/**', 'apps/agent/**', 'packages/**', 'scripts/**', 'bin/**', 'infra/**', 'icarus.toml', 'icarus.local.toml.example', '.env.example', 'Makefile', '.gitattributes', '.gitignore', '.github/workflows/apps.yml']
   pull_request:
-    paths: ['apps/mem0/**', 'apps/openkb/**', 'apps/agent/**', 'packages/**', 'scripts/**', 'Makefile', '.gitattributes', '.gitignore', '.github/workflows/apps.yml']
+    paths: ['apps/mem0/**', 'apps/openkb/**', 'apps/rela-mem/**', 'apps/agent/**', 'packages/**', 'scripts/**', 'bin/**', 'infra/**', 'icarus.toml', 'icarus.local.toml.example', '.env.example', 'Makefile', '.gitattributes', '.gitignore', '.github/workflows/apps.yml']
 permissions:
   contents: read
 concurrency:
@@ -17,21 +25,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [mem0, openkb]
+        app: ${{ fromJSON(inputs.apps || '["mem0","openkb","rela-mem"]') }}
     env:
       MEM0_TELEMETRY: 'false'
       PYTHONUTF8: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: bash apps/${{ matrix.app }}/scripts/install.sh --dev
       - name: Run application-owned contracts
         shell: bash
+        env:
+          PYTEST_ADDOPTS: --junitxml=${{ github.workspace }}/test-results/${{ matrix.app }}.xml
         run: |
           mkdir -p test-results
           set -o pipefail
@@ -39,23 +49,18 @@ jobs:
       - name: Verify OpenKB lock without rewriting it
         if: matrix.app == 'openkb'
         run: uv lock --check --project apps/openkb
-      - uses: actions/upload-artifact@v4
+      - name: Run rela-mem against isolated databases
+        if: matrix.app == 'rela-mem'
+        run: python apps/rela-mem/scripts/ci-integration.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: service-contracts-${{ matrix.app }}
-          path: test-results/
+          path: |
+            test-results/
+            apps/rela-mem/test-results/
+          retention-days: 14
           if-no-files-found: ignore
   repository-control:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Use empty local config for offline control tests
-        run: python -c "from pathlib import Path; Path('.env').touch()"
-      - run: bash apps/agent/scripts/install.sh --dev
-      - run: apps/agent/.venv/bin/python -m pytest scripts/tests -q
+    if: ${{ !inputs.skip_control }}
+    uses: ./.github/workflows/control.yml

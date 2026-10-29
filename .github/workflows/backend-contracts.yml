@@ -1,5 +1,6 @@
 name: Backend contracts
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     paths:
@@ -17,6 +18,9 @@ on:
       - '.github/workflows/backend-contracts.yml'
 permissions:
   contents: read
+concurrency:
+  group: backend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   agent-gateway:
     strategy:
@@ -28,25 +32,19 @@ jobs:
     env:
       PYTHONUTF8: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: '3.12'
       - name: Use an empty local configuration for offline tests
         run: python -c "from pathlib import Path; Path('.env').touch()"
       - name: Agent memory, runtime and tool regressions
+        if: runner.os == 'Windows'
         run: >-
           uv run --no-project --with-editable ./apps/agent --with-requirements apps/agent/requirements-dev.txt
-          python -m pytest
-          apps/agent/test/agent_app/plugins/memory/test_factory.py
-          apps/agent/test/agent_app/plugins/memory/test_plugin.py
-          apps/agent/test/agent_app/plugins/memory/test_adapter.py
-          apps/agent/test/agent_app/plugins/memory/test_tools.py
-          apps/agent/test/agent_app/plugins/builtin_tools/test_tools.py
-          apps/agent/test/agent_app/application/test_memory_context.py
-          apps/agent/test/agent_app/application/test_agent_runtime.py
+          python apps/agent/scripts/test-contracts.py
           -q --junitxml=test-results/agent.xml
       - name: Gateway application suite
         run: >-
@@ -55,19 +53,23 @@ jobs:
           python -m pytest apps/gateway/test -q --junitxml=test-results/gateway.xml
       - name: Agent application suite on Linux
         if: runner.os == 'Linux'
-        run: >-
-          uv run --no-project --with-editable ./apps/agent --with-requirements apps/agent/requirements-dev.txt
-          python -m pytest apps/agent/test -q --junitxml=test-results/agent-full.xml
+        run: |
+          bash apps/agent/scripts/install.sh --dev
+          make test-agent
+        env:
+          PYTEST_ADDOPTS: --junitxml=test-results/agent-full.xml
       - name: Agent type contracts
         if: runner.os == 'Linux'
-        run: >-
-          uv run --no-project --with-editable ./apps/agent --with-requirements apps/agent/requirements-dev.txt
-          python -m mypy --config-file apps/agent/pyproject.toml -p icarus -p agent_app
+        run: make typecheck-agent
+      - name: Verify installed Agent wheel and resources
+        if: runner.os == 'Linux'
+        run: make check-package-agent
       - name: Compile
         run: python -m compileall -q apps/agent/src apps/gateway/src packages
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: agent-gateway-${{ matrix.os }}
           path: test-results/
+          retention-days: 14
           if-no-files-found: ignore

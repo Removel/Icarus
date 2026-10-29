@@ -1,40 +1,37 @@
 name: Repository syntax
 on:
+  workflow_call:
   workflow_dispatch:
   push:
-    paths: ['apps/**', 'packages/**', 'scripts/**', '.github/workflows/**']
+    paths: ['apps/**', 'packages/**', 'scripts/**', 'bin/**', 'infra/**', 'icarus.toml', 'icarus.local.toml.example', '.env.example', 'Makefile', '.gitattributes', '.gitignore', '.editorconfig', '.github/workflows/**']
   pull_request:
-    paths: ['apps/**', 'packages/**', 'scripts/**', '.github/workflows/**']
+    paths: ['apps/**', 'packages/**', 'scripts/**', 'bin/**', 'infra/**', 'icarus.toml', 'icarus.local.toml.example', '.env.example', 'Makefile', '.gitattributes', '.gitignore', '.editorconfig', '.github/workflows/**']
 permissions:
   contents: read
 concurrency:
-  group: syntax-${{ github.ref }}
+  group: syntax-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   syntax:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.23'
           cache: false
       - run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
       - run: actionlint
       - name: Compile retained Python code
-        run: >-
-          python -m compileall -q scripts packages apps/agent/src apps/gateway/src
-          apps/tui/src apps/mem0/mem0 apps/mem0/server apps/mem0/scripts
-          apps/openkb/openkb apps/openkb/scripts
+        run: python scripts/ci/checks.py compile
       - name: Check application shell entrypoints
-        run: |
-          bash -n apps/mem0/scripts/install.sh apps/mem0/scripts/test.sh
-          bash -n apps/openkb/scripts/install.sh apps/openkb/scripts/test.sh
-          bash -n scripts/install.sh scripts/test.sh
-      - run: git diff --check
+        run: python scripts/ci/checks.py shell
+      - name: Check committed whitespace in the event's Git range
+        run: python scripts/ci/checks.py diff

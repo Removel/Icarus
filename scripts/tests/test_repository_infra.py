@@ -176,7 +176,8 @@ def test_service_workflow_covers_root_control_and_runs_the_app_entrypoints():
         for path in ("Makefile", "scripts/**", "apps/mem0/**", "apps/openkb/**"):
             assert path in patterns
     job = doc["jobs"]["contracts"]
-    assert job["strategy"]["matrix"]["app"] == ["mem0", "openkb"]
+    assert events["workflow_call"]["inputs"]["apps"]["default"] == '["mem0","openkb","rela-mem"]'
+    assert "fromJSON" in job["strategy"]["matrix"]["app"]
     runs = "\n".join(step.get("run", "") for step in job["steps"])
     assert "make test-${{ matrix.app }}" in runs
     assert "scripts/install.sh --dev" in runs
@@ -184,16 +185,18 @@ def test_service_workflow_covers_root_control_and_runs_the_app_entrypoints():
 
 
 def test_image_workflow_builds_app_owned_inputs_without_publishing():
+    import json
     import yaml
 
     doc = yaml.safe_load((ROOT / ".github/workflows/images.yml").read_text())
     assert doc["permissions"] == {"contents": "read"}
     job = doc["jobs"]["build"]
-    matrix = job["strategy"]["matrix"]["include"]
-    assert {entry["app"] for entry in matrix} == {"mem0", "openkb", "rela-mem", "webui"}
-    for entry in matrix:
-        assert (ROOT / entry["context"]).is_dir()
-        assert (ROOT / entry["dockerfile"]).is_file()
+    events = doc.get("on", doc.get(True))
+    apps = json.loads(events["workflow_call"]["inputs"]["apps"]["default"])
+    assert set(apps) == {"mem0", "openkb", "rela-mem", "webui"}
+    assert "fromJSON" in job["strategy"]["matrix"]["app"]
+    for app in apps:
+        assert (ROOT / "apps" / app).is_dir()
     build_steps = [step for step in job["steps"]
                    if step.get("uses", "").startswith("docker/build-push-action@")]
     assert build_steps
@@ -218,6 +221,9 @@ def test_new_workflows_never_run_fork_code_with_write_permissions():
             assert "continue-on-error" not in job
             if pull_request_triggered:
                 assert "secrets." not in str(job)
-            for step in job["steps"]:
+            if "uses" in job:
+                assert job["uses"].startswith("./.github/workflows/"), file.name
+                assert not job.get("secrets"), file.name
+            for step in job.get("steps", []):
                 if step.get("uses", "").startswith("actions/checkout@"):
                     assert step["with"]["persist-credentials"] is False

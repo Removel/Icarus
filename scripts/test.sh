@@ -11,6 +11,8 @@ bash "$repo_root/apps/openkb/scripts/test.sh"
 "$repo_root/apps/agent/scripts/test.sh"
 "$repo_root/apps/gateway/scripts/test.sh"
 "$repo_root/apps/tui/scripts/test.sh"
+bash "$repo_root/apps/rela-mem/scripts/test.sh"
+"$repo_root/apps/agent/.venv/bin/python" "$repo_root/apps/webui/scripts/test.py"
 
 cd "$repo_root"
 git diff --check

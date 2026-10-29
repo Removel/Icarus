@@ -9,19 +9,46 @@ on:
         description: Image tag/version for this manual run (for example v0.1.0)
         required: true
         type: string
+      dry_run:
+        description: Validate promotion without updating version or latest tags
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-images-${{ github.ref }}
+  group: publish-runtime-images
   cancel-in-progress: false
 
-env:
-  VERSION: ${{ github.event.release.tag_name || inputs.tag }}
-
 jobs:
+  identity:
+    if: github.repository == 'Removel/Icarus'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: python scripts/ci/release.py prepare
+  verify:
+    needs: identity
+    uses: ./.github/workflows/ci.yml
+    with:
+      full: true
   build:
+    needs: [identity, verify]
     name: ${{ matrix.app.name }} / ${{ matrix.platform.arch }}
     environment: DOCKER
     runs-on: ${{ matrix.platform.runner }}
@@ -48,50 +75,96 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build and push platform image
-        uses: docker/build-push-action@v6
+          ref: ${{ needs.identity.outputs.sha }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build platform image once
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.app.context }}
           file: ${{ matrix.app.dockerfile }}
           platforms: linux/${{ matrix.platform.arch }}
-          push: true
-          tags: removel/icarus-${{ matrix.app.name }}:${{ github.sha }}-${{ matrix.platform.arch }}
+          push: false
+          load: true
+          tags: removel/icarus-${{ matrix.app.name }}:${{ needs.identity.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform.arch }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ needs.identity.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.identity.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.app.name }}-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app.name }}-${{ matrix.platform.arch }}
+      - name: Smoke the exact built platform image
+        env:
+          APP: ${{ matrix.app.name }}
+          IMAGE: removel/icarus-${{ matrix.app.name }}:${{ needs.identity.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform.arch }}
+        run: python3 scripts/ci/smoke_image.py "$APP" "$IMAGE"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push tested candidate and record digest
+        env:
+          IMAGE: removel/icarus-${{ matrix.app.name }}:${{ needs.identity.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.platform.arch }}
+          APP: ${{ matrix.app.name }}
+          ARCH: ${{ matrix.platform.arch }}
+          RELEASE_SHA: ${{ needs.identity.outputs.sha }}
+        run: |
+          docker push "$IMAGE"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          digests = json.loads(subprocess.check_output(['docker', 'image', 'inspect', os.environ['IMAGE'], '--format', '{{json .RepoDigests}}'], text=True))
+          assert len(digests) == 1, digests
+          record = {'app': os.environ['APP'], 'arch': os.environ['ARCH'], 'sha': os.environ['RELEASE_SHA'], 'digest': digests[0].split('@', 1)[1]}
+          pathlib.Path('digests').mkdir(exist_ok=True)
+          pathlib.Path(f"digests/{record['app']}-{record['arch']}.json").write_text(json.dumps(record) + '\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ matrix.app.name }}-${{ matrix.platform.arch }}
+          path: digests/*.json
+          retention-days: 90
 
   merge:
     name: Merge multi-arch manifests
-    needs: build
+    needs: [identity, build]
     environment: DOCKER
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.identity.outputs.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Merge platform images
+        env:
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          RELEASE_SHA: ${{ needs.identity.outputs.sha }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
           set -euo pipefail
-          version="${{ env.VERSION }}"
-          version="${version#v}"
-          for app in webui mem0 openkb rela-mem; do
-            docker buildx imagetools create \
-              -t "removel/icarus-${app}:${version}" \
-              -t "removel/icarus-${app}:latest" \
-              "removel/icarus-${app}:${GITHUB_SHA}-amd64" \
-              "removel/icarus-${app}:${GITHUB_SHA}-arm64"
-          done
+          if [ "$DRY_RUN" = true ]; then
+            python3 scripts/ci/release.py promote --dry-run
+          else
+            python3 scripts/ci/release.py promote
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: release-record-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-record.json
+          retention-days: 90
+          if-no-files-found: ignore

@@ -1,0 +1,102 @@
+name: CI quality gates
+on:
+  workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: false
+  workflow_dispatch:
+  pull_request:
+    branches: [feature, dev, main]
+  push:
+    branches: [feature, dev, main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      expected: ${{ steps.select.outputs.expected }}
+      service_apps: ${{ steps.select.outputs.service_apps }}
+      images: ${{ steps.select.outputs.images }}
+      run_repository_control: ${{ steps.select.outputs.run_repository_control }}
+      run_backend: ${{ steps.select.outputs.run_backend }}
+      run_tui: ${{ steps.select.outputs.run_tui }}
+      run_services: ${{ steps.select.outputs.run_services }}
+      run_webui: ${{ steps.select.outputs.run_webui }}
+      run_images: ${{ steps.select.outputs.run_images }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - id: select
+        name: Select expected checks from the complete Git diff
+        env:
+          FORCE_FULL: ${{ inputs.full }}
+        run: |
+          if [ "$FORCE_FULL" = true ]; then
+            python scripts/ci/changes.py --full
+          else
+            python scripts/ci/changes.py
+          fi
+  syntax:
+    needs: changes
+    uses: ./.github/workflows/lint.yml
+  repository-control:
+    needs: [changes, syntax]
+    if: needs.changes.outputs.run_repository_control == 'true'
+    uses: ./.github/workflows/control.yml
+  backend:
+    needs: [changes, syntax]
+    if: needs.changes.outputs.run_backend == 'true'
+    uses: ./.github/workflows/backend-contracts.yml
+  tui:
+    needs: [changes, syntax]
+    if: needs.changes.outputs.run_tui == 'true'
+    uses: ./.github/workflows/tui.yml
+  services:
+    needs: [changes, syntax]
+    if: needs.changes.outputs.run_services == 'true'
+    uses: ./.github/workflows/apps.yml
+    with:
+      apps: ${{ needs.changes.outputs.service_apps }}
+      skip_control: true
+  webui:
+    needs: [changes, syntax]
+    if: needs.changes.outputs.run_webui == 'true'
+    uses: ./.github/workflows/webui.yml
+  images:
+    needs: [changes, syntax, backend, services, webui]
+    if: >-
+      always() && needs.changes.result == 'success' &&
+      needs.changes.outputs.run_images == 'true' && needs.syntax.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/images.yml
+    with:
+      apps: ${{ needs.changes.outputs.images }}
+  ci-required:
+    name: ci-required
+    if: always()
+    needs: [changes, syntax, repository-control, backend, tui, services, webui, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Require every selected task to succeed
+        env:
+          EXPECTED_TASKS: ${{ needs.changes.outputs.expected }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python scripts/ci/check_results.py

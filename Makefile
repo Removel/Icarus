@@ -95,7 +95,10 @@ test-mem0-full:
 test-openkb-full:
 	bash "$(REPO_ROOT)/apps/openkb/scripts/test.sh" --full
 
-.PHONY: test-rela-mem test-rela-mem-integration
+.PHONY: test-rela-mem test-rela-mem-integration test-webui
+
+test-webui:
+	"$(REPO_ROOT)/apps/agent/.venv/bin/python" "$(REPO_ROOT)/apps/webui/scripts/test.py" $(ARGS)
 
 test-rela-mem:
 	bash "$(REPO_ROOT)/apps/rela-mem/scripts/test.sh"
