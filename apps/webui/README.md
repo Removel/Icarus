@@ -46,6 +46,14 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
+默认离线测试使用 `python scripts/test.py`（根目录可运行 `make test-webui`），由入口启动并清理独立 dev server。
+记录分阶段耗时可加 `--timings-json=test-results/timings.json --durations=20`。
+CI 将完整 collection 分为四组，例如 `python scripts/test.py --shard-index=1 --shard-total=4`；
+每组必须运行在独立目录或 runner，第一组包含生产服务测试。所有分片通过后再校验用例清单，
+确保每项恰好执行一次。已有构建可显式加 `--use-existing-build`，未构建时该选项会使生产测试失败。
+页面夹具、分片和报告门禁见 [测试性能架构](docs/spec/2026-10-29-test-performance/arch.md)，
+基线与验收要求见 [实施计划](docs/spec/2026-10-29-test-performance/plan.md)。
+
 打开 <http://127.0.0.1:5173>。可直接访问 `/#/memory/all`和 `/#/knowledge/sources`。知识库从服务读取数据，支持搜索、类型筛选、长文阅读、来源跳转和知识关联。
 
 人物入口在左下角账户菜单，也可访问 `/#/people`、`/#/people/circles`。首页按内容宽度显示三/两/一列近方形人物卡片，搜索、类型、归档包含和游标分页由 rela-mem 处理。阅读式详情包含稳定档案、关系、圈子、别名与精确身份核对；支持人物/别名纠错、单字段 JSON 与历史、关系称谓及失效，以及圈子和成员管理。已忘记的字段可按已知 key 读取历史。浏览人物不会创建对话或调用模型。

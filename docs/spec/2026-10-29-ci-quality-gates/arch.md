@@ -2,6 +2,9 @@
 
 本文描述已实现的配置，源码基线为 `885a4318cfaec7742da9ff0986ceb09f5b79f234` 加本次 CI 改造提交。配置已按授权推送到个人仓库 `xilele777/Icarus` 的 `feature`、`feat/webui`，进行真实 Actions 验证；尚未迁移 upstream 或启用分支保护。实施范围与后续任务见 [plan.md](plan.md)，验证证据见 [execution.md](execution.md)。
 
+WebUI 四分片与耗时报告是后续变更，按用户授权提交并推送至个人仓库分支验证；其验证记录由 WebUI 自有的
+[测试性能计划](../../../apps/webui/docs/spec/2026-10-29-test-performance/plan.md)维护，不将旧运行视为分片方案的远端验收。
+
 ## 调度与结果
 
 [ci.yml](../../../.github/workflows/ci.yml) 对目标为 `feature`、`dev`、`main` 的 PR 和这些分支的 push 运行，也支持手动和 reusable 调用。入口无路径过滤；`changes` 获取完整历史，由 [changes.py](../../../scripts/ci/changes.py) 计算变更与预期任务。PR 使用 base/head 的 merge-base 分析影响，测试仍运行 checkout 的合并提交；push 使用 before/after。没有比较基线或 Git 无法比较时保守选择全部任务。
@@ -19,7 +22,7 @@
 - [backend-contracts.yml](../../../.github/workflows/backend-contracts.yml) 保留 Windows 的应用自有契约入口、Gateway 双平台套件；Linux 运行 Agent 完整套件、mypy 和 wheel 安装检查。wheel 校验不再继承 system-site-packages。
 - [tui.yml](../../../.github/workflows/tui.yml) 安装 TUI 自有开发依赖并运行完整套件，包含当前布局和交互验收。最新 TUI 已移除旧 SVG 快照，本次未恢复它们。
 - [apps.yml](../../../.github/workflows/apps.yml) 根据传入应用数组执行 Mem0/OpenKB 既有默认契约和 rela-mem 离线测试；rela-mem 另通过 [ci-integration.py](../../../apps/rela-mem/scripts/ci-integration.py) 创建临时 PostgreSQL/FalkorDB，运行全部测试后清理本次容器和匿名卷。
-- [webui.yml](../../../.github/workflows/webui.yml) 固定 Playwright 1.58 支持的 Ubuntu 24.04，先运行 lint/format/typecheck/build，再准备浏览器。[应用测试入口](../../../apps/webui/scripts/test.py) 在临时端口以 strictPort 启动 dev server，移除继承的真实服务 opt-in，以不可用的 loopback 端点及测试凭据覆盖根 .env 的代理配置，返回原测试退出码并清理进程树。服务集成测试仍可显式替换为其自有临时上游。
+- [webui.yml](../../../.github/workflows/webui.yml) 固定 Playwright 1.58 支持的 Ubuntu 24.04，默认测试在四个独立 runner 分片；第一组先执行 lint/format/typecheck/build 并复用该构建验证生产服务。各组独立上传报告，汇总门禁检查完整 collection 每项恰好执行一次及所有分片成功，耗时按 setup/call/teardown 展示。细节见 [WebUI 测试架构](../../../apps/webui/docs/spec/2026-10-29-test-performance/arch.md)。[应用测试入口](../../../apps/webui/scripts/test.py) 在临时端口以 strictPort 启动 dev server，移除继承的真实服务 opt-in，以不可用的 loopback 端点及测试凭据覆盖根 .env 的代理配置，返回原测试退出码并清理进程树。服务集成测试仍可显式替换为其自有临时上游。
 - [extended.yml](../../../.github/workflows/extended.yml) 每周或手动在 `feature` 的精确 checkout 上运行 Mem0/OpenKB retained 全套，保留实际失败；只有该文件进入 GitHub 默认分支后定时触发才生效。
 
 测试报告失败也上传。外部 Actions 固定完整 commit SHA，[Dependabot](../../../.github/dependabot.yml) 通过面向 `feature` 的更新 PR 维护。应用依赖的锁定现状未被本次改写，不能据此宣称全部构建可复现。
