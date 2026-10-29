@@ -73,7 +73,9 @@ WebUI 性能基线：本地 367 个 collection 项中 354 passed、13 skipped，
 
 在全量 push 与后续纯文档运行（[40835245832](https://github.com/xilele777/Icarus/actions/runs/40835245832)，SHA `dfb22185b7d54c5dda90377e77a1e1442b9f681f`）均成功后，用户要求直接推送新版本，结束重复运行的过渡。已从 apps/backend/images/lint/webui/tui 六个执行单元移除 push/PR，保留复用与手动入口；control 原本就没有自动触发。普通自动入口只剩 `ci.yml`，定时扩展和发布使用各自独立事件。
 
-调整后本地相关回归 59 passed，actionlint 与差异检查通过；新增断言要求所有执行单元只能声明复用/手动事件，且均由统一 CI 调用。最终远端结果随本轮切换验证登记；本次不改变应用测试内容、分支保护或发布授权。
+调整后本地最小相关回归 59 passed，扩展 CI focused 96 passed，actionlint 与差异检查通过；新增断言要求所有执行单元只能声明复用/手动事件，且均由统一 CI 调用。本次不改变应用测试内容、分支保护或发布授权。
+
+切换后的 [完整运行 40836393498](https://github.com/xilele777/Icarus/actions/runs/40836393498) 已成功，受测 SHA `29f2a65806b38e36b667f94a33e0a63e31cecee2`。GitHub 对该提交仅创建这一轮 push workflow，未出现旧独立自动运行；根控制层 437 passed、1 skipped，应用与四个 amd64 镜像验证均成功，最终 `ci-required` 为 success。测试报告与日志可在该运行查看，PR 方案不再依赖重复触发的过渡期。
 
 ## 待远端验收与后续任务
 
