@@ -20,9 +20,12 @@ AUTH = "Basic " + base64.b64encode(b"webui:test-password").decode()
 
 
 @pytest.fixture(scope="module")
-def production():
+def production(request):
     # Build the actual deployed asset tree, also when this test runs on its own.
-    subprocess.run([shutil.which("pnpm"), "build"], cwd=ROOT, env={**os.environ, 'RELA_MEM_API_TOKEN': 'isolated-build-rela-token'}, check=True, capture_output=True)
+    if request.config.getoption("--use-existing-build"):
+        assert (ROOT / 'apps/shell/dist/index.html').is_file(), 'Run pnpm build before --use-existing-build'
+    else:
+        subprocess.run([shutil.which("pnpm"), "build"], cwd=ROOT, env={**os.environ, 'RELA_MEM_API_TOKEN': 'isolated-build-rela-token'}, check=True, capture_output=True)
 
     class Backend(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"

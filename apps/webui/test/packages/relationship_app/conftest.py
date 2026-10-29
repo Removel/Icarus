@@ -6,5 +6,5 @@ from test.rela_service import fake_rela
 def rela(page):
     state = fake_rela(page)
     # Exercise the public route independently of the account-menu tests.
-    page.goto(page.url.split('#')[0] + '#/people')
+    page.goto('/#/people')
     return state

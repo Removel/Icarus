@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 from test.mem0_service import fake_mem0
 
+pytest_plugins = ["test.ci"]
+
 
 @pytest.fixture(scope="session")
 def browser():
@@ -20,13 +22,40 @@ def browser():
 
 
 @pytest.fixture
-def page(browser, request):
-    context = browser.new_context(viewport={"width": 1440, "height": 1080}, reduced_motion="reduce")
+def blank_page(browser, request):
+    context = browser.new_context(
+        base_url=os.environ.get("WEBUI_BASE_URL", "http://127.0.0.1:5173"),
+        viewport={"width": 1440, "height": 1080}, reduced_motion="reduce",
+    )
     page = context.new_page()
     page.set_default_timeout(10000)
     page.set_default_navigation_timeout(60000)
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
+    yield page
+    try:
+        failed = any(getattr(request.node, f"rep_{phase}", None) and
+                     getattr(request.node, f"rep_{phase}").failed for phase in ("setup", "call"))
+        if failed:
+            output = Path("test-results")
+            output.mkdir(exist_ok=True)
+            page.screenshot(path=str(output / f"{request.node.name}.png"), full_page=True)
+            (output / f"{request.node.name}.html").write_text(page.content(), encoding="utf-8")
+    finally:
+        context.close()
+    assert not errors, errors
+
+
+@pytest.fixture
+def page(blank_page):
+    """An isolated page; callers register mocks before the first navigation."""
+    return blank_page
+
+
+@pytest.fixture
+def app_page(blank_page):
+    """Cross-workspace tests can visit Memory without loading it during setup."""
+    page = blank_page
     def memory_context(socket):
         def receive(raw):
             request = json.loads(raw)
@@ -39,18 +68,16 @@ def page(browser, request):
         socket.on_message(receive)
     page.route_web_socket('**/rpc', memory_context)
     page.mem0_rows = fake_mem0(page)
-    # Management fixtures start on their explicit route; homepage is now chat.
-    page.goto(os.environ.get("WEBUI_BASE_URL", "http://127.0.0.1:5173") + '/#/memory/all', wait_until="domcontentloaded")
+    return page
+
+
+@pytest.fixture
+def memory_page(app_page):
+    page = app_page
+    page.goto('/#/memory/all', wait_until="domcontentloaded")
     page.get_by_role("heading", name="记忆", exact=True).wait_for()
     page.locator('.memory-entry').first.wait_for()
-    yield page
-    if getattr(request.node, "rep_call", None) and request.node.rep_call.failed:
-        output = Path("test-results")
-        output.mkdir(exist_ok=True)
-        page.screenshot(path=str(output / f"{request.node.name}.png"), full_page=True)
-        (output / f"{request.node.name}.html").write_text(page.content(), encoding="utf-8")
-    context.close()
-    assert not errors, errors
+    return page
 
 
 @pytest.hookimpl(hookwrapper=True)
