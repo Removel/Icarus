@@ -2,7 +2,8 @@
 
 本文描述已实现的配置，源码基线为 `885a4318cfaec7742da9ff0986ceb09f5b79f234` 加本次 CI 改造提交。配置已按授权推送到个人仓库 `xilele777/Icarus` 的 `feature`、`feat/webui`，进行真实 Actions 验证；尚未迁移 upstream 或启用分支保护。实施范围与后续任务见 [plan.md](plan.md)，验证证据见 [execution.md](execution.md)。
 
-WebUI 四分片与耗时报告是后续变更，按用户授权提交并推送至个人仓库分支验证；其验证记录由 WebUI 自有的
+WebUI 四分片与耗时报告是后续变更，已按用户授权推送至个人仓库 `feat/webui` 并通过远端验证，
+尚未合入 `feature`；其验证记录由 WebUI 自有的
 [测试性能计划](../../../apps/webui/docs/spec/2026-10-29-test-performance/plan.md)维护，不将旧运行视为分片方案的远端验收。
 
 ## 调度与结果

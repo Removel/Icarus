@@ -74,4 +74,34 @@ CI 仍直接运行受支持的 Ubuntu 24.04。
 
 可复查的本地 JSON、JUnit、日志和汇总位于忽略的
 `apps/webui/test-results/test-performance-20261029/`。
-远端 Actions 的 5–8 分钟目标尚待实际运行确认；本地验证阶段没有提交、推送或触发远端 workflow。
+本地验证阶段没有提交、推送或触发远端 workflow；随后按明确授权进行的远端验收见下一节。
+
+## 远端 Actions 验收
+
+用户授权后，将应用实现、workflow 接线及文档分别提交为 `7b21df5`、`2c3073f`、`b8ebece`，
+推送至个人仓库 `xilele777/Icarus:feat/webui`，没有推送 upstream 或修改 `feature`。
+手动触发 [运行 40870241958](https://github.com/xilele777/Icarus/actions/runs/40870241958)，
+受测 SHA 为 `b8ebece0255021bdc8005c86c3c58289f7d12182`，最终 `conclusion=success`。
+
+北京时间 2026-10-29 20:04:01 开始，20:07:37 完成，完整流程 **3 分 36 秒**，
+包含依赖安装、静态检查/构建、浏览器准备、四组测试、产物上传及报告汇总。
+旧版个人仓库 [运行 40836393498](https://github.com/xilele777/Icarus/actions/runs/40836393498)
+的 WebUI job 为 14 分 55 秒，本轮完整 WebUI workflow 等待缩短约 **75.9%**。
+这是两轮真实运行的对比，runner 速度存在波动，不代表所有后续运行都固定为 3 分 36 秒。
+
+| 分片 | 完整 job | 测试步骤 | pytest elapsed | 覆盖项数 |
+| --- | --- | --- | --- | --- |
+| 1 | 3 分 08 秒 | 2 分 18 秒 | 136.38 秒 | 111 |
+| 2 | 2 分 49 秒 | 2 分 15 秒 | 133.30 秒 | 90 |
+| 3 | 3 分 22 秒 | 2 分 46 秒 | 163.12 秒 | 90 |
+| 4 | 2 分 52 秒 | 2 分 20 秒 | 138.39 秒 | 90 |
+
+四个 job 均成功；第一组静态检查及生产构建通过，用时 19 秒。
+报告汇总 job 通过，用时 6 秒，实际输出：
+`368 passed, 13 skipped; 381 tests covered exactly once.`
+默认真实服务 opt-in 边界保持不变，各组 JUnit、耗时 JSON、截图及服务日志已上传，保留 14 天。
+原定 5–8 分钟目标已由本轮真实 Actions 验收，未以本地计时代替远端结果。
+
+本地归档的 GitHub job/run 元数据及完整性门禁日志位于忽略的
+`apps/webui/test-results/actions-40870241958/`。
+后续验证记录提交仅更新文档，不改受测实现。改动尚未合入 `feature`，常规集成 CI 在合入后使用新分片。
