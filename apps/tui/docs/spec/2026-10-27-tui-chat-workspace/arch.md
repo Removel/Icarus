@@ -28,7 +28,7 @@ OperationScope 包含 generation、epoch、client identity、operation_id；派�
 
 ## 页面与展示
 
-欢迎、聊天、slash suggestions 是同一个 ChatScreen 的状态。Hero 为正文前导，首窗口可重建且不计导航 turn。InputDock 是持久对象；菜单在 Composer 下方展开，改变对话可用高度而不重建输入控件。消息角色通过标题行 `❯ You` / `✦ Icarus` 与正文缩进区分，不使用贯穿全文的纯色竖条；追加消息同样使用 `❯` 标识，用户/追加正文保留低对比底色，执行记录边框独立保留。
+欢迎、聊天、slash suggestions 是同一个 ChatScreen 的状态。Hero 为正文前导，首窗口可重建且不计导航 turn；对话容器不预留顶部空行，短会话恢复后 Hero 从终端首行开始，长会话仍按正文正常滚动。Hero 只展示 Logo（窄/矮窗口为紧凑标题）和与提示同色的灰色版本信息，不再重复 Workspace 或罗列快捷键。InputDock 是持久对象；Composer 上方一行左侧保留任务状态（最长占半行），右侧 ComposerTip 每 8 秒轮播一条单行操作提示，不改变输入焦点、光标或草稿。菜单在 Composer 下方展开，改变对话可用高度而不重建输入控件。底部元信息用 `model`、`context`、`session`、`uid`、`workspace` 英文键，键色更暗、值较亮并加粗，删除重复的思考等级；终端单元格字号仍由终端统一控制，不模拟局部缩放。消息角色通过标题行 `❯ You` / `✦ Icarus` 与正文缩进区分，不使用贯穿全文的纯色竖条；追加消息同样使用 `❯` 标识，用户/追加正文保留低对比底色，执行记录边框独立保留。
 
 纠偏投影为同一 turn 的顶层 correction，保留 task/step，不生成新任务/轮次。执行记录按 Assistant 消息分组：CompleteAssistantMessage 封闭当前 segment，后续工具/Thinking 创建新 segment；纠偏本身不切段。快照中的 run_card.completed 表示该分组已封闭，重建时不将其注册为当前可追加分组。所有 Assistant 文本（包括中途输出、未完成文本）保留在外层，不降级为 progress 或设内层滚动。
 
@@ -42,7 +42,7 @@ App 明确加载 8 个文件：tokens、base、chat screen、session picker、we
 
 ## 当前限制与验收边界
 
-- 元信息模型、思考等级、当前上下文占用缺公共来源，显示未知/—；最新版本未检查。版本可由配置注入，不在线查询。
+- 元信息模型和当前上下文占用缺公共来源，显示未知/—；最新版本未检查。版本可由配置注入，不在线查询。
 - psutil 未加入；它不处理剪贴板和终端协议。
 - `icarus tui` 根启动器检查 Gateway 依赖就绪，未为 preview 修改仓库基础设施。离线真实界面运行 `./apps/tui/scripts/start.sh --preview`；正式会话先启动 Gateway 后 `icarus tui`。
 - 真实预览通过 tmux 启动并键入输入/Enter，以及真实 App capture 脚本输出 SVG；SVG 是临时审查证据，不恢复删除的 13 张基线。字体转换差异和原生终端行为必须区别报告。
