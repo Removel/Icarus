@@ -17,7 +17,7 @@
 > `ff54396e575ee6feb0113b631a34caa082b441cc` under Apache-2.0. The upstream source is
 > frozen, while Icarus patches/security maintenance continue. Start through
 > `icarus start openkb`; data is bind-mounted under `$ICARUS_DATA_DIR/services/openkb`
-> and configuration comes only from the repository-root `.env`.
+> with topology and data-root settings in repository TOML and credentials in the root `.env`.
 > See [MODIFICATIONS.md](MODIFICATIONS.md) and [LICENSE](LICENSE).
 >
 > This first cleanup removes upstream examples, plugin-distribution metadata, and

@@ -67,7 +67,14 @@ icarus status          # 与其他应用一起查看状态
 icarus stop webui
 ```
 
-启动配置来自仓库根 `.env`（同名进程环境变量优先）：`ICARUS_WEBUI_HOST`（默认 `127.0.0.1`）、`ICARUS_WEBUI_PORT`（默认 `8080`）、`ICARUS_WEBUI_USER`、`ICARUS_WEBUI_PASSWORD`，以及 `ICARUS_MEM0_ENDPOINT`、`ICARUS_OPENKB_ENDPOINT`、`ICARUS_GATEWAY_ENDPOINT` 与对应 `ICARUS_MEM0_API_KEY`、`ICARUS_OPENKB_API_TOKEN` 覆盖项。非回环 `ICARUS_WEBUI_HOST` 必须同时设置用户名与密码，否则启动器拒绝启动。`make webui-up` / `make webui-down` / `make webui-logs` 是对应的便捷入口。
+受管启动的监听地址、端口及上游地址来自 `icarus.toml` / ignored `icarus.local.toml`，控制面通过
+`ICARUS_WEBUI_HOST`、`ICARUS_WEBUI_PORT`、`ICARUS_MEM0_ENDPOINT`、`ICARUS_OPENKB_ENDPOINT`、
+`ICARUS_GATEWAY_ENDPOINT` 和 `ICARUS_RELATIONSHIP_ENDPOINT` 注入。默认监听 `127.0.0.1:8080`。
+用户名、密码和上游凭据来自根 `.env` 或进程环境，包括 `ICARUS_WEBUI_USER`、`ICARUS_WEBUI_PASSWORD`、
+`ICARUS_MEM0_API_KEY`、`ICARUS_OPENKB_API_TOKEN`、`RELA_MEM_API_TOKEN`。非回环监听必须同时设置
+用户名与密码，否则启动器拒绝启动。手动 Node/Vite 入口仍使用进程环境或各自的 dotenv，
+不会自动解析根 TOML；不要将该路径与 `icarus` 受管配置混为一谈。
+`make webui-up` / `make webui-down` / `make webui-logs` 都委托同一个 `icarus` 控制面。
 
 
 ## 这版可以体验什么
