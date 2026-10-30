@@ -1,9 +1,16 @@
 # IDE and isolated development workspaces
 .idea/
 .superpowers/
-.claude/worktrees/
 .playwright-mcp/
 test-results/
+
+# Local AI coding assistant state
+.claude/
+.codex/
+.trae/
+.cursor/
+.windsurf/
+.gemini/
 
 # Python
 __pycache__/
