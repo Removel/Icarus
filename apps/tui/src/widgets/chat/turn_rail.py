@@ -83,6 +83,7 @@ class TurnRail(Static):
         self._refresh()
 
     def set_turns(self, turns: Sequence[str], current: int) -> None:
+        previous_current = self.current
         previous_count = len(self._turns)
         previous_start = self.window_start
         was_at_latest = previous_start >= max(0, previous_count - self.capacity)
@@ -101,6 +102,11 @@ class TurnRail(Static):
                 if was_at_latest
                 else min(previous_start, len(self._turns) - 1)
             )
+            if self.current != previous_current:
+                if self.current < self.window_start:
+                    self.window_start = self.current
+                elif self.current >= self.window_start + self.capacity:
+                    self.window_start = self.current - self.capacity + 1
         self._refresh()
 
     @staticmethod

@@ -35,6 +35,9 @@ class SubscriptionFailed(Message):
 class ChatChanged(Message):
     revision: int
 
+    def can_replace(self, message: Message) -> bool:
+        return isinstance(message, ChatChanged)
+
 
 @dataclass
 class PasteRequested(Message):

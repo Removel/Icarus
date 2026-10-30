@@ -28,6 +28,9 @@ class DisclosureSummary(Static):
     """Keyboard and pointer accessible disclosure summary."""
 
     can_focus = True
+    # Disclosure headers are controls, not selectable bodies. This also keeps
+    # Textual from anchoring selection to a detached header before repaint.
+    ALLOW_SELECT = False
     BINDINGS = [
         Binding("enter", "toggle", show=False),
         Binding("space", "toggle", show=False),
