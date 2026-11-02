@@ -49,7 +49,10 @@ async def test_round_budget_matches_gateway_without_silent_truncation(isolated_s
     # The real Gateway/Agent shared validator must accept this exact aggregate.
     from agent_app.argus_protocol import WakeRequest
     WakeRequest(channel_id=channel.id, wake_id=round_['wake_id'], binding_id=round_['binding_id'],
-                channel_version=channel.version, session_id=str(uuid4()), items=items, argus_url='http://argus.test')
+                channel_version=channel.version, session_id=str(uuid4()), items=items, argus_url='http://argus.test',
+                channel_snapshot=dict(id=channel.id,title=channel.title,goal=channel.goal,progress=channel.progress,
+                                      lifecycle=channel.lifecycle,version=channel.version,source_keys=list(channel.subscriptions),rule_source=''),
+                rule_sdk={'version':2})
 
 
 @pytest.mark.asyncio

@@ -54,6 +54,18 @@ class Channel(Fact):
     runtime: dict[str, Any] = Field(default_factory=dict)
 
 
+class DiscoveryDecision(Fact):
+    action: Literal['ignore', 'existing', 'new', 'defer']
+    reason: str
+    channel_id: str | None = None
+
+    @model_validator(mode='after')
+    def route_identity(self):
+        if (self.action == 'existing') != (self.channel_id is not None):
+            raise ValueError('Only existing decisions require channel_id')
+        return self
+
+
 class Decision(Fact):
     passed: bool
     reason: str

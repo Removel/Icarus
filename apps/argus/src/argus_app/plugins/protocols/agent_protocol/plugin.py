@@ -1,11 +1,7 @@
 from icarus.core.plugin import BasePlugin
 from argus_app.contracts.capabilities import RuleControlRequest
 
-KINDS = {
-    'delivered': 'agent.delivered', 'confirm': 'agent.result_submitted',
-    'check': 'rule.check_requested', 'update': 'channel.update_requested',
-    'finish': 'agent.finish_requested',
-}
+KINDS = {'delivered': 'agent.delivered', 'check': 'rule.check_requested', 'commit': 'agent.commit_requested'}
 
 
 class AgentProtocol(BasePlugin):

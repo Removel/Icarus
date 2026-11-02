@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -15,7 +16,9 @@ from sqlalchemy import (BigInteger, Column, Identity, Integer, JSON, MetaData, S
                         Table, UniqueConstraint, and_, exists, or_, select, text, update)
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from argus_app.contracts.models import Channel, Decision, DomainError, Observation
+from argus_app.contracts.models import Channel, Decision, DiscoveryDecision, DomainError, Observation
+from argus_app.contracts.commit import CommitPayload
+from pydantic import ValidationError
 
 metadata = MetaData()
 observed_items = Table(
@@ -45,8 +48,7 @@ channels = Table(
     Column("runtime", JSON, nullable=False),
 )
 MESSAGE = "message.observed"
-CONTROL_KINDS = {"agent.delivered", "agent.result_submitted", "channel.update_requested",
-                 "agent.finish_requested", "rule.check_requested"}
+CONTROL_KINDS = {'agent.delivered', 'rule.check_requested', 'agent.commit_requested'}
 
 
 def canonical(value):
@@ -319,11 +321,6 @@ class Store:
             previous = int(ch["subscriptions"][row["source_key"]] or 0)
             ch["subscriptions"][row["source_key"]] = str(max(previous, row["position"]))
             await self._save(conn, ch)
-            current_fact = await self._observation(conn, observation_id, lock=True)
-            if current_fact['detail'].get('discovery', {}).get('status') not in {'created', 'ignored', 'exhausted'}:
-                detail = copy.deepcopy(current_fact['detail'])
-                detail['discovery'] = {'status': 'ignored', 'reason': 'source_already_subscribed'}
-                await conn.execute(update(observed_items).where(observed_items.c.id == observation_id).values(detail=detail))
             return True
 
     async def begin_round(self, channel_id: str, limit: int = 20) -> dict | None:
@@ -384,13 +381,11 @@ class Store:
             if not current or current["wake_id"] != wake_id:
                 return
             pending = ch["runtime"]["pending"]
-            for id in current["observation_ids"]:
-                if id in current["confirmed"]:
-                    pending.pop(id, None)
-                elif id in pending:
+            for id in current['observation_ids']:
+                if id in pending:
                     entry = pending[id]
-                    entry["delivery_attempt_count"] = min(3, entry.get("delivery_attempt_count", 0) + 1)
-                    entry["delivery_error"] = status
+                    entry['delivery_attempt_count'] = min(3, entry.get('delivery_attempt_count', 0) + 1)
+                    entry['delivery_error'] = status
             ch["runtime"]["round"] = None
             await self._retire_pending(conn, ch)
             if ch["lifecycle"] == "completed":
@@ -427,7 +422,22 @@ class Store:
         async with self.engine.connect() as conn:
             return channel(await self._bound(conn, binding_id))
 
-    async def apply_control(self, observation_id: str) -> dict:
+    async def commit_status(self, binding_id: str, request_id: str) -> dict:
+        """Read a durable receipt without creating or resuming a control operation."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(observed_items.c.detail).where(
+                observed_items.c.message_id == request_id,
+                observed_items.c.kind == 'agent.commit_requested',
+                observed_items.c.detail['binding_id'].as_string() == binding_id,
+            ))).scalars().all()
+        if not rows:
+            return {'state': 'not_found'}
+        result = rows[0].get('result')
+        if result is None:
+            return {'state': 'pending'}
+        return {'state': 'applied' if result.get('applied') else 'rejected', 'result': result}
+
+    async def apply_control(self, observation_id: str, *, prepared_rule: dict | None = None) -> dict:
         async with self.engine.begin() as conn:
             # Subscription publication and first-Channel creation share this short
             # transaction lock; no model/worker call runs under it.
@@ -443,13 +453,22 @@ class Store:
                     raise DomainError("invalid_control")
                 ch = await self._bound(conn, detail.get("binding_id"), lock=True)
                 # Mutate a copy: rejected multi-item controls cannot partially apply.
-                payload = detail.get("payload", row["content"])
+                payload = copy.deepcopy(detail.get("payload", row["content"]))
                 if not isinstance(payload, dict):
                     raise DomainError("invalid_payload")
-                self._apply(ch, row, payload)
+                if row['kind'] == 'agent.commit_requested' and 'rule_source' in payload:
+                    source = payload.pop('rule_source')
+                    if (not isinstance(source, str) or prepared_rule is None
+                            or prepared_rule.get('rule_hash') != hashlib.sha256(source.encode()).hexdigest()
+                            or 'rule_hash' in payload or 'rule_path' in payload):
+                        raise DomainError('unprepared_rule')
+                    payload.update(prepared_rule)
+                changed = self._apply(ch, row, payload)
                 await self._retire_pending(conn, ch)
-                await self._save(conn, ch, publish=row["kind"] == "channel.update_requested")
+                await self._save(conn, ch, publish=bool(changed))
                 result = {"applied": True, "channel_id": ch["id"], "version": ch["version"]}
+                if row['kind'] == 'agent.commit_requested':
+                    result.update(committed=True, rule_hash=ch['rule_hash'])
             except DomainError as exc:
                 result = {"applied": False, "code": exc.code}
             detail["result"] = result
@@ -459,71 +478,41 @@ class Store:
     def _apply(self, ch, row, payload):
         round_ = ch["runtime"]["round"]
         frozen = set(round_["observation_ids"])
+        if row['kind'] == 'agent.commit_requested':
+            try:
+                commit = CommitPayload.model_validate(payload)
+            except ValidationError as exc:
+                raise DomainError('invalid_commit') from exc
+            if commit.expected_version != ch['version']:
+                raise DomainError('stale_version')
+            ids = [item.observation_id for item in commit.results]
+            if set(ids) != frozen or len(ids) != len(frozen):
+                raise DomainError('invalid_confirmation')
+            if not frozen.issubset(round_['delivered']):
+                raise DomainError('events_not_delivered')
+            before = {key: copy.deepcopy(ch[key]) for key in
+                      ('progress', 'subscriptions', 'rule_path', 'rule_hash', 'lifecycle')}
+            values = commit.model_dump(exclude_unset=True, exclude={'results', 'expected_version'})
+            if 'rule_path' in values and values['rule_path'] != f"{ch['id']}/{values['rule_hash']}.py":
+                raise DomainError('invalid_rule_path')
+            sources = values.pop('source_keys', None)
+            if sources is not None:
+                ch['subscriptions'] = {key: ch['subscriptions'].get(key) for key in sources}
+            ch.update(values)
+            for ref in frozen:
+                ch['runtime']['pending'].pop(ref, None)
+            ch['runtime']['round'] = None
+            if ch['lifecycle'] == 'completed':
+                ch['subscriptions'] = {}
+                ch['runtime']['pending'] = {}
+            return any(ch[key] != value for key, value in before.items())
         if row["kind"] == "agent.delivered":
             refs = payload.get("observation_ids")
             if not isinstance(refs, list) or not refs or not all(isinstance(x, str) and x in frozen for x in refs):
                 raise DomainError("invalid_delivery")
             round_["delivered"] = sorted(set(round_["delivered"]) | set(refs))
-        elif row["kind"] == "agent.result_submitted":
-            items = payload.get("items")
-            if not isinstance(items, list) or not items:
-                raise DomainError("invalid_confirmation")
-            seen = set()
-            for item in items:
-                if not isinstance(item, dict):
-                    raise DomainError("invalid_confirmation")
-                ref = item.get("observation_id")
-                status = item.get("status")
-                if not isinstance(ref, str) or ref in seen or ref not in frozen or ref not in round_["delivered"] or not isinstance(status, str) or status not in {"handled", "no_action"}:
-                    raise DomainError("invalid_confirmation")
-                seen.add(ref)
-                confirmation = {"status": status, "reason": str(item.get("reason", ""))[:2048]}
-                previous = round_["confirmed"].get(ref)
-                if previous is not None and previous != confirmation:
-                    raise DomainError("confirmation_conflict")
-                round_["confirmed"][ref] = confirmation
         else:
-            if not frozen.issubset(round_["delivered"]) or not frozen.issubset(round_["confirmed"]):
-                raise DomainError("events_not_confirmed")
-            if row["kind"] == "channel.update_requested":
-                allowed = {"expected_version", "progress", "source_keys", "rule_path", "rule_hash", "lifecycle"}
-                if set(payload) - allowed:
-                    raise DomainError("invalid_update_fields")
-                if type(payload.get("expected_version")) is not int or payload["expected_version"] != ch["version"]:
-                    raise DomainError("stale_version")
-                if round_["update_request_id"] is not None:
-                    raise DomainError("update_already_committed")
-                if "source_keys" in payload:
-                    keys = payload["source_keys"]
-                    if not isinstance(keys, list) or len(keys) > 256 or not all(isinstance(key, str) and key for key in keys):
-                        raise DomainError("invalid_sources")
-                    ch["subscriptions"] = {key: ch["subscriptions"].get(key) for key in keys}
-                for key in ("progress", "rule_path", "rule_hash"):
-                    if key in payload:
-                        if not isinstance(payload[key], str):
-                            raise DomainError("invalid_update")
-                        ch[key] = payload[key]
-                if "rule_hash" in payload and "rule_path" not in payload:
-                    digest = payload["rule_hash"]
-                    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-                        raise DomainError("invalid_rule_hash")
-                    ch["rule_path"] = f"{ch['id']}/{digest}.py"
-                if "lifecycle" in payload:
-                    if not isinstance(payload["lifecycle"], str) or payload["lifecycle"] not in {"active", "paused", "completed"}:
-                        raise DomainError("invalid_lifecycle")
-                    ch["lifecycle"] = payload["lifecycle"]
-                round_["update_request_id"] = row["id"]
-            elif row["kind"] == "agent.finish_requested":
-                state = payload.get("update")
-                committed = round_["update_request_id"] is not None
-                if not isinstance(state, str) or state not in {"committed", "unchanged"} or (state == "committed") != committed:
-                    raise DomainError("update_not_committed")
-                for ref in frozen:
-                    ch["runtime"]["pending"].pop(ref, None)
-                ch["runtime"]["round"] = None
-                if ch["lifecycle"] == "completed":
-                    ch["subscriptions"] = {}
-                    ch["runtime"]["pending"] = {}
+            raise DomainError('invalid_control')
 
     async def complete_control(self, observation_id: str, result: dict) -> dict:
         if (not isinstance(result, dict) or type(result.get("applied")) is not bool
@@ -567,56 +556,69 @@ class Store:
             return [observation(row) for row in rows]
 
     async def record_discovery(self, observation_id: str, decision: dict,
-                               rule_path: str = "", rule_hash: str = "") -> str | None:
-        error = decision.get("error")
-        parsed = None if error else Decision.model_validate(decision)
+                               rule_path: str = "", rule_hash: str = "",
+                               candidate_versions: dict | None = None) -> str | None:
+        error = decision.get('error')
+        parsed = None if error else DiscoveryDecision.model_validate(decision)
         async with self.engine.begin() as conn:
             await self._lock_subscriptions(conn)
             row = await self._observation(conn, observation_id, lock=True)
-            if row["kind"] != MESSAGE:
-                raise DomainError("invalid_discovery_event")
-            detail = copy.deepcopy(row["detail"])
-            previous = detail.get("discovery", {})
-            if previous.get("status") in {"created", "ignored", "exhausted"}:
-                return previous.get("channel_id")
+            if row['kind'] != MESSAGE:
+                raise DomainError('invalid_discovery_event')
+            detail = copy.deepcopy(row['detail'])
+            previous = detail.get('discovery', {})
+            if previous.get('status') in {'created', 'existing', 'ignored', 'exhausted'}:
+                return previous.get('channel_id') if previous.get('status') == 'created' else None
             if previous.get('next_retry_at', '') > datetime.now(timezone.utc).isoformat():
                 return None
-            # Recheck ownership after out-of-transaction classification. A new
-            # subscription or another first event may have won while the rule ran.
-            owners = (await conn.execute(select(channels.c.subscriptions).where(
-                channels.c.lifecycle.in_(["active", "paused"])))).scalars().all()
+            owners = (await conn.execute(select(channels).where(
+                channels.c.lifecycle.in_(['active', 'paused'])))).mappings().all()
+            owners = [dict(x) for x in owners if row['source_key'] in x['subscriptions']]
+            if candidate_versions is not None and {x['id']: x['version'] for x in owners} != candidate_versions:
+                error = 'discovery_context_changed'
             is_latest = (await conn.execute(select(observed_items.c.id).where(
                 observed_items.c.id == observation_id, latest()))).scalar_one_or_none() is not None
-            owned = any(row["source_key"] in subscriptions for subscriptions in owners)
             channel_id = None
-            if owned or not is_latest:
-                result = {"status": "ignored", "reason": "source_already_subscribed" if owned else "superseded_revision"}
-            elif error or parsed.defer:
-                attempts = min(3, previous.get("attempt_count", 0) + 1)
-                result = {"status": "exhausted" if attempts == 3 else "error" if error else "deferred",
-                          "attempt_count": attempts, "error_code": str(error or parsed.reason)[:512],
-                          "next_retry_at": (datetime.now(timezone.utc) + timedelta(seconds=5 if attempts == 1 else 30)).isoformat()}
-            elif not parsed.passed:
-                result = {"status": "ignored", "reason": parsed.reason[:512]}
+            if not is_latest:
+                result = {'status': 'ignored', 'reason': 'superseded_revision'}
+            elif error or parsed.action == 'defer':
+                attempts = min(3, previous.get('attempt_count', 0) + 1)
+                result = {'status': 'exhausted' if attempts == 3 else 'error' if error else 'deferred',
+                          'attempt_count': attempts, 'error_code': str(error or parsed.reason)[:512],
+                          'next_retry_at': (datetime.now(timezone.utc) + timedelta(seconds=5 if attempts == 1 else 30)).isoformat()}
+            elif parsed.action == 'ignore':
+                result = {'status': 'ignored', 'reason': parsed.reason[:512]}
+            elif parsed.action == 'existing':
+                if parsed.channel_id not in {x['id'] for x in owners}:
+                    raise DomainError('discovery_candidate_forbidden')
+                result = {'status': 'existing', 'channel_id': parsed.channel_id, 'reason': parsed.reason[:512]}
             else:
-                if not rule_path or not rule_hash:
-                    raise DomainError("discovery_rule_required")
-                item = observation(row)
-                channel_id = self.discovered_channel_id(item)
-                existing = (await conn.execute(select(channels.c.id).where(channels.c.id == channel_id))).scalar_one_or_none()
-                if existing is None:
-                    message = str(item.content.get("text", "")).strip()
-                    pending = {item.id: {"status": "passed", "decision": parsed.model_dump(),
-                               "channel_version": 1, "attempt_count": 0, "next_retry_at": None,
-                               "delivery_attempt_count": 0, "delivery_error": ""}}
-                    ch = Channel(id=channel_id, title=(message or "New observed request")[:120],
-                                 goal=(message or parsed.reason)[:4000],
-                                 subscriptions={item.source_key: str(row["position"])},
-                                 rule_path=rule_path, rule_hash=rule_hash,
-                                 runtime={"pending": pending, "round": None})
-                    await conn.execute(channels.insert().values(**ch.model_dump()))
-                result = {"status": "created", "channel_id": channel_id}
-            detail["discovery"] = result
+                message = str(row['content'].get('text', '')).strip()
+                normalized = ' '.join(unicodedata.normalize('NFKC', message).casefold().split())
+                topic_key = hashlib.sha256(normalized.encode()).hexdigest()
+                same = next((x for x in owners if x['runtime'].get('discovery', {}).get('topic_key') == topic_key), None)
+                if same:
+                    result = {'status': 'existing', 'channel_id': same['id'], 'reason': 'active topic already exists'}
+                    channel_id = same['id']
+                else:
+                    if not rule_path or not rule_hash:
+                        raise DomainError('discovery_rule_required')
+                    item = observation(row)
+                    channel_id = self.discovered_channel_id(item)
+                    existing = (await conn.execute(select(channels.c.id).where(channels.c.id == channel_id))).scalar_one_or_none()
+                    if existing is None:
+                        pending = {item.id: {'status': 'passed', 'decision': {'passed': True, 'reason': parsed.reason},
+                                   'channel_version': 1, 'attempt_count': 0, 'next_retry_at': None,
+                                   'delivery_attempt_count': 0, 'delivery_error': ''}}
+                        ch = Channel(id=channel_id, title=(message or 'New observed request')[:120],
+                                     goal=(message or parsed.reason)[:4000],
+                                     subscriptions={item.source_key: str(row['position'])},
+                                     rule_path=rule_path, rule_hash=rule_hash,
+                                     runtime={'pending': pending, 'round': None,
+                                              'discovery': {'topic_key': topic_key, 'source_key': item.source_key}})
+                        await conn.execute(channels.insert().values(**ch.model_dump()))
+                    result = {'status': 'created', 'channel_id': channel_id}
+            detail['discovery'] = result
             await conn.execute(update(observed_items).where(observed_items.c.id == observation_id).values(detail=detail))
             return channel_id
 

@@ -34,7 +34,7 @@ class CreateChannelBody(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     goal: str = Field(min_length=1, max_length=4000)
     source_keys: list[str] = Field(min_length=1, max_length=16)
-    rule_source: str = Field(default='def decide(event, channel):\n    return {"passed": False, "reason": "waiting for a configured rule"}\n', max_length=32768)
+    rule_source: str = Field(default='def main(event, channel):\n    return {"passed": False, "reason": "waiting for a configured rule"}\n', max_length=32768)
 
 
 async def recovery_scan_once(host, store) -> list[str]:
@@ -89,7 +89,19 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
             current_semantic, semantic_owner = configured_backend(config.semantic_api_key.get_secret_value(),
                 config.semantic_base_url, config.semantic_model)
         configs["semantic-judgement"].update(semantic=current_semantic)
-        configs["icarus-bridge"].update(bridge_client=current_bridge, argus_url=config.public_url)
+        safety_owner = None
+        if config.safety_review_enabled:
+            if not config.semantic_api_key.get_secret_value():
+                raise ValueError('Safety review enabled without configured JEV credentials')
+            from argus_app.model_provider.semantic import _TypedClient
+            from argus_app.model_provider.safety import RuleSafetyReview
+            safety_owner = _TypedClient(config.semantic_api_key.get_secret_value(), config.semantic_base_url, config.semantic_model)
+            configs['workflow-rules']['safety_review'] = RuleSafetyReview(safety_owner, budget=config.safety_review_budget)
+        from argus_app.rule_sdk.guide import rule_guide
+        guide = rule_guide(config)
+        guide['capabilities']['semantic']['configured'] = current_semantic is not None
+        configs["icarus-bridge"].update(bridge_client=current_bridge, argus_url=config.public_url,
+                                         rule_files=files, guide=guide)
         endpoints = (("memory-evidence", config.memory_endpoint, config.memory_token),
                      ("relationship-evidence", config.relationship_endpoint, config.relationship_token),
                      ("knowledge-evidence", config.knowledge_endpoint, config.knowledge_token))
@@ -110,6 +122,8 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
                                  required_plugin_ids=frozenset(plugin_ids), plugin_configs=configs)
         app.state.store, app.state.rule_files = current_store, files
         app.state.host = host
+        app.state.rule_engine = engine
+        app.state.rule_guide = guide
         task = None
         try:
             await current_store.start()
@@ -142,6 +156,8 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
                     await configured_client.aclose()
                 if semantic_owner is not None:
                     await semantic_owner.aclose()
+                if safety_owner is not None:
+                    await safety_owner.aclose()
                 await current_store.close()
 
     app = FastAPI(title="Argus", lifespan=lifespan)
@@ -189,7 +205,9 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
     async def health():
         if not app.state.ready:
             raise HTTPException(503, "not_ready")
-        return {"status": "ready", "scan_error": app.state.scan_error}
+        isolation = await asyncio.to_thread(app.state.rule_engine.launcher.probe)
+        return {"status": "ready", "scan_error": app.state.scan_error,
+                'rule_execution_available': isolation.available, 'rule_execution_error': isolation.reason}
 
     @app.post("/protocols/qq")
     async def qq(request: Request):
@@ -246,6 +264,11 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
         return await guarded(app.state.host.get_plugin("agent-protocol").submit(
             binding_id=event.binding_id, request_id=event.request_id, kind=event.kind, payload=event.payload))
 
+    @app.get('/agent/commits/{binding_id}/{request_id}')
+    async def commit_status(binding_id: str, request_id: str, request: Request):
+        authorized(request)
+        return await app.state.store.commit_status(binding_id, request_id)
+
     @app.post("/channels")
     async def create_channel(request: Request):
         authorized(request)
@@ -278,7 +301,8 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
             bound = await guarded(app.state.store.bound_channel(binding_id))
             if bound.id != channel.id:
                 raise HTTPException(403, "binding_mismatch")
-        result = channel.model_dump()
+        result = channel.model_dump(exclude={'runtime'} if binding_id else set())
+        result['rule_sdk'] = app.state.rule_guide
         if channel.rule_path:
             result["rule_source"] = app.state.rule_files.read(channel.rule_path, channel.rule_hash)
         return result

@@ -22,7 +22,7 @@ class EmptyStore:
         return str(uuid4())
     async def record_discovery(self, observation_id, decision, **artifact):
         self.recorded.append((observation_id, decision, artifact))
-        return 'new-channel' if decision.get('passed') else None
+        return 'new-channel' if decision.get('action') == 'new' else None
 
 
 def event(text):
@@ -40,8 +40,14 @@ async def test_unsubscribed_request_is_discovered_without_system_channel(tmp_pat
     async def publish(value):
         published.append(value)
     plugin.bind_publisher(publish)
+    from argus_app.contracts.capabilities import RuleResponse
+    from icarus.core.capabilities import CapabilityStatus
+    async def classify(request):
+        return RuleResponse(correlation_id=request.correlation_id, status=CapabilityStatus.OK,
+                            data={'match': True, 'reason': 'request', 'discovery': {'action': 'new'}})
+    plugin.request = classify
     await plugin.discover(item)
-    assert store.recorded[0][1]['passed'] is True
+    assert store.recorded[0][1]['action'] == 'new'
     assert store.recorded[0][2]['rule_path']
     assert published[0].channel_id == 'new-channel'
 
@@ -52,8 +58,14 @@ async def test_initial_default_rule_ignores_chatter(tmp_path):
     store = EmptyStore(item)
     plugin = WorkflowRules('workflow-rules', store, RuleEngine(), RuleFiles(tmp_path))
     assert callable(getattr(plugin, 'discover', None))
+    from argus_app.contracts.capabilities import RuleResponse
+    from icarus.core.capabilities import CapabilityStatus
+    async def classify(request):
+        return RuleResponse(correlation_id=request.correlation_id, status=CapabilityStatus.OK,
+                            data={'match': False, 'reason': 'chatter', 'discovery': {'action': 'ignore'}})
+    plugin.request = classify
     await plugin.discover(item)
-    assert store.recorded[0][1]['passed'] is False
+    assert store.recorded[0][1]['action'] == 'ignore'
 
 
 @pytest.mark.asyncio
@@ -67,7 +79,7 @@ async def test_discovery_history_is_source_scoped_without_persistent_channel(tmp
             assert result['observations'][0]['id'] == item.id
             with pytest.raises(ValueError, match='source'):
                 await call('history', {'source_keys': ['other:tenant']})
-            return {'passed': False, 'reason': 'checked history'}
+            return {'action': 'ignore', 'reason': 'checked history'}
     async def observations(source_keys, **kwargs):
         assert source_keys == [item.source_key]
         return [item]
@@ -80,4 +92,4 @@ async def test_discovery_history_is_source_scoped_without_persistent_channel(tmp
     plugin.request = request
     assert callable(getattr(plugin, 'discover', None))
     await plugin.discover(item)
-    assert store.recorded[0][1]['passed'] is False
+    assert store.recorded[0][1]['action'] == 'ignore'

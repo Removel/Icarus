@@ -19,18 +19,18 @@ def test_confirm_rejects_missing_final_view_and_stale_refs(monkeypatch):
                       'items':[{'id':item_id}]},'prompt':'FULL FROZEN CONTENT','delivered':False,'confirmed':[],'finished':False}
     bridge = SimpleNamespace(bindings={task_id:binding}, callback_locks={})
     plugin = SimpleNamespace(bridge=bridge, task_channels=channels)
-    tool = ArgusTool(plugin, 'argus_confirm')
+    tool = ArgusTool(plugin, 'argus_commit')
     async def run():
-        result = await tool.ainvoke({'request_id':'confirm','items':[{'observation_id':'old','status':'handled'}]}, task_id=task_id)
+        result = await tool.ainvoke({'results':[{'ref':'old','status':'handled'}]}, task_id=task_id)
         assert not result.success
         assert 'outside the current frozen round' in result.error
-        result = await tool.ainvoke({'request_id':'confirm','items':[{'observation_id':'1','status':'handled'}]}, task_id=task_id)
+        result = await tool.ainvoke({'results':[{'ref':'1','status':'handled'}]}, task_id=task_id)
         assert not result.success
         assert 'Full frozen content is not visible' in result.error
         channels.request_cancel(task_id, 'stop')
         from icarus.core.run_control.channel import AgentRunCancelled
         with pytest.raises(AgentRunCancelled):
-            await tool.ainvoke({'request_id':'confirm','items':[{'observation_id':'1','status':'handled'}]}, task_id=task_id)
+            await tool.ainvoke({'results':[{'ref':'1','status':'handled'}]}, task_id=task_id)
     asyncio.run(run())
 
 
@@ -63,7 +63,7 @@ def test_callback_request_ids_are_scoped_to_task_binding():
     async def append(identity, kind, payload, task_id):
         records.append(SimpleNamespace(type=kind, payload=payload, task_id=task_id))
     bridge = SimpleNamespace(runtime=SimpleNamespace(session_store=Store()), identity=lambda channel:channel, append=append)
-    tool = ArgusTool(SimpleNamespace(bridge=bridge, task_channels=channels), 'argus_confirm')
+    tool = ArgusTool(SimpleNamespace(bridge=bridge, task_channels=channels), 'argus_commit')
     def respond(request):
         import json
         body = json.loads(request.content)

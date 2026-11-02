@@ -39,6 +39,7 @@ def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
                 malformed = await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure','extra':True})
                 assert malformed.status_code == 422
                 payload = dict(channel_id=channel,wake_id=wake,binding_id=binding,channel_version=1,session_id=session,
+                    channel_snapshot=dict(id=channel,title='task',goal='goal',progress='',lifecycle='active',version=1,source_keys=['qq:a'],rule_source=''), rule_sdk={'version':2},
                     items=[dict(id=item,source_key='qq:a',message_id='1',kind='message.observed',revision=1,
                                 observed_at='2026-11-01T00:00:00Z',content={'text':'Argus evidence'},detail={})],
                     argus_url='http://127.0.0.1:1')
@@ -46,13 +47,13 @@ def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
                 assert response.status_code == 200, response.text
                 task_id = response.json()['task_id']
                 assert (await client.post('/argus/wake', json=payload)).json()['task_id'] == task_id
-                assert (await client.post('/argus/wake', json=payload | {'channel_version':2})).status_code == 409
+                assert (await client.post('/argus/wake', json=payload | {'channel_version':2})).status_code == 422
                 for _ in range(200):
                     status = (await client.post('/argus/status', json={'wake_id':wake})).json()
                     if status['status'] in {'completed','failed'}:
                         break
                     await asyncio.sleep(.02)
-                assert status == {'task_id':task_id,'session_id':session,'status':'completed'}
+                assert status == {'task_id':task_id,'session_id':session,'status':'completed','commit_state':'none'}
                 return task_id
     with local_provider() as port:
         config = config_for(tmp_path / 'data', port)

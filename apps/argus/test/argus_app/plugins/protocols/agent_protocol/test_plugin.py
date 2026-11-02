@@ -47,4 +47,4 @@ async def test_finished_binding_duplicate_returns_stored_receipt():
         async def bound_channel(self, binding):
             raise ValueError('closed binding must not block receipt replay')
     plugin = AgentProtocol('agent-protocol', Store())
-    assert await plugin.submit('closed', 'finish-request', 'finish', {'update': 'unchanged'}) == {'applied': True}
+    assert await plugin.submit('closed', 'commit-request', 'commit', {'results': []}) == {'applied': True}

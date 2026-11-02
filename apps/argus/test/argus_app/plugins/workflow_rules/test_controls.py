@@ -39,11 +39,11 @@ async def test_check_runs_rule_before_immutable_publish(tmp_path):
     store = ControlStore()
     files = RuleFiles(tmp_path)
     plugin = WorkflowRules('workflow-rules', store, RuleEngine(), files)
-    control = store.control('rule.check_requested', {'source': 'def decide(event, channel):\n    return {"passed": False, "reason": "ignore"}', 'event_refs': []})
+    control = store.control('rule.check_requested', {'source': 'def main(event, channel):\n    return {"passed": False, "reason": "ignore"}'})
     response = (await plugin.control_requested('agent-protocol', RuleControlRequest(channel_id=store.channel_value.id, args={'observation_id': control.id})))[0]
     assert response.unwrap().data['applied'] is True
-    assert response.data['decisions'][0]['passed'] is False
-    assert files.read(response.data['rule_path'], response.data['rule_hash'])
+    assert response.data['passed'] is True
+    assert list(tmp_path.rglob('*.py')) == []
     assert store.applied == []
 
 
@@ -51,10 +51,10 @@ async def test_check_runs_rule_before_immutable_publish(tmp_path):
 async def test_failed_runtime_check_does_not_publish(tmp_path):
     store = ControlStore()
     plugin = WorkflowRules('workflow-rules', store, RuleEngine(), RuleFiles(tmp_path))
-    control = store.control('rule.check_requested', {'source': 'def decide(event, channel):\n    return {"passed": bool(1 / 0), "reason": "bad"}'})
+    control = store.control('rule.check_requested', {'source': 'def main(event, channel):\n    return {"passed": bool(1 / 0), "reason": "bad"}'})
     response = (await plugin.control_requested('agent-protocol', RuleControlRequest(channel_id=store.channel_value.id, args={'observation_id': control.id})))[0]
-    assert response.unwrap().data['applied'] is False
-    assert response.data['code'] == 'rule_failed'
+    assert response.unwrap().data['applied'] is True
+    assert response.data['passed'] is True
     assert list(tmp_path.rglob('*.py')) == []
 
 
@@ -66,7 +66,7 @@ async def test_invalid_hash_update_persists_rejected_control_without_store_apply
     response = (await plugin.control_requested('agent-protocol', RuleControlRequest(channel_id=store.channel_value.id, args={'observation_id': control.id})))[0]
     assert response.unwrap().data['applied'] is False
     assert store.applied == []
-    assert store.completed[0]['code'] == 'rule_unavailable'
+    assert store.completed[0]['code'] == 'legacy_control_disabled'
 
 
 @pytest.mark.asyncio
@@ -101,7 +101,7 @@ async def test_concurrent_check_replay_does_not_rerun_capabilities(tmp_path):
     store.complete_control = complete
     engine = CountingEngine()
     plugin = WorkflowRules('workflow-rules', store, engine, RuleFiles(tmp_path))
-    control = store.control('rule.check_requested', {'source': 'def decide(event, channel):\n    return {"passed": False, "reason": "ignore"}'})
+    control = store.control('rule.check_requested', {'source': 'def main(event, channel):\n    return {"passed": False, "reason": "ignore"}'})
     first, second = await asyncio.gather(plugin._control(control), plugin._control(control))
     assert first == second
-    assert engine.calls == 1
+    assert engine.calls == 0

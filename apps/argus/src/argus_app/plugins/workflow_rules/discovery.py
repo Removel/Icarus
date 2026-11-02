@@ -1,13 +1,18 @@
 """Trusted initial discovery defaults; executed by the same restricted rule engine."""
 from pathlib import Path
 
-DEFAULT_DISCOVERY_RULE = '''def decide(event, channel):
-    text = event["content"].get("text", "").lower()
-    requested = any(word in text for word in ["请帮", "帮我", "请跟进", "需要跟进", "请处理", "提醒我", "please help", "please track", "remind me"])
-    return {"passed": requested, "reason": "explicit request" if requested else "not an explicit request"}
+DEFAULT_DISCOVERY_RULE = '''def main(event, channel):
+    text = event["content"].get("text", "")
+    candidates = channel.get("candidates", [])
+    if not text.strip():
+        return {"action": "ignore", "reason": "empty message"}
+    result = capability("semantic", {"mode": "discovery", "text": text})
+    decision = result["discovery"]
+    decision["reason"] = result.get("reason", "discovery judgement")
+    return decision
 '''
 
-INITIAL_CHANNEL_RULE = '''def decide(event, channel):
+INITIAL_CHANNEL_RULE = '''def main(event, channel):
     return {"passed": False, "reason": "initial event already delivered; Agent must publish the next observation rule"}
 '''
 

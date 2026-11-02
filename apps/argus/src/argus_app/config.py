@@ -30,6 +30,8 @@ class ArgusConfig(BaseModel):
     semantic_api_key: SecretStr = SecretStr("")
     semantic_base_url: str | None = None
     semantic_model: str | None = None
+    safety_review_enabled: bool = False
+    safety_review_budget: int = Field(default=16, ge=1, le=1000)
     memory_endpoint: str | None = None
     memory_token: SecretStr = SecretStr("")
     memory_user_id: str = ""
@@ -78,6 +80,8 @@ class ArgusConfig(BaseModel):
                    discovery_enabled=os.getenv("ARGUS_DISCOVERY_ENABLED", "true").lower() in {"true", "1", "yes"},
                    discovery_rule_path=os.getenv("ARGUS_DISCOVERY_RULE_PATH"),
                    semantic_base_url=os.getenv("ARGUS_JEV_BASE_URL"), semantic_model=os.getenv("ARGUS_JEV_MODEL"),
+                   safety_review_enabled=os.getenv('ARGUS_SAFETY_REVIEW_ENABLED', 'false').lower() in {'true', '1', 'yes'},
+                   safety_review_budget=int(os.getenv('ARGUS_SAFETY_REVIEW_BUDGET', '16')),
                    memory_endpoint=os.getenv("ICARUS_MEM0_ENDPOINT"),
                    memory_token=SecretStr(os.getenv("ICARUS_MEM0_API_KEY", "")),
                    memory_user_id=os.getenv("ARGUS_MEMORY_USER_ID", ""),

@@ -4,9 +4,10 @@ from argus_app.contracts.events import RulePassed
 
 
 class BridgePlugin(BasePlugin):
-    def __init__(self, plugin_id, store, bridge_client, argus_url):
+    def __init__(self, plugin_id, store, bridge_client, argus_url, *, rule_files=None, guide=None):
         super().__init__(plugin_id)
         self.store, self.client, self.argus_url = store, bridge_client, argus_url.rstrip('/')
+        self.rule_files, self.guide = rule_files, guide or {}
         self._delivery_lock = asyncio.Lock()
 
     @handles(RulePassed)
@@ -24,14 +25,21 @@ class BridgePlugin(BasePlugin):
                 # Remote completion is not delivered/confirmation; only callback receipts
                 # can retire pending observations. Never create another task on status retry.
                 result = await self.client.status(round_['wake_id'])
-                if result.get('status') in {'failed', 'cancelled', 'completed'}:
+                if (result.get('status') in {'failed', 'cancelled', 'completed'}
+                        and result.get('commit_state') not in {'pending', 'unknown'}):
                     await self.store.reconcile_round(channel_id, round_['wake_id'], result['status'])
                 return result
             channel = await self.store.channel(channel_id)
             session_id = round_.get('session_id') or await self.client.ensure_session(channel_id, round_['wake_id'])
             items = [(await self.store.observation(id)).model_dump(mode='json') for id in round_['observation_ids']]
+            from argus_app.rule_sdk.guide import channel_snapshot
+            if channel.version != round_.get('channel_version', channel.version):
+                raise RuntimeError('stale_round_snapshot')
+            if self.rule_files is None:
+                raise RuntimeError('rule_files_unavailable')
             result = await self.client.wake(channel_id=channel_id, wake_id=round_['wake_id'],
                 binding_id=round_['binding_id'], channel_version=round_.get('channel_version', channel.version),
+                channel_snapshot=channel_snapshot(channel, self.rule_files), rule_sdk=self.guide,
                 session_id=session_id, items=items, argus_url=self.argus_url)
             await self.store.set_round_delivery(channel_id, round_['wake_id'], session_id, result['task_id'])
             return result

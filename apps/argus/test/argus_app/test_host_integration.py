@@ -42,7 +42,7 @@ async def test_real_host_grouped_plugins_two_tables_and_confirmation_gate(tmp_pa
             group_id = uuid4().int % 100000000000
             source = f"qq:123:group:{group_id}"
             response = await client.post("/channels", headers=auth, json={"title": "review", "goal": "wait", "source_keys": [source],
-                "rule_source": 'def decide(event, channel):\n    return {"passed": True, "reason": "test"}\n'})
+                "rule_source": 'def main(event, channel):\n    return {"passed": True, "reason": "test"}\n'})
             assert response.status_code == 200, response.text
             channel_id = response.json()["id"]
             raw = json.dumps({"post_type": "message", "self_id": 123, "message_type": "group", "group_id": group_id,
@@ -62,10 +62,12 @@ async def test_real_host_grouped_plugins_two_tables_and_confirmation_gate(tmp_pa
                 assert response.status_code == 200, response.text
                 return response.json()
             current = await store.channel(channel_id)
-            rejected = await control("channel.update_requested", {"expected_version": current.version, "progress": "done"})
-            assert rejected["applied"] is False and rejected["code"] == "events_not_confirmed"
-            assert (await control("agent.delivered", {"observation_ids": [item_id]}))["applied"]
-            assert (await control("agent.result_submitted", {"items": [{"observation_id": item_id, "status": "handled"}]}))["applied"]
-            assert (await control("channel.update_requested", {"expected_version": current.version, "progress": "done"}))["applied"]
-            assert (await store.channel(channel_id)).progress == "done"
-            assert (await control("agent.finish_requested", {"update": "committed"}))["applied"]
+            rejected = await control('agent.commit_requested', {'expected_version': current.version,
+                'results': [{'observation_id': item_id, 'status': 'handled'}], 'progress': 'done'})
+            assert rejected['applied'] is False and rejected['code'] == 'events_not_delivered'
+            assert (await control('agent.delivered', {'observation_ids': [item_id]}))['applied']
+            committed = await control('agent.commit_requested', {'expected_version': current.version,
+                'results': [{'observation_id': item_id, 'status': 'handled'}], 'progress': 'done'})
+            assert committed['committed'] is True
+            assert (await store.channel(channel_id)).progress == 'done'
+            assert (await store.channel(channel_id)).runtime['round'] is None

@@ -31,7 +31,10 @@ async def test_empty_source_discovers_and_delivers_first_event_without_manual_ch
         agent_token=SecretStr('callback-secret'), gateway_token=SecretStr('gateway-secret'),
         gateway_url=gateway_url, public_url=argus_url, qq_token=SecretStr('qq-secret'),
         discovery_enabled=True, scan_interval=.1)
-    app = create_app(config, store=store)
+    async def semantic(args):
+        assert args['mode'] == 'discovery'
+        return {'match': True, 'reason': 'new explicit task', 'discovery': {'action': 'new'}}
+    app = create_app(config, store=store, semantic=semantic)
     # Provider's model responses are deterministic; callback requests go to real Argus.
     ArgusProvider.callbacks, ArgusProvider.model_calls = [], []
     with local_provider(ArgusProvider) as port:

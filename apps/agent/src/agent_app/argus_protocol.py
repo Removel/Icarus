@@ -40,11 +40,31 @@ class Observation(WireModel):
             raise ValueError('observation detail exceeds 48 KiB')
         return self
 
+class ChannelSnapshot(WireModel):
+    id: Id
+    title: Annotated[str, Field(max_length=120)]
+    goal: Annotated[str, Field(max_length=4096)]
+    progress: Annotated[str, Field(max_length=8192)]
+    lifecycle: Literal['active', 'paused', 'completed']
+    version: Annotated[int, Field(ge=1)]
+    source_keys: Annotated[list[Annotated[str, Field(min_length=1, max_length=512)]], Field(max_length=16)]
+    rule_source: str
+
+    @field_validator('rule_source')
+    @classmethod
+    def source_size(cls, value):
+        if len(value.encode()) > 32768:
+            raise ValueError('Rule source exceeds 32 KiB')
+        return value
+
+
 class WakeRequest(WireModel):
     channel_id: Id
     wake_id: Id
     binding_id: Id
     channel_version: Annotated[int, Field(ge=1)]
+    channel_snapshot: ChannelSnapshot
+    rule_sdk: dict
     session_id: Id
     items: Annotated[list[Observation], Field(min_length=1, max_length=20)]
     argus_url: Annotated[str, Field(max_length=2048)]
@@ -59,6 +79,10 @@ class WakeRequest(WireModel):
 
     @model_validator(mode='after')
     def bounded(self):
+        if self.channel_snapshot.id != self.channel_id or self.channel_snapshot.version != self.channel_version:
+            raise ValueError('Channel snapshot identity/version mismatch')
+        if len(json.dumps(self.rule_sdk, allow_nan=False).encode()) > 32768:
+            raise ValueError('Rule SDK metadata exceeds 32 KiB')
         if len({item.id for item in self.items}) != len(self.items):
             raise ValueError('duplicate observation IDs')
         if len(json.dumps(self.model_dump()).encode()) > 512 * 1024:

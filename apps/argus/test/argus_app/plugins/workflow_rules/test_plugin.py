@@ -37,7 +37,7 @@ def facts():
 async def test_workflow_records_pass_before_notification(tmp_path):
     ch, event = facts()
     files = RuleFiles(tmp_path)
-    ch = ch.model_copy(update=files.publish('def decide(event, channel):\n    return {"passed": True, "reason": "matched"}', ch.id))
+    ch = ch.model_copy(update=files.publish('def main(event, channel):\n    return {"passed": True, "reason": "matched"}', ch.id))
     store = StoreFake(ch, event)
     plugin = WorkflowRules('workflow-rules', store, RuleEngine(), files)
     events = []
@@ -54,7 +54,7 @@ async def test_workflow_records_pass_before_notification(tmp_path):
 async def test_failed_rule_is_persisted_as_error_not_false(tmp_path):
     ch, event = facts()
     files = RuleFiles(tmp_path)
-    ch = ch.model_copy(update=files.publish('def decide(event, channel):\n    return {"passed": bool(1 / 0), "reason": "bad"}', ch.id))
+    ch = ch.model_copy(update=files.publish('def main(event, channel):\n    return {"passed": bool(1 / 0), "reason": "bad"}', ch.id))
     store = StoreFake(ch, event)
     plugin = WorkflowRules('workflow-rules', store, RuleEngine(), files)
     await plugin.process_channel(ch.id)

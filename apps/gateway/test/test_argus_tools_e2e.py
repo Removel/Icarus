@@ -18,7 +18,7 @@ class ArgusProvider(ProviderHandler):
         if self.path == '/agent/events':
             assert self.headers['Authorization'] == 'Bearer callback-secret'
             type(self).callbacks.append(payload)
-            data, content_type = json.dumps({'applied':True}).encode(), 'application/json'
+            data, content_type = json.dumps({'applied':True, 'committed': payload['kind'] == 'agent.commit_requested'}).encode(), 'application/json'
         elif self.path.endswith('/chat/completions'):
             type(self).model_calls.append(payload)
             tool_results = [m for m in payload['messages'] if m['role'] == 'tool']
@@ -28,12 +28,10 @@ class ArgusProvider(ProviderHandler):
             if lazy and count == 0:
                 name, arguments = 'tool_search', {'query':'argus'}
             elif operation == 0:
-                name, arguments = 'argus_confirm', {'request_id':'confirm-1','items':[{'observation_id':'1','status':'handled'}]}
-            elif operation == 1:
-                name, arguments = 'argus_finish', {'request_id':'finish-1','update':'unchanged'}
+                name, arguments = 'argus_commit', {'results':[{'ref':'1','status':'handled'}]}
             else:
                 name, arguments = None, None
-            if lazy and name in {'argus_confirm','argus_finish'}:
+            if lazy and name == 'argus_commit':
                 name, arguments = 'tool_execute', {'name':name,'arguments':arguments}
             delta = {'content':'round complete'} if name is None else {'tool_calls':[{
                 'index':0,'id':f'call-{count}','type':'function','function':{'name':name,'arguments':json.dumps(arguments)}}]}
@@ -66,6 +64,7 @@ def test_real_agent_argus_tools_receipts_and_final_view(tmp_path, monkeypatch):
                 headers={'Authorization':'Bearer gateway-secret'}) as client:
                 session = (await client.post('/argus/session',json={'channel_id':channel,'request_id':'session'})).json()['session_id']
                 payload = dict(channel_id=channel,wake_id=wake,binding_id=binding,channel_version=1,session_id=session,
+                    channel_snapshot=dict(id=channel,title='task',goal='goal',progress='',lifecycle='active',version=1,source_keys=['qq:same-source'],rule_source=''), rule_sdk={'version':2},
                     items=[dict(id=item,source_key='qq:same-source',message_id='m',kind='message.observed',revision=1,
                                 observed_at='2026-11-01T00:00:00Z',content={'text':'untrusted external evidence'},detail={})],
                     argus_url=f'http://127.0.0.1:{port}')
@@ -78,27 +77,28 @@ def test_real_agent_argus_tools_receipts_and_final_view(tmp_path, monkeypatch):
                     await asyncio.sleep(.02)
                 assert status['status'] == 'completed', status
                 records,_ = await runtime.session_store.read_updates(SessionIdentity.create(tmp_path / 'workspace',session))
-                assert len([r for r in records if r.type == 'argus.receipt']) == 3
+                assert len([r for r in records if r.type == 'argus.receipt']) == 2
                 assert all(r.payload.get('success',True) for r in records if r.type == 'tool.completed'), [dict(r.payload) for r in records if r.type == 'tool.completed']
     with local_provider(ArgusProvider) as port:
         asyncio.run(run(config_for(tmp_path / 'data',port),port))
-    assert [p['kind'] for p in ArgusProvider.callbacks] == ['agent.delivered','agent.result_submitted','agent.finish_requested']
+    assert [p['kind'] for p in ArgusProvider.callbacks] == ['agent.delivered','agent.commit_requested']
     assert ArgusProvider.callbacks[0]['payload'] == {'observation_ids':[item]}
-    assert ArgusProvider.callbacks[1]['payload']['items'][0]['observation_id'] == item
+    assert ArgusProvider.callbacks[1]['payload']['results'][0]['observation_id'] == item
+    assert ArgusProvider.callbacks[1]['payload']['expected_version'] == 1
     first = ArgusProvider.model_calls[0]
     exposed = {t['function']['name'] for t in first.get('tools', [])}
     lazy = 'tool_search' in exposed
-    assert len(ArgusProvider.model_calls) == (4 if lazy else 3)
+    assert len(ArgusProvider.model_calls) == (3 if lazy else 2)
     assert all('ARGUS CURRENT ROUND' not in str(m['content']) for m in first['messages'] if m['role'] == 'system')
     assert any('ARGUS CURRENT ROUND' in str(m['content']) and item in str(m['content']) for m in first['messages'] if m['role'] == 'user')
-    required_guidance = ('argus_channel_read', 'def decide(event, channel):', "capability('history', {'limit': 20})",
-                         "{'observations': [...]}", 'criterion', 'rule_hash', 'expected_version', 'no rule_path')
+    required_guidance = ('argus_channel_read', 'def main(event, channel):', "capability('history', {'limit': 20})",
+                         "{'observations': [...]}", 'criterion', 'argus_commit', 'never executes source')
     user_view = '\n'.join(str(m['content']) for m in first['messages'] if m['role'] == 'user')
     system_view = '\n'.join(str(m['content']) for m in first['messages'] if m['role'] == 'system')
     for fragment in required_guidance:
         assert fragment in user_view, fragment
-    assert 'def decide(event, channel):' not in system_view
+    assert 'def main(event, channel):' not in system_view
     assert "capability('history', {'limit': 20})" not in system_view
-    assert exposed == ({'tool_search','tool_execute'} if lazy else {'argus_channel_read','argus_read','argus_history','argus_rule_check','argus_confirm','argus_channel_update','argus_finish'})
-    if lazy:
-        assert 'argus(7)' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
+    assert exposed == {'tool_search', 'tool_execute'}
+    assert 'argus(5)' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
+    assert 'memory_recall' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')

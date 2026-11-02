@@ -113,33 +113,23 @@ async def test_only_two_tables_and_restart_cursor(store):
 
 
 @pytest.mark.asyncio
-async def test_freezes_round_and_requires_delivered_all_confirmed_before_publish(store):
+async def test_freezes_round_and_commits_all_results_together(store):
     ch, items, round_ = await passed_round(store, 2)
     assert round_ == await store.begin_round(ch.id)
-    await store.set_round_delivery(ch.id, round_["wake_id"], "session", "task")
-    _, early = await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
-    assert not early["applied"]
-    _, delivered = await control(store, round_, "agent.delivered", {"observation_ids": [x.id for x in items]})
-    assert delivered["applied"]
-    _, result = await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
-    assert result["applied"]
+    await store.set_round_delivery(ch.id, round_['wake_id'], 'session', 'task')
+    body = {'expected_version': ch.version, 'progress': 'done',
+            'results': [{'observation_id': x.id, 'status': 'handled'} for x in items]}
+    _, early = await control(store, round_, 'agent.commit_requested', body)
+    assert early['applied'] is False
+    await control(store, round_, 'agent.delivered', {'observation_ids': [x.id for x in items]})
+    request, result = await control(store, round_, 'agent.commit_requested', body)
+    assert result['committed'] is True
+    assert await store.apply_control(request.id) == result
     current = await store.channel(ch.id)
-    _, premature = await control(store, round_, "channel.update_requested", {"expected_version": current.version, "progress": "done"})
-    assert not premature["applied"]
-    assert premature["code"] == "events_not_confirmed"
-    _, result = await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[1].id, "status": "no_action"}]})
-    assert result["applied"]
-    current = await store.channel(ch.id)
-    update, result = await control(store, round_, "channel.update_requested", {"expected_version": current.version, "progress": "done"}, "update-1")
-    assert result["applied"]
-    assert await store.apply_control(update.id) == result
-    assert (await store.channel(ch.id)).progress == "done"
-    _, result = await control(store, round_, "agent.finish_requested", {"update": "committed"})
-    assert result["applied"]
-    assert await store.begin_round(ch.id) is None
-    assert (await store.channel(ch.id)).runtime["pending"] == {}
+    assert current.progress == 'done'
+    assert current.runtime['round'] is None and current.runtime['pending'] == {}
     with pytest.raises(DomainError):
-        await store.bound_channel(round_["binding_id"])
+        await store.bound_channel(round_['binding_id'])
 
 
 @pytest.mark.asyncio
@@ -150,11 +140,13 @@ async def test_atomic_reject_cross_channel_unfrozen_and_invalid_confirmation(sto
     assert not result["applied"]
     assert (await store.begin_round(ch.id))["delivered"] == []
     await control(store, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-    _, result = await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}, {"observation_id": foreign.id, "status": "handled"}]})
-    assert not result["applied"]
-    assert (await store.begin_round(ch.id))["confirmed"] == {}
-    _, result = await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "bad"}]})
-    assert not result["applied"]
+    _, result = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'results': [{'observation_id': items[0].id, 'status': 'handled'}, {'observation_id': foreign.id, 'status': 'handled'}]})
+    assert not result['applied']
+    assert (await store.begin_round(ch.id))['confirmed'] == {}
+    _, result = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'results': [{'observation_id': items[0].id, 'status': 'bad'}]})
+    assert not result['applied']
 
 
 @pytest.mark.asyncio
@@ -209,23 +201,21 @@ async def test_fixed_check_results_pending_replay_and_finish_unchanged(store):
     assert await store.complete_control(check.id, {"applied": False, "valid": False}) == {"applied": True, "valid": True}
     assert check.id not in [x.id for x in await store.pending_controls()]
     await control(store, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "no_action"}]})
-    _, result = await control(store, round_, "agent.finish_requested", {"update": "committed"})
-    assert not result["applied"]
-    _, result = await control(store, round_, "agent.finish_requested", {"update": "unchanged"})
-    assert result["applied"]
+    _, result = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'results': [{'observation_id': items[0].id, 'status': 'no_action'}]})
+    assert result['committed'] is True
 
 
 @pytest.mark.asyncio
 async def test_malformed_controls_are_fixed_rejections_not_server_errors(store):
     ch, items, round_ = await passed_round(store)
     await control(store, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-    malformed, result = await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": []}]})
-    assert not result["applied"]
+    malformed, result = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'results': [{'observation_id': items[0].id, 'status': []}]})
+    assert not result['applied']
     assert await store.apply_control(malformed.id) == result
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
-    ch = await store.channel(ch.id)
-    _, result = await control(store, round_, "channel.update_requested", {"expected_version": ch.version, "lifecycle": {}})
+    _, result = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'results': [{'observation_id': items[0].id, 'status': 'handled'}], 'lifecycle': {}})
     assert not result["applied"]
     assert (await store.channel(ch.id)).lifecycle == "active"
 
@@ -272,8 +262,8 @@ async def test_frozen_round_survives_new_pending_restart_and_stale_finish(store)
     try:
         assert await another.begin_round(ch.id) == round_
         await control(another, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-        await control(another, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
-        _, result = await control(another, round_, "agent.finish_requested", {"update": "unchanged"})
+        _, result = await control(another, round_, 'agent.commit_requested', {'expected_version': ch.version,
+            'results': [{'observation_id': items[0].id, 'status': 'handled'}]})
         assert result["applied"]
         next_round = await another.begin_round(ch.id)
         assert next_round["observation_ids"] == [newer.id]
@@ -310,11 +300,10 @@ async def test_remaining_passed_items_rejudge_when_round_changes_channel_context
     current = await store.channel(ch.id)
     assert await store.decide(ch.id, second.id, current.version, {"passed": True, "reason": "old rule"})
     await control(store, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
     current = await store.channel(ch.id)
-    _, update = await control(store, round_, "channel.update_requested", {"expected_version": current.version, "progress": "new context"})
-    assert update["applied"]
-    await control(store, round_, "agent.finish_requested", {"update": "committed"})
+    _, update = await control(store, round_, 'agent.commit_requested', {'expected_version': current.version,
+        'progress': 'new context', 'results': [{'observation_id': items[0].id, 'status': 'handled'}]})
+    assert update['committed'] is True
     assert await store.begin_round(ch.id) is None
     assert [x.id for x in await store.unread(ch.id)] == [second.id]
     current = await store.channel(ch.id)
@@ -325,7 +314,7 @@ async def test_remaining_passed_items_rejudge_when_round_changes_channel_context
 @pytest.mark.asyncio
 async def test_external_validation_can_persist_only_rejected_update(store):
     ch, _, round_ = await passed_round(store)
-    request = await store.ingest("agent", "bad-rule", "channel.update_requested",
+    request = await store.ingest("agent", "bad-rule", "agent.commit_requested",
                                  {"expected_version": ch.version, "rule_hash": "bad"},
                                  {"binding_id": round_["binding_id"]})
     rejection = {"applied": False, "code": "rule_hash_mismatch"}
@@ -342,14 +331,11 @@ async def test_operational_writes_preserve_config_version_and_frozen_version(sto
     assert round_["channel_version"] == ch.version
     await store.set_round_delivery(ch.id, round_["wake_id"], "session", "task")
     await control(store, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
     assert (await store.channel(ch.id)).version == ch.version
-    _, result = await control(store, round_, "channel.update_requested", {"expected_version": ch.version, "progress": "updated"})
-    assert result["applied"]
-    assert (await store.channel(ch.id)).version == ch.version + 1
-    assert (await store.begin_round(ch.id))["channel_version"] == ch.version
-    _, finish = await control(store, round_, "agent.finish_requested", {"update": "committed"})
-    assert finish["applied"]
+    _, result = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'progress': 'updated', 'results': [{'observation_id': items[0].id, 'status': 'handled'}]})
+    assert result['committed'] is True
+    assert (await store.channel(ch.id)).runtime['round'] is None
     assert (await store.channel(ch.id)).version == ch.version + 1
 
 
@@ -395,10 +381,9 @@ async def test_lifecycle_finalizes_round_and_preserves_or_clears_other_pending(s
     second = await message(store, "next")
     assert await store.decide(ch.id, second.id, ch.version, {"passed": True, "reason": "next"})
     await control(store, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
-    _, result = await control(store, round_, "channel.update_requested", {"expected_version": ch.version, "lifecycle": lifecycle})
-    assert result["applied"]
-    await control(store, round_, "agent.finish_requested", {"update": "committed"})
+    _, result = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'lifecycle': lifecycle, 'results': [{'observation_id': items[0].id, 'status': 'handled'}]})
+    assert result['committed'] is True
     ch = await store.channel(ch.id)
     assert ch.runtime["round"] is None
     assert await store.begin_round(ch.id) is None
@@ -424,18 +409,16 @@ async def test_history_literal_text_and_identifiers_cannot_change_sql(store):
 async def test_raw_hash_update_derives_path_without_breaking_closed_control_replay(store):
     ch, items, round_ = await passed_round(store)
     await control(store, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
-    payload = {"expected_version": ch.version, "rule_hash": "a" * 64}
-    request, result = await control(store, round_, "channel.update_requested", payload, "raw-rule")
-    assert result["applied"]
+    payload = {'expected_version': ch.version, 'rule_hash': 'a' * 64,
+               'rule_path': f"{ch.id}/{'a' * 64}.py",
+               'results': [{'observation_id': items[0].id, 'status': 'handled'}]}
+    request, result = await control(store, round_, 'agent.commit_requested', payload, 'raw-rule')
+    assert result['committed'] is True
     assert (await store.channel(ch.id)).rule_path == f"{ch.id}/{'a' * 64}.py"
-    finish, finished = await control(store, round_, "agent.finish_requested", {"update": "committed"}, "closed-finish")
-    assert finished["applied"]
-    duplicate = await store.ingest("agent", "raw-rule", "channel.update_requested", payload,
-                                   {"binding_id": round_["binding_id"], "payload": payload})
+    duplicate = await store.ingest('agent', 'raw-rule', 'agent.commit_requested', payload,
+                                   {'binding_id': round_['binding_id'], 'payload': payload})
     assert duplicate.id == request.id
     assert await store.apply_control(duplicate.id) == result
-    assert await store.apply_control(finish.id) == finished
 
 
 @pytest.mark.asyncio
@@ -449,13 +432,11 @@ async def test_source_replacement_reclaims_full_pending_capacity_but_keeps_froze
     round_ = await store.begin_round(ch.id, limit=1)
     frozen = round_["observation_ids"]
     await control(store, round_, "agent.delivered", {"observation_ids": frozen})
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": frozen[0], "status": "handled"}]})
-    _, result = await control(store, round_, "channel.update_requested", {"expected_version": ch.version, "source_keys": ["qq:B"]})
-    assert result["applied"]
+    _, result = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'source_keys': ['qq:B'], 'results': [{'observation_id': frozen[0], 'status': 'handled'}]})
+    assert result['committed'] is True
     current = await store.channel(ch.id)
-    assert set(current.runtime["pending"]) == set(frozen)
-    assert (await store.begin_round(ch.id))["observation_ids"] == frozen
-    await control(store, round_, "agent.finish_requested", {"update": "committed"})
+    assert current.runtime['round'] is None
     assert (await store.channel(ch.id)).runtime["pending"] == {}
     for i in range(256):
         item = await message(store, str(i), source="qq:B")
@@ -497,8 +478,8 @@ async def test_revision_replacement_never_rewrites_already_frozen_round(store):
     assert (await store.begin_round(ch.id))["observation_ids"] == [items[0].id]
     assert set((await store.channel(ch.id)).runtime["pending"]) == {items[0].id, second.id}
     await control(store, round_, "agent.delivered", {"observation_ids": [items[0].id]})
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
-    await control(store, round_, "agent.finish_requested", {"update": "unchanged"})
+    await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'results': [{'observation_id': items[0].id, 'status': 'handled'}]})
     assert (await store.begin_round(ch.id))["observation_ids"] == [second.id]
 
 
@@ -514,14 +495,17 @@ async def test_test_fixture_rejects_production_named_database_before_connect(mon
 async def test_terminal_reconciliation_releases_only_known_stopped_rounds(store):
     ch, items, round_ = await passed_round(store, 2)
     await control(store, round_, "agent.delivered", {"observation_ids": [x.id for x in items]})
-    await control(store, round_, "agent.result_submitted", {"items": [{"observation_id": items[0].id, "status": "handled"}]})
+    # Incomplete commit cannot consume even the first item.
+    _, rejected = await control(store, round_, 'agent.commit_requested', {'expected_version': ch.version,
+        'results': [{'observation_id': items[0].id, 'status': 'handled'}]})
+    assert rejected['applied'] is False
     for status in ("unknown", "accepted", "running"):
         await store.reconcile_round(ch.id, round_["wake_id"], status)
         assert await store.begin_round(ch.id) == (await store.channel(ch.id)).runtime["round"]
         assert (await store.begin_round(ch.id))["wake_id"] == round_["wake_id"]
     await store.reconcile_round(ch.id, round_["wake_id"], "failed")
     current = await store.channel(ch.id)
-    assert set(current.runtime["pending"]) == {items[1].id}
+    assert set(current.runtime['pending']) == {x.id for x in items}
     assert current.runtime["pending"][items[1].id]["delivery_attempt_count"] == 1
     with pytest.raises(DomainError):
         await store.bound_channel(round_["binding_id"])

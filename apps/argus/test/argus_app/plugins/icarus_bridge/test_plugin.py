@@ -30,7 +30,8 @@ async def test_delivery_retry_keeps_identity_and_does_not_claim_actual_delivery(
         async def begin_round(self, channel_id):
             return self.round
         async def channel(self, id):
-            return SimpleNamespace(version=4)
+            return SimpleNamespace(id='ch', title='task', goal='goal', progress='', lifecycle='active',
+                                   subscriptions={'qq:1': None}, rule_path='', version=4)
         async def observation(self, id):
             return SimpleNamespace(model_dump=lambda **kwargs: {'id': id})
         async def set_round_delivery(self, *args):
@@ -44,7 +45,7 @@ async def test_delivery_retry_keeps_identity_and_does_not_claim_actual_delivery(
             self.calls.append(kwargs)
             return {'task_id': 'task', 'status': 'accepted'}
     store, client = Store(), Client()
-    plugin = BridgePlugin('icarus-bridge', store, client, 'http://argus')
+    plugin = BridgePlugin('icarus-bridge', store, client, 'http://argus', rule_files=SimpleNamespace())
     await plugin.deliver_channel('ch')
     await plugin.deliver_channel('ch')
     assert client.calls[0] == client.calls[1]

@@ -6,7 +6,7 @@
   "python_requires": ["httpx>=0.27,<1"],
   "required_capabilities": [],
   "provided_capabilities": [],
-  "provided_tools": ["argus_channel_read", "argus_read", "argus_history", "argus_rule_check", "argus_confirm", "argus_channel_update", "argus_finish"],
+  "provided_tools": ["argus_channel_read", "argus_read", "argus_history", "argus_rule_check", "argus_commit"],
   "published_events": [],
   "consumed_events": [],
   "state_scopes": [],

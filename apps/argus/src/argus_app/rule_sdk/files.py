@@ -28,6 +28,8 @@ class RuleFiles:
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as stream:
                 stream.write(source)
+                stream.flush()
+                os.fsync(stream.fileno())
             # link creates immutable destination without replacing an existing file
             try:
                 os.link(temporary, target)
@@ -36,6 +38,11 @@ class RuleFiles:
                     raise RuleError('rule_hash', 'existing rule content mismatch')
         finally:
             os.unlink(temporary)
+        directory_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
         return {'rule_path': relative, 'rule_hash': digest}
 
     def _path(self, path: str) -> Path:

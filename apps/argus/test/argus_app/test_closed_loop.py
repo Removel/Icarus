@@ -26,8 +26,8 @@ from argus_app.application import create_app
 from argus_app.config import ArgusConfig
 from argus_app.infrastructure.store import Store
 
-NEW_RULE = 'def decide(event, channel):\n    return {"passed": False, "reason": "review already handled"}\n'
-INITIAL_RULE = '''def decide(event, channel):
+NEW_RULE = 'def main(event, channel):\n    return {"passed": False, "reason": "review already handled"}\n'
+INITIAL_RULE = '''def main(event, channel):
     if "approved" not in event["content"]["text"]:
         return {"passed": False, "reason": "waiting for approval"}
     history = capability("history", {"limit": 20})
@@ -61,16 +61,12 @@ class ClosedLoopProvider(ProviderHandler):
                 json={'binding_id': binding.group(1), 'request_id': 'direct-early-update',
                       'kind': 'channel.update_requested',
                       'payload': {'expected_version': 1, 'progress': 'must not commit'}})
-            assert result.status_code == 200 and result.json() == {'applied': False, 'code': 'events_not_confirmed'}
+            assert result.status_code == 422  # legacy multi-step writes are not accepted
         calls = [
             ('tool_search', {'query': 'argus'}),
-            ('argus_channel_update', {'request_id': 'early-update', 'expected_version': 1, 'progress': 'must not commit'}),
-            ('argus_confirm', {'request_id': 'confirm-one', 'items': [{'observation_id': '1', 'status': 'handled'}]}),
-            ('argus_rule_check', {'request_id': 'check-next', 'source': NEW_RULE, 'event_refs': ['1']}),
-            ('argus_channel_update', {'request_id': 'publish-next', 'expected_version': 1,
-                                      'progress': 'review handled from QQ and Feishu',
-                                      'rule_hash': hashlib.sha256(NEW_RULE.encode()).hexdigest()}),
-            ('argus_finish', {'request_id': 'finish-round', 'update': 'committed'}),
+            ('argus_rule_check', {'source': NEW_RULE}),
+            ('argus_commit', {'results': [{'ref': '1', 'status': 'handled'}],
+                              'progress': 'review handled from QQ and Feishu', 'rule_source': NEW_RULE}),
         ]
         if count < len(calls):
             name, arguments = calls[count]
@@ -131,6 +127,8 @@ async def test_two_sources_real_tcp_agent_confirmation_and_rule_rewrite(tmp_path
     store = Store(url)
     semantic_calls = []
     async def semantic(args):
+        if args.get('mode') == 'discovery':
+            return {'match': False, 'discovery': {'action': 'ignore'}, 'reason': 'existing workflow evidence'}
         semantic_calls.append(args)
         return {'match': True, 'reason': 'fixture approval'}
     config = ArgusConfig(database_url=SecretStr(url), data_dir=tmp_path / 'argus',
@@ -185,16 +183,16 @@ async def test_two_sources_real_tcp_agent_confirmation_and_rule_rewrite(tmp_path
                 assert len(semantic_calls) == 1
                 # finish receipt can arrive before the final model text is emitted.
                 async with asyncio.timeout(10):
-                    while len(ClosedLoopProvider.model_calls) < 7:
+                    while len(ClosedLoopProvider.model_calls) < 4:
                         await asyncio.sleep(.02)
-                assert len(ClosedLoopProvider.model_calls) == 7
+                assert len(ClosedLoopProvider.model_calls) == 4
                 async with store.engine.connect() as conn:
                     names = set((await conn.execute(text('SELECT tablename FROM pg_tables WHERE schemaname=current_schema()'))).scalars())
                     assert names == {'observed_items', 'channels'}
                     controls = (await conn.execute(text("SELECT kind,content,detail FROM observed_items WHERE source_key LIKE 'agent:%' ORDER BY position"))).mappings().all()
                 own = [r for r in controls if r['detail'].get('result', {}).get('channel_id') == channel_id or r['content'].get('progress') == 'must not commit']
-                assert any(r['detail'].get('result', {}).get('code') == 'events_not_confirmed' for r in own)
-                assert any(r['kind'] == 'channel.update_requested' and r['detail']['result']['applied'] for r in own)
+                assert any(r['kind'] == 'agent.commit_requested' and r['detail']['result'].get('committed') for r in own)
+                assert not any(r['kind'] in {'agent.result_submitted', 'channel.update_requested', 'agent.finish_requested'} for r in own)
                 # Published rule suppresses the next event without another Agent execution.
                 previous_cursor = ch['subscriptions'][sources[0]]
                 raw = json.dumps(qq | {'message_id': uuid4().hex, 'raw_message': 'approved again'}).encode()
@@ -207,4 +205,4 @@ async def test_two_sources_real_tcp_agent_confirmation_and_rule_rewrite(tmp_path
                             break
                         await asyncio.sleep(.02)
                 assert final['runtime']['pending'] == {}
-                assert len(ClosedLoopProvider.model_calls) == 7
+                assert len(ClosedLoopProvider.model_calls) == 4

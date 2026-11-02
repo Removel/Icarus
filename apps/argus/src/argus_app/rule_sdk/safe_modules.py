@@ -1,0 +1,20 @@
+"""Explicit computation exports, never raw modules or interpreter internals."""
+EXPORTS = {
+    're': frozenset({'compile', 'search', 'match', 'fullmatch', 'findall', 'finditer', 'split', 'sub', 'subn', 'escape',
+                     'IGNORECASE', 'MULTILINE', 'DOTALL', 'ASCII', 'VERBOSE', 'NOFLAG', 'error'}),
+    'json': frozenset({'loads', 'dumps', 'JSONDecodeError'}),
+    'math': frozenset({'ceil', 'floor', 'trunc', 'fabs', 'factorial', 'comb', 'perm', 'gcd', 'lcm',
+                       'isfinite', 'isinf', 'isnan', 'isclose', 'sqrt', 'isqrt', 'pow', 'exp', 'expm1',
+                       'log', 'log1p', 'log2', 'log10', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2',
+                       'degrees', 'radians', 'hypot', 'dist', 'copysign', 'fmod', 'remainder', 'fsum',
+                       'prod', 'modf', 'frexp', 'ldexp', 'nextafter', 'ulp', 'pi', 'e', 'tau', 'inf', 'nan'}),
+    'datetime': frozenset({'date', 'datetime', 'time', 'timedelta', 'timezone'}),
+    'statistics': frozenset({'mean', 'fmean', 'geometric_mean', 'harmonic_mean', 'median', 'median_low',
+                             'median_high', 'mode', 'multimode', 'pstdev', 'pvariance', 'stdev', 'variance',
+                             'quantiles', 'correlation', 'covariance', 'linear_regression', 'StatisticsError'}),
+    'itertools': frozenset({'accumulate', 'chain', 'combinations', 'combinations_with_replacement', 'compress',
+                            'count', 'cycle', 'dropwhile', 'filterfalse', 'groupby', 'islice', 'pairwise',
+                            'permutations', 'product', 'repeat', 'starmap', 'takewhile', 'tee', 'zip_longest'}),
+    'functools': frozenset({'reduce', 'partial', 'cmp_to_key', 'cache', 'lru_cache'}),
+    'collections': frozenset({'Counter', 'defaultdict', 'deque', 'OrderedDict', 'namedtuple'}),
+}

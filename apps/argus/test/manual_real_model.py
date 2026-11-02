@@ -37,11 +37,14 @@ from argus_app.application import create_app
 from argus_app.config import ArgusConfig
 from argus_app.infrastructure.store import Store, observed_items
 from sqlalchemy import select
+from apps.argus.test.model_budget import ModelBudget
+from argus_app.model_provider.semantic import configured_backend
 
 
 class Recorder(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
-    budget = 30
+    budget = 120
+    accounting = ModelBudget()
     calls = []
     lock = threading.Lock()
 
@@ -60,8 +63,10 @@ class Recorder(BaseHTTPRequestHandler):
             return
         with self.lock:
             index = len(self.calls)
-            if index >= self.budget:
-                self.send_error(429, 'synthetic acceptance request budget exhausted')
+            try:
+                self.accounting.consume('agent')
+            except ValueError as exc:
+                self.send_error(429, str(exc))
                 return
             record = {'index': index + 1, 'timestamp': datetime.now(timezone.utc).isoformat(),
                       'request': body, 'response_chunks': [], 'usage': None}
@@ -75,7 +80,9 @@ class Recorder(BaseHTTPRequestHandler):
                     record['status_code'] = response.status_code
                     if response.status_code != 200:
                         data = response.read()
-                        record['error_body'] = data.decode(errors='replace')[:2000]
+                        record['error_body'] = 'upstream request failed; body omitted to avoid credential disclosure'
+                        if response.status_code in {401, 403}:
+                            self.accounting.stop('agent authentication_failed')
                         self.send_response(response.status_code)
                         self.send_header('Content-Type', 'application/json')
                         self.send_header('Content-Length', str(len(data)))
@@ -123,7 +130,16 @@ def model_recorder(config, output):
         Recorder.api_key = ''
 
 
-async def run(output: Path):
+async def run(output: Path, *, max_agent_requests=120, max_scenario_requests=50,
+              max_semantic_requests=64, max_safety_requests=16, scenario_timeout=600,
+              selected_scenarios=None):
+    accounting = ModelBudget(agent=max_agent_requests, scenario=max_scenario_requests,
+                             semantic=max_semantic_requests, safety=max_safety_requests)
+    Recorder.accounting, Recorder.budget = accounting, max_agent_requests
+    key = os.getenv('ARGUS_JEV_API_KEY', '')
+    if not key:
+        raise ValueError('ARGUS_JEV_API_KEY is required for genuine configured semantic validation')
+    owner = None
     original = os.environ['ARGUS_TEST_DATABASE_URL']
     url = make_url(original)
     if url.drivername != 'postgresql+asyncpg' or not (url.database or '').endswith('_test'):
@@ -155,20 +171,17 @@ async def run(output: Path):
             config.agent.max_steps = 12
             runtime = AgentRuntime(config_loader=lambda: config)
             gateway = gateway_app(runtime)
+            backend, owner = configured_backend(key, os.getenv('ARGUS_JEV_BASE_URL'), os.getenv('ARGUS_JEV_MODEL'))
             async def semantic(arguments):
-                # Same paid endpoint, independent classification; no scripted answer.
+                # Genuine configured typed JEV, not a substitute deep-model endpoint.
+                accounting.consume('semantic')
                 started = time.monotonic()
-                query = {'model': actual.get_model(actual.model_roles.agent).model_name, 'max_tokens': 256,
-                         'messages': [{'role': 'user', 'content': '合成测试。仅返回JSON对象，match为布尔值。判断标准：' +
-                           str(arguments.get('criterion', arguments.get('question', '是否值得处理'))) + '\n文本：' + str(arguments.get('text', ''))}]}
-                async with httpx.AsyncClient(timeout=60) as client:
-                    response = await client.post(f'http://127.0.0.1:{provider_port}/chat/completions', json=query)
-                    response.raise_for_status()
-                    value = response.json()
-                answer = value['choices'][0]['message']['content'].strip().removeprefix('```json').removesuffix('```').strip()
-                result = json.loads(answer)
-                if type(result.get('match')) is not bool:
-                    raise ValueError('invalid real semantic answer')
+                try:
+                    result = await backend(arguments)
+                except Exception as exc:
+                    if type(exc).__name__ in {'TypeSafeAuthenticationError', 'TypeSafePermissionDeniedError'}:
+                        accounting.stop('semantic authentication_failed')
+                    raise
                 summary['semantic_calls'].append({'input': arguments, 'output': result,
                                                    'elapsed_seconds': round(time.monotonic() - started, 3)})
                 return result
@@ -195,10 +208,12 @@ async def run(output: Path):
                         response.raise_for_status()
                         return {'platform': platform, 'message_id': request_id, 'text': message,
                                 'http_status': response.status_code, 'observation_id': response.json()['observation_id']}
-                    async def settle(event_id, timeout=180):
+                    async def settle(event_id, timeout=scenario_timeout):
                         start = time.monotonic()
                         last = None
                         while time.monotonic() - start < timeout:
+                            if accounting.stopped_reason:
+                                return {'settled': False, 'reason': accounting.stopped_reason}
                             item = await store.observation(event_id)
                             channel_id = item.detail.get('discovery', {}).get('channel_id')
                             if channel_id:
@@ -212,30 +227,31 @@ async def run(output: Path):
                                             'elapsed_seconds': round(time.monotonic() - start, 2), 'channel': last}
                             await asyncio.sleep(.3)
                         return {'settled': False, 'elapsed_seconds': round(time.monotonic() - start, 2), 'channel': last}
-                    scenarios = [
-                        ('work_review', 'qq', 30001,
-                         '请帮我跟进仓储接口评审。这是合成工作场景：当前等待评审；后续也要关注飞书来源 feishu:synthetic-tenant:chat:oc_review_synthetic 。先确认已记录本条请求，然后更新进展、增加这个飞书来源，并编写规则：只有后续消息明确包含“评审通过”才通过，其他消息忽略。不要调用真实外部工具。',
-                         ('feishu', 'oc_review_synthetic', '仓储接口评审通过，可以进入联调。这是合成进展。请确认处理并将事情标记完成。')),
-                        ('life_health', 'feishu', 'oc_health_synthetic',
-                         '请帮我跟进家庭体检预约。这是合成生活场景：正在等待医院确认。先确认收到本条，再更新进展并写规则：只在后续消息包含“体检确认”时通过，其余闲聊不处理。不要真正预约或发送消息。',
-                         ('feishu', 'oc_health_synthetic', '体检确认：下周二上午九点，需空腹。这是合成通知。请整理注意事项并确认事件，将事情标记完成。')),
-                    ]
-                    for name, platform, source, message, followup in scenarios:
+                    from apps.argus.test.real_scenarios import scenarios as business_scenarios
+                    cases_to_run = selected_scenarios if selected_scenarios is not None else business_scenarios()
+                    for scenario in cases_to_run:
+                        name, platform, source, message = scenario.name, scenario.platform, scenario.source, scenario.initial
+                        followup = (scenario.followup_platform, scenario.followup_source, scenario.followup)
+                        accounting.new_scenario()
                         case = {'name': name, 'initial': await send(platform, source, message, name + '-initial')}
                         case['initial_result'] = await settle(case['initial']['observation_id'])
                         summary['scenarios'].append(case)
                         (output / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2))
                         if not case['initial_result']['settled']:
-                            summary['stopped_reason'] = 'Initial round did not finish; no further paid loops'
+                            case['failure'] = 'Initial business round did not finish'
+                            summary['stopped_reason'] = accounting.stopped_reason or 'Unsettled round; stop to avoid overlapping paid tasks'
                             break
                         channel_id = case['initial_result']['channel']['id']
                         initial_version = case['initial_result']['channel']['version']
                         if initial_version == 1:
-                            summary['stopped_reason'] = 'Real Agent did not publish an observation rule; followup cannot validate intended behavior'
-                            break
+                            case['failure'] = 'Agent closed initialization without publishing a next-stage rule'
+                            continue
                         case['followup'] = await send(*followup, name + '-followup')
                         start = time.monotonic()
-                        while time.monotonic() - start < 180:
+                        ch = await store.channel(channel_id)
+                        while time.monotonic() - start < scenario_timeout:
+                            if accounting.stopped_reason:
+                                break
                             ch = await store.channel(channel_id)
                             if ch.lifecycle == 'completed' and ch.runtime.get('round') is None:
                                 break
@@ -243,8 +259,10 @@ async def run(output: Path):
                         case['followup_result'] = {'channel': ch.model_dump(), 'completed': ch.lifecycle == 'completed' and ch.runtime.get('round') is None,
                                                    'elapsed_seconds': round(time.monotonic() - start, 2)}
                         if not case['followup_result']['completed']:
-                            summary['stopped_reason'] = 'Followup did not complete; investigate process rather than retrying paid loops'
+                            case['failure'] = 'Followup business commit did not complete'
+                            summary['stopped_reason'] = accounting.stopped_reason or 'Unsettled followup; stop before next scenario'
                             break
+                        (output / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2))
                     # Save facts, control results, rule code and actual Agent journal.
                     async with store.engine.connect() as conn:
                         facts = (await conn.execute(select(observed_items).order_by(observed_items.c.position))).mappings().all()
@@ -260,6 +278,9 @@ async def run(output: Path):
                         (output / ('agent-' + session_id + '.json')).write_text(json.dumps([
                             {'type': row.type, 'task_id': row.task_id, 'payload': dict(row.payload)} for row in records], ensure_ascii=False, indent=2))
         summary['model_request_count'] = len(Recorder.calls)
+        summary['request_counts'] = dict(accounting.counts)
+        summary['budget_stopped_reason'] = accounting.stopped_reason
+        summary['semantic_route'] = {'base_url': owner.base_url, 'model': owner.model}
         summary['usage'] = [r['usage'] for r in Recorder.calls if r.get('usage')]
         summary['finished_at'] = datetime.now(timezone.utc).isoformat()
         (output / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -268,6 +289,8 @@ async def run(output: Path):
                                          'followup_completed': c.get('followup_result', {}).get('completed')} for c in summary['scenarios']],
                           'stopped_reason': summary.get('stopped_reason')}, ensure_ascii=False))
     finally:
+        if owner is not None:
+            await owner.aclose()
         await store.close()
         async with admin.connect() as connection:
             await connection.execute(text(f'DROP DATABASE "{db_name}" WITH (FORCE)'))
@@ -275,10 +298,22 @@ async def run(output: Path):
 
 
 if __name__ == '__main__':
+    os.umask(0o077)
     parser = argparse.ArgumentParser()
     parser.add_argument('--authorize-real-model', action='store_true', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--max-agent-requests', type=int, default=120)
+    parser.add_argument('--max-scenario-requests', type=int, default=50)
+    parser.add_argument('--max-semantic-requests', type=int, default=64)
+    parser.add_argument('--max-safety-requests', type=int, default=16)
+    parser.add_argument('--scenario-timeout', type=float, default=600)
     args = parser.parse_args()
+    if args.scenario_timeout <= 0:
+        parser.error('--scenario-timeout must be positive')
+    from agent_app.config.environment import load_icarus_environment
+    load_icarus_environment()
     args.output.mkdir(parents=True, exist_ok=False)
     os.chmod(args.output, 0o700)
-    asyncio.run(run(args.output.resolve()))
+    asyncio.run(run(args.output.resolve(), max_agent_requests=args.max_agent_requests,
+                    max_scenario_requests=args.max_scenario_requests, max_semantic_requests=args.max_semantic_requests,
+                    max_safety_requests=args.max_safety_requests, scenario_timeout=args.scenario_timeout))
