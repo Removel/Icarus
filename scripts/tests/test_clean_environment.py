@@ -33,7 +33,8 @@ def test_clean_topology_starts_shared_postgres_before_mem0(tmp_path):
     assert registry.data_dir == "~/.icarus"
     assert registry.get("postgres").data_dir == "services/postgres"
     assert registry.get("falkordb").data_dir == "services/falkordb"
-    assert "argus" not in registry.names()
+    assert "argus" not in registry.default_stack()
+    assert registry.get("argus").requires["postgres"].connection.user == "argus"
 
 
 @pytest.mark.parametrize("app,database,user", [

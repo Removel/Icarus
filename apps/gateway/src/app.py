@@ -44,6 +44,8 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan)
     app.state.agent_runtime = runtime
+    from apps.gateway.src.protocol.argus import argus_router
+    app.include_router(argus_router(runtime))
     app.include_router(image_routes(runtime, data_dir=resource_data_dir))
 
     @app.get("/health")

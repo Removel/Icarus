@@ -1,0 +1,61 @@
+"""Argus protected bridge uses the production runtime and offline model fixture."""
+import asyncio
+import json
+from uuid import uuid4
+
+import httpx
+from agent_app.application import AgentRuntime
+from apps.gateway.src.app import create_app
+from apps.gateway.test.test_runtime_e2e import config_for, local_provider, ProviderHandler
+
+
+def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv('ARGUS_GATEWAY_TOKEN', 'gateway-secret')
+    monkeypatch.setenv('ARGUS_AGENT_API_TOKEN', 'agent-secret')
+    monkeypatch.setenv('ARGUS_WORKSPACE_PATH', str(tmp_path / 'workspace'))
+    (tmp_path / 'workspace').mkdir()
+    channel, wake, binding, item = [str(uuid4()) for _ in range(4)]
+    async def run(config, restart=False):
+        runtime = AgentRuntime(config_loader=lambda: config)
+        app = create_app(runtime)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://gateway') as client:
+                assert (await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure'})).status_code == 401
+                client.headers['Authorization'] = 'Bearer gateway-secret'
+                response = await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure'})
+                assert response.status_code == 200, response.text
+                session = response.json()['session_id']
+                if not restart:
+                    for operation in (
+                        runtime.create_session(tmp_path / 'workspace', session),
+                        runtime.submit(tmp_path / 'workspace', session, 'injected', submission_id='public'),
+                        runtime.steer_task(tmp_path / 'workspace', session, 'unknown', 'injected'),
+                    ):
+                        try:
+                            await operation
+                            assert False, 'Public operation accepted a reserved bridge session'
+                        except ValueError:
+                            pass
+                malformed = await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure','extra':True})
+                assert malformed.status_code == 422
+                payload = dict(channel_id=channel,wake_id=wake,binding_id=binding,channel_version=1,session_id=session,
+                    items=[dict(id=item,source_key='qq:a',message_id='1',kind='message.observed',revision=1,
+                                observed_at='2026-11-01T00:00:00Z',content={'text':'Argus evidence'},detail={})],
+                    argus_url='http://127.0.0.1:1')
+                response = await client.post('/argus/wake', json=payload)
+                assert response.status_code == 200, response.text
+                task_id = response.json()['task_id']
+                assert (await client.post('/argus/wake', json=payload)).json()['task_id'] == task_id
+                assert (await client.post('/argus/wake', json=payload | {'channel_version':2})).status_code == 409
+                for _ in range(200):
+                    status = (await client.post('/argus/status', json={'wake_id':wake})).json()
+                    if status['status'] in {'completed','failed'}:
+                        break
+                    await asyncio.sleep(.02)
+                assert status == {'task_id':task_id,'session_id':session,'status':'completed'}
+                return task_id
+    with local_provider() as port:
+        config = config_for(tmp_path / 'data', port)
+        first = asyncio.run(run(config))
+        assert asyncio.run(run(config, True)) == first
+    assert len([p for path,p in ProviderHandler.requests if path.endswith('/chat/completions')]) == 1

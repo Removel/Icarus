@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "plugin_id": "agent-protocol",
+  "plugin_version": "1.0.0",
+  "entrypoint": "argus_app.plugins.protocols.agent_protocol.factory:create_plugin",
+  "contracts": "argus_app.contracts.capabilities",
+  "tier": "base",
+  "python_requires": [],
+  "required_capabilities": [
+    {
+      "capability_id": "argus.rule_control",
+      "version_spec": ">=1,<2"
+    }
+  ],
+  "provided_capabilities": [],
+  "provided_tools": [],
+  "published_events": [],
+  "consumed_events": [],
+  "state_scopes": []
+}

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "icarus-argus"
+version = "0.1.0"
+description = "Plugin-driven observation, Channel rules and Agent bridge"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "pydantic>=2,<3", "SQLAlchemy[asyncio]>=2,<3", "asyncpg>=0.29,<1", "httpx>=0.27,<1", "websockets>=13,<17", "icarus-agent==0.1.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "aiosqlite>=0.20,<1"]
+
+[project.scripts]
+icarus-argus = "argus_app.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["argus_app", "argus_app.*"]
+
+[tool.setuptools.package-data]
+"argus_app.plugins" = ["*/manifest.json", "*/*/manifest.json"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["test"]

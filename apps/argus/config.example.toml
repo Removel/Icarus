@@ -1,0 +1,10 @@
+# Runtime topology comes from icarus.toml; secrets belong in ignored environment.
+# bin/icarus injects ARGUS_PG_HOST/PORT/DATABASE/USER/PASSWORD from shared postgres.
+# No app-owned PostgreSQL container or separate plugin runtime implementation.
+# Environment settings consumed by argus_app.config.ArgusConfig:
+# ARGUS_DATA_DIR or ICARUS_DATA_DIR
+# ARGUS_AGENT_API_TOKEN / ARGUS_GATEWAY_TOKEN
+# ARGUS_GATEWAY_ENDPOINT (HTTP, can normalize existing WS endpoint)
+# ARGUS_PUBLIC_URL=http://127.0.0.1:8770
+# ARGUS_QQ_REPORT_SECRET
+# ARGUS_FEISHU_VERIFICATION_TOKEN / ARGUS_FEISHU_ENCRYPT_KEY

@@ -156,6 +156,34 @@ graph_env = "RELA_MEM_FALKORDB_GRAPH"
 password_env = "RELA_MEM_FALKORDB_PASSWORD"
 graph = "rela_mem"
 
+[components.argus]
+kind = "app"
+provisioning = "process"
+default_stack = false
+endpoint = "http://127.0.0.1:8770"
+host_env = "ARGUS_HOST"
+port_env = "ARGUS_PORT"
+workdir = "."
+start_command = ["bash", "{repo_root}/apps/argus/scripts/start.sh"]
+install_command = ["bash", "{repo_root}/apps/argus/scripts/install.sh"]
+dev_install_command = ["bash", "{repo_root}/apps/argus/scripts/install.sh", "--dev"]
+process_markers = ["argus_app.main"]
+probe = { type = "http", path = "/health" }
+secret_env = { ARGUS_PG_PASSWORD = "ARGUS_PG_PASSWORD", ARGUS_AGENT_API_TOKEN = "ARGUS_AGENT_API_TOKEN", ARGUS_GATEWAY_TOKEN = "ARGUS_GATEWAY_TOKEN" }
+[components.argus.requires.postgres]
+required = true
+[components.argus.requires.postgres.connection]
+host_env = "ARGUS_PG_HOST"
+port_env = "ARGUS_PG_PORT"
+database_env = "ARGUS_PG_DATABASE"
+user_env = "ARGUS_PG_USER"
+password_env = "ARGUS_PG_PASSWORD"
+database = "argus"
+user = "argus"
+[components.argus.requires.gateway]
+required = false
+endpoint_env = "ARGUS_GATEWAY_ENDPOINT"
+
 [components.postgres]
 kind = "middleware"
 provisioning = "compose"

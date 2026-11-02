@@ -100,6 +100,7 @@ class SessionApi:
             else None
         )
         self.logger = logger or logging.getLogger("icarus.agent.runtime")
+        self._bridge_session_configs: dict[str, dict] = {}
         self._entries: dict[tuple[str, str], _SessionEntry] = {}
         self._entries_lock = asyncio.Lock()
         self._path_resolver: DataPathResolver | None = None
@@ -111,7 +112,7 @@ class SessionApi:
         self._started = False
         self._stopping = False
         self._closed = False
-        self.sessions = SessionRegistry(clock=self._clock, config_loader=self._config_loader, entries=self._entries, entries_lock=self._entries_lock, handle_update=self._handle_update, publish_lifecycle=self._publish_lifecycle, load_instructions=lambda identity: self._store().get_session_instructions(identity), session_factory=lambda *args, **kwargs: self._session_factory(*args, **kwargs), logger=self.logger)
+        self.sessions = SessionRegistry(clock=self._clock, config_loader=self._config_loader, entries=self._entries, entries_lock=self._entries_lock, handle_update=self._handle_update, publish_lifecycle=self._publish_lifecycle, load_instructions=lambda identity: self._store().get_session_instructions(identity), session_factory=lambda *args, **kwargs: self._configured_session_factory(*args, **kwargs), logger=self.logger)
         self.submissions = SubmissionGuard(submission_history_limit=self.submission_history_limit, task_history_limit=self.task_history_limit)
         self.resources = ResourceImporter(path_resolver_getter=lambda: self._path_resolver)
         self.updates = UpdatePipeline(begin_unload_locked=self._begin_unload_locked, clock=self._clock, entries=self._entries, has_nonterminal_tasks=self._has_nonterminal_tasks, lifecycle_update=self._lifecycle_update, remember_task=self._remember_task, store=self._store, update_queue=self._update_queue, updates=self._updates, logger=self.logger)
@@ -176,6 +177,30 @@ class SessionApi:
         config = PromptConfig.model_validate(self._config_loader().runtime.plugin_config.get("prompt", {}))
         validate_instructions(instructions, max_tokens=config.max_section_tokens)
 
+    @property
+    def session_store(self) -> SessionStore:
+        """Started conversation repository for trusted application services."""
+        return self._store()
+
+    def configure_bridge_session(self, session_id: str, plugin_config: dict) -> None:
+        """Trusted in-process setup; deliberately not exposed by Gateway RPC."""
+        if not session_id.startswith("argus-"):
+            raise ValueError("Not a reserved Argus session")
+        self._bridge_session_configs[session_id] = plugin_config
+
+    def _configured_session_factory(self, identity, *, config, **kwargs):
+        if identity.session_id.startswith("argus-"):
+            settings = self._bridge_session_configs.get(identity.session_id)
+            if settings is None:
+                raise ValueError("Argus session must be initialized through protected bridge")
+            config = config.model_copy(deep=True)
+            config.runtime.plugin_config["argus"] = settings
+            from agent_app.plugins.argus.tools import TOOL_NAMES
+            kwargs["tools"] = list(TOOL_NAMES)
+            if "argus" not in config.runtime.required_plugin_ids:
+                config.runtime.required_plugin_ids.append("argus")
+        return self._session_factory(identity, config=config, **kwargs)
+
     async def create_session(
         self,
         workspace_path: str | Path,
@@ -183,8 +208,11 @@ class SessionApi:
         *,
         load_runtime: bool = True,
         instructions: str | None = None,
+        bridge: bool = False,
     ) -> str:
         self._require_accepting()
+        if session_id and session_id.startswith("argus-") and not bridge:
+            raise ValueError("Reserved bridge session")
         self.validate_session_instructions(instructions)
         identity = SessionIdentity.create(workspace_path, session_id or uuid4().hex)
         if self._entries.get(_key(identity)) is None and await self._store().session_exists(
@@ -219,8 +247,12 @@ class SessionApi:
         resources: tuple[ResourceRef, ...] = (),
         display_text: str | None = None,
         request_options: dict[str, object] | None = None,
+        task_id: str | None = None,
+        bridge: bool = False,
     ) -> InputAccepted:
         self._require_accepting()
+        if session_id.startswith("argus-") and not bridge:
+            raise ValueError("Reserved bridge session")
         if not submission_id.strip():
             raise ValueError("submission_id cannot be empty")
         request_options = dict(UserInputEvent(prompt=prompt, request_options=request_options or {}).request_options)
@@ -252,7 +284,7 @@ class SessionApi:
                     images = await self._import_resources(
                         entry.runtime, resources
                     )
-                    task_id = uuid4().hex
+                    task_id = task_id or uuid4().hex
                     accepted = await entry.runtime.submit(
                         prompt,
                         images,
@@ -357,6 +389,8 @@ class SessionApi:
         submission_id: str | None = None,
     ) -> TaskOperationResult:
         self._require_accepting()
+        if session_id.startswith("argus-"):
+            raise ValueError("Reserved bridge session cannot be steered")
         if submission_id is not None and not submission_id.strip():
             raise ValueError("submission_id cannot be empty")
         identity = SessionIdentity.create(workspace_path, session_id)

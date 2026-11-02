@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "plugin_id": "qq-protocol",
+  "plugin_version": "1.0.0",
+  "entrypoint": "argus_app.plugins.protocols.qq_protocol.factory:create_plugin",
+  "contracts": "argus_app.contracts.capabilities",
+  "tier": "base",
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [],
+  "provided_tools": [],
+  "published_events": [
+    "argus.observation_recorded"
+  ],
+  "consumed_events": [],
+  "state_scopes": []
+}

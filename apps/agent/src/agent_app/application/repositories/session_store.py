@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast, get_args
 
-from sqlalchemy import exists, func, select, update as update_row
+from sqlalchemy import exists, func, select, text, true, update as update_row
 from icarus.runtime.storage import SqliteDatabase
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -31,7 +31,9 @@ from icarus.core.runtime_update import RuntimeUpdate, RuntimeUpdateType
 
 
 _SUMMARY_MAX_LENGTH = 256
-_UPDATE_TYPES = frozenset(get_args(RuntimeUpdateType))
+_UPDATE_TYPES = frozenset(get_args(RuntimeUpdateType)) | frozenset({
+    "argus.session", "argus.wake", "argus.failed", "argus.callback", "argus.receipt",
+})
 
 
 @dataclass(frozen=True)
@@ -201,14 +203,14 @@ class SessionStore:
             is not None
         )
 
-    async def list_session_ids(self, workspace_key: str) -> tuple[str, ...]:
+    async def list_session_ids(self, workspace_key: str, *, include_deleted: bool = False) -> tuple[str, ...]:
         sessions = self._require_started()
         async with sessions() as db:
             values = await db.scalars(
                 select(_SessionRow.session_id)
                 .where(
                     _SessionRow.workspace_key == workspace_key,
-                    _SessionRow.deleted_at.is_(None),
+                    true() if include_deleted else _SessionRow.deleted_at.is_(None),
                 )
                 .order_by(_SessionRow.session_id.asc())
             )
@@ -342,15 +344,19 @@ class SessionStore:
         identity: SessionIdentity,
         *,
         after_sequence: int = 0,
+        include_deleted: bool = False,
     ) -> tuple[tuple[RuntimeUpdate, ...], int]:
         if after_sequence < 0:
             raise ValueError("after_sequence cannot be negative")
         sessions = self._require_started()
         async with sessions() as db:
+            # SQLite legacy transaction mode does not BEGIN on SELECT. All
+            # cursor/row/count reads must observe one snapshot during streaming.
+            await db.execute(text("BEGIN"))
             session_row = await db.get(
                 _SessionRow, (identity.workspace_key, identity.session_id)
             )
-            if session_row is None or session_row.deleted_at is not None:
+            if session_row is None or (session_row.deleted_at is not None and not include_deleted):
                 raise SessionNotFoundError(identity.session_id)
             rows = tuple(
                 await db.scalars(

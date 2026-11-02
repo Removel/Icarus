@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "plugin_id": "workflow-rules",
+  "plugin_version": "1.0.0",
+  "entrypoint": "argus_app.plugins.workflow_rules.factory:create_plugin",
+  "contracts": "argus_app.contracts.capabilities",
+  "tier": "base",
+  "python_requires": [],
+  "required_capabilities": [
+    {
+      "capability_id": "argus.observation_query",
+      "version_spec": ">=1,<2"
+    },
+    {
+      "capability_id": "argus.mechanical_match",
+      "version_spec": ">=1,<2"
+    },
+    {
+      "capability_id": "argus.semantic_judge",
+      "version_spec": ">=1,<2"
+    },
+    {
+      "capability_id": "argus.memory_search",
+      "version_spec": ">=1,<2"
+    },
+    {
+      "capability_id": "argus.relationship_search",
+      "version_spec": ">=1,<2"
+    },
+    {
+      "capability_id": "argus.knowledge_query",
+      "version_spec": ">=1,<2"
+    }
+  ],
+  "provided_capabilities": [
+    {
+      "capability_id": "argus.rule_control",
+      "version": "1.0.0"
+    }
+  ],
+  "provided_tools": [],
+  "published_events": [
+    "argus.rule_passed"
+  ],
+  "consumed_events": [
+    "argus.observation_recorded"
+  ],
+  "state_scopes": []
+}

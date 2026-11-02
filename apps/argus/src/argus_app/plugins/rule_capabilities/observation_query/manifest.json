@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "plugin_id": "observation-query",
+  "plugin_version": "1.0.0",
+  "entrypoint": "argus_app.plugins.rule_capabilities.observation_query.factory:create_plugin",
+  "contracts": "argus_app.contracts.capabilities",
+  "tier": "base",
+  "python_requires": [],
+  "required_capabilities": [],
+  "provided_capabilities": [
+    {
+      "capability_id": "argus.observation_query",
+      "version": "1.0.0"
+    }
+  ],
+  "provided_tools": [],
+  "published_events": [],
+  "consumed_events": [],
+  "state_scopes": []
+}

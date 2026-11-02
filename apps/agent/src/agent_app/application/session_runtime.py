@@ -48,6 +48,7 @@ class SessionRuntime(SessionHost):
         logger: logging.Logger | None = None,
     ) -> None:
         self.identity = identity
+        self.allowed_tools = None if tools is None else frozenset(tools)
         self.workspace_path = identity.workspace_path
         self.config = config
         self.logger = logger or logging.getLogger("icarus.agent.session")
@@ -200,6 +201,13 @@ class SessionRuntime(SessionHost):
                 memory.region_registration = handle
 
     async def _finalize_links(self, host):
+        # An explicit application allowlist constrains both direct and lazy tools.
+        # Prune before binding the catalog/executor; default sessions keep all tools.
+        if self.allowed_tools is not None:
+            allowed = self.allowed_tools | {"tool_search", "tool_execute"}
+            for name in tuple(self.tool_registry.names()):
+                if name not in allowed:
+                    self.tool_registry.unregister(name)
         from agent_app.plugins.blackboard.plugin import BlackboardPlugin
         from agent_app.plugins.prompt.plugin import PromptPlugin
         if host.graph_snapshot is None:

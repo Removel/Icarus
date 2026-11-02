@@ -20,6 +20,12 @@ SQL
 create_database mem0_local mem0_app "${ICARUS_MEM0_POSTGRES_PASSWORD:?Set ICARUS_MEM0_POSTGRES_PASSWORD}"
 create_database rela_mem rela_mem "${RELA_MEM_PG_PASSWORD:?Set RELA_MEM_PG_PASSWORD}"
 
+# Optional app: sharing this cluster never grants access to the other app databases.
+# Existing clusters are not modified automatically by application startup.
+if [ -n "${ARGUS_PG_PASSWORD:-}" ]; then
+  create_database argus argus "$ARGUS_PG_PASSWORD"
+fi
+
 # Extensions are per database and require admin installation before app access.
 for database in mem0_app rela_mem; do
   psql -X -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$database" \

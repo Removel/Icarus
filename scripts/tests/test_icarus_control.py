@@ -35,7 +35,7 @@ def test_default_repository_root_and_default_stack_required_closure():
     registry = load_configuration(ROOT)
     order = required_closure(registry, registry.default_stack())
     assert {"rela-mem", "postgres", "falkordb", "mem0", "openkb", "gateway", "webui", "tui", "agent"} <= set(order)
-    assert "argus" not in registry.names()
+    assert "argus" in registry.names() and "argus" not in order
     assert "mem0-postgres" not in order
     for dependency in ("mem0", "openkb", "agent"):
         assert order.index(dependency) < order.index("gateway")
