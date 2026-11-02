@@ -69,7 +69,7 @@ def test_tool_execute分发记录保留身份且隔离参数():
         args["arguments"]["value"] = "changed"
         assert result.metadata["dispatched_tool"]["arguments"]["value"] == "hello"
         assert "dispatched_tool" not in str(result.as_dict())
-    denied = tool.invoke({"name": "echo", "arguments": {"value": "hello"}})
+    denied = tool.invoke({"name": "unregistered", "arguments": {}})
     assert "dispatched_tool" not in denied.metadata
 
 
@@ -106,18 +106,24 @@ def test_tool_execute记录分发参数不是Hook后实参():
     assert result.metadata["dispatched_tool"]["arguments"] == {"value": "original"}
 
 
-def test_tool_execute未加载时硬门拒绝并引导搜索():
+def test_registered_tool_executes_without_search_sync_and_async():
     tool, executor = make_tools()
+    args = {"name": "echo", "arguments": {"value": "hello"}}
+    for result in (tool.invoke(args, tool_executor=executor),
+                   asyncio.run(tool.ainvoke(args, loaded_tools=[], tool_executor=executor))):
+        assert result.success is True
+        assert result.output == {"echo": "hello"}
+    executor.registry.unregister('echo')
+    denied = tool.invoke(args, loaded_tools=['echo'], tool_executor=executor)
+    assert denied.success is False
+    assert 'not registered' in denied.error
 
-    result = tool.invoke(
-        {"name": "echo", "arguments": {"value": "hello"}},
-        loaded_tools=[],
-        tool_executor=executor,
-    )
 
+def test_current_schema_applies_without_search():
+    tool, executor = make_tools()
+    result = tool.invoke({'name': 'echo', 'arguments': {'value': 123}}, tool_executor=executor)
     assert result.success is False
-    assert "echo" in result.error
-    assert "tool_search('<scope>')" in result.error
+    assert 'invalid' in result.error.lower()
     assert executor.calls == []
 
 

@@ -38,7 +38,7 @@ def test_factory_registers_search_and_fetch_without_prefetch(tmp_path):
             assert 'tool_search(query="web-search")' in guidance
             assert 'tool_execute(name="web_search", arguments={"query":' in guidance
             assert 'tool_execute(name="web_fetch", arguments={"url":' in guidance
-            assert "新 Run" in guidance
+            assert "已知用法无需每轮重新搜索" in guidance
         finally:
             await plugin.stop()
     asyncio.run(run())

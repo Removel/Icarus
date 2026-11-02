@@ -204,8 +204,8 @@ def test_stream裁剪搜索不授权而精确恢复后可执行(method):
     ])
     events = run_surface_agent(ReActAgent("thinking", llm, ToolExecutor(registry)), method)
     completed = [event for event in events if isinstance(event, AgentToolCompletedEvent)]
-    assert completed[1].result.success is False
-    assert "not loaded" in completed[1].result.error
+    assert completed[1].result.success is True
+    assert completed[1].result.output == {'echo': 'x'}
     assert completed[3].result.output == {"echo": "hello"}
     assert completed[3].target_tool_call.name == "echo"
     assert completed[3].tool_call.name == "tool_execute"

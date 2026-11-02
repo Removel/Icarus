@@ -78,7 +78,7 @@ def test_default_system_prompt保留通用约束而不绑定业务插件():
     assert "memory_recall" not in DEFAULT_SYSTEM_PROMPT
     assert "tool_search" in DEFAULT_SYSTEM_PROMPT
     assert "tool_execute(name, arguments)" in DEFAULT_SYSTEM_PROMPT
-    assert "新 Run" in DEFAULT_SYSTEM_PROMPT
+    assert '已知工具无需每轮重搜' in DEFAULT_SYSTEM_PROMPT
 
 
 def test_default_system_prompt要求普通聊天简短自然():

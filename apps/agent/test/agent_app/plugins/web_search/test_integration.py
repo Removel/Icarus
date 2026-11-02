@@ -150,9 +150,7 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
                 for enabled in (False, True):
                     call_offset = len(llm.calls)
                     llm.streams.extend([
-                        web_tool_step("web_fetch", {"url": "https://example.com/new"}, "before-load"),
-                        load_web_tools("reload"),
-                        web_tool_step("web_fetch", {"url": "https://example.com/new"}, 4),
+                        web_tool_step("web_fetch", {"url": "https://example.com/new"}, "without-search"),
                         final,
                     ])
                     before = len(requests)
@@ -163,11 +161,11 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
                     calls = llm.calls[call_offset:]
                     assert_frozen_tool_surface(calls)
                     assert calls[0][0][0].content[0].text == system
-                    rejected = json.loads(next(m for m in reversed(calls[1][0]) if m.role == "tool").content[0].text)
-                    assert rejected["success"] is False
-                    assert "not loaded in this Run" in rejected["error"]
+                    # No search in this Run: registry permission and plugin policy decide.
                     result = json.loads(next(m for m in reversed(calls[-1][0]) if m.role == "tool").content[0].text)
                     assert result["success"] is enabled
+                    if not enabled:
+                        assert '本轮未启用联网工具' in result['error']
                     if enabled:
                         assert current[-1]["queries"] == [] and current[-1]["total"] == 0
                         assert len(current[-1]["sources"]) == 1 and current[-1]["sources"][0]["citeIndex"] == 1

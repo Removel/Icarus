@@ -158,8 +158,8 @@ def test_react_agent裁剪搜索不授权而精确恢复后可执行(method):
     ])
     run_surface_agent(ReActAgent("thinking", llm, ToolExecutor(registry)), method)
     results = [json.loads(message.content[0].text) for message in llm.calls[-1][0] if message.role == "tool"]
-    assert results[1]["success"] is False
-    assert "not loaded" in results[1]["error"]
+    assert results[1]['success'] is True
+    assert results[1]['output'] == {'echo': 'x'}
     assert results[3]["output"] == {"echo": "hello"}
     assert all(definitions == llm.calls[0][1] for _, definitions in llm.calls)
 
@@ -196,7 +196,7 @@ def test_react_agent搜索后分发执行且定义数组冻结(method):
     }
 
 
-def test_react_agent未加载工具被硬门拒绝():
+def test_react_agent_registered_tool_works_without_search():
     agent, llm, _ = make_surface_agent(
         [
             surface_response(
@@ -212,11 +212,11 @@ def test_react_agent未加载工具被硬门拒绝():
 
     tool_message = llm.calls[-1][0][-1]
     result = json.loads(tool_message.content[0].text)
-    assert result["success"] is False
-    assert "tool_search('<scope>')" in result["error"]
+    assert result['success'] is True
+    assert result['output'] == {'echo': 'hello'}
 
 
-def test_react_agent加载名单不跨run继承():
+def test_react_agent_known_tools_work_across_runs_without_research():
     agent, llm, _ = make_surface_agent(
         [
             surface_response("search-1", "tool_search", {"query": "alpha"}),
@@ -240,8 +240,8 @@ def test_react_agent加载名单不跨run继承():
 
     second_run_tool = llm.calls[-1][0][-1]
     result = json.loads(second_run_tool.content[0].text)
-    assert result["success"] is False
-    assert "tool_search('<scope>')" in result["error"]
+    assert result['success'] is True
+    assert result['output'] == {'echo': 'second'}
 
 
 def test_react_agent加载名与可执行全集求交并保序去重():

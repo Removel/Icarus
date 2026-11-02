@@ -58,8 +58,9 @@ class ToolExecuteTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "tool_execute",
-            "Execute a tool returned by tool_search. Pass its name unchanged "
-            "and put the target tool's parameters in arguments as an object.",
+            "Execute a tool allowed by the current session. Use tool_search when "
+            "you need its current description or parameters; searching is not authorization. "
+            "Pass its name unchanged and put its parameters in arguments as an object.",
             {
                 "type": "object",
                 "properties": {
@@ -172,12 +173,8 @@ class ToolExecuteTool(BaseTool):
         timeout_seconds: float | None,
     ) -> ToolCall:
         name, target_arguments = self._values(arguments)
-        if name not in (loaded_tools or []):
-            raise ValueError(
-                f"Tool is not loaded in this Run: {name}. "
-                "Call tool_search('<scope>') for its scope first, then retry "
-                "tool_execute."
-            )
+        # Search describes tools; only the current session registry grants execution.
+        # loaded_tools remains accepted as description-discovery metadata for callers.
         if self._registry is None:
             raise RuntimeError("Tool Registry is not bound")
         target = self._registry.get(name)
