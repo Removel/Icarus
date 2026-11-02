@@ -91,6 +91,11 @@ class PluginManifestDiscovery:
                 continue
             manifest_file = child.joinpath("manifest.json")
             if not manifest_file.is_file():
+                # Only trusted builtin packages may group leaf plugins in namespaces.
+                # A manifest-bearing directory remains a leaf; external layouts keep
+                # their existing import-root and package-name validation semantics.
+                if built_in and not child.name.startswith((".", "__")):
+                    discovered.extend(self._scan_root(child, True, None, diagnostics))
                 continue
             try:
                 text = manifest_file.read_text(encoding="utf-8")
