@@ -119,7 +119,7 @@ async def test_discovery_report_preserves_primary_score_and_fallback_call_count(
     async def classify(args):
         return {'match': False, 'score': .64, 'selected_route': 'new', 'defer_reason': 'low_confidence',
                 'reason': 'typed discovery judgement', 'discovery': {'action': 'defer'}}
-    async def fallback(text, candidates):
+    async def fallback(text, candidates, *, criterion, context):
         calls.append((text, candidates))
         return DiscoveryDecision(action='new', reason='explicit request')
     report = await module.run_discovery_matrix(classify, fallback, tmp_path, selected_cases=[discovery_case()])
@@ -137,7 +137,7 @@ async def test_discovery_high_confidence_does_not_claim_live_fallback_validation
     assert callable(getattr(module, 'run_discovery_matrix', None)), 'discovery runner is missing'
     async def classify(args):
         return {'match': True, 'score': .9, 'selected_route': 'new', 'reason': 'confident', 'discovery': {'action': 'new'}}
-    async def fallback(text, candidates):
+    async def fallback(text, candidates, *, criterion, context):
         raise AssertionError('must not call fallback')
     report = await module.run_discovery_matrix(classify, fallback, tmp_path, selected_cases=[discovery_case()])
     assert report['all_expected'] is True
@@ -152,7 +152,7 @@ async def test_discovery_fallback_budget_stops_before_second_request(tmp_path):
     async def classify(args):
         return {'match': False, 'score': .4, 'selected_route': 'new', 'defer_reason': 'low_confidence',
                 'reason': 'uncertain', 'discovery': {'action': 'defer'}}
-    async def fallback(text, candidates):
+    async def fallback(text, candidates, *, criterion, context):
         calls.append(text)
         return DiscoveryDecision(action='new', reason='explicit')
     report = await module.run_discovery_matrix(classify, fallback, tmp_path, fallback_maximum=1,
@@ -168,7 +168,7 @@ async def test_discovery_fallback_error_stops_and_does_not_save_error_body(tmp_p
     async def classify(args):
         return {'match': False, 'score': .4, 'defer_reason': 'low_confidence', 'reason': 'uncertain',
                 'discovery': {'action': 'defer'}}
-    async def fallback(text, candidates):
+    async def fallback(text, candidates, *, criterion, context):
         raise RuntimeError('synthetic credential must not appear')
     report = await module.run_discovery_matrix(classify, fallback, tmp_path,
         selected_cases=[discovery_case(), discovery_case()])

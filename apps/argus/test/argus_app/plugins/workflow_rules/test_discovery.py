@@ -16,8 +16,11 @@ class EmptyStore:
         return []
     async def observation(self, id):
         return self.event
-    async def discovery_candidates(self, limit=20):
-        return [self.event]
+    async def discovery_ready(self, observation_id):
+        assert observation_id == self.event.id
+        return True  # This fake has no existing Channels.
+    async def discovery_candidates(self, limit=20, after=None):
+        return [self.event] if after is None else []
     def discovered_channel_id(self, item):
         return str(uuid4())
     async def record_discovery(self, observation_id, decision, **artifact):

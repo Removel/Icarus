@@ -88,7 +88,12 @@ async def run_discovery_matrix(classify, fallback, output: Path, *, maximum=12,
         row = dict(case)
         started = time.monotonic()
         try:
-            primary = await classify({'mode': 'discovery', 'text': case['text'], 'candidates': case['candidates']})
+            from argus_app.plugins.workflow_rules.discovery import RESPONSE_CRITERION
+            criterion = case.get('criterion', RESPONSE_CRITERION)
+            context = case.get('context', {})
+            primary = await classify({'mode': 'discovery', 'text': case['text'],
+                'criterion': criterion, 'context': context, 'candidates': case['candidates']})
+
             row.update(selected_route=primary.get('selected_route'), native_confidence=primary.get('score'),
                        primary_decision=primary['discovery'], fallback_used=False)
             decision = DiscoveryDecision.model_validate({**primary['discovery'], 'reason': primary['reason']})
@@ -96,7 +101,7 @@ async def run_discovery_matrix(classify, fallback, output: Path, *, maximum=12,
                 if not consume('fallback'):
                     break
                 row['fallback_used'] = True
-                decision = DiscoveryDecision.model_validate(await fallback(case['text'], case['candidates']))
+                decision = DiscoveryDecision.model_validate(await fallback(case['text'], case['candidates'], criterion=criterion, context=context))
             if decision.action == 'existing' and decision.channel_id not in {c['id'] for c in case['candidates']}:
                 raise ValueError('candidate outside trusted snapshot')
             row['final_decision'] = decision.model_dump(exclude_none=True)

@@ -193,6 +193,8 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
         except DomainError as error:
             code = error.code
             status = 404 if code in {"not_found", "channel_not_found", "observation_not_found"} else 409
+            if code.startswith('qq_'):
+                status = 422
             if code in {"unauthorized", "binding_mismatch", "source_forbidden"}:
                 status = 403
             raise HTTPException(status, code) from None
@@ -217,6 +219,13 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
         signature = "sha1=" + hmac.new(secret.encode(), raw, hashlib.sha1).hexdigest()
         if not hmac.compare_digest(request.headers.get("x-signature", ""), signature):
             raise HTTPException(401, "invalid_signature")
+        event_type = value.get('post_type', 'message')
+        if not isinstance(event_type, str):
+            raise HTTPException(422, 'qq_event_type_invalid')
+        if event_type in {'meta_event', 'notice', 'request'}:
+            return {'accepted': True, 'ignored': True, 'reason': 'unsupported_event_type'}
+        if event_type not in {'message', 'message_sent'}:
+            raise HTTPException(422, 'qq_event_type_invalid')
         observation = await guarded(app.state.host.get_plugin("qq-protocol").receive(value))
         return {"observation_id": observation.id}
 

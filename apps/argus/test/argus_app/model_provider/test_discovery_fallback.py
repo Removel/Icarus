@@ -34,14 +34,14 @@ class LLM:
 ])
 async def test_one_shot_returns_validated_decision_without_tools(decision):
     llm = LLM(json.dumps(decision, ensure_ascii=False))
-    value = await module().DiscoveryFallback(llm)('请跟进此事', [{'id': 'channel-1', 'goal': '评审'}])
+    value = await module().DiscoveryFallback(llm)('请跟进此事', [{'id': 'channel-1', 'goal': '评审'}], criterion='按规则判断', context={})
     assert value.model_dump(exclude_none=True) == decision
     assert len(llm.calls) == 1
     messages, tools = llm.calls[0]
     assert tools is None
     assert [m.role for m in messages] == ['system', 'user']
     data = json.loads(messages[1].content[0].text)
-    assert data == {'text': '请跟进此事', 'candidates': [{'id': 'channel-1', 'goal': '评审'}]}
+    assert data == {'text': '请跟进此事', 'candidates': [{'id': 'channel-1', 'goal': '评审'}], 'criterion': '按规则判断', 'context': {}}
     assert '请跟进此事' not in messages[0].content[0].text
 
 
@@ -57,7 +57,7 @@ async def test_one_shot_returns_validated_decision_without_tools(decision):
 async def test_invalid_output_is_not_repaired_or_converted_to_ignore(text):
     llm = LLM(text)
     with pytest.raises(DomainError) as error:
-        await module().DiscoveryFallback(llm)('data', [{'id': 'channel-1'}])
+        await module().DiscoveryFallback(llm)('data', [{'id': 'channel-1'}], criterion='按规则判断', context={})
     assert error.value.code == 'invalid_output'
     assert len(llm.calls) == 1
 
@@ -71,7 +71,7 @@ async def test_invalid_output_is_not_repaired_or_converted_to_ignore(text):
 async def test_truncated_or_tool_response_is_rejected(response):
     llm = LLM(response=response)
     with pytest.raises(DomainError) as error:
-        await module().DiscoveryFallback(llm)('data', [])
+        await module().DiscoveryFallback(llm)('data', [], criterion='按规则判断', context={})
     assert error.value.code == 'invalid_output'
     assert len(llm.calls) == 1
 
@@ -80,7 +80,7 @@ async def test_truncated_or_tool_response_is_rejected(response):
 async def test_failed_model_call_preserves_error_not_ignore(error, code):
     llm = LLM(error=error)
     with pytest.raises(DomainError) as failure:
-        await module().DiscoveryFallback(llm)('data', [])
+        await module().DiscoveryFallback(llm)('data', [], criterion='按规则判断', context={})
     assert failure.value.code == code
     assert 'synthetic secret' not in str(failure.value)
     assert len(llm.calls) == 1
@@ -89,7 +89,7 @@ async def test_failed_model_call_preserves_error_not_ignore(error, code):
 async def test_cancellation_propagates_without_another_call():
     llm = LLM(error=asyncio.CancelledError())
     with pytest.raises(asyncio.CancelledError):
-        await module().DiscoveryFallback(llm)('data', [])
+        await module().DiscoveryFallback(llm)('data', [], criterion='按规则判断', context={})
     assert len(llm.calls) == 1
 
 
@@ -102,9 +102,21 @@ async def test_slow_call_is_bounded(monkeypatch):
             calls.append(messages)
             await asyncio.Event().wait()
     with pytest.raises(DomainError) as error:
-        await m.DiscoveryFallback(Slow())('data', [])
+        await m.DiscoveryFallback(Slow())('data', [], criterion='按规则判断', context={})
     assert error.value.code == 'timeout'
     assert len(calls) == 1
+
+
+async def test_fallback_receives_same_rule_task_in_user_context():
+    llm = LLM()
+    criterion = '只判断 Agent 是否需要回应，短对话也可以新建 Channel'
+    context = {'conversation': {'kind': 'private'}, 'recent_history': []}
+    value = await module().DiscoveryFallback(llm)('你好', [], criterion=criterion, context=context)
+    assert value.action == 'new'
+    messages, _ = llm.calls[0]
+    data = json.loads(messages[1].content[0].text)
+    assert data['criterion'] == criterion and data['context'] == context
+    assert 'ignore：闲聊' not in messages[0].content[0].text
 
 
 def config():
@@ -150,5 +162,5 @@ def test_configured_helper_rejects_missing_model_or_credentials(monkeypatch):
 async def test_invalid_candidates_fail_before_call(candidates):
     llm = LLM()
     with pytest.raises(ValueError):
-        await module().DiscoveryFallback(llm)('data', candidates)
+        await module().DiscoveryFallback(llm)('data', candidates, criterion='按规则判断', context={})
     assert not llm.calls

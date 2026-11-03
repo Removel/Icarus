@@ -58,9 +58,12 @@ class DiscoveryDecision(Fact):
     action: Literal['ignore', 'existing', 'new', 'defer']
     reason: str
     channel_id: str | None = None
+    review_required: bool = Field(default=False, exclude=True)
 
     @model_validator(mode='after')
     def route_identity(self):
+        if self.review_required and self.action != 'defer':
+            raise ValueError('Only defer may request deeper review')
         if (self.action == 'existing') != (self.channel_id is not None):
             raise ValueError('Only existing decisions require channel_id')
         return self

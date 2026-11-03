@@ -20,6 +20,7 @@ class CommitPayload(Fact):
     rule_path: str | None = None
     rule_hash: Annotated[str, Field(pattern=r'^[a-f0-9]{64}$')] | None = None
     lifecycle: Literal['active', 'paused', 'completed'] | None = None
+    next_session: Literal['reuse', 'new'] | None = None
 
     @model_validator(mode='after')
     def explicit_values(self):

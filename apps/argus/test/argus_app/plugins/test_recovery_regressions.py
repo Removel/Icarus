@@ -49,7 +49,7 @@ async def test_round_budget_matches_gateway_without_silent_truncation(isolated_s
     # The real Gateway/Agent shared validator must accept this exact aggregate.
     from agent_app.argus_protocol import WakeRequest
     WakeRequest(channel_id=channel.id, wake_id=round_['wake_id'], binding_id=round_['binding_id'],
-                channel_version=channel.version, session_id=str(uuid4()), items=items, argus_url='http://argus.test',
+                channel_version=channel.version, session_key=round_['session_key'], session_id=str(uuid4()), items=items, argus_url='http://argus.test',
                 channel_snapshot=dict(id=channel.id,title=channel.title,goal=channel.goal,progress=channel.progress,
                                       lifecycle=channel.lifecycle,version=channel.version,source_keys=list(channel.subscriptions),rule_source=''),
                 rule_sdk={'version':2})
@@ -98,7 +98,8 @@ async def test_recovery_scan_reconciles_inactive_open_round_and_isolates_failure
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('lifecycle', ['paused', 'completed'])
-async def test_real_inactive_round_reconciles_but_cannot_begin_new(isolated_store, lifecycle):
+@pytest.mark.parametrize('replay_safe', [True, False])
+async def test_real_inactive_round_reconciles_only_when_safe(isolated_store, lifecycle, replay_safe):
     from argus_app.plugins.icarus_bridge.plugin import BridgePlugin
     store = isolated_store
     channel = await store.create_channel('test', 'goal', ['qq:1'])
@@ -112,9 +113,14 @@ async def test_real_inactive_round_reconciles_but_cannot_begin_new(isolated_stor
     class Client:
         async def status(self, wake):
             assert wake == round_['wake_id']
-            return {'status': 'failed'}
+            return {'status': 'failed', 'replay_safe': replay_safe}
     await BridgePlugin('icarus-bridge', store, Client(), 'http://argus.test').deliver_channel(channel.id)
     restored = await store.channel(channel.id)
+    if not replay_safe:
+        assert restored.runtime['round']['wake_id'] == round_['wake_id']
+        assert restored.runtime['round']['outcome'] == 'execution_outcome_unknown'
+        assert restored.runtime['pending'][item.id]['delivery_attempt_count'] == 0
+        return
     assert restored.runtime['round'] is None
     assert await store.begin_round(channel.id) is None
     if lifecycle == 'paused':

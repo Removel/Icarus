@@ -8,6 +8,8 @@ from apps.argus.test.argus_app.infrastructure.test_store import store
 async def test_existing_subscription_does_not_hide_new_topic(store):
     existing = await store.create_channel('A', 'approval', ['qq:1'])
     item = await store.ingest('qq:1', 'new-topic', 'message.observed', {'text': '请帮我跟进体检预约'})
+    assert await store.decide(existing.id, item.id, existing.version,
+                              {'passed': False, 'reason': 'not an approval topic'})
     new_id = store.discovered_channel_id(item)
     result = await store.record_discovery(item.id, {'action': 'new', 'reason': 'new health task'},
         rule_path=f'{new_id}/' + 'a' * 64 + '.py', rule_hash='a' * 64)

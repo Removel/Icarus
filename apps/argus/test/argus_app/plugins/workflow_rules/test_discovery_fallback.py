@@ -38,7 +38,7 @@ class Fallback:
     def __init__(self, action='new', error=None, channel_id=None):
         self.action, self.error, self.channel_id, self.calls = action, error, channel_id, []
 
-    async def __call__(self, text, candidates):
+    async def __call__(self, text, candidates, *, criterion, context):
         self.calls.append((text, candidates))
         if self.error:
             raise self.error
@@ -95,9 +95,55 @@ async def test_low_confidence_uses_one_fallback_even_after_restart(store, tmp_pa
         assert len(fallback.calls) == 1
 
 
+@pytest.mark.parametrize('history_after', [False, True])
+async def test_deep_review_receives_same_trusted_task_and_ignores_forged_source(store, tmp_path, history_after):
+    item = await incoming(store)
+    tasks = []
+    class Rule(Engine):
+        async def run(self, source, event, context, call):
+            value = await call('semantic', {'mode': 'discovery', 'text': 'extracted request only',
+                'criterion': 'custom response criterion', 'context': {
+                    'business_requirement': 'respond only about deployment',
+                    'conversation': {'source_key': 'forged'}}})
+            if history_after:
+                await call('history', {'limit': 2})
+            return {**value['discovery'], 'reason': value['reason']}
+    async def fallback(text, candidates, *, criterion, context):
+        tasks.append((criterion, context, text))
+        return DiscoveryDecision(action='new', reason='reply needed')
+    value = plugin(store, tmp_path, fallback, engine=Rule())
+    observed = []
+    original = value.request
+    async def request(call):
+        observed.append(call.args)
+        return await original(call)
+    value.request = request
+    await value.discover(item)
+    assert len(tasks) == 1
+    assert tasks[0][0] == 'custom response criterion'
+    assert tasks[0][1] == observed[0]['context']
+    assert tasks[0][1]['conversation']['source_key'] == item.source_key
+    assert observed[0]['context']['business_requirement'] == 'respond only about deployment'
+    assert tasks[0][1]['business_requirement'] == 'respond only about deployment'
+    assert tasks[0][2] == observed[0]['text'] == 'extracted request only'
+
+
+async def test_explicit_rule_deep_review_is_bounded_without_a_jev_call(store, tmp_path):
+    item = await incoming(store)
+    fallback = Fallback('new')
+    engine = Engine({'action': 'defer', 'reason': 'needs contextual reading', 'review_required': True})
+    value = plugin(store, tmp_path, fallback, engine=engine)
+    await value.discover(item)
+    await plugin(store, tmp_path, fallback, engine=engine).discover(item)
+    assert len(fallback.calls) == 1
+    assert (await store.observation(item.id)).detail['discovery']['status'] == 'created'
+
+
 async def test_existing_fallback_uses_only_trusted_source_candidate(store, tmp_path):
     item = await incoming(store)
     owner = await store.create_channel('review', 'wait', [item.source_key])
+    assert await store.decide(owner.id, item.id, owner.version,
+                              {'passed': False, 'reason': 'existing rule rejected'})
     fallback = Fallback('existing', channel_id=owner.id)
     await plugin(store, tmp_path, fallback).discover(item)
     state = (await store.observation(item.id)).detail['discovery']
@@ -174,7 +220,7 @@ async def test_slow_fallback_does_not_hold_discovery_lock_and_cancellation_is_du
     item = await incoming(store)
     entered, release = asyncio.Event(), asyncio.Event()
     calls = []
-    async def fallback(text, candidates):
+    async def fallback(text, candidates, *, criterion, context):
         calls.append(text)
         entered.set()
         await release.wait()
@@ -242,6 +288,8 @@ async def test_host_multibyte_candidates_fit_same_snapshot_for_both_classifiers(
     from icarus.core.models.messages import LLMResponse, Message, TextPart
     item = await incoming(store)
     owner = await store.create_channel('评审' * 60, (symbol * 1000)[:1000], [item.source_key])
+    assert await store.decide(owner.id, item.id, owner.version,
+                              {'passed': False, 'reason': 'existing rule rejected'})
     async with store.engine.begin() as connection:
         await connection.execute(channels.update().where(channels.c.id == owner.id)
                                  .values(progress=(symbol * 1000)[:1000]))
@@ -269,7 +317,7 @@ async def test_host_multibyte_candidates_fit_same_snapshot_for_both_classifiers(
 
 async def test_context_changed_while_llm_waited_cannot_create_channel(store, tmp_path):
     item = await incoming(store)
-    async def fallback(text, candidates):
+    async def fallback(text, candidates, *, criterion, context):
         await store.create_channel('concurrent task', 'other goal', [item.source_key])
         return DiscoveryDecision(action='new', reason='stale')
     await plugin(store, tmp_path, fallback).discover(item)

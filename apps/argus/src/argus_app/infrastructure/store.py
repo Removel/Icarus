@@ -279,7 +279,7 @@ class Store:
         parsed = None if error else Decision.model_validate(decision)
         async with self.engine.begin() as conn:
             ch = await self._channel(conn, channel_id, lock=True)
-            row = await self._observation(conn, observation_id)
+            row = await self._observation(conn, observation_id, lock=True)
             if ch["version"] != expected_version or ch["lifecycle"] != "active" or row["kind"] != MESSAGE or row["source_key"] not in ch["subscriptions"]:
                 return False
             if await self._retire_pending(conn, ch):
@@ -318,6 +318,10 @@ class Store:
                     if attempts else None}
             else:
                 pending.pop(observation_id, None)
+            if parsed is not None and parsed.passed:
+                # Acceptance is durable before notification/Agent execution. It is
+                # a witness against creating a Channel, not exclusive consumption.
+                await self._record_existing_acceptance(conn, row, channel_id)
             previous = int(ch["subscriptions"][row["source_key"]] or 0)
             ch["subscriptions"][row["source_key"]] = str(max(previous, row["position"]))
             await self._save(conn, ch)
@@ -358,13 +362,23 @@ class Store:
                 if rejected:
                     await self._save(conn, ch)
                 return None
+            selection = ch['runtime'].setdefault('session_key', str(uuid4()))
             current = dict(wake_id=str(uuid4()), binding_id=str(uuid4()), observation_ids=ids,
-                           channel_version=ch["version"],
+                           channel_version=ch["version"], session_key=selection,
                            delivered=[], confirmed={}, session_id=None, task_id=None,
                            update_request_id=None, closed=False)
             ch["runtime"]["round"] = current
             await self._save(conn, ch)
             return current
+
+    async def mark_round_outcome_unknown(self, channel_id: str, wake_id: str) -> None:
+        async with self.engine.begin() as conn:
+            ch = await self._channel(conn, channel_id, lock=True)
+            current = ch['runtime'].get('round')
+            if current and current['wake_id'] == wake_id and not current.get('closed'):
+                if current.get('outcome') != 'execution_outcome_unknown':
+                    current['outcome'] = 'execution_outcome_unknown'
+                    await self._save(conn, ch)
 
     async def reconcile_round(self, channel_id: str, wake_id: str, status: str) -> None:
         """Release only a remotely known-stopped task; uncertainty keeps binding.
@@ -492,13 +506,15 @@ class Store:
                 raise DomainError('events_not_delivered')
             before = {key: copy.deepcopy(ch[key]) for key in
                       ('progress', 'subscriptions', 'rule_path', 'rule_hash', 'lifecycle')}
-            values = commit.model_dump(exclude_unset=True, exclude={'results', 'expected_version'})
+            values = commit.model_dump(exclude_unset=True, exclude={'results', 'expected_version', 'next_session'})
             if 'rule_path' in values and values['rule_path'] != f"{ch['id']}/{values['rule_hash']}.py":
                 raise DomainError('invalid_rule_path')
             sources = values.pop('source_keys', None)
             if sources is not None:
                 ch['subscriptions'] = {key: ch['subscriptions'].get(key) for key in sources}
             ch.update(values)
+            if commit.next_session == 'new':
+                ch['runtime']['session_key'] = str(uuid4())
             for ref in frozen:
                 ch['runtime']['pending'].pop(ref, None)
             ch['runtime']['round'] = None
@@ -549,6 +565,38 @@ class Store:
             channels.c.lifecycle.in_(['active', 'paused'])))).mappings().all()
         return [dict(row) for row in rows if source_key in row['subscriptions']]
 
+    async def _record_existing_acceptance(self, conn, row, channel_id):
+        detail = copy.deepcopy(row['detail'])
+        previous = detail.get('discovery', {})
+        if previous.get('status') in {'created', 'existing'}:
+            return
+        detail['discovery'] = {'status': 'existing', 'channel_id': channel_id,
+                               'reason': 'accepted by existing Channel'}
+        if previous.get('fallback'):
+            detail['discovery']['fallback'] = previous['fallback']
+        await conn.execute(update(observed_items).where(observed_items.c.id == row['id']).values(detail=detail))
+
+    async def _discovery_ready(self, conn, row, owners):
+        for owner in owners:
+            entry = owner['runtime'].get('pending', {}).get(row['id'])
+            if entry and entry['status'] == 'passed':
+                # Also recognize pre-upgrade accepted items still in pending.
+                await self._record_existing_acceptance(conn, row, owner['id'])
+                return False
+        # A subscription is not acceptance, but an unread event, defer or error
+        # is not a rejection either. Cursors advance atomically with decisions.
+        return all(int(owner['subscriptions'][row['source_key']] or 0) >= row['position']
+                   and row['id'] not in owner['runtime'].get('pending', {}) for owner in owners)
+
+    async def discovery_ready(self, observation_id: str) -> bool:
+        async with self.engine.begin() as conn:
+            row = await self._observation(conn, observation_id, lock=True)
+            if row['kind'] != MESSAGE:
+                raise DomainError('invalid_discovery_event')
+            if row['detail'].get('discovery', {}).get('status') in {'created', 'existing', 'ignored', 'exhausted'}:
+                return False
+            return await self._discovery_ready(conn, row, await self._discovery_owners(conn, row['source_key']))
+
     async def claim_discovery_fallback(self, observation_id: str,
                                        candidate_versions: dict[str, int]) -> str | None:
         async with self.engine.begin() as conn:
@@ -565,6 +613,8 @@ class Store:
                 observed_items.c.id == observation_id, latest()))).scalar_one_or_none() is not None
             owners = await self._discovery_owners(conn, row['source_key'])
             if not is_latest or {x['id']: x['version'] for x in owners} != candidate_versions:
+                return None
+            if not await self._discovery_ready(conn, row, owners):
                 return None
             token = str(uuid4())
             deadline = (now + timedelta(seconds=25)).isoformat()
@@ -607,15 +657,18 @@ class Store:
             detail['discovery'] = state
             await conn.execute(update(observed_items).where(observed_items.c.id == observation_id).values(detail=detail))
 
-    async def discovery_candidates(self, limit: int = 20) -> list[Observation]:
+    async def discovery_candidates(self, limit: int = 20, after: str | None = None) -> list[Observation]:
         state = observed_items.c.detail["discovery"]["status"].as_string()
         retry_at = observed_items.c.detail["discovery"]["next_retry_at"].as_string()
         due = or_(state.is_(None), and_(state.in_(["error", "deferred", "fallback_pending"]),
                     retry_at <= datetime.now(timezone.utc).isoformat()))
+        query = select(observed_items).where(observed_items.c.kind == MESSAGE, latest(), due)
         async with self.engine.connect() as conn:
-            rows = (await conn.execute(select(observed_items).where(
-                observed_items.c.kind == MESSAGE, latest(), due
-            ).order_by(observed_items.c.position).limit(self._limit(limit, 50)))).mappings().all()
+            if after is not None:
+                cursor = await self._observation(conn, after)
+                query = query.where(observed_items.c.position > cursor['position'])
+            rows = (await conn.execute(query.order_by(observed_items.c.position)
+                                      .limit(self._limit(limit, 50)))).mappings().all()
             return [observation(row) for row in rows]
 
     async def record_discovery(self, observation_id: str, decision: dict,
@@ -675,6 +728,8 @@ class Store:
                     result = {'status': 'existing', 'channel_id': same['id'], 'reason': 'active topic already exists'}
                     channel_id = same['id']
                 else:
+                    if not await self._discovery_ready(conn, row, owners):
+                        return None
                     if not rule_path or not rule_hash:
                         raise DomainError('discovery_rule_required')
                     item = observation(row)

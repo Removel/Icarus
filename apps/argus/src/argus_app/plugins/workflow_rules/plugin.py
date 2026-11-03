@@ -8,7 +8,9 @@ from icarus.core.plugin import BasePlugin, handles
 from argus_app.contracts.events import ObservationRecorded, RulePassed
 from argus_app.contracts.capabilities import RuleControl, RuleControlRequest, RULE_FUNCTIONS
 from argus_app.contracts.models import Observation, Decision, DiscoveryDecision, DomainError
-from argus_app.plugins.workflow_rules.discovery import load_discovery_rule, INITIAL_CHANNEL_RULE, candidate_summaries
+from argus_app.plugins.workflow_rules.discovery import (
+    load_discovery_rule, INITIAL_CHANNEL_RULE, candidate_summaries, semantic_context, RESPONSE_CRITERION,
+)
 from argus_app.plugins.rule_capabilities.responses import ok, failure
 from argus_app.rule_sdk.engine import RuleError
 
@@ -26,6 +28,7 @@ class WorkflowRules(BasePlugin):
         self._discovery_lock = asyncio.Lock()
         self._scan_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
+        self._discovery_after: str | None = None
 
     @handles(ObservationRecorded)
     async def observation_recorded(self, source, event):
@@ -42,6 +45,16 @@ class WorkflowRules(BasePlugin):
             state = current.detail.get('discovery', {})
             if state.get('status') in {'created', 'existing', 'ignored', 'exhausted'}:
                 return
+            # Existing Channels all get their normal opportunity to accept. New
+            # Channel classification is a fallback, not a parallel consumer.
+            owners = [ch for ch in await self.store.channels()
+                      if current.source_key in ch.subscriptions and ch.lifecycle in {'active', 'paused'}]
+            for owner in owners:
+                await self.process_channel(owner.id)
+            if not await self.store.discovery_ready(current.id):
+                return
+            current = await self.store.observation(current.id)
+            state = current.detail.get('discovery', {})
             if state.get('status') == 'fallback_pending':
                 await self._resume_discovery_fallback(current, state)
                 return
@@ -54,35 +67,56 @@ class WorkflowRules(BasePlugin):
                 return
             candidates = candidate_summaries(owners)
             versions = {ch.id: ch.version for ch in owners}
+            trusted_context = semantic_context(current, [])
             context = {'mode': 'discovery', 'source_key': current.source_key, 'candidates': candidates,
-                       'subscriptions': {current.source_key: None}, 'progress': ''}
+                       'subscriptions': {current.source_key: None}, 'progress': '', **trusted_context}
             low_confidence = False
+            semantic_task_frozen = False
+            task = {'text': current.content.get('text', ''), 'criterion': RESPONSE_CRITERION, 'context': trusted_context}
             async def call(name, args):
-                nonlocal low_confidence
+                nonlocal low_confidence, trusted_context, task, semantic_task_frozen
                 request_type = RULE_FUNCTIONS.get(name)
                 if request_type is None:
                     raise RuleError('capability_forbidden')
                 safe_args = dict(args)
                 if name == 'semantic' and safe_args.get('mode') == 'discovery':
                     safe_args['candidates'] = candidates
+                    provided_context = safe_args.get('context', {})
+                    if not isinstance(provided_context, dict):
+                        raise RuleError('semantic_context_invalid')
+                    # Rule-owned business evidence survives; only host-owned identity
+                    # and history fields are overwritten by trusted values.
+                    safe_args['context'] = {**provided_context, **trusted_context}
+                    # Older custom rules without criterion use the default rule's policy,
+                    # never a vendor-owned business criterion.
+                    safe_args.setdefault('criterion', RESPONSE_CRITERION)
+                    task = {'text': safe_args.get('text'), 'criterion': safe_args['criterion'], 'context': safe_args['context']}
+                    semantic_task_frozen = True
                 if name == 'history':
                     sources = safe_args.get('source_keys', [current.source_key])
                     if not isinstance(sources, list) or set(sources) != {current.source_key}:
                         raise RuleError('source_forbidden')
                     safe_args.update(source_keys=[current.source_key], discovery_observation_id=current.id,
-                                     source_bounds={current.source_key: current.id})
+                                     source_bounds={current.source_key: current.id}, limit=min(8, safe_args.get('limit', 8)))
                 response = await self.request(request_type(channel_id='', args=safe_args, timeout_seconds=5))
                 data = response.unwrap().data
+                if name == 'history':
+                    trusted_context = semantic_context(current, data.get('observations', []))
+                    if not semantic_task_frozen:
+                        task['context'] = trusted_context
+                    return {'observations': trusted_context['recent_history'],
+                            'history_incomplete': trusted_context.get('history_incomplete', False)}
                 if name == 'semantic' and safe_args.get('mode') == 'discovery':
                     low_confidence = data.get('defer_reason') == 'low_confidence' and data.get('discovery', {}).get('action') == 'defer'
                 return data
             try:
                 value = await self.engine.run(self.discovery_source, current.model_dump(mode='json'), context, call)
-                decision = DiscoveryDecision.model_validate(value).model_dump(exclude_none=True)
-                if decision['action'] == 'defer' and low_confidence and self.discovery_fallback is not None:
+                parsed = DiscoveryDecision.model_validate(value)
+                decision = parsed.model_dump(exclude_none=True)
+                if decision['action'] == 'defer' and (low_confidence or parsed.review_required) and self.discovery_fallback is not None:
                     token = await self.store.claim_discovery_fallback(current.id, versions)
                     if token:
-                        pending = (current, candidates, token)
+                        pending = (current, candidates, token, task)
                     else:
                         latest = await self.store.observation(current.id)
                         latest_state = latest.detail.get('discovery', {})
@@ -123,10 +157,10 @@ class WorkflowRules(BasePlugin):
         else:
             await self.store.record_discovery(current.id, {'error': fallback.get('error_code', 'unavailable')})
 
-    async def _run_discovery_fallback(self, current, candidates, token):
+    async def _run_discovery_fallback(self, current, candidates, token, task):
         try:
             async with asyncio.timeout(20):
-                result = await self.discovery_fallback(current.content.get('text', ''), candidates)
+                result = await self.discovery_fallback(candidates=candidates, **task)
             decision = DiscoveryDecision.model_validate(result).model_dump(exclude_none=True)
             if (not decision['reason'].strip() or len(decision['reason']) > 512
                     or (decision['action'] == 'existing' and decision['channel_id'] not in {x['id'] for x in candidates})):
@@ -151,7 +185,15 @@ class WorkflowRules(BasePlugin):
     async def scan_once(self):
         # No private event bus: DB replay is the recovery path for missed notices.
         if self.discovery_enabled:
-            for event in await self.store.discovery_candidates():
+            candidates = await self.store.discovery_candidates(after=self._discovery_after)
+            if not candidates and self._discovery_after is not None:
+                self._discovery_after = None
+                candidates = await self.store.discovery_candidates()
+            if candidates:
+                # Advance even when every item is still waiting on an existing
+                # Channel; those items must not monopolize the recovery batch.
+                self._discovery_after = candidates[-1].id
+            for event in candidates:
                 try:
                     await self.discover(event)
                 except Exception:
@@ -178,7 +220,7 @@ class WorkflowRules(BasePlugin):
             bounds[key] = rows[0].id if rows else None
         return bounds
 
-    def _broker(self, channel, bounds):
+    def _broker(self, channel, bounds, event=None):
         async def call(name, args):
             request_type = RULE_FUNCTIONS.get(name)
             if request_type is None:
@@ -186,6 +228,10 @@ class WorkflowRules(BasePlugin):
             safe_args = dict(args)
             if name == 'history':
                 safe_args['source_bounds'] = bounds
+            if name == 'semantic' and event is not None:
+                provided = safe_args.get('context', {})
+                safe_args['context'] = {**(provided if isinstance(provided, dict) else {'rule_context': provided}),
+                    'conversation': semantic_context(event, [])['conversation']}
             response = await self.request(request_type(channel_id=channel.id, args=safe_args, timeout_seconds=5))
             try:
                 return response.unwrap().data
@@ -209,7 +255,7 @@ class WorkflowRules(BasePlugin):
                     return
                 try:
                     source = self.rule_files.read(channel.rule_path, channel.rule_hash)
-                    decision = await self.engine.evaluate(source, event, channel, self._broker(channel, bounds))
+                    decision = await self.engine.evaluate(source, event, channel, self._broker(channel, bounds, event))
                     value = decision.model_dump()
                 except Exception as exc:
                     value = {'error': f"{getattr(exc, 'code', 'rule_failed')}: {exc}"[:512]}

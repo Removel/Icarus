@@ -31,9 +31,15 @@ async def test_empty_source_discovers_and_delivers_first_event_without_manual_ch
         agent_token=SecretStr('callback-secret'), gateway_token=SecretStr('gateway-secret'),
         gateway_url=gateway_url, public_url=argus_url, qq_token=SecretStr('qq-secret'),
         discovery_enabled=True, scan_interval=.1)
+    discovery_texts = []
     async def semantic(args):
-        assert args['mode'] == 'discovery'
-        return {'match': True, 'reason': 'new explicit task', 'discovery': {'action': 'new'}}
+        assert '回应' in args['criterion']
+        if args.get('mode') != 'discovery':
+            return {'match': True, 'score': .9, 'reason': 'related continuation needs response'}
+        # Deliberately ask for a new Channel even when one exists. Existing
+        # acceptance must prevent this classifier from seeing the follow-up.
+        discovery_texts.append(args['text'])
+        return {'match': True, 'reason': 'new response needed', 'discovery': {'action': 'new'}}
     app = create_app(config, store=store, semantic=semantic)
     # Provider's model responses are deterministic; callback requests go to real Argus.
     ArgusProvider.callbacks, ArgusProvider.model_calls = [], []
@@ -69,3 +75,27 @@ async def test_empty_source_discovers_and_delivers_first_event_without_manual_ch
                 assert len(await store.channels()) == 1
                 assert (await store.channel(ch['id'])).runtime['round'] is None
                 assert len(ArgusProvider.model_calls) <= 4
+                from icarus.core.identity import SessionIdentity
+                first_session = (await runtime.session_store.list_session_ids(
+                    SessionIdentity.create(tmp_path / 'workspace').workspace_key))[0]
+                second = {**payload, 'message_id': 'second-request', 'raw_message': '再跟我说详细一点'}
+                raw2 = json.dumps(second).encode()
+                sig2 = 'sha1=' + hmac.new(b'qq-secret', raw2, hashlib.sha1).hexdigest()
+                response = await client.post('/protocols/qq', content=raw2, headers={'X-Signature': sig2})
+                assert response.status_code == 200
+                second_id = response.json()['observation_id']
+                async with asyncio.timeout(25):
+                    while True:
+                        row = await store.observation(second_id)
+                        current = await store.channel(ch['id'])
+                        if (row.detail.get('discovery', {}).get('status') == 'existing'
+                                and current.runtime['round'] is None and not current.runtime['pending']
+                                and len(ArgusProvider.model_calls) >= 6):
+                            break
+                        await asyncio.sleep(.03)
+                assert len(await store.channels()) == 1
+                assert discovery_texts == [payload['raw_message']]
+                assert current.rule_hash == ch['rule_hash']
+                from icarus.core.identity import SessionIdentity
+                sessions = await runtime.session_store.list_session_ids(SessionIdentity.create(tmp_path / 'workspace').workspace_key)
+                assert sessions == (first_session,)

@@ -5,8 +5,9 @@ class BridgeClient:
     def __init__(self, client):
         self.client = client
 
-    async def ensure_session(self, channel_id: str, request_id: str) -> str:
-        response = await self.client.post('/argus/session', json={'channel_id': channel_id, 'request_id': request_id})
+    async def ensure_session(self, channel_id: str, request_id: str, session_key: str) -> str:
+        response = await self.client.post('/argus/session', json={
+            'channel_id': channel_id, 'request_id': request_id, 'session_key': session_key})
         response.raise_for_status()
         return response.json()['session_id']
 

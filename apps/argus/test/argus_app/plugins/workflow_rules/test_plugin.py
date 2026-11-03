@@ -64,6 +64,32 @@ async def test_failed_rule_is_persisted_as_error_not_false(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_followup_semantic_keeps_trusted_conversation_identity(tmp_path):
+    from argus_app.contracts.capabilities import RuleResponse
+    from icarus.core.capabilities import CapabilityStatus
+    from argus_app.plugins.workflow_rules.discovery import INITIAL_CHANNEL_RULE
+    ch, event = facts()
+    event = event.model_copy(update={'source_key': 'qq:100:private:200',
+        'content': {'text': '继续说', 'sender_id': '200', 'message_type': 'private'},
+        'detail': {'self_id': '100', 'peer_id': '200', 'is_self': False}})
+    files = RuleFiles(tmp_path)
+    ch = ch.model_copy(update={**files.publish(INITIAL_CHANNEL_RULE, ch.id), 'subscriptions': {event.source_key: None}})
+    plugin = WorkflowRules('workflow-rules', StoreFake(ch, event), RuleEngine(timeout=10), files)
+    seen = []
+    async def request(value):
+        seen.append(value.args)
+        return RuleResponse(correlation_id=value.correlation_id, status=CapabilityStatus.OK,
+                            data={'match': True, 'score': .9, 'reason': 'respond'})
+    plugin.request = request
+    async def publish(event):
+        pass
+    plugin.bind_publisher(publish)
+    await plugin.process_channel(ch.id)
+    assert seen[0]['context']['conversation']['source_key'] == event.source_key
+    assert seen[0]['context']['goal'] == ch.goal
+
+
+@pytest.mark.asyncio
 async def test_paused_channel_is_not_evaluated(tmp_path):
     ch, event = facts()
     ch = ch.model_copy(update={'lifecycle': 'paused'})
