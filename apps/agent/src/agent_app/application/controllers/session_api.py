@@ -195,8 +195,8 @@ class SessionApi:
                 raise ValueError("Argus session must be initialized through protected bridge")
             config = config.model_copy(deep=True)
             config.runtime.plugin_config["argus"] = settings
-            from agent_app.plugins.argus.tools import TOOL_NAMES
-            kwargs["tools"] = [*TOOL_NAMES, 'memory_recall', 'memory_read']
+            # Bridge origin adds business context, not a reduced permission profile.
+            # Keep ordinary session defaults and any explicitly supplied tool policy.
             if "argus" not in config.runtime.required_plugin_ids:
                 config.runtime.required_plugin_ids.append("argus")
         return self._session_factory(identity, config=config, **kwargs)

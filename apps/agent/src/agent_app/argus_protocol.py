@@ -14,6 +14,7 @@ class WireModel(BaseModel):
 class SessionRequest(WireModel):
     channel_id: Id
     request_id: Id
+    session_key: Id
 
 class Observation(WireModel):
     id: Id
@@ -66,6 +67,7 @@ class WakeRequest(WireModel):
     channel_snapshot: ChannelSnapshot
     rule_sdk: dict
     session_id: Id
+    session_key: Id
     items: Annotated[list[Observation], Field(min_length=1, max_length=20)]
     argus_url: Annotated[str, Field(max_length=2048)]
 

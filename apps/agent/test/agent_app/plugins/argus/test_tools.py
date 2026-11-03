@@ -62,7 +62,7 @@ def test_callback_request_ids_are_scoped_to_task_binding():
             return tuple(records), len(records)
     async def append(identity, kind, payload, task_id):
         records.append(SimpleNamespace(type=kind, payload=payload, task_id=task_id))
-    bridge = SimpleNamespace(runtime=SimpleNamespace(session_store=Store()), identity=lambda channel:channel, append=append)
+    bridge = SimpleNamespace(runtime=SimpleNamespace(session_store=Store()), identity_for_wake=lambda wake: wake['binding_id'], append=append)
     tool = ArgusTool(SimpleNamespace(bridge=bridge, task_channels=channels), 'argus_commit')
     def respond(request):
         import json

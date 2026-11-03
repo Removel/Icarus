@@ -47,6 +47,7 @@ class Commit(WireModel):
     source_keys: Annotated[list[Annotated[str, Field(min_length=1, max_length=512)]], Field(max_length=16)] | None = None
     rule_source: Annotated[str, Field(max_length=32768)] | None = None
     lifecycle: Literal['active', 'paused', 'completed'] | None = None
+    next_session: Literal['reuse', 'new'] | None = None
 
     @model_validator(mode='after')
     def explicit_values(self):
@@ -166,7 +167,7 @@ class ArgusTool(BaseTool):
         channel.raise_if_cancelled()
         bridge = self.plugin.bridge
         wake = binding['wake']
-        identity = bridge.identity(wake['channel_id'])
+        identity = bridge.identity_for_wake(wake)
         body = {'binding_id': wake['binding_id'], 'request_id': request_id, 'kind': kind, 'payload': payload}
         records, _ = await bridge.runtime.session_store.read_updates(identity)
         callbacks, receipts = {}, {}

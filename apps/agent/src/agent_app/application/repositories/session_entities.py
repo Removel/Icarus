@@ -75,6 +75,19 @@ class _SessionTitleRow(_Base):
     title: Mapped[str] = mapped_column(String(80), nullable=False)
 
 
+class _ArgusSessionLinkRow(_Base):
+    """Consumed selection keys survive Session deletion and journal trimming."""
+    __tablename__ = 'argus_session_links'
+    __table_args__ = (Index('uq_argus_session_identity', 'workspace_key', 'session_id', unique=True),)
+    workspace_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    selection_request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class _ConversationUpdateRow(_Base):
     __tablename__ = "conversation_updates"
     __table_args__ = (

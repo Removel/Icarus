@@ -8,6 +8,18 @@ import pytest
 from agent_app.application.services.argus_bridge import ArgusBridge
 
 
+def test_stopped_execution_without_commit_is_not_replay_safe():
+    bridge = ArgusBridge(SimpleNamespace())
+    claim = SimpleNamespace(task_id='task', type='argus.wake', payload={'binding': {'wake': {}}})
+    records = [claim, SimpleNamespace(task_id='task', type='task.finished', payload={'status': 'completed'})]
+    async def run():
+        result = await bridge._status((SimpleNamespace(session_id='bound-session'), claim, records))
+        assert result['status'] == 'completed'
+        assert result['commit_state'] == 'none'
+        assert result['replay_safe'] is False
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('state', ['applied', 'pending', 'not_found', 'rejected'])
 def test_stopped_task_commit_reconciliation_is_read_only(monkeypatch, state):
     monkeypatch.setenv('ARGUS_AGENT_API_TOKEN', 'synthetic-token')

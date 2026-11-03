@@ -46,6 +46,15 @@
     ]
   },
   "mcpServers": {
+    "snowluma": {
+      "command": "node",
+      "args": ["${SNOWLUMA_MCP_SERVER_PATH}"],
+      "env": {
+        "SNOWLUMA_MCP_ENDPOINT": "${SNOWLUMA_MCP_ENDPOINT}",
+        "SNOWLUMA_MCP_TOKEN": "${SNOWLUMA_MCP_TOKEN}",
+        "SNOWLUMA_MCP_MODE": "write"
+      }
+    },
     "playwright": {
       "command": "npx",
       "args": [

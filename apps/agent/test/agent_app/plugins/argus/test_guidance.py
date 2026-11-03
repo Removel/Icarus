@@ -4,7 +4,7 @@ from agent_app.argus_protocol import WakeRequest
 
 def wake(**changes):
     return dict(channel_id='channel', wake_id='wake', binding_id='binding', channel_version=1,
-                session_id='session', items=[dict(id='obs', source_key='qq:1', message_id='m',
+                session_id='session', session_key='slot', items=[dict(id='obs', source_key='qq:1', message_id='m',
                     kind='message.observed', revision=1, observed_at='2026-11-02T00:00:00Z', content={'text': 'fact'}, detail={})],
                 argus_url='http://argus', channel_snapshot=dict(id='channel', title='task', goal='track', progress='',
                     lifecycle='active', version=1, source_keys=['qq:1'], rule_source=''),

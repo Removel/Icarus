@@ -22,6 +22,7 @@ from icarus.core.identity import (
 from agent_app.application.models.status import SessionSummary
 from agent_app.application.repositories.session_entities import (
     _Base,
+    _ArgusSessionLinkRow,
     _ConversationUpdateRow,
     _SessionRow,
     _SessionTitleRow,
@@ -104,6 +105,57 @@ class SessionStore:
         self._engine = None
         self._started = False
         self._closed = True
+
+    async def has_argus_session_links(self, workspace_key: str, channel_id: str) -> bool:
+        async with self._require_started()() as db:
+            return bool(await db.scalar(select(exists().where(
+                _ArgusSessionLinkRow.workspace_key == workspace_key,
+                _ArgusSessionLinkRow.channel_id == channel_id))))
+
+    async def get_argus_session_link(self, workspace_key: str, channel_id: str, session_key: str):
+        async with self._require_started()() as db:
+            row = await db.get(_ArgusSessionLinkRow, (workspace_key, channel_id, session_key))
+            if row is None:
+                return None
+            workspace = await db.get(_WorkspaceRow, workspace_key)
+            if workspace is None:
+                raise ValueError('session_link_workspace_missing')
+            return SessionIdentity.create(Path(workspace.workspace_path), row.session_id), row.status
+
+    async def reserve_argus_session_link(self, identity: SessionIdentity, channel_id: str,
+            session_key: str, request_id: str, *, legacy_identity: SessionIdentity | None = None) -> SessionIdentity:
+        async with self._require_started().begin() as db:
+            # Serialize reservation and the one-time legacy adoption gate across clients.
+            await db.execute(text('BEGIN IMMEDIATE'))
+            previous = await db.get(_ArgusSessionLinkRow, (identity.workspace_key, channel_id, session_key))
+            if previous is not None:
+                return SessionIdentity.create(identity.workspace_path, previous.session_id)
+            linked = await db.scalar(select(exists().where(
+                _ArgusSessionLinkRow.workspace_key == identity.workspace_key,
+                _ArgusSessionLinkRow.channel_id == channel_id)))
+            selected = legacy_identity if legacy_identity is not None and not linked else identity
+            if selected.workspace_key != identity.workspace_key:
+                raise ValueError('session_link_workspace_mismatch')
+            now = datetime.now(UTC)
+            await db.execute(sqlite_insert(_WorkspaceRow).values(workspace_key=identity.workspace_key,
+                workspace_path=str(identity.workspace_path), created_at=now, last_seen_at=now).on_conflict_do_nothing())
+            conflict = await db.scalar(select(exists().where(
+                _ArgusSessionLinkRow.workspace_key == identity.workspace_key,
+                _ArgusSessionLinkRow.session_id == selected.session_id)))
+            if conflict:
+                raise ValueError('session_already_linked')
+            db.add(_ArgusSessionLinkRow(workspace_key=identity.workspace_key, channel_id=channel_id,
+                session_key=session_key, session_id=selected.session_id, selection_request_id=request_id,
+                status='reserved', created_at=now))
+            return selected
+
+    async def complete_argus_session_link(self, identity: SessionIdentity, channel_id: str, session_key: str) -> None:
+        async with self._require_started().begin() as db:
+            row = await db.get(_ArgusSessionLinkRow, (identity.workspace_key, channel_id, session_key))
+            session = await db.get(_SessionRow, (identity.workspace_key, identity.session_id))
+            if row is None or row.session_id != identity.session_id or session is None or session.deleted_at is not None:
+                raise ValueError('session_selection_deleted_or_invalid')
+            row.status = 'ready'
 
     async def create_session(self, identity: SessionIdentity, *, instructions: str | None = None) -> None:
         sessions = self._require_started()

@@ -12,7 +12,7 @@ from icarus.core.run_control import TaskChannelRegistry
 def test_commit_schema_only_requests_business_fields():
     assert 'argus_commit' in MODELS
     assert set(MODELS['argus_commit'].model_json_schema()['properties']) == {
-        'results', 'progress', 'source_keys', 'rule_source', 'lifecycle'}
+        'results', 'progress', 'source_keys', 'rule_source', 'lifecycle', 'next_session'}
     assert set(TOOL_NAMES) == {'argus_channel_read', 'argus_read', 'argus_history', 'argus_rule_check', 'argus_commit'}
     assert set(MODELS['argus_rule_check'].model_json_schema()['properties']) == {'source'}
 
@@ -30,7 +30,7 @@ def fixture(monkeypatch):
         records.append(SimpleNamespace(type=kind, payload=payload, task_id=task_id))
     bridge = SimpleNamespace(bindings={'task': binding}, callback_locks={},
                              runtime=SimpleNamespace(session_store=Store()),
-                             append=append, identity=lambda channel: channel)
+                             append=append, identity_for_wake=lambda wake: 'bound-session')
     channels = TaskChannelRegistry()
     channels.create('task')
     plugin = SimpleNamespace(bridge=bridge, task_channels=channels)
@@ -60,6 +60,23 @@ def test_commit_auto_binds_ids_and_version_and_replays_receipt(monkeypatch):
         assert second.success and second.output == first.output
         assert len([r for r in requests if r.method == 'POST']) == 1
         assert binding['finished'] is True
+    asyncio.run(run())
+
+
+def test_commit_uses_bound_session_not_latest_channel_identity(monkeypatch):
+    plugin, binding, records, requests = fixture(monkeypatch)
+    binding['wake'].update(session_id='session-a', session_key='slot-a')
+    calls = []
+    def old_identity(channel):
+        raise AssertionError('current Channel Session must not choose old callback journal')
+    plugin.bridge.identity = old_identity
+    plugin.bridge.identity_for_wake = lambda wake: calls.append(wake['session_id']) or 'session-a'
+    tool = ArgusTool(plugin, 'argus_commit')
+    async def run():
+        result = await tool.ainvoke({'results': [{'ref': '1', 'status': 'handled'}],
+            'progress': 'next stage', 'next_session': 'new'}, task_id='task')
+        assert result.success, result.error
+        assert calls == ['session-a']
     asyncio.run(run())
 
 
