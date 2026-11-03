@@ -35,14 +35,18 @@ class OpenAILLM(BaseLLM):
         temperature: float | None = None,
         reasoning_effort: ThinkMode | None = None,
         image_resolver: Callable[[ImagePart], Path] | None = None,
+        max_retries: int | None = None,
     ) -> None:
+        if max_retries is not None and (type(max_retries) is not int or max_retries < 0):
+            raise ValueError('max_retries must be a nonnegative integer or None')
+        retry_options: dict[str, Any] = {} if max_retries is None else {'max_retries': max_retries}
         self.model_name = model_name
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.reasoning_effort = reasoning_effort
         self._image_resolver = image_resolver
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
-        self._async_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = OpenAI(api_key=api_key, base_url=base_url, **retry_options)
+        self._async_client = AsyncOpenAI(api_key=api_key, base_url=base_url, **retry_options)
 
     def invoke(
         self,

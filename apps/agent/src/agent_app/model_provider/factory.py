@@ -34,6 +34,7 @@ class LLMFactory:
         temperature: float | None = None,
         default_think_level: ThinkMode | None = None,
         thinking_budget: int | None = None,
+        max_retries: int | None = None,
     ) -> BaseLLM:
         model_config = self.config.get_model(role)
         selected_protocol = protocol or self.config.use_protocol
@@ -61,6 +62,7 @@ class LLMFactory:
                 temperature=selected_temperature,
                 reasoning_effort=selected_think_level,
                 image_resolver=self.image_resolver,
+                max_retries=max_retries,
             )
         if selected_protocol == "anthropic":
             return AnthropicLLM(
@@ -73,5 +75,6 @@ class LLMFactory:
                     thinking_budget if thinking_budget is not None else 1024
                 ),
                 image_resolver=self.image_resolver,
+                max_retries=max_retries,
             )
         raise ValueError(f"Unsupported protocol: {selected_protocol}")

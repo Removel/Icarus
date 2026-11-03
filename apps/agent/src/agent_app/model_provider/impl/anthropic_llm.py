@@ -34,14 +34,18 @@ class AnthropicLLM(BaseLLM):
         temperature: float | None = None,
         thinking_budget: int = 1024,
         image_resolver: Callable[[ImagePart], Path] | None = None,
+        max_retries: int | None = None,
     ) -> None:
+        if max_retries is not None and (type(max_retries) is not int or max_retries < 0):
+            raise ValueError('max_retries must be a nonnegative integer or None')
+        retry_options: dict[str, Any] = {} if max_retries is None else {'max_retries': max_retries}
         self.model_name = model_name
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.thinking_budget = thinking_budget
         self._image_resolver = image_resolver
-        self._client = Anthropic(api_key=api_key, base_url=base_url)
-        self._async_client = AsyncAnthropic(api_key=api_key, base_url=base_url)
+        self._client = Anthropic(api_key=api_key, base_url=base_url, **retry_options)
+        self._async_client = AsyncAnthropic(api_key=api_key, base_url=base_url, **retry_options)
 
     def invoke(
         self,

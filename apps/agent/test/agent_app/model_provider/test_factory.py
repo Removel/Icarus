@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from agent_app.config import (
@@ -100,3 +102,28 @@ def test_init_未传配置时调用配置加载器(monkeypatch):
     factory = LLMFactory()
 
     assert factory.config is expected
+
+
+@pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
+@pytest.mark.parametrize('max_retries', [None, 0, 3])
+def test_factory_preserves_or_overrides_retry_policy(protocol, max_retries):
+    async def run():
+        factory = LLMFactory(config=make_config())
+        llm = factory.create_llm(role='perception', protocol=protocol, max_retries=max_retries)
+        default = factory.create_llm(role='perception', protocol=protocol)
+        try:
+            expected = default._client.max_retries if max_retries is None else max_retries
+            assert llm._client.max_retries == expected
+            assert llm._async_client.max_retries == expected
+        finally:
+            await llm.aclose()
+            await default.aclose()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
+@pytest.mark.parametrize('max_retries', [-1, True, '0', 1.5])
+def test_factory_rejects_invalid_retry_policy(protocol, max_retries):
+    with pytest.raises(ValueError, match='max_retries'):
+        LLMFactory(config=make_config()).create_llm(
+            role='perception', protocol=protocol, max_retries=max_retries)
