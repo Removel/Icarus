@@ -20,11 +20,17 @@ def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
         app = create_app(runtime)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://gateway') as client:
-                assert (await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure'})).status_code == 401
+                assert (await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure','session_key':'slot-a'})).status_code == 401
                 client.headers['Authorization'] = 'Bearer gateway-secret'
-                response = await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure'})
+                response = await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure','session_key':'slot-a'})
                 assert response.status_code == 200, response.text
                 session = response.json()['session_id']
+                other = await client.post('/argus/session', json={'channel_id':channel,
+                    'request_id':'second-selection', 'session_key':'slot-b'})
+                assert other.status_code == 200
+                assert other.json()['session_id'] != session
+                missing_key = await client.post('/argus/session', json={'channel_id':channel,'request_id':'bad'})
+                assert missing_key.status_code == 422
                 if not restart:
                     for operation in (
                         runtime.create_session(tmp_path / 'workspace', session),
@@ -36,9 +42,9 @@ def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
                             assert False, 'Public operation accepted a reserved bridge session'
                         except ValueError:
                             pass
-                malformed = await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure','extra':True})
+                malformed = await client.post('/argus/session', json={'channel_id':channel,'request_id':'ensure','session_key':'slot-a','extra':True})
                 assert malformed.status_code == 422
-                payload = dict(channel_id=channel,wake_id=wake,binding_id=binding,channel_version=1,session_id=session,
+                payload = dict(channel_id=channel,wake_id=wake,binding_id=binding,channel_version=1,session_id=session,session_key='slot-a',
                     channel_snapshot=dict(id=channel,title='task',goal='goal',progress='',lifecycle='active',version=1,source_keys=['qq:a'],rule_source=''), rule_sdk={'version':2},
                     items=[dict(id=item,source_key='qq:a',message_id='1',kind='message.observed',revision=1,
                                 observed_at='2026-11-01T00:00:00Z',content={'text':'Argus evidence'},detail={})],
@@ -53,7 +59,10 @@ def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
                     if status['status'] in {'completed','failed'}:
                         break
                     await asyncio.sleep(.02)
-                assert status == {'task_id':task_id,'session_id':session,'status':'completed','commit_state':'none'}
+                assert status == {'task_id':task_id,'session_id':session,'status':'completed','commit_state':'none','replay_safe':False}
+                unsafe = await client.post('/argus/wake', json=payload | {'wake_id': str(uuid4()),
+                    'binding_id': str(uuid4()), 'session_id': other.json()['session_id'], 'session_key': 'slot-b'})
+                assert unsafe.status_code == 409, 'new Session must not replay an unresolved Channel execution'
                 return task_id
     with local_provider() as port:
         config = config_for(tmp_path / 'data', port)

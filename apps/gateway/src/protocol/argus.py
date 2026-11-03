@@ -18,7 +18,10 @@ def argus_router(runtime):
 
     @router.post('/session', dependencies=[Depends(authorized)])
     async def session(request: SessionRequest):
-        return await bridge.ensure_session(request.channel_id, request.request_id)
+        try:
+            return await bridge.ensure_session(request.channel_id, request.request_id, request.session_key)
+        except BridgeConflict as error:
+            raise HTTPException(409, str(error)) from error
 
     @router.post('/wake', dependencies=[Depends(authorized)])
     async def wake(request: WakeRequest):

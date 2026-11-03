@@ -1,0 +1,156 @@
+"""Real MCP stdio + protected Gateway + normal Agent, never a real QQ send."""
+import asyncio
+import json
+import sys
+from pathlib import Path
+from uuid import uuid4
+
+import httpx
+import pytest
+
+from agent_app.application import AgentRuntime
+from apps.gateway.src.app import create_app
+from apps.gateway.test.test_argus_tools_e2e import ArgusProvider
+from apps.gateway.test.test_runtime_e2e import config_for, local_provider
+
+
+class ReplyProvider(ArgusProvider):
+    reply_retcode = 0
+    lose_commit_response = False
+    lost_once = False
+
+    def do_GET(self):
+        if self.path.startswith('/agent/commits/'):
+            data = json.dumps({'state': 'applied', 'result': {'applied': True, 'committed': True}}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        return super().do_GET()
+
+    def do_POST(self):
+        if self.path == '/agent/events' and self.lose_commit_response:
+            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            type(self).callbacks.append(body)
+            committed = body['kind'] == 'agent.commit_requested'
+            if committed and not type(self).lost_once:
+                import socket
+                type(self).lost_once = True
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+                return
+            data = json.dumps({'applied': True, 'committed': committed}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if not self.path.endswith('/chat/completions'):
+            return super().do_POST()
+        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        type(self).model_calls.append(body)
+        count = sum(m['role'] == 'tool' for m in body['messages'])
+        sequence = [
+            ('mcp_tool_search', {'server': 'snowluma', 'query': 'invoke_action'}),
+            ('mcp_tool_execute', {'tool_ref': 'snowluma/invoke_action', 'arguments': {
+                'action': 'send_private_msg', 'params': {'user_id': 200, 'message': 'synthetic reply'}}}),
+            ('tool_execute', {'name': 'argus_commit', 'arguments': {'results': [
+                {'ref': '1', 'status': 'handled' if self.reply_retcode == 0 else 'no_action',
+                 'reason': 'platform success message_id=901' if self.reply_retcode == 0 else 'platform rejected send'}],
+                'progress': 'replied' if self.reply_retcode == 0 else 'send failed',
+                'lifecycle': 'active', 'next_session': 'new'}}),
+        ]
+        if self.lose_commit_response:
+            # Retry the exact commit after a missing receipt, never the MCP send.
+            sequence.append(sequence[-1])
+        if count < len(sequence):
+            name, arguments = sequence[count]
+            delta = {'tool_calls': [{'index': 0, 'id': f'call-{count}', 'type': 'function',
+                'function': {'name': name, 'arguments': json.dumps(arguments)}}]}
+            finish = 'tool_calls'
+        else:
+            delta, finish = {'content': 'reply sent and committed'}, 'stop'
+        chunks = [{'id': 'fixture', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'synthetic',
+                   'choices': [{'index': 0, 'delta': delta, 'finish_reason': None}]},
+                  {'id': 'fixture', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'synthetic',
+                   'choices': [{'index': 0, 'delta': {}, 'finish_reason': finish}]}]
+        data = (''.join('data: ' + json.dumps(c) + '\n\n' for c in chunks) + 'data: [DONE]\n\n').encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+@pytest.mark.parametrize('retcode,lose_receipt', [(0, False), (1401, False), (0, True)])
+def test_agent_sends_via_real_mcp_then_confirms_argus(tmp_path, monkeypatch, retcode, lose_receipt):
+    monkeypatch.setenv('ARGUS_GATEWAY_TOKEN', 'gateway-secret')
+    monkeypatch.setenv('ARGUS_AGENT_API_TOKEN', 'callback-secret')
+    monkeypatch.setenv('ARGUS_WORKSPACE_PATH', str(tmp_path / 'workspace'))
+    server = tmp_path / 'synthetic_mcp.py'
+    sends = tmp_path / 'sends.jsonl'
+    server.write_text('''import json
+from pathlib import Path
+from mcp.server.mcpserver import MCPServer
+server = MCPServer("synthetic-snowluma")
+@server.tool()
+def invoke_action(action: str, params: dict) -> dict:
+    """Invoke a synthetic OneBot action; never calls any platform."""
+    assert action == "send_private_msg"
+    with Path(''' + repr(str(sends)) + ''').open("a") as f:
+        f.write(json.dumps({"action": action, "params": params}) + "\\n")
+    return {"status": "ok" if RETCODE == 0 else "failed", "retcode": RETCODE,
+            "data": {"message_id": 901} if RETCODE == 0 else None}
+if __name__ == "__main__":
+    server.run(transport="stdio")
+'''.replace('RETCODE', str(retcode)))
+    channel, wake, binding, obs = [str(uuid4()) for _ in range(4)]
+    ReplyProvider.callbacks, ReplyProvider.model_calls = [], []
+    ReplyProvider.reply_retcode = retcode
+    ReplyProvider.lose_commit_response = lose_receipt
+    ReplyProvider.lost_once = False
+    async def run(port):
+        config = config_for(tmp_path / 'data', port)
+        config.mcp_servers = {'snowluma': {'command': sys.executable, 'args': [str(server)]}}
+        runtime = AgentRuntime(config_loader=lambda: config)
+        app = create_app(runtime)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://gateway',
+                headers={'Authorization': 'Bearer gateway-secret'}) as client:
+                r = await client.post('/argus/session', json={'channel_id': channel, 'request_id': 'select', 'session_key': 'slot-a'})
+                assert r.status_code == 200, r.text
+                session = r.json()['session_id']
+                payload = dict(channel_id=channel, wake_id=wake, binding_id=binding, channel_version=1,
+                    session_id=session, session_key='slot-a', channel_snapshot=dict(id=channel, title='conversation',
+                    goal='respond to greeting', progress='', lifecycle='active', version=1,
+                    source_keys=['qq:100:private:200'], rule_source=''), rule_sdk={'version': 2},
+                    items=[dict(id=obs, source_key='qq:100:private:200', message_id='m', kind='message.observed',
+                        revision=1, observed_at='2026-11-03T00:00:00Z', content={'text': 'synthetic greeting'}, detail={})],
+                    argus_url=f'http://127.0.0.1:{port}')
+                response = await client.post('/argus/wake', json=payload)
+                assert response.status_code == 200, response.text
+                for _ in range(600):
+                    status = (await client.post('/argus/status', json={'wake_id': wake})).json()
+                    if status['status'] in {'completed', 'failed'}:
+                        break
+                    await asyncio.sleep(.02)
+                assert status['status'] == 'completed', status
+                assert status['commit_state'] == 'applied', status
+                assert (await client.post('/argus/wake', json=payload)).json()['task_id'] == response.json()['task_id']
+    with local_provider(ReplyProvider) as port:
+        asyncio.run(run(port))
+    assert [json.loads(line) for line in sends.read_text().splitlines()] == [
+        {'action': 'send_private_msg', 'params': {'user_id': 200, 'message': 'synthetic reply'}}]
+    commits = [x for x in ReplyProvider.callbacks if x['kind'] == 'agent.commit_requested']
+    assert len(commits) == 1
+    assert commits[0]['payload']['next_session'] == 'new'
+    assert commits[0]['payload']['results'][0]['observation_id'] == obs
+    assert commits[0]['payload']['results'][0]['status'] == ('handled' if retcode == 0 else 'no_action')
+    assert commits[0]['payload']['progress'] == ('replied' if retcode == 0 else 'send failed')
+    # The scripted model saw the actual business envelope, not just MCP transport success.
+    marker = '901' if retcode == 0 else '1401'
+    assert any(marker in str(m) and 'retcode' in str(m) for p in ReplyProvider.model_calls for m in p['messages'] if m['role'] == 'tool')

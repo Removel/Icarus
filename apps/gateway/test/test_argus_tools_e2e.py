@@ -21,7 +21,10 @@ class ArgusProvider(ProviderHandler):
             data, content_type = json.dumps({'applied':True, 'committed': payload['kind'] == 'agent.commit_requested'}).encode(), 'application/json'
         elif self.path.endswith('/chat/completions'):
             type(self).model_calls.append(payload)
-            tool_results = [m for m in payload['messages'] if m['role'] == 'tool']
+            messages = payload['messages']
+            start = max((i for i, m in enumerate(messages) if m['role'] == 'user'
+                         and 'ARGUS CURRENT ROUND' in str(m.get('content', ''))), default=0)
+            tool_results = [m for m in messages[start:] if m['role'] == 'tool']
             count = len(tool_results)
             lazy = any(tool['function']['name'] == 'tool_search' for tool in payload.get('tools', []))
             operation = count - int(lazy)
@@ -62,8 +65,8 @@ def test_real_agent_argus_tools_receipts_and_final_view(tmp_path, monkeypatch):
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://gateway',
                 headers={'Authorization':'Bearer gateway-secret'}) as client:
-                session = (await client.post('/argus/session',json={'channel_id':channel,'request_id':'session'})).json()['session_id']
-                payload = dict(channel_id=channel,wake_id=wake,binding_id=binding,channel_version=1,session_id=session,
+                session = (await client.post('/argus/session',json={'channel_id':channel,'request_id':'session','session_key':'slot-a'})).json()['session_id']
+                payload = dict(channel_id=channel,wake_id=wake,binding_id=binding,channel_version=1,session_id=session,session_key='slot-a',
                     channel_snapshot=dict(id=channel,title='task',goal='goal',progress='',lifecycle='active',version=1,source_keys=['qq:same-source'],rule_source=''), rule_sdk={'version':2},
                     items=[dict(id=item,source_key='qq:same-source',message_id='m',kind='message.observed',revision=1,
                                 observed_at='2026-11-01T00:00:00Z',content={'text':'untrusted external evidence'},detail={})],
@@ -99,6 +102,6 @@ def test_real_agent_argus_tools_receipts_and_final_view(tmp_path, monkeypatch):
         assert fragment in user_view, fragment
     assert 'def main(event, channel):' not in system_view
     assert "capability('history', {'limit': 20})" not in system_view
-    assert exposed == {'tool_search', 'tool_execute'}
+    assert {'tool_search', 'tool_execute', 'mcp_tool_list', 'mcp_tool_search', 'mcp_tool_execute'} <= exposed
     assert 'argus(5)' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
     assert 'memory_recall' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
