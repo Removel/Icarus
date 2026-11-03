@@ -60,8 +60,16 @@ Discovery uses one JEV `Choice` question and its native `confidence`, with a `0.
 The selected option's probability is a different field; no independent Noul question is
 interpreted as route confidence. Ordinary semantic match keeps its `0.5` threshold.
 
-Only a host-observed low-confidence semantic defer may invoke the fallback. Plain rule defer,
-candidate overflow, invalid output and service errors do not. The fallback returns only
+The default rule defines a Channel as a context that needs an Agent response or processing:
+it can be a greeting/short chat or a large multi-stage task. Group response decisions are
+semantic, not mechanically gated on an @ mention. The rule supplies an explicit `criterion`
+and bounded trusted conversation/history `context` to discovery; model adapters do not define
+which business messages deserve a response. A new active Channel keeps an effective default
+follow-up rule even if the first commit omits `rule_source`.
+
+A host-observed low-confidence defer, or a rule's explicit `review_required=true` on a defer,
+may invoke the perception fallback. Plain rule defer without that flag, candidate overflow,
+invalid input and service errors do not. The fallback returns only
 `DiscoveryDecision` (`new`/`existing`/`ignore`/`defer`), has no tools, and cannot create a Channel
 or choose an identity outside the trusted candidates. Its SDK retries are zero, output cap
 2048 tokens and call timeout20s; it runs outside rule execution and database/discovery locks.
@@ -119,14 +127,23 @@ kernel vulnerabilities or hostile multitenant certification.
 ## Atomic business commit
 
 1. Protocol persists an observation before publishing its event.
-2. Existing Channel rules and ongoing new-topic discovery run independently; a subscribed
-   source is not exclusively owned by one Channel. Discovery uses trusted candidate summaries,
-   typed Choice/confidence and bounded retries. Ambiguous decisions defer.
+2. Existing subscribed Channels evaluate first; multiple Channels may accept the same
+   observation. Acceptance is persisted with the decision before notification and survives
+   Agent commit, pending cleanup and subscription removal. New-Channel discovery is only a
+   fallback after all existing subscribers have evaluated and rejected the observation;
+   unread, deferred, failed or paused evaluations are not rejection. Ingress and background
+   recovery use the same gate, and creation/fallback claims recheck it transactionally.
+   A source subscription alone does not suppress a genuinely new topic. Discovery uses
+   trusted candidate summaries, typed Choice/confidence and bounded retries. Recovery scans
+   advance bounded position-based pages and wrap back, so unresolved early observations
+   cannot monopolize the global batch or starve unrelated later requests.
 3. Bridge freezes passed observations, sends a bounded current Channel snapshot and SDK
    metadata through the authenticated Gateway to the normal Agent execution chain.
-4. Agent may combine snapshot, history and authorized memory reads. It need not always
-   read Channel first or search known tools again. Real session registry/allowlist remains authoritative.
-5. Agent calls `argus_commit(results, progress?, source_keys?, rule_source?, lifecycle?)`.
+4. Agent inherits the normal Session's authorized capabilities, including configured MCP servers.
+   It directly performs actions (for QQ, SnowLuma MCP) and checks platform business results;
+   normal assistant output is not a platform reply. It need not always read Channel first or
+   search known tools again. Explicit ordinary session tool policies still apply.
+5. Agent calls `argus_commit(results, progress?, source_keys?, rule_source?, lifecycle?, next_session?)`.
    Code supplies binding/ref mapping/request identity/version/hash/path. Results must cover
    exactly the frozen batch. Omitted fields stay unchanged.
 6. Argus statically checks and prepares any new rule outside the transaction, then commits
@@ -142,7 +159,22 @@ Agent persists callback intent before HTTP. Retries reuse exact identities and b
 `GET /agent/commits/{binding_id}/{request_id}` reads only existing receipts and returns
 not_found/pending/applied/rejected even after a round closes. Cancelled/stopped tasks only query
 existing intents; unknown outcomes retain the round rather than replay business actions.
-The transaction does not roll back external service actions; arbitrary write tools are not opened.
+The transaction does not roll back external service actions. Terminal Agent execution without
+an applied commit is not automatically replayed: the round remains visible as
+`execution_outcome_unknown` unless the remote explicitly proves replay safe. Reconcile unknown
+sends rather than starting another Session to repeat them.
+
+Channel progress, rules and lifecycle remain the business representation; no extra JSON
+`state` field or Argus table migration was introduced. Each round freezes a `session_key`;
+`next_session="new"` changes the next execution context only after a successful commit.
+The Agent owns durable 1:N Session links in its existing SessionStore. Deleted selection keys
+stay consumed, and old callbacks always write the original Session journal.
+
+QQ ingress verifies the HMAC over the raw body before dispatch. Normal heartbeat/notice/request
+events are acknowledged without ingestion; message/message_sent are normalized with sender,
+conversation kind, peer and self metadata. Self-sent private events need a reliable target_id.
+Keeping self echoes from triggering loops is not deterministically guaranteed by semantic
+inference alone; do not treat an unverified message_id summary as proof of authorship.
 
 ## Verification
 

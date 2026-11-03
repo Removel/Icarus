@@ -22,6 +22,26 @@
 - 通过 ProcessPlugin 在 Session 内启动和管理开发服务器等长期命令，提供一个参数化
   `background_process` Tool，并在 Session 卸载前收束完整进程组。
 
+## Argus 驱动会话与 QQ MCP
+
+Argus 驱动的 Session 继承普通会话的已授权工具能力，仅附加 Argus 业务上下文和工具；
+不再因为 `argus-` 来源而强制缩成只读工具白名单。显式调用者工具限制仍然生效。
+Channel 与 Session 通过 Agent 既有 SessionStore 中的持久关联支持一对多；每轮绑定固定 Session，
+`argus_commit(next_session="new")` 可请求下一轮新上下文，进展继续使用已有 `progress`、规则和历史，
+不新增业务 `state` 字段。
+
+`settings.json` 已声明 `snowluma` stdio MCP。部署前提供：
+
+- `SNOWLUMA_MCP_SERVER_PATH`：现有 SnowLuma MCP 的 `dist/server.js` 绝对路径；
+- `SNOWLUMA_MCP_ENDPOINT`：OneBot HTTP API，例如 `http://127.0.0.1:3010/`，不是 MCP HTTP 地址；
+- `SNOWLUMA_MCP_TOKEN`：OneBot 入站 API token，不能用 QQ 上报签名密钥替代。
+
+公开路径放本机拓扑，token 保留秘密环境。Agent 经 `mcp_tool_search` / `mcp_tool_execute`
+调用 `snowluma/invoke_action` 回复，检查 OneBot `retcode` 与业务状态后提交 `argus_commit`。
+普通 assistant 文本不会自动转发 QQ；Argus 不代发。发送结果不明时不能自动重跑整轮。
+
+详见 [回应 Channel 与多 Session 设计](docs/spec/2026-11-03-response-oriented-channels/plan-design.md)。
+
 ## 安装依赖
 
 运行环境：

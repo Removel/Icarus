@@ -1,0 +1,29 @@
+# 回应驱动 Channel：当前接线
+
+核验日期：2026-11-03。描述当前工作区实现与本地测试，不代表已提交或部署；验收和剩余限制见[execution.md](execution.md)。业务设计见[plan-design.md](plan-design.md)。
+
+## 输入与规则
+
+QQ HTTP入口先验证原始body HMAC，再对正常heartbeat/notice/request无操作应答。QQProtocol把message/message_sent规范成同一Observation，保留sender、消息类型、peer/self/reply/@元信息；self私聊必须有可靠对端。媒体不下载、不作视觉理解。
+
+WorkflowRules先让订阅来源的已有Channel按规则判断；多个已有Channel可以接受同一Observation，不做独占消费。只要一个Channel接受，就在decide事务中把Observation.detail.discovery记录为existing，先于通知和Agent执行；该记录不随pending清理、业务提交或取消订阅消失。只有所有已有订阅Channel都明确拒绝后，才执行新建Channel判定；未读、defer、error或未判定的paused不算拒绝。入站、后台扫描和恢复直接调用discover均遵守这个顺序；创建与fallback认领在事务中再次核验游标及pending，防止迟到结果越过已有接受。订阅来源本身不表示接受，真正的新话题仍可新建。
+
+默认规则criterion定义“需要Agent回应/处理的一件事”，短聊天不再固定ignore。宿主注入可信conversation与最多8条当前事件截止历史，模型不决定技术来源身份。规则仍在隔离执行环境内，只读能力调用次数和墙钟限制不变。
+
+semantic model_provider将criterion/context/candidates编码为一次Choice，读取原生confidence，低于0.7返回defer。固定handler对低confidence或合法review_required=true认领一次perception深判；同revision持久预算、并发fence、错误/取消收尾沿用既有fallback。一般LLM仍无工具。
+
+创建Channel使用有效默认后续规则而非恒False bootstrap；首条只seed一次，active commit省略rule_source保留原规则，第二条相关内容仍经规则判断，existing不直接绕过规则强制wake。
+
+后台发现按Observation的持久position进行有界分页，每次扫描推进批次游标，末尾回到起点。等待已有Channel判定的事件保持未决，不反复独占最早20条批次；其他来源的新事件仍可恢复，早先到期的重试会在下一轮遍历再次被扫描。游标仅为进程内扫描位置，重启从头恢复；接受记录和fallback预算仍以数据库为准。
+
+## 业务进展与Session交付
+
+Channel业务表示维持goal/progress、规则、订阅和active/paused/completed，不新增JSON state或Argus业务列。session_key放既有runtime，在每个round冻结；确认提交next_session=new只改变下一轮选择键，progress/规则/确认及固定回执同事务应用。
+
+Bridge通过Gateway显式转发channel_id/session_key，Agent拥有真实Session和一对多关联，Argus不派生Session ID。旧无key在途轮明确待对账。任务终态没有确定commit且不可证明replay_safe时，round保留execution_outcome_unknown，不自动派发新Task。
+
+正式Agent继承普通Session能力，自行通过SnowLuma MCP回复后argus_commit；Argus没有平台发送客户端，不转发普通assistant文本。
+
+## 验证边界
+
+本地真实PG/TCP/正常Agent与假模型验证创建、确认和第二条相关消息复用同Channel/Session；Gateway实际stdio假MCP验证一次发送后一次提交。关联删除/重启和跨Session选择由Agent真实SQLite测试覆盖。真实QQ、付费语义质量与生产部署留给用户验收；self回声没有可信发送关联账本，不能声称确定性防循环。
