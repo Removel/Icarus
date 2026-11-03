@@ -34,18 +34,45 @@ Other configuration:
 - `ARGUS_QQ_REPORT_SECRET`, `ARGUS_FEISHU_VERIFICATION_TOKEN`: platform ingress verification.
 - `ARGUS_FEISHU_ENCRYPT_KEY`: optional signature validation; encrypted envelopes are explicitly rejected.
 - `ARGUS_JEV_API_KEY`, `ARGUS_JEV_BASE_URL`, `ARGUS_JEV_MODEL`: genuine typed semantic backend.
-  The default route/model match the repository's Persona JEV configuration:
-  `https://openrouter.ai/api` and `typesafe/jev-1.13`; explicit Argus overrides take precedence.
+  The default base/model are `https://openrouter.ai/api` and `~typesafe/jev-latest`;
+  OpenRouter requests use `/api/alpha/decisions`. The leading `~` is required.
+  Explicit Argus overrides take precedence; self-hosted native JEV uses `/v1/systemone`.
   Missing key means semantic unavailable, including default semantic discovery. The key must
   be accepted by the selected route; key presence is not proof of working authentication.
 - `ARGUS_SAFETY_REVIEW_ENABLED` (default false), `ARGUS_SAFETY_REVIEW_BUDGET` (default16):
   optional fail-closed typed LLM review before publishing candidate commit rules; static lint never invokes it.
 - `ARGUS_DISCOVERY_ENABLED`, `ARGUS_DISCOVERY_RULE_PATH`: ongoing discovery and optional replacement script.
+- `ARGUS_DISCOVERY_FALLBACK_ENABLED` (default false): enable a single tool-free LLM decision
+  after a valid low-confidence semantic discovery result, not after transport/authentication errors.
+- `ARGUS_DISCOVERY_FALLBACK_MODEL`: an existing **named model key** in Agent settings, not a wire model ID.
+  `ARGUS_DISCOVERY_FALLBACK_SETTINGS_PATH` optionally selects that settings JSON; otherwise the
+  existing `ICARUS_SETTINGS_PATH` / default settings lookup applies. Credentials and base URLs
+  come from the existing general-model configuration, not from `ARGUS_JEV_API_KEY`.
 - Existing Mem0/relationship/OpenKB endpoint/token configuration provides read-only evidence.
   Memory also requires `ARGUS_MEMORY_USER_ID`, `ARGUS_MEMORY_AGENT_ID`, `ARGUS_MEMORY_WORKSPACE_KEY`;
   knowledge requires `ARGUS_KNOWLEDGE_BASE`. Scripts cannot override trusted scopes.
 
 Keep all credentials in ignored environment configuration, never rule source or prompts.
+
+## Discovery confidence and fallback
+
+Discovery uses one JEV `Choice` question and its native `confidence`, with a `0.7` gate.
+The selected option's probability is a different field; no independent Noul question is
+interpreted as route confidence. Ordinary semantic match keeps its `0.5` threshold.
+
+Only a host-observed low-confidence semantic defer may invoke the fallback. Plain rule defer,
+candidate overflow, invalid output and service errors do not. The fallback returns only
+`DiscoveryDecision` (`new`/`existing`/`ignore`/`defer`), has no tools, and cannot create a Channel
+or choose an identity outside the trusted candidates. Its SDK retries are zero, output cap
+2048 tokens and call timeout20s; it runs outside rule execution and database/discovery locks.
+
+The existing Observation stores a durable claim and result under `detail.discovery.fallback`.
+A revision gets at most one upstream fallback attempt, including after restarts. A saved result
+can be replayed through normal transactional checks; a claimed request with unknown outcome
+is not automatically resent. The claim expires after25s and becomes unknown if unresolved.
+This intentionally trades automatic recovery for a strict attempt budget after crashes.
+Message revision and candidate versions are rechecked before applying an answer. Fallback
+failure or ambiguity is not a successful classification and never silently becomes ignore.
 
 ## Decision files
 
@@ -138,6 +165,25 @@ apps/argus/.venv/bin/python -m apps.argus.test.manual_jev_semantic --authorize-r
 apps/argus/.venv/bin/python -m apps.argus.test.manual_real_model --authorize-real-model --output /tmp/new-private-run
 ```
 
+The discovery-only smoke needs no DB and can optionally exercise a configured fallback:
+
+```bash
+# perception must be an existing named model key in the selected Agent settings.
+apps/argus/.venv/bin/python -m apps.argus.test.manual_real_scenarios \
+  --authorize-real-model --mode discovery --discovery-initial-only \
+  --fallback-model perception --max-semantic-requests 6 --max-fallback-requests 6 \
+  --output /tmp/new-private-discovery-run
+```
+
+It keeps the six initial requests unchanged and records selected_route/native_confidence,
+primary/final decisions and separate fallback attempts. The broader discovery matrix also
+covers existing candidates, a different topic from the same source, quotes, negation,
+chatter and ambiguity. Reports explicitly mark durable workflow/full pipeline as not executed;
+classification success is not proof of Channel creation or business completion. If no fallback
+is triggered, `fallback_exercised` stays false. Authentication/permission errors stop the run.
+Proxy variables can be inherited; use NO_PROXY for a general-model host only when that host
+requires direct access. Do not silently retry with different credentials or routing.
+
 The full smoke requires a disposable test DB URL and real configured JEV. It no longer
 substitutes DeepSeek for semantic. For a larger multi-scenario trial, use:
 
@@ -161,8 +207,11 @@ Authentication/permission errors stop immediately; an unsettled business round s
 before starting another paid task. Reports distinguish actual model/semantic responses
 from persisted business completion. Output is private (directory0700/files0600), excludes
 credentials and raw error bodies. A failed scenario is never converted to a pass by
-retrying it invisibly. Current real preflight on OpenRouter through7890 returned
-PermissionDeniedError; the 24-case matrix and six paid business scenarios have not passed.
+retrying it invisibly. An earlier OpenRouter preflight through7890 returned
+PermissionDeniedError and did not reach its matrix or business scenarios. Subsequent
+classification evidence and the current discovery-fallback permission blocker are recorded
+separately in [the discovery execution record](docs/spec/2026-11-02-decision-script-atomic-commit/plan-discovery-fallback-execution.md);
+none of these classification tests proves the six full business scenarios passed.
 
 The older smoke entry retains defaults agent120 total/50 per scenario and semantic64;
 both have scenario600s, output3072 tokens/request and explicit budgets. Usage counts are

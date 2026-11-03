@@ -1,6 +1,6 @@
 # Explicit LLM Request Retry Control Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 为现有公共 LLM factory 和适配器增加向后兼容的可选重试参数，使 Argus 单次发现兜底能够显式关闭 SDK 自动重试。
 
@@ -10,7 +10,7 @@
 
 **Spec:** 本文件“范围与接口”以及 [Argus 已确认的单次兜底设计](../../../../argus/docs/spec/2026-11-02-decision-script-atomic-commit/plan-discovery-fallback.md#已确认设计与新证据)。两部分可独立实施，因此按应用所有权拆分计划，不创建重复实现细节的根 spec。
 
-**Status:** 待审阅；本轮只写计划，不修改公共 API 实现。
+**Status:** 可选重试参数与回归测试已实现；provider 聚焦51项、Agent整套1320项通过，typecheck280源文件无错误。同步/异步本地HTTP错误请求计数证明零重试；最终独立审阅并入[Argus实施记录](../../../../argus/docs/spec/2026-11-02-decision-script-atomic-commit/plan-discovery-fallback-execution.md)。
 
 ## Global Constraints
 
@@ -58,9 +58,9 @@
 - Produces: `LLMFactory(config).create_llm(role=existing_model_name, max_retries=0)` 返回一份无隐式重试的现有 BaseLLM；Argus 可以只调用一次 `ainvoke`，且无需触碰私有成员。
 - 不承诺服务端不重复执行请求，只保证当前 SDK 不自动补发；消息级 at-most-once 由 Argus 认领协议保证。
 
-- [ ] **Step 1: 写失败测试。** factory 两种协议分别覆盖 None、0、正整数，断言参数选择/传递正确；两个适配器分别覆盖 SDK 的 sync/async 构造参数。负数/True/字符串/小数输入均失败，构造无效参数时不得发请求或遗留半初始化客户端。
-- [ ] **Step 2: 运行并确认失败。** Run `apps/agent/.venv/bin/python -m pytest apps/agent/test/agent_app/model_provider/test_factory.py apps/agent/test/agent_app/model_provider/impl/test_openai_llm.py apps/agent/test/agent_app/model_provider/impl/test_anthropic_llm.py -q`；新参数缺失导致失败，而非依赖/凭据问题。
-- [ ] **Step 3: 最小实现。** 扩展三个现有签名，验证可选非负整数，仅将非 None 的参数加入 SDK 构造。保持 invoke/ainvoke/stream/astream 的调用和转换实现不变；不新增 ConfigModel 字段或通用重试策略类。
-- [ ] **Step 4: 验证实际上游请求数。** 用本地 HTTP fixture 返回 500 或 429，分别让 zero-retry OpenAI/Anthropic adapter 执行 invoke/ainvoke，断言服务端每次只收到一个请求、方法正常抛出对应错误。无真实凭据、无付费调用；最后关闭同步和异步客户端。
-- [ ] **Step 5: 聚焦与全应用验证。** 先运行受影响 provider 文件，再 `make test-agent`，再 `make typecheck-agent`、`apps/agent/.venv/bin/python -m compileall -q apps/agent/src/agent_app/model_provider` 与 `git diff --check`。如发现不相关基线失败，按测试身份报告，不扩展修复范围。
-- [ ] **Step 6: 交付依赖。** 保持这些更改及测试属于 Agent 应用；由 Argus 计划 Task 2 消费新参数。无授权不执行任何 git add/commit/push，也不把仓库其他模型改为 zero-retry。
+- [x] **Step 1: 写失败测试。** factory 两种协议分别覆盖 None、0、正整数，断言参数选择/传递正确；两个适配器分别覆盖 SDK 的 sync/async 构造参数。负数/True/字符串/小数输入均失败，构造无效参数时不得发请求或遗留半初始化客户端。
+- [x] **Step 2: 运行并确认失败。** Run `apps/agent/.venv/bin/python -m pytest apps/agent/test/agent_app/model_provider/test_factory.py apps/agent/test/agent_app/model_provider/impl/test_openai_llm.py apps/agent/test/agent_app/model_provider/impl/test_anthropic_llm.py -q`；新参数缺失导致失败，而非依赖/凭据问题。
+- [x] **Step 3: 最小实现。** 扩展三个现有签名，验证可选非负整数，仅将非 None 的参数加入 SDK 构造。保持 invoke/ainvoke/stream/astream 的调用和转换实现不变；不新增 ConfigModel 字段或通用重试策略类。
+- [x] **Step 4: 验证实际上游请求数。** 用本地 HTTP fixture 返回 500 或 429，分别让 zero-retry OpenAI/Anthropic adapter 执行 invoke/ainvoke，断言服务端每次只收到一个请求、方法正常抛出对应错误。无真实凭据、无付费调用；最后关闭同步和异步客户端。
+- [x] **Step 5: 聚焦与全应用验证。** 先运行受影响 provider 文件，再 `make test-agent`，再 `make typecheck-agent`、`apps/agent/.venv/bin/python -m compileall -q apps/agent/src/agent_app/model_provider` 与 `git diff --check`。如发现不相关基线失败，按测试身份报告，不扩展修复范围。
+- [x] **Step 6: 交付依赖。** 保持这些更改及测试属于 Agent 应用；由 Argus 计划 Task 2 消费新参数。无授权不执行任何 git add/commit/push，也不把仓库其他模型改为 zero-retry。

@@ -173,7 +173,11 @@ Channel/binding/wake/task由当前执行上下文获取；真实observation_id�
 
 发现上下文提供当前来源最近历史和至多20个active/paused候选Channel摘要（每条<=4096字节），不含runtime/凭据；source边界固定。候选超过20则明确defer/backpressure，不静默裁剪后判定“不存在”。轻量发现可机械短路，含糊新事项用semantic；不为每条消息启动深度Agent。服务不可用、分类错误有5/30秒退避、最多3次，保持error/deferred而非ignore。
 
-现有semantic的match布尔值不足以表达候选选择，明确增加受控`mode="discovery"`：输入text/context和宿主注入的候选ID/摘要；后端在**一次typed JEV请求**中使用Choice选择ignore/new/某候选ID，并用Noul给出分类置信度。score<0.7返回defer，不靠默认new兜底。返回仍保留match/score/reason，另含`discovery:{action, channel_id?}`；match仅在new/existing时为true。普通mode省略时保持原match契约。默认发现main将discovery对象转换为DiscoveryDecision；错误不能解释为ignore。候选集合由broker覆盖为可信上下文，规则不能自造候选。此扩展计为原先的1次semantic，不增加调用预算；模型差异全部在model_provider处理。
+现有semantic的match布尔值不足以表达候选选择，受控`mode="discovery"`输入text/context和宿主注入的候选ID/摘要。**2026-11-02后续修订：** 后端在一次typed JEV请求中只使用Choice选择ignore/new/某候选ID，`score`直接取该Choice答案原生`confidence`，不再额外问一个指代不明的Noul，也不把所选项probability当作同一字段。score<0.7返回defer并附宿主可识别的顶层`defer_reason=low_confidence`；普通mode省略时保持原match契约与0.5门槛。返回继续保留match/score/reason，另含`discovery:{action, channel_id?}`及用于诊断的`selected_route`；match仅在new/existing时为true。默认发现main将discovery转换为DiscoveryDecision；候选集合由broker覆盖为可信上下文，规则不能自造候选。此扩展仍计为原先的一次semantic能力调用，模型差异全部在model_provider。
+
+可显式启用一次无工具LLM兜底：只在固定handler观察到合法semantic低置信度标记且最终decision为defer时认领；不为候选超限、规则自行defer、服务/鉴权错误调用LLM。一般模型通过已有BaseLLM.ainvoke一次返回DiscoveryDecision，不启动AgentRuntime、不返回自报置信度作为新门槛、不执行工具。模型等待20秒、输出上限2048 tokens、SDK自动重试0；独立于规则的墙钟和能力预算，并在数据库事务及discovery全局锁之外等待。
+
+同一Observation修订的意图、候选版本及完成缓存放在现有detail.discovery.fallback，事务认领一次后提交再发请求。started/completed/failed/unknown与外层fallback_pending用于恢复；25秒内未获确定结果则unknown，崩溃或超时结果不明不自动补发，已缓存结果可经原有事务路径重放。它保证应用级最多一次尝试，不宣称外部服务exactly-once。提交重验latest修订、来源/候选身份及版本；上下文变化废弃旧答案但不返还该修订的LLM调用预算。原有5/30秒、最多3次发现重评仍可进行，但不会重复调用已消费预算的兜底。实现和验收详见[后续计划](plan-discovery-fallback.md)。
 
 new事务在现有订阅协调锁内重新核对事件最新修订/已发现结果，并仅检查**active/paused**的当前来源相同topic_key：已存在则复用，事件UUID幂等身份沿用；不同topic_key允许同一来源新建Channel。key保存在有界Channel runtime发现元信息，不扩表。分类后候选集合/版本发生变化则defer并重新分类，不能以“任意订阅出现”取消真正的新事项。
 

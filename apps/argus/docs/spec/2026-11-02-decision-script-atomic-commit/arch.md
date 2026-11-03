@@ -35,12 +35,16 @@ Agent-owned WakeRequest包含严格ChannelSnapshot和有界SDK metadata；id/ver
 
 ## 5. 持续发现
 
-已有订阅规则处理与发现独立，不以来源owned跳过。发现使用独立DiscoveryDecision(ignore/existing/new/defer)；默认脚本经semantic discovery模式一次typed Choice＋Noul选择可信候选/new/ignore，置信度<0.7 defer；普通semantic match行为不变。
+已有订阅规则处理与发现独立，不以来源owned跳过。发现使用独立DiscoveryDecision(ignore/existing/new/defer)；默认脚本经semantic discovery模式一次typed Choice选择可信候选/new/ignore，score取Choice原生confidence，<0.7时defer；不再另问独立Noul，普通semantic match行为不变。诊断记录selected_route与原生confidence，不把选项probability混同于confidence。
+
+显式配置的discovery_fallback是普通组件，不是子Plugin。固定handler观察到低置信度标记后，在现有Observation detail.discovery.fallback中事务认领token；退出规则执行与discovery锁后，经公共BaseLLM.ainvoke无工具调用一次。请求20秒、2048 tokens，公共factory可选max_retries=0对sync/async SDK客户端一致生效，旧调用者未配置时保持原行为。
+
+兜底外层fallback_pending、内部started/completed/failed/unknown由数据库恢复；25秒未定请求保守标unknown，不补发。已完成缓存经原record_discovery复核修订/候选版本、准备初始规则制品并提交；任何结果更新保留兜底预算记录。LLM错误不变ignore，取消先shield持久收尾再传播；Application以AsyncExitStack关闭拥有的客户端，也覆盖部分启动失败。注入的外部兜底对象不归App关闭。
 
 候选仅active/paused、同授权来源、最多20项，超限明确defer；context版本在短事务中复核。新事项topic_key为规范化文本hash，仅在活动事项中去重；completed不自动重开。旧事件修订终态不再发现，错误有有界退避，不变ignore。existing归属不绕过正常规则或唤醒paused。不同语义表述的去重仍需模型质量评估。
 
 ## 6. 验证边界
 
-已有真实PG/TCP/正常Agent/隔离脚本的确定性闭环，以及静态不执行、OS文件/网络/环境/进程权限、原子回滚和回执恢复测试。付费脚本已改为真实配置typed JEV并独立预算；本轮单次预检仍AuthenticationError后停止，没有语义质量/自然场景付费闭环通过声明。最终套件计数和审阅结果另记[实施记录](plan-execution.md)，不把中间运行值写成最终结论。
+已有真实PG/TCP/正常Agent/隔离脚本的确定性闭环，以及静态不执行、OS文件/网络/环境/进程权限、原子回滚和回执恢复测试。历史原型的真实模型结果见[既有记录](plan-execution.md)；本轮发现兜底的新鲜离线验证为Argus251、Agent1320、Gateway52通过。真实discovery首轮权限拒绝后停；用户再次授权重试后原始六条JEV发现6/6通过，独立LLM分类1/1通过，但未自然触发自动兜底，未验证完整业务闭环。详见[本轮记录](plan-discovery-fallback-execution.md)。
 
 未部署、未创建生产角色、未推送；不支持多副本调度、自动GC、任意平台写入或加密飞书体。
