@@ -8,7 +8,7 @@ from icarus.core.plugin import BasePlugin, handles
 from argus_app.contracts.events import ObservationRecorded, RulePassed
 from argus_app.contracts.capabilities import RuleControl, RuleControlRequest, RULE_FUNCTIONS
 from argus_app.contracts.models import Observation, Decision, DiscoveryDecision, DomainError
-from argus_app.plugins.workflow_rules.discovery import load_discovery_rule, INITIAL_CHANNEL_RULE
+from argus_app.plugins.workflow_rules.discovery import load_discovery_rule, INITIAL_CHANNEL_RULE, candidate_summaries
 from argus_app.plugins.rule_capabilities.responses import ok, failure
 from argus_app.rule_sdk.engine import RuleError
 
@@ -16,9 +16,11 @@ from argus_app.rule_sdk.engine import RuleError
 class WorkflowRules(BasePlugin):
     provided_capabilities = (RuleControl,)
 
-    def __init__(self, plugin_id, store, engine, rule_files, *, discovery_enabled=False, discovery_rule_path=None):
+    def __init__(self, plugin_id, store, engine, rule_files, *, discovery_enabled=False,
+                 discovery_rule_path=None, discovery_fallback=None):
         super().__init__(plugin_id)
         self.store, self.engine, self.rule_files = store, engine, rule_files
+        self.discovery_fallback = discovery_fallback
         self.discovery_enabled = discovery_enabled
         self.discovery_source = load_discovery_rule(discovery_rule_path)
         self._discovery_lock = asyncio.Lock()
@@ -34,10 +36,14 @@ class WorkflowRules(BasePlugin):
             await self.discover(await self.store.observation(event.observation_id))
 
     async def discover(self, event):
+        pending = None
         async with self._discovery_lock:
             current = await self.store.observation(event.id)
             state = current.detail.get('discovery', {})
-            if state.get('status') in {'created', 'ignored', 'exhausted'}:
+            if state.get('status') in {'created', 'existing', 'ignored', 'exhausted'}:
+                return
+            if state.get('status') == 'fallback_pending':
+                await self._resume_discovery_fallback(current, state)
                 return
             if state.get('next_retry_at', '') > datetime.now(UTC).isoformat():
                 return
@@ -46,12 +52,13 @@ class WorkflowRules(BasePlugin):
             if len(owners) > 20:
                 await self.store.record_discovery(current.id, {'action': 'defer', 'reason': 'candidate_capacity'})
                 return
-            candidates = [{'id': ch.id, 'title': ch.title[:120], 'goal': ch.goal[:1000],
-                           'progress': ch.progress[:1000], 'lifecycle': ch.lifecycle} for ch in owners]
+            candidates = candidate_summaries(owners)
             versions = {ch.id: ch.version for ch in owners}
             context = {'mode': 'discovery', 'source_key': current.source_key, 'candidates': candidates,
                        'subscriptions': {current.source_key: None}, 'progress': ''}
+            low_confidence = False
             async def call(name, args):
+                nonlocal low_confidence
                 request_type = RULE_FUNCTIONS.get(name)
                 if request_type is None:
                     raise RuleError('capability_forbidden')
@@ -65,20 +72,81 @@ class WorkflowRules(BasePlugin):
                     safe_args.update(source_keys=[current.source_key], discovery_observation_id=current.id,
                                      source_bounds={current.source_key: current.id})
                 response = await self.request(request_type(channel_id='', args=safe_args, timeout_seconds=5))
-                return response.unwrap().data
+                data = response.unwrap().data
+                if name == 'semantic' and safe_args.get('mode') == 'discovery':
+                    low_confidence = data.get('defer_reason') == 'low_confidence' and data.get('discovery', {}).get('action') == 'defer'
+                return data
             try:
                 value = await self.engine.run(self.discovery_source, current.model_dump(mode='json'), context, call)
                 decision = DiscoveryDecision.model_validate(value).model_dump(exclude_none=True)
-                artifact = {}
-                if decision['action'] == 'new':
-                    identity = self.store.discovered_channel_id(current)
-                    artifact = self.rule_files.publish(INITIAL_CHANNEL_RULE, identity)
-                channel_id = await self.store.record_discovery(current.id, decision, candidate_versions=versions, **artifact)
+                if decision['action'] == 'defer' and low_confidence and self.discovery_fallback is not None:
+                    token = await self.store.claim_discovery_fallback(current.id, versions)
+                    if token:
+                        pending = (current, candidates, token)
+                    else:
+                        latest = await self.store.observation(current.id)
+                        latest_state = latest.detail.get('discovery', {})
+                        if latest_state.get('status') == 'fallback_pending':
+                            await self._resume_discovery_fallback(latest, latest_state)
+                            return
+                        if latest_state.get('status') in {'created', 'existing', 'ignored', 'exhausted'}:
+                            return
+                if pending is None:
+                    await self._record_discovery(current, decision, versions)
             except Exception as exc:
-                await self.store.record_discovery(current.id, {'error': f"{getattr(exc, 'code', 'discovery_failed')}: {exc}"[:512]})
+                await self.store.record_discovery(current.id, {'error': getattr(exc, 'code', 'discovery_failed')})
                 return
-            if channel_id:
-                await self.publish(RulePassed(channel_id=channel_id))
+        # The durable claim has committed; no transaction or global discovery lock
+        # is held while waiting for a general model. RuleEngine limits stay unchanged.
+        if pending is not None:
+            await self._run_discovery_fallback(*pending)
+
+    async def _record_discovery(self, current, decision, versions=None, fallback_token=None):
+        artifact = {}
+        if decision['action'] == 'new':
+            identity = self.store.discovered_channel_id(current)
+            artifact = self.rule_files.publish(INITIAL_CHANNEL_RULE, identity)
+        channel_id = await self.store.record_discovery(current.id, decision,
+            candidate_versions=versions, fallback_token=fallback_token, **artifact)
+        if channel_id:
+            await self.publish(RulePassed(channel_id=channel_id))
+
+    async def _resume_discovery_fallback(self, current, state):
+        fallback = state['fallback']
+        if fallback['status'] == 'started':
+            if fallback['deadline_at'] > datetime.now(UTC).isoformat():
+                return
+            await self.store.finish_discovery_fallback(current.id, fallback['token'], error_code='outcome_unknown')
+            fallback = (await self.store.observation(current.id)).detail['discovery']['fallback']
+        if fallback['status'] == 'completed':
+            await self._record_discovery(current, fallback['decision'], fallback['candidate_versions'], fallback['token'])
+        else:
+            await self.store.record_discovery(current.id, {'error': fallback.get('error_code', 'unavailable')})
+
+    async def _run_discovery_fallback(self, current, candidates, token):
+        try:
+            async with asyncio.timeout(20):
+                result = await self.discovery_fallback(current.content.get('text', ''), candidates)
+            decision = DiscoveryDecision.model_validate(result).model_dump(exclude_none=True)
+            if (not decision['reason'].strip() or len(decision['reason']) > 512
+                    or (decision['action'] == 'existing' and decision['channel_id'] not in {x['id'] for x in candidates})):
+                raise DomainError('invalid_output')
+        except asyncio.CancelledError:
+            async def persist_cancelled():
+                await self.store.finish_discovery_fallback(current.id, token, error_code='cancelled')
+                await self.store.record_discovery(current.id, {'error': 'cancelled'})
+            await asyncio.shield(persist_cancelled())
+            raise
+        except Exception as exc:
+            code = 'timeout' if isinstance(exc, TimeoutError) else getattr(exc, 'code', 'unavailable')
+            if code not in {'timeout', 'invalid_output', 'unavailable'}:
+                code = 'invalid_output' if isinstance(exc, ValueError) else 'unavailable'
+            await self.store.finish_discovery_fallback(current.id, token, error_code=code)
+            await self.store.record_discovery(current.id, {'error': code})
+            return
+        await self.store.finish_discovery_fallback(current.id, token, decision=decision)
+        latest = await self.store.observation(current.id)
+        await self._resume_discovery_fallback(latest, latest.detail['discovery'])
 
     async def scan_once(self):
         # No private event bus: DB replay is the recovery path for missed notices.

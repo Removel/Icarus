@@ -24,7 +24,7 @@ def test_budget_blocks_before_next_upstream_attempt():
     value.consume('semantic')
     with pytest.raises(ValueError, match='semantic'):
         value.consume('semantic')
-    assert value.counts == {'agent': 3, 'semantic': 1, 'safety': 0}
+    assert value.counts == {'agent': 3, 'semantic': 1, 'safety': 0, 'fallback': 0}
 
 
 def test_auth_failure_stops_without_paid_retry_loop():
@@ -34,4 +34,13 @@ def test_auth_failure_stops_without_paid_retry_loop():
     for kind in ('agent', 'semantic', 'safety'):
         with pytest.raises(ValueError, match='authentication_failed'):
             value.consume(kind)
-    assert value.counts == {'agent': 0, 'semantic': 1, 'safety': 0}
+    assert value.counts == {'agent': 0, 'semantic': 1, 'safety': 0, 'fallback': 0}
+
+
+def test_fallback_budget_is_independent_and_checked_before_request():
+    value = budget(fallback=1)
+    value.consume('fallback')
+    with pytest.raises(ValueError, match='fallback request budget exhausted'):
+        value.consume('fallback')
+    assert value.counts['fallback'] == 1
+    assert value.counts['agent'] == value.counts['semantic'] == value.counts['safety'] == 0

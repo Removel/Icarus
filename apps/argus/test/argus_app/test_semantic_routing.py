@@ -19,9 +19,9 @@ async def test_provider_uses_correct_endpoint_with_latest_model(base, expected_p
         assert request.url.path == expected_path
         assert request.headers['Authorization'] == 'Bearer synthetic-test-key'
         body = json.loads(request.content)
-        assert body['model'] == 'typesafe/jev-latest'
+        assert body['model'] == '~typesafe/jev-latest'
         assert body['questions']['match'] == {'type': 'noul', 'instructions': 'approved?'}
-        return httpx2.Response(200, json={'id': 'test-decision', 'model': 'typesafe/jev-latest',
+        return httpx2.Response(200, json={'id': 'test-decision', 'model': '~typesafe/jev-latest',
             'usage': {'input_tokens': 30, 'output_tokens': 1, 'cost': .00001},
             'answers': {'match': {'type': 'noul', 'noul': .95}}})
     try:

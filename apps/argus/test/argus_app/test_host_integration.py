@@ -71,3 +71,75 @@ async def test_real_host_grouped_plugins_two_tables_and_confirmation_gate(tmp_pa
             assert committed['committed'] is True
             assert (await store.channel(channel_id)).progress == 'done'
             assert (await store.channel(channel_id)).runtime['round'] is None
+
+
+@pytest.mark.asyncio
+async def test_configured_fallback_is_injected_and_closed_on_shutdown(tmp_path, database_url, monkeypatch):
+    from argus_app.contracts.models import DiscoveryDecision
+    class Owner:
+        closed = 0
+        async def aclose(self):
+            self.closed += 1
+    owner = Owner()
+    async def fallback(text, candidates):
+        return DiscoveryDecision(action='defer', reason='unused')
+    builds = []
+    def build(model_name, settings_path=None):
+        builds.append((model_name, settings_path))
+        return fallback, owner
+    monkeypatch.setattr('argus_app.model_provider.discovery_fallback.configured_discovery_fallback', build)
+    config = ArgusConfig(database_url=SecretStr(database_url), data_dir=tmp_path,
+        agent_token=SecretStr('agent-test'), gateway_token=SecretStr('gateway-test'), auto_scan=False,
+        discovery_fallback_enabled=True, discovery_fallback_model='perception')
+    app = create_app(config)
+    async with app.router.lifespan_context(app):
+        assert app.state.host.get_plugin('workflow-rules').discovery_fallback is fallback
+        assert owner.closed == 0
+    assert owner.closed == 1
+    assert builds == [('perception', None)]
+
+
+@pytest.mark.asyncio
+async def test_injected_fallback_is_not_owned_and_disabled_fallback_is_not_built(tmp_path, database_url, monkeypatch):
+    class Fallback:
+        closed = 0
+        async def __call__(self, text, candidates):
+            raise AssertionError('not invoked during startup')
+        async def aclose(self):
+            self.closed += 1
+    fallback = Fallback()
+    def unexpected_build(*args, **kwargs):
+        raise AssertionError('must not build an injected or disabled backend')
+    monkeypatch.setattr('argus_app.model_provider.discovery_fallback.configured_discovery_fallback', unexpected_build)
+    for enabled in (True, False):
+        config = ArgusConfig(database_url=SecretStr(database_url), data_dir=tmp_path,
+            agent_token=SecretStr('agent-test'), gateway_token=SecretStr('gateway-test'), auto_scan=False,
+            discovery_fallback_enabled=enabled, discovery_fallback_model='perception')
+        app = create_app(config, discovery_fallback=fallback)
+        async with app.router.lifespan_context(app):
+            actual = app.state.host.get_plugin('workflow-rules').discovery_fallback
+            assert actual is (fallback if enabled else None)
+    assert fallback.closed == 0
+
+
+@pytest.mark.asyncio
+async def test_fallback_owner_is_closed_if_host_startup_fails(tmp_path, database_url, monkeypatch):
+    class Owner:
+        closed = 0
+        async def aclose(self):
+            self.closed += 1
+    owner = Owner()
+    monkeypatch.setattr('argus_app.model_provider.discovery_fallback.configured_discovery_fallback',
+        lambda *args: (object(), owner))
+    async def fail_start(self):
+        raise RuntimeError('synthetic startup failure')
+    monkeypatch.setattr('argus_app.application.PluginRuntimeHost.start', fail_start)
+    config = ArgusConfig(database_url=SecretStr(database_url), data_dir=tmp_path,
+        agent_token=SecretStr('agent-test'), gateway_token=SecretStr('gateway-test'), auto_scan=False,
+        discovery_fallback_enabled=True, discovery_fallback_model='perception')
+    app = create_app(config)
+    with pytest.raises(RuntimeError, match='synthetic startup failure'):
+        async with app.router.lifespan_context(app):
+            pass
+    assert owner.closed == 1
+    assert app.state.ready is False

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 import hashlib
 import hmac
 import json
@@ -58,107 +58,105 @@ async def recovery_scan_once(host, store) -> list[str]:
 
 
 def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
-               bridge_client=None, evidence_backends: dict | None = None) -> FastAPI:
+               bridge_client=None, evidence_backends: dict | None = None,
+               discovery_fallback=None) -> FastAPI:
     config = config or ArgusConfig.from_environment()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        from argus_app.infrastructure.store import Store
-        from argus_app.rule_sdk import RuleFiles, RuleEngine
-        from argus_app.plugins.icarus_bridge.client import BridgeClient
-        current_store = store or Store(config.database_url.get_secret_value())
-        client = httpx.AsyncClient(base_url=config.gateway_url,
-                                   headers={"Authorization": f"Bearer {config.gateway_token.get_secret_value()}"},
-                                   timeout=10)
-        files = RuleFiles(config.data_dir / "rules")
-        engine = RuleEngine(timeout=config.rule_timeout)
-        current_bridge = bridge_client or BridgeClient(client)
-        plugin_ids = ("qq-protocol", "feishu-protocol", "agent-protocol", "workflow-rules",
-                      "icarus-bridge", "observation-query", "mechanical-rules", "semantic-judgement",
-                      "memory-evidence", "relationship-evidence", "knowledge-evidence")
-        configs = {name: {"store": current_store} for name in plugin_ids}
-        configs["workflow-rules"].update(engine=engine, rule_files=files,
-                                         discovery_enabled=config.discovery_enabled,
-                                         discovery_rule_path=config.discovery_rule_path)
-        configs["agent-protocol"].update(rule_files=files)
-        configured_clients = []
-        semantic_owner = None
-        current_semantic = semantic
-        if current_semantic is None and config.semantic_api_key.get_secret_value():
-            from argus_app.model_provider.semantic import configured_backend
-            current_semantic, semantic_owner = configured_backend(config.semantic_api_key.get_secret_value(),
-                config.semantic_base_url, config.semantic_model)
-        configs["semantic-judgement"].update(semantic=current_semantic)
-        safety_owner = None
-        if config.safety_review_enabled:
-            if not config.semantic_api_key.get_secret_value():
-                raise ValueError('Safety review enabled without configured JEV credentials')
-            from argus_app.model_provider.semantic import _TypedClient
-            from argus_app.model_provider.safety import RuleSafetyReview
-            safety_owner = _TypedClient(config.semantic_api_key.get_secret_value(), config.semantic_base_url, config.semantic_model)
-            configs['workflow-rules']['safety_review'] = RuleSafetyReview(safety_owner, budget=config.safety_review_budget)
-        from argus_app.rule_sdk.guide import rule_guide
-        guide = rule_guide(config)
-        guide['capabilities']['semantic']['configured'] = current_semantic is not None
-        configs["icarus-bridge"].update(bridge_client=current_bridge, argus_url=config.public_url,
-                                         rule_files=files, guide=guide)
-        endpoints = (("memory-evidence", config.memory_endpoint, config.memory_token),
-                     ("relationship-evidence", config.relationship_endpoint, config.relationship_token),
-                     ("knowledge-evidence", config.knowledge_endpoint, config.knowledge_token))
-        for name, endpoint, token in endpoints:
-            if endpoint:
-                headers = {"Authorization": f"Bearer {token.get_secret_value()}"} if token.get_secret_value() else {}
-                backend = httpx.AsyncClient(base_url=endpoint.rstrip("/"), headers=headers, timeout=5)
+        # Register ownership immediately, including resources created before host
+        # startup, so invalid configuration and partial startup also clean up.
+        async with AsyncExitStack() as resources:
+            from argus_app.infrastructure.store import Store
+            from argus_app.rule_sdk import RuleFiles, RuleEngine
+            from argus_app.plugins.icarus_bridge.client import BridgeClient
+            current_store = store or Store(config.database_url.get_secret_value())
+            resources.push_async_callback(current_store.close)
+            client = await resources.enter_async_context(httpx.AsyncClient(base_url=config.gateway_url,
+                headers={"Authorization": f"Bearer {config.gateway_token.get_secret_value()}"}, timeout=10))
+            files = RuleFiles(config.data_dir / "rules")
+            engine = RuleEngine(timeout=config.rule_timeout)
+            current_bridge = bridge_client or BridgeClient(client)
+            plugin_ids = ("qq-protocol", "feishu-protocol", "agent-protocol", "workflow-rules",
+                          "icarus-bridge", "observation-query", "mechanical-rules", "semantic-judgement",
+                          "memory-evidence", "relationship-evidence", "knowledge-evidence")
+            configs = {name: {"store": current_store} for name in plugin_ids}
+            configs["workflow-rules"].update(engine=engine, rule_files=files,
+                discovery_enabled=config.discovery_enabled, discovery_rule_path=config.discovery_rule_path)
+            configs["agent-protocol"].update(rule_files=files)
+            current_semantic = semantic
+            if current_semantic is None and config.semantic_api_key.get_secret_value():
+                from argus_app.model_provider.semantic import configured_backend
+                current_semantic, owner = configured_backend(config.semantic_api_key.get_secret_value(),
+                    config.semantic_base_url, config.semantic_model)
+                resources.push_async_callback(owner.aclose)
+            configs["semantic-judgement"].update(semantic=current_semantic)
+            if config.safety_review_enabled:
+                if not config.semantic_api_key.get_secret_value():
+                    raise ValueError('Safety review enabled without configured JEV credentials')
+                from argus_app.model_provider.semantic import _TypedClient
+                from argus_app.model_provider.safety import RuleSafetyReview
+                safety_owner = _TypedClient(config.semantic_api_key.get_secret_value(), config.semantic_base_url, config.semantic_model)
+                resources.push_async_callback(safety_owner.aclose)
+                configs['workflow-rules']['safety_review'] = RuleSafetyReview(safety_owner, budget=config.safety_review_budget)
+            if config.discovery_fallback_enabled:
+                current_fallback = discovery_fallback
+                if current_fallback is None:
+                    from argus_app.model_provider.discovery_fallback import configured_discovery_fallback
+                    current_fallback, fallback_owner = configured_discovery_fallback(
+                        config.discovery_fallback_model, config.discovery_fallback_settings_path)
+                    resources.push_async_callback(fallback_owner.aclose)
+                configs['workflow-rules']['discovery_fallback'] = current_fallback
+            from argus_app.rule_sdk.guide import rule_guide
+            guide = rule_guide(config)
+            guide['capabilities']['semantic']['configured'] = current_semantic is not None
+            configs["icarus-bridge"].update(bridge_client=current_bridge, argus_url=config.public_url,
+                rule_files=files, guide=guide)
+            endpoints = (("memory-evidence", config.memory_endpoint, config.memory_token),
+                         ("relationship-evidence", config.relationship_endpoint, config.relationship_token),
+                         ("knowledge-evidence", config.knowledge_endpoint, config.knowledge_token))
+            for name, endpoint, token in endpoints:
+                if endpoint:
+                    headers = {"Authorization": f"Bearer {token.get_secret_value()}"} if token.get_secret_value() else {}
+                    backend = await resources.enter_async_context(httpx.AsyncClient(
+                        base_url=endpoint.rstrip("/"), headers=headers, timeout=5))
+                    configs[name]["client"] = backend
+            configs["memory-evidence"].update(user_id=config.memory_user_id, agent_id=config.memory_agent_id,
+                workspace_key=config.memory_workspace_key)
+            configs["knowledge-evidence"]["kb"] = config.knowledge_base
+            for name, backend in (evidence_backends or {}).items():
+                if name not in configs:
+                    raise ValueError(f"Unknown evidence plugin: {name}")
                 configs[name]["client"] = backend
-                configured_clients.append(backend)
-        configs["memory-evidence"].update(user_id=config.memory_user_id, agent_id=config.memory_agent_id,
-                                           workspace_key=config.memory_workspace_key)
-        configs["knowledge-evidence"]["kb"] = config.knowledge_base
-        for name, backend in (evidence_backends or {}).items():
-            if name not in configs:
-                raise ValueError(f"Unknown evidence plugin: {name}")
-            configs[name]["client"] = backend
-        host = PluginRuntimeHost(config.data_dir, "argus-runtime", builtin_package="argus_app.plugins",
-                                 required_plugin_ids=frozenset(plugin_ids), plugin_configs=configs)
-        app.state.store, app.state.rule_files = current_store, files
-        app.state.host = host
-        app.state.rule_engine = engine
-        app.state.rule_guide = guide
-        task = None
-        try:
-            await current_store.start()
-            await host.start()
-            app.state.ready = True
-            if config.auto_scan:
-                async def scan():
-                    while app.state.ready:
-                        try:
-                            errors = await recovery_scan_once(host, current_store)
-                            app.state.scan_error = errors[-1] if errors else None
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as error:
-                            app.state.scan_error = type(error).__name__
-                            LOG.exception("Argus recovery scan failed")
-                        await asyncio.sleep(config.scan_interval)
-                task = asyncio.create_task(scan(), name="argus-recovery-scan")
-            yield
-        finally:
-            app.state.ready = False
-            if task:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+            host = PluginRuntimeHost(config.data_dir, "argus-runtime", builtin_package="argus_app.plugins",
+                required_plugin_ids=frozenset(plugin_ids), plugin_configs=configs)
+            resources.push_async_callback(host.stop)
+            app.state.store, app.state.rule_files = current_store, files
+            app.state.host, app.state.rule_engine, app.state.rule_guide = host, engine, guide
+            task = None
             try:
-                await host.stop()
+                await current_store.start()
+                await host.start()
+                app.state.ready = True
+                if config.auto_scan:
+                    async def scan():
+                        while app.state.ready:
+                            try:
+                                errors = await recovery_scan_once(host, current_store)
+                                app.state.scan_error = errors[-1] if errors else None
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as error:
+                                app.state.scan_error = type(error).__name__
+                                LOG.exception("Argus recovery scan failed")
+                            await asyncio.sleep(config.scan_interval)
+                    task = asyncio.create_task(scan(), name="argus-recovery-scan")
+                yield
             finally:
-                await client.aclose()
-                for configured_client in configured_clients:
-                    await configured_client.aclose()
-                if semantic_owner is not None:
-                    await semantic_owner.aclose()
-                if safety_owner is not None:
-                    await safety_owner.aclose()
-                await current_store.close()
+                app.state.ready = False
+                if task:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
 
     app = FastAPI(title="Argus", lifespan=lifespan)
     app.state.ready = False

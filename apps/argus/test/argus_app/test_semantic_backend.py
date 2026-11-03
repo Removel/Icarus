@@ -32,7 +32,7 @@ async def test_semantic_backend_rejects_nonfinite_or_out_of_range_result():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('base_url,model,expected_base,expected_model', [
-    (None, None, 'https://openrouter.ai/api', 'typesafe/jev-latest'),
+    (None, None, 'https://openrouter.ai/api', '~typesafe/jev-latest'),
     ('https://custom.example/api', 'custom-jev', 'https://custom.example/api', 'custom-jev'),
 ])
 async def test_configured_backend_routes_to_openrouter_unless_explicitly_overridden(

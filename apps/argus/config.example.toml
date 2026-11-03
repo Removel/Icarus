@@ -11,5 +11,9 @@
 # ARGUS_JEV_API_KEY / ARGUS_JEV_BASE_URL / ARGUS_JEV_MODEL (match the actual key issuer)
 # ARGUS_SAFETY_REVIEW_ENABLED=false / ARGUS_SAFETY_REVIEW_BUDGET=16
 # ARGUS_DISCOVERY_ENABLED=true / ARGUS_DISCOVERY_RULE_PATH (optional main-based script)
+# ARGUS_DISCOVERY_FALLBACK_ENABLED=false (explicit opt-in; only semantic low-confidence defer)
+# ARGUS_DISCOVERY_FALLBACK_MODEL=perception (existing Agent settings model key, not wire ID)
+# ARGUS_DISCOVERY_FALLBACK_SETTINGS_PATH (optional existing Agent settings JSON)
+# Fallback reuses general-model credentials; one request/revision, retries0, timeout20s, claim25s.
 # Linux/WSL2 execution requires installed unshare, /usr/bin/python3 and libseccomp.so.2.
 # Check with: bash apps/argus/scripts/check-isolation.sh; unavailable isolation never falls back.

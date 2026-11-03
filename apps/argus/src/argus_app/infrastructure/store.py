@@ -544,10 +544,73 @@ class Store:
         identity = canonical([item.source_key, item.message_id])
         return str(uuid5(NAMESPACE_URL, "icarus:argus:discovery:" + identity))
 
+    async def _discovery_owners(self, conn, source_key):
+        rows = (await conn.execute(select(channels).where(
+            channels.c.lifecycle.in_(['active', 'paused'])))).mappings().all()
+        return [dict(row) for row in rows if source_key in row['subscriptions']]
+
+    async def claim_discovery_fallback(self, observation_id: str,
+                                       candidate_versions: dict[str, int]) -> str | None:
+        async with self.engine.begin() as conn:
+            await self._lock_subscriptions(conn)
+            row = await self._observation(conn, observation_id, lock=True)
+            detail = copy.deepcopy(row['detail'])
+            previous = detail.get('discovery', {})
+            now = datetime.now(timezone.utc)
+            if (row['kind'] != MESSAGE or previous.get('fallback')
+                    or previous.get('status') in {'created', 'existing', 'ignored', 'exhausted'}
+                    or previous.get('next_retry_at', '') > now.isoformat()):
+                return None
+            is_latest = (await conn.execute(select(observed_items.c.id).where(
+                observed_items.c.id == observation_id, latest()))).scalar_one_or_none() is not None
+            owners = await self._discovery_owners(conn, row['source_key'])
+            if not is_latest or {x['id']: x['version'] for x in owners} != candidate_versions:
+                return None
+            token = str(uuid4())
+            deadline = (now + timedelta(seconds=25)).isoformat()
+            detail['discovery'] = {**previous, 'status': 'fallback_pending', 'next_retry_at': deadline,
+                'fallback': {'token': token, 'candidate_versions': candidate_versions,
+                    'started_at': now.isoformat(), 'deadline_at': deadline, 'status': 'started'}}
+            await conn.execute(update(observed_items).where(observed_items.c.id == observation_id).values(detail=detail))
+            return token
+
+    async def finish_discovery_fallback(self, observation_id: str, token: str, *,
+                                        decision: dict | None = None, error_code: str = '') -> None:
+        allowed_errors = {'timeout', 'cancelled', 'invalid_output', 'unavailable', 'outcome_unknown'}
+        if (decision is None) == (not error_code) or (error_code and error_code not in allowed_errors):
+            raise DomainError('discovery_fallback_conflict')
+        parsed = DiscoveryDecision.model_validate(decision).model_dump(exclude_none=True) if decision is not None else None
+        async with self.engine.begin() as conn:
+            row = await self._observation(conn, observation_id, lock=True)
+            detail = copy.deepcopy(row['detail'])
+            state = detail.get('discovery', {})
+            fallback = state.get('fallback', {})
+            if not token or fallback.get('token') != token:
+                raise DomainError('discovery_fallback_conflict')
+            if fallback.get('status') != 'started':
+                if ((parsed is not None and fallback.get('status') == 'completed' and fallback.get('decision') == parsed)
+                        or (error_code and fallback.get('error_code') == error_code)):
+                    return
+                raise DomainError('discovery_fallback_conflict')
+            if parsed is not None and parsed.get('action') == 'existing' and parsed['channel_id'] not in fallback['candidate_versions']:
+                raise DomainError('discovery_candidate_forbidden')
+            now = datetime.now(timezone.utc).isoformat()
+            if fallback['deadline_at'] <= now:
+                parsed, error_code = None, 'outcome_unknown'
+            fallback.update(status='completed' if parsed is not None else
+                'unknown' if error_code in {'timeout', 'cancelled', 'outcome_unknown'} else 'failed', finished_at=now)
+            if parsed is not None:
+                fallback['decision'] = parsed
+            else:
+                fallback['error_code'] = error_code
+            state['next_retry_at'] = now
+            detail['discovery'] = state
+            await conn.execute(update(observed_items).where(observed_items.c.id == observation_id).values(detail=detail))
+
     async def discovery_candidates(self, limit: int = 20) -> list[Observation]:
         state = observed_items.c.detail["discovery"]["status"].as_string()
         retry_at = observed_items.c.detail["discovery"]["next_retry_at"].as_string()
-        due = or_(state.is_(None), and_(state.in_(["error", "deferred"]),
+        due = or_(state.is_(None), and_(state.in_(["error", "deferred", "fallback_pending"]),
                     retry_at <= datetime.now(timezone.utc).isoformat()))
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(observed_items).where(
@@ -557,7 +620,8 @@ class Store:
 
     async def record_discovery(self, observation_id: str, decision: dict,
                                rule_path: str = "", rule_hash: str = "",
-                               candidate_versions: dict | None = None) -> str | None:
+                               candidate_versions: dict | None = None,
+                               fallback_token: str | None = None) -> str | None:
         error = decision.get('error')
         parsed = None if error else DiscoveryDecision.model_validate(decision)
         async with self.engine.begin() as conn:
@@ -569,11 +633,21 @@ class Store:
             previous = detail.get('discovery', {})
             if previous.get('status') in {'created', 'existing', 'ignored', 'exhausted'}:
                 return previous.get('channel_id') if previous.get('status') == 'created' else None
-            if previous.get('next_retry_at', '') > datetime.now(timezone.utc).isoformat():
+            if (fallback_token is None and previous.get('status') == 'fallback_pending'
+                    and previous.get('fallback', {}).get('status') in {'started', 'completed'}):
+                # A primary classification may have started before this durable
+                # claim. It cannot displace an in-flight or saved fallback.
                 return None
-            owners = (await conn.execute(select(channels).where(
-                channels.c.lifecycle.in_(['active', 'paused'])))).mappings().all()
-            owners = [dict(x) for x in owners if row['source_key'] in x['subscriptions']]
+            if fallback_token is not None:
+                fallback = previous.get('fallback', {})
+                if (fallback.get('token') != fallback_token or fallback.get('status') != 'completed'
+                        or parsed is None or fallback.get('decision') != parsed.model_dump(exclude_none=True)
+                        or (candidate_versions is not None and candidate_versions != fallback['candidate_versions'])):
+                    raise DomainError('discovery_fallback_conflict')
+                candidate_versions = fallback['candidate_versions']
+            elif previous.get('next_retry_at', '') > datetime.now(timezone.utc).isoformat():
+                return None
+            owners = await self._discovery_owners(conn, row['source_key'])
             if candidate_versions is not None and {x['id']: x['version'] for x in owners} != candidate_versions:
                 error = 'discovery_context_changed'
             is_latest = (await conn.execute(select(observed_items.c.id).where(
@@ -618,6 +692,8 @@ class Store:
                                               'discovery': {'topic_key': topic_key, 'source_key': item.source_key}})
                         await conn.execute(channels.insert().values(**ch.model_dump()))
                     result = {'status': 'created', 'channel_id': channel_id}
+            if previous.get('fallback'):
+                result['fallback'] = previous['fallback']
             detail['discovery'] = result
             await conn.execute(update(observed_items).where(observed_items.c.id == observation_id).values(detail=detail))
             return channel_id

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 
 class ArgusConfig(BaseModel):
@@ -30,6 +30,9 @@ class ArgusConfig(BaseModel):
     semantic_api_key: SecretStr = SecretStr("")
     semantic_base_url: str | None = None
     semantic_model: str | None = None
+    discovery_fallback_enabled: bool = False
+    discovery_fallback_model: str = ''
+    discovery_fallback_settings_path: Path | None = None
     safety_review_enabled: bool = False
     safety_review_budget: int = Field(default=16, ge=1, le=1000)
     memory_endpoint: str | None = None
@@ -42,6 +45,12 @@ class ArgusConfig(BaseModel):
     knowledge_endpoint: str | None = None
     knowledge_token: SecretStr = SecretStr("")
     knowledge_base: str = ""
+
+    @model_validator(mode='after')
+    def configured_discovery_fallback(self):
+        if self.discovery_fallback_enabled and not self.discovery_fallback_model.strip():
+            raise ValueError('discovery_fallback_model must name a configured model when enabled')
+        return self
 
     @classmethod
     def from_environment(cls) -> "ArgusConfig":
@@ -79,6 +88,9 @@ class ArgusConfig(BaseModel):
                    semantic_api_key=SecretStr(os.getenv("ARGUS_JEV_API_KEY", "")),
                    discovery_enabled=os.getenv("ARGUS_DISCOVERY_ENABLED", "true").lower() in {"true", "1", "yes"},
                    discovery_rule_path=os.getenv("ARGUS_DISCOVERY_RULE_PATH"),
+                   discovery_fallback_enabled=os.getenv('ARGUS_DISCOVERY_FALLBACK_ENABLED', 'false').lower() in {'true', '1', 'yes'},
+                   discovery_fallback_model=os.getenv('ARGUS_DISCOVERY_FALLBACK_MODEL', ''),
+                   discovery_fallback_settings_path=os.getenv('ARGUS_DISCOVERY_FALLBACK_SETTINGS_PATH') or None,
                    semantic_base_url=os.getenv("ARGUS_JEV_BASE_URL"), semantic_model=os.getenv("ARGUS_JEV_MODEL"),
                    safety_review_enabled=os.getenv('ARGUS_SAFETY_REVIEW_ENABLED', 'false').lower() in {'true', '1', 'yes'},
                    safety_review_budget=int(os.getenv('ARGUS_SAFETY_REVIEW_BUDGET', '16')),

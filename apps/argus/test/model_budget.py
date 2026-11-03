@@ -3,10 +3,10 @@ import threading
 
 
 class ModelBudget:
-    def __init__(self, *, agent=120, scenario=50, semantic=64, safety=16):
-        if any(type(x) is not int or x < 1 for x in (agent, scenario, semantic, safety)):
+    def __init__(self, *, agent=120, scenario=50, semantic=64, safety=16, fallback=16):
+        if any(type(x) is not int or x < 1 for x in (agent, scenario, semantic, safety, fallback)):
             raise ValueError('Budgets must be positive integers')
-        self.limits = {'agent': agent, 'semantic': semantic, 'safety': safety}
+        self.limits = {'agent': agent, 'semantic': semantic, 'safety': safety, 'fallback': fallback}
         self.counts = dict.fromkeys(self.limits, 0)
         self.scenario_limit, self.scenario_count = scenario, 0
         self.stopped_reason = None

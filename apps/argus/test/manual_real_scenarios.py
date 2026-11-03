@@ -64,6 +64,63 @@ async def run_semantic_matrix(classify, output: Path, *, maximum=120):
     return report
 
 
+async def run_discovery_matrix(classify, fallback, output: Path, *, maximum=12,
+                               fallback_maximum=12, selected_cases=None):
+    """Classification smoke only; PostgreSQL/workflow idempotency has separate tests."""
+    from argus_app.contracts.models import DiscoveryDecision
+    from apps.argus.test.real_scenarios import discovery_cases
+    cases = discovery_cases() if selected_cases is None else selected_cases
+    budget = ModelBudget(semantic=maximum, fallback=fallback_maximum)
+    report = {'started_at': datetime.now(timezone.utc).isoformat(), 'attempts': 0,
+              'fallback_attempts': 0, 'fallback_exercised': False, 'correct': 0,
+              'all_expected': False, 'cases': [], 'stopped_reason': None,
+              'durable_workflow_executed': False, 'full_pipeline_executed': False}
+    def consume(kind):
+        try:
+            budget.consume(kind)
+            return True
+        except ValueError as exc:
+            report['stopped_reason'] = str(exc)
+            return False
+    for case in cases:
+        if not consume('semantic'):
+            break
+        row = dict(case)
+        started = time.monotonic()
+        try:
+            primary = await classify({'mode': 'discovery', 'text': case['text'], 'candidates': case['candidates']})
+            row.update(selected_route=primary.get('selected_route'), native_confidence=primary.get('score'),
+                       primary_decision=primary['discovery'], fallback_used=False)
+            decision = DiscoveryDecision.model_validate({**primary['discovery'], 'reason': primary['reason']})
+            if decision.action == 'defer' and primary.get('defer_reason') == 'low_confidence' and fallback is not None:
+                if not consume('fallback'):
+                    break
+                row['fallback_used'] = True
+                decision = DiscoveryDecision.model_validate(await fallback(case['text'], case['candidates']))
+            if decision.action == 'existing' and decision.channel_id not in {c['id'] for c in case['candidates']}:
+                raise ValueError('candidate outside trusted snapshot')
+            row['final_decision'] = decision.model_dump(exclude_none=True)
+            row['correct'] = (decision.action == case['expected_action']
+                and decision.channel_id == case.get('expected_channel_id'))
+            report['correct'] += int(row['correct'])
+        except Exception as exc:
+            row['error_type'] = type(exc).__name__
+            report['stopped_reason'] = type(exc).__name__
+        finally:
+            row['elapsed_seconds'] = round(time.monotonic() - started, 3)
+            report['cases'].append(row)
+            report['attempts'] = budget.counts['semantic']
+            report['fallback_attempts'] = budget.counts['fallback']
+            report['fallback_exercised'] = budget.counts['fallback'] > 0
+            save(output / 'discovery-summary.json', report)
+        if report['stopped_reason']:
+            break
+    report['all_expected'] = bool(cases) and len(report['cases']) == len(cases) and report['correct'] == len(cases)
+    report['finished_at'] = datetime.now(timezone.utc).isoformat()
+    save(output / 'discovery-summary.json', report)
+    return report
+
+
 def pipeline_passed(report):
     cases = report.get('scenarios', [])
     return bool(cases) and not report.get('stopped_reason') and all(
@@ -79,6 +136,31 @@ async def execute(args):
         raise ValueError('ARGUS_JEV_API_KEY is required')
     backend, owner = configured_backend(key, os.getenv('ARGUS_JEV_BASE_URL'), os.getenv('ARGUS_JEV_MODEL'))
     try:
+        if args.mode == 'discovery':
+            from apps.argus.test.real_scenarios import discovery_cases
+            fallback, fallback_owner = None, None
+            try:
+                model = args.fallback_model or os.getenv('ARGUS_DISCOVERY_FALLBACK_MODEL', '')
+                if model:
+                    from argus_app.model_provider.discovery_fallback import configured_discovery_fallback
+                    fallback, fallback_owner = configured_discovery_fallback(model,
+                        args.fallback_settings or os.getenv('ARGUS_DISCOVERY_FALLBACK_SETTINGS_PATH'))
+                cases = [case for case in discovery_cases()
+                         if (not args.scenario or case['scenario'] in args.scenario)
+                         and (not args.discovery_initial_only or case['category'] == 'initial')]
+                report = await run_discovery_matrix(backend, fallback, args.output,
+                    maximum=args.max_semantic_requests, fallback_maximum=args.max_fallback_requests,
+                    selected_cases=cases)
+                report.update(route={'base_url': owner.base_url, 'model': owner.model},
+                              proxy=args.proxy or 'inherited environment')
+                save(args.output / 'discovery-summary.json', report)
+                print(json.dumps({k: report[k] for k in ('route', 'attempts', 'fallback_attempts',
+                    'fallback_exercised', 'correct', 'all_expected', 'stopped_reason',
+                    'durable_workflow_executed', 'full_pipeline_executed')}, ensure_ascii=False))
+                return report['all_expected'] and not report['stopped_reason']
+            finally:
+                if fallback_owner is not None:
+                    await fallback_owner.aclose()
         matrix = await run_semantic_matrix(backend, args.output, maximum=args.max_semantic_requests)
         route = {'base_url': owner.base_url, 'model': owner.model}
     finally:
@@ -125,7 +207,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--authorize-real-model', action='store_true', required=True)
     parser.add_argument('--output', type=Path, required=True, help='New private directory; must not already exist')
-    parser.add_argument('--mode', choices=('semantic', 'full'), default='full')
+    parser.add_argument('--mode', choices=('semantic', 'discovery', 'full'), default='full')
+    parser.add_argument('--fallback-model', help='Named model in existing Agent settings; discovery mode only')
+    parser.add_argument('--fallback-settings', type=Path, help='Optional existing Agent settings JSON path')
+    parser.add_argument('--max-fallback-requests', type=int, default=12)
+    parser.add_argument('--discovery-initial-only', action='store_true', help='Classify only the six unchanged initial requests')
     parser.add_argument('--proxy', help='HTTP proxy URL used only in this process, e.g. http://127.0.0.1:7890')
     parser.add_argument('--scenario', action='append', choices=[s.name for s in scenarios()])
     parser.add_argument('--max-agent-requests', type=int, default=240)
@@ -135,7 +221,10 @@ def main():
     args = parser.parse_args()
     if args.scenario_timeout <= 0:
         parser.error('--scenario-timeout must be positive')
-    ModelBudget(agent=args.max_agent_requests, scenario=args.max_scenario_requests, semantic=args.max_semantic_requests)
+    if args.mode != 'discovery' and (args.fallback_model or args.fallback_settings or args.discovery_initial_only):
+        parser.error('fallback model/settings and initial-only options require --mode discovery')
+    ModelBudget(agent=args.max_agent_requests, scenario=args.max_scenario_requests,
+                semantic=args.max_semantic_requests, fallback=args.max_fallback_requests)
     load_icarus_environment()
     if args.proxy:
         from urllib.parse import urlsplit

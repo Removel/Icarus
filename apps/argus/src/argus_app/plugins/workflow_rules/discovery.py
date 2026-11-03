@@ -1,5 +1,33 @@
 """Trusted initial discovery defaults; executed by the same restricted rule engine."""
 from pathlib import Path
+import json
+
+
+def candidate_summaries(owners):
+    """One trusted, UTF-8 JSON byte-bounded snapshot for both classifiers."""
+    result = []
+    for owner in owners:
+        fields = {'title': owner.title[:120], 'goal': owner.goal[:1000],
+                  'progress': owner.progress[:1000]}
+        def build(limit):
+            return {'id': owner.id, **{name: text[:limit] for name, text in fields.items()},
+                    'lifecycle': owner.lifecycle}
+        def size(value):
+            return len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
+        candidate = build(1000)
+        if size(candidate) > 4096:
+            low, high = 0, 1000
+            while low < high:
+                middle = (low + high + 1) // 2
+                if size(build(middle)) <= 4096:
+                    low = middle
+                else:
+                    high = middle - 1
+            candidate = build(low)
+            if size(candidate) > 4096:
+                raise ValueError('discovery candidate metadata exceeds byte limit')
+        result.append(candidate)
+    return result
 
 DEFAULT_DISCOVERY_RULE = '''def main(event, channel):
     text = event["content"].get("text", "")

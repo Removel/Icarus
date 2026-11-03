@@ -53,3 +53,17 @@ async def test_accounts_same_room_and_message_have_distinct_source_identity():
     second = await plugin.receive({**payload, 'self_id': 200})
     assert first.source_key != second.source_key
     assert 'payload' not in first.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['message_sent', 'notice', 'meta_event'])
+async def test_onebot_non_incoming_events_are_rejected(kind):
+    store = StoreFake()
+    payload = {'post_type': kind, 'self_id': 100, 'message_type': 'group', 'group_id': 42,
+               'user_id': 8, 'message_id': 'string-id' if kind == 'message_sent' else 7,
+               'raw_message': 'bot output' if kind == 'message_sent' else ''}
+    if kind == 'notice':
+        payload.update(notice_type='notify', sub_type='poke')
+    with pytest.raises(ValueError, match='message'):
+        await QQProtocol('qq-protocol', store).receive(payload)
+    assert store.rows == []

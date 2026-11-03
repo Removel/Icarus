@@ -59,3 +59,28 @@ def semantic_cases():
                                               ('negative', case.negative, False),
                                               ('quoted', case.quoted, False),
                                               ('unrelated', case.unrelated, False)]]
+
+
+def discovery_cases():
+    """Initial requests and routing boundaries, labelled before any model execution."""
+    cases = [dict(scenario=case.name, category='initial', text=case.initial,
+                  candidates=[], expected_action='new') for case in scenarios()]
+    review = {'id': 'review-active', 'title': '仓储接口评审', 'goal': '跟进仓储接口评审',
+              'progress': '等待审核意见', 'lifecycle': 'active'}
+    cases.extend([
+        dict(scenario='work_review', category='existing_continuation',
+             text='仓储接口评审还在等审核意见，请继续关注刚才那件事。', candidates=[review],
+             expected_action='existing', expected_channel_id='review-active'),
+        dict(scenario='work_review', category='same_source_new_topic',
+             text='另外请帮我跟进洗衣机送货，目前还在安排车辆。', candidates=[review], expected_action='new'),
+        dict(scenario='work_review', category='quoted_request',
+             text='“请帮我跟进接口评审”只是示例用语，不是我现在的请求。', candidates=[], expected_action='ignore'),
+        dict(scenario='work_review', category='negated_request',
+             text='不需要你帮忙跟进，这里只是在说明一个假设。', candidates=[], expected_action='ignore'),
+        dict(scenario='work_review', category='chatter',
+             text='今天中午吃什么？', candidates=[], expected_action='ignore'),
+        dict(scenario='work_review', category='ambiguous_reference', text='那个再跟一下。',
+             candidates=[review, {'id': 'delivery-active', 'title': '洗衣机送货', 'goal': '等待送货',
+                                  'progress': '车辆安排中', 'lifecycle': 'active'}], expected_action='defer'),
+    ])
+    return cases
