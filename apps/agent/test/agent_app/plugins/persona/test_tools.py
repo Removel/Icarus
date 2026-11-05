@@ -110,6 +110,8 @@ def test_current_task_messages_ground_evolution_without_tool_results(make_person
             Message("assistant", [TextPart("I like greeting you warmly.")]),
         ))
         recent = judge.evolutions[0]["recent"]
+        assert judge.evolutions[0]["invariants"] == plugin.document.invariants_text
+        assert "不以角色设定索取信任、制造依赖或越过授权" in judge.evolutions[0]["invariants"]
         assert ("user", "Warm greetings please.") in recent
         assert ("assistant", "I like greeting you warmly.") in recent
         assert "PRIVATE" not in str(recent)

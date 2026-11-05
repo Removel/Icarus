@@ -14,7 +14,7 @@ class WriteTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="write",
-            description="使用 UTF-8 覆盖写入本地文本文件",
+            description="使用 UTF-8 写入本地文本文件，会覆盖已有正文并创建缺失的父目录。修改已有文件前先 read 核对；content 是完整正文。结果裁剪不表示未写入，先核实文件再决定重试。",
             input_schema={
                 "type": "object",
                 "properties": {

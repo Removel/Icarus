@@ -79,13 +79,15 @@ class RelationshipRememberTool(_RelationshipTool):
         return _definition("relationship_remember", (
             "Store explicitly stated stable person profile facts, preferences or exact identities, not one-time events (use memory_remember). "
             "Use a known person_id OR display_name, never both. Identities use non-name namespace:value strings. "
-            "A unique exact name may be reused; fuzzy/ambiguous candidates require the user's choice via person_id. "
+            "A unique exact name may be reused only with complete candidate results; fuzzy/ambiguous candidates require the user's choice via person_id. "
+            "A name with no match requires explicit confirmation before creation. Never rebind or merge conflicting identities automatically. "
             "Unbound exact identities create a person only when no name candidates exist. If candidates exist, ask whether this is an existing person or a new namesake. "
             "Set confirm_create=true ONLY after the user explicitly confirms creation; it is not permission to guess identity. "
             "Never store guesses, temporary states, credentials, or anything the user asked not to remember. Writes may partially succeed; do not blindly retry."),
             {"person_id": _ID, "display_name": _STRING,
              "identities": {"type": "array", "items": _STRING, "maxItems": 10},
-             "profile": {"type": "object", "maxProperties": 50, "additionalProperties": True},
+             "profile": {"type": "object", "maxProperties": 50, "additionalProperties": True,
+                         "description": "Stable facts explicitly stated by the user. Keys: lowercase letter first, then lowercase letters/digits/underscores, optionally dot-separated (e.g. work.role); max 128 characters. Values: valid JSON, max 64 KiB each. Do not duplicate these preferences in Memory; split one-time events into memory_remember."},
              "confirm_create": {"type": "boolean", "default": False}}, [])
 
     def _invoke(self, arguments, source_ref):

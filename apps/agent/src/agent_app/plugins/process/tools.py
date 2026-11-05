@@ -35,29 +35,38 @@ class BackgroundProcessTool(BaseTool):
             "background_process",
             "Start and manage Session-owned background commands such as development servers. "
             "A successful start means the OS process was created and is supervised; it does "
-            "not mean the application is ready. Use get, list, or logs to observe it.",
+            "not mean the application is ready. Use get, list, or logs to observe it. "
+            "Stop only task-owned processes when authorized; inspect state before retrying a start. "
+            "Each action accepts only the fields documented for it.",
             {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["start", "list", "get", "logs", "stop"],
+                        "description": "start: requires command, optional workdir; creates a process. "
+                                       "list: optional cursor/page_size; reads session processes. "
+                                       "get: requires process_id; reads status. "
+                                       "logs: requires process_id, optional cursor/limit_bytes; reads a log page. "
+                                       "stop: requires process_id; terminates that process.",
                     },
-                    "command": {"type": "string", "minLength": 1},
-                    "workdir": {"type": "string", "minLength": 1},
-                    "process_id": {"type": "string", "minLength": 1},
-                    "cursor": {"type": "string", "minLength": 1},
+                    "command": {"type": "string", "minLength": 1, "description": "Command for start only."},
+                    "workdir": {"type": "string", "minLength": 1, "description": "Working directory for start; defaults to the workspace."},
+                    "process_id": {"type": "string", "minLength": 1, "description": "Exact ID returned by start/list; required for get/logs/stop."},
+                    "cursor": {"type": "string", "minLength": 1, "description": "Continuation cursor from the same list or logs operation; do not interchange them."},
                     "page_size": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": config.max_page_size,
                         "default": config.default_page_size,
+                        "description": "Maximum processes per list page; list only.",
                     },
                     "limit_bytes": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": config.max_log_page_bytes,
                         "default": config.default_log_page_bytes,
+                        "description": "Maximum bytes per logs page; logs only. A page is not the complete log.",
                     },
                 },
                 "required": ["action"],

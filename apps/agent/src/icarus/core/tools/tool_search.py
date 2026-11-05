@@ -25,7 +25,8 @@ class ToolSearchTool(BaseTool):
             "Search for a tool scope by exact plugin_id. Returns complete tool "
             "definitions; call returned tools with tool_execute(name, arguments). "
             "Use optional name for an exact tool in that scope. Only complete returned "
-            "definitions are loaded. If truncated, search one name or request more budget; "
+            "definitions are loaded for this Run, without granting permission for business actions. "
+            "If truncated, search one name or increase _execution.max_output_tokens; "
             "reading a saved result does not load tools. Use an empty query to list scopes. Available scopes:"
         )
         directory = self._catalog.directory()
@@ -80,7 +81,8 @@ class ToolSearchTool(BaseTool):
             "tools": [{"name": item.name, "description": item.description,
                        "input_schema": item.input_schema} for item in definitions],
             "usage": "Call complete definitions with tool_execute(name, arguments). "
-                     "If truncated, search an exact name or request more budget; saved files do not load tools.",
+                     "If truncated, search an exact name or increase _execution.max_output_tokens; "
+                     "saved files do not load tools, and loading does not grant permission for business actions.",
         }, metadata={"tools_loaded": [item.name for item in definitions]})
 
     def finalize_loaded_tools(self, result: ToolExecutionResult) -> ToolExecutionResult:

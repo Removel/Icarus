@@ -38,16 +38,20 @@ class ReadTool(BaseTool):
                         "description": "需要读取的文件路径",
                     },
                     "offset": {
-                        "type": "integer", "minimum": 1, "default": 1
+                        "type": "integer", "minimum": 1, "default": 1,
+                        "description": "行页起始行号，从1开始；同一行页续读时保持不变。",
                     },
-                    "text_offset": {"type": "integer", "minimum": 0, "default": 0},
+                    "text_offset": {"type": "integer", "minimum": 0, "default": 0,
+                                    "description": "当前行页内的字符偏移，从0开始；续读使用 next_text_offset。"},
                     "max_chars": {
                         "type": "integer", "minimum": 1, "maximum": 20000, "default": 2000,
+                        "description": "本次最多返回的字符数；预算裁剪时减小并用原偏移重读。",
                     },
                     "limit": {
                         "type": "integer", "minimum": 1,
                         "maximum": self.maximum_limit,
                         "default": self.default_limit,
+                        "description": "行页最多包含的行数；同一行页续读时保持不变。",
                     },
                 },
                 "required": ["path"],

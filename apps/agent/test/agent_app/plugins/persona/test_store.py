@@ -41,6 +41,21 @@ def test_load_ignores_unknown_sections_with_warning(tmp_path, caplog):
     assert "unknown" in caplog.text
 
 
+def test_misspelled_invariants_report_missing_sections(tmp_path, caplog):
+    doc = make_store(tmp_path, BASE.replace("## boundaries", "## boundary")
+                     .replace("## anti-goals", "## ignored")).load()
+    assert "Never lie." not in doc.invariants_text
+    assert "Persona invariant sections missing" in caplog.text
+    assert "boundaries,anti-goals" in caplog.text
+
+
+def test_packaged_invariants_preserve_boundaries_independent_of_identity_budget(tmp_path):
+    doc = PersonaStore(tmp_path, "default", PersonaConfig(max_identity_tokens=70)).load()
+    assert "不伪造经历、感受或事实" in doc.invariants_text
+    assert "不以角色设定索取信任、制造依赖或越过授权" in doc.invariants_text
+    assert "不为了扮演而牺牲正确性" in doc.invariants_text
+
+
 @pytest.mark.parametrize("prefix", ["", "---\nname: [broken\n---\n"])
 def test_bad_or_absent_frontmatter_keeps_valid_body(tmp_path, prefix, caplog):
     doc = make_store(tmp_path, prefix + "## soul\nIntact soul.\n## voice\nKind.\n").load()

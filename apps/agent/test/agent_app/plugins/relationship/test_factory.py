@@ -66,9 +66,13 @@ def test_static_prompt_no_regions_and_close_before_start():
     section, = plugin.static_prompt_sections()
     assert section.layer == "session"
     assert "memory_remember" in section.content
-    assert "confirm_create" in section.content
+    assert "上下文足够" in section.content
+    remember = next(tool.definition for tool in plugin.build_tools()
+                    if tool.definition.name == "relationship_remember")
+    assert "confirm_create=true ONLY after the user explicitly confirms" in remember.description
     assert "relationship_relate" in section.content
-    assert "凭据" in section.content
+    assert "credentials" in remember.description
+    assert "work.role" in remember.input_schema["properties"]["profile"]["description"]
     asyncio.run(plugin.stop())
     assert backend.closed
 

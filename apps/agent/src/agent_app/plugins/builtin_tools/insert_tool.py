@@ -14,7 +14,7 @@ class InsertTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="insert",
-            description="在 UTF-8 文本文件的指定行前插入内容",
+            description="在 UTF-8 文本文件的指定行前插入内容。先 read 核对当前行号；line=总行数+1 时追加，content 自带所需换行。写后行号可能变化，重试前先核实，避免重复插入。",
             input_schema={
                 "type": "object",
                 "properties": {

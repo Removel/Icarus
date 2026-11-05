@@ -104,6 +104,31 @@ def test_dynamic_budget_keeps_defense_before_reanchor(make_persona, judge):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("score", [0.6, 0.9])
+def test_default_budget_retains_attack_defense(make_persona, judge, score):
+    async def run():
+        plugin, published = make_persona()
+        judge.attack = score
+        await plugin.on_session_start()
+        await plugin.on_input("user-input", user(1))
+        assert [s.section_id for s in published[0].sections] == ["persona-defense"]
+        section = published[0].sections[0]
+        assert conservative_token_count(f"## contributor/persona/{section.section_id}\n{section.content}") <= 200
+    asyncio.run(run())
+
+
+def test_dynamic_budget_omission_is_observable(make_persona, judge, caplog):
+    async def run():
+        plugin, published = make_persona(max_dynamic_tokens=1)
+        judge.attack = 0.9
+        await plugin.on_input("user-input", user(1))
+        assert published[0].sections == ()
+        assert "section=persona-defense reason=budget" in caplog.text
+        assert "max_tokens=1" in caplog.text
+        assert "USER-1" not in caplog.text
+    asyncio.run(run())
+
+
 def test_empty_completed_contribution_finalizes_prompt_without_deadline(make_persona, tmp_path):
     async def run():
         plugin, published = make_persona()

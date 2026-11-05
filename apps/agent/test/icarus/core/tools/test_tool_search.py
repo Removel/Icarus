@@ -60,6 +60,8 @@ def test_tool_search命中功能面返回完整定义和加载metadata():
     assert entry["input_schema"]["required"] == ["path"]
     assert entry["input_schema"]["additionalProperties"] is False
     assert "_execution" not in entry["input_schema"]
+    assert "_execution.max_output_tokens" in tool.definition.description
+    assert "without granting permission" in tool.definition.description
 
 
 def test_search精确name及最终完整性逐项检查():

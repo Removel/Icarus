@@ -9,7 +9,7 @@ from agent_app.contracts.prompt import PromptContributionEvent, PromptSection
 from agent_app.plugins.persona.judge import Judge, bounded_recent, create_judge, NullJudge
 from agent_app.plugins.persona.relationship import RelationshipReader
 from agent_app.plugins.persona.store import PersonaStore
-from agent_app.plugins.persona.prompts import DEFENSE, EVOLUTION_GUIDANCE, POLICY, REANCHOR, STRONG_DEFENSE
+from agent_app.plugins.persona.prompts import DEFENSE, EVOLUTION_GUIDANCE, REANCHOR, STRONG_DEFENSE
 from icarus.core.models.messages import TextPart
 from icarus.core.tools.result_budget import conservative_token_count
 from icarus.core.run_control import TaskChannelStatus
@@ -55,13 +55,12 @@ class PersonaPlugin(BasePlugin):
     async def on_session_start(self):
         self.document = self.store.load()
         relationship = await self.relationship.load()
-        policy = POLICY
-        if self.config.jev_enabled and not isinstance(self.judge, NullJudge):
-            policy += EVOLUTION_GUIDANCE
+        evolution = (EVOLUTION_GUIDANCE
+                     if self.config.jev_enabled and not isinstance(self.judge, NullJudge) else "")
         values = (("persona-01-identity", self.document.identity_text),
                   ("persona-02-relationship", relationship),
                   ("persona-03-evolved", self.document.evolved_text),
-                  ("persona-04-policy", policy))
+                  ("persona-05-evolution", evolution))
         self._sections = tuple(PromptSection(key, "persona", text) for key, text in values if text)
 
     def static_prompt_sections(self):
@@ -127,7 +126,11 @@ class PersonaPlugin(BasePlugin):
                 for section in candidates:
                     proposed = [*selected, section]
                     rendered = "\n\n".join(f"## contributor/{self.plugin_id}/{s.section_id}\n{s.content}" for s in proposed)
-                    if conservative_token_count(rendered) > self.config.max_dynamic_tokens:
+                    measured = conservative_token_count(rendered)
+                    if measured > self.config.max_dynamic_tokens:
+                        self.logger.warning(
+                            "Persona dynamic section omitted: section=%s reason=budget units=%s max_tokens=%s",
+                            section.section_id, measured, self.config.max_dynamic_tokens)
                         break
                     selected = proposed
                 sections = tuple(selected)

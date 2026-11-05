@@ -139,7 +139,8 @@ def test_builtin_plugin_guidance_reaches_system_once_not_user_context(tmp_path):
         assert f"## session/" in system
         assert section in system
         assert section not in user
-    assert "你自己的长期记忆" in system
+    assert "memory_read" in system and "memory_correct" in system
+    assert "无命中" in system and "超时或故障" in system
     assert "mcp_tool_search" in system
     assert "当前未开放" in system
     assert "e2e-guide" in system

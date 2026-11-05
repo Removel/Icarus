@@ -126,6 +126,10 @@ class PersonaStore:
             sections[key] = "\n".join(filter(None, (sections[key], content)))
         if not sections["soul"]:
             logger.warning("Persona soul section is missing")
+        missing_invariants = [key for key in _SECTIONS[:3] if not sections[key]]
+        if missing_invariants:
+            logger.warning("Persona invariant sections missing: persona=%s sections=%s; evolution input lacks these sections",
+                           self.persona_id, ",".join(missing_invariants))
         if conservative_token_count(sections["soul"]) > self.config.max_soul_tokens:
             sections["soul"] = clip_text(sections["soul"], self.config.max_soul_tokens)
             logger.warning("Persona soul exceeded budget; truncated")

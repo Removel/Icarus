@@ -17,7 +17,7 @@ from icarus.core.identity import SessionIdentity
 from icarus.core.tools import ToolRegistry
 from icarus.core.tools.tool_execute import ToolExecuteTool
 from icarus.core.tools.tool_search import ToolSearchTool
-from icarus.core.tools.tool_surface import ToolSurfaceCatalog
+from icarus.core.tools.tool_surface import RESIDENT_TOOLS, ToolSurfaceCatalog
 from agent_app.config import ConfigModel
 from icarus.core.models.messages import Message
 from icarus.core.runtime_update import RuntimeUpdate
@@ -209,6 +209,10 @@ class SessionRuntime(SessionHost):
         )
         self.tool_search.bind_catalog(catalog)
         self.tool_execute.bind_registry(self.tool_registry)
+        missing = [name for name in RESIDENT_TOOLS if self.tool_registry.get(name) is None]
+        if missing:
+            self.logger.warning("Session resident tools missing: names=%s; prompt guidance may describe unavailable capabilities",
+                                ",".join(missing))
         active = set(host.graph.registrations)
         prompt = next(r.plugin for r in host.graph.registrations.values() if isinstance(r.plugin, PromptPlugin))
         boards = [r.plugin for r in host.graph.registrations.values() if isinstance(r.plugin, BlackboardPlugin)]

@@ -81,6 +81,27 @@ def test_default_system_prompt保留通用约束而不绑定业务插件():
     assert "新 Run" in DEFAULT_SYSTEM_PROMPT
 
 
+def test_session_reports_missing_resident_tools_before_ready(tmp_path, caplog):
+    async def run():
+        runtime = SessionRuntime(SessionIdentity.create(tmp_path, "resident-diagnostics"),
+            config=make_config(tmp_path / "data"), publish_update=lambda update: asyncio.sleep(0))
+        finalize = runtime.runtime_host.before_ready
+
+        async def without_insert(host):
+            runtime.tool_registry.unregister("insert")
+            await finalize(host)
+
+        runtime.runtime_host.before_ready = without_insert
+        await runtime.start()
+        try:
+            assert "Session resident tools missing: names=insert;" in caplog.text
+            assert runtime.tool_registry.get("insert") is None
+            assert runtime.is_running
+        finally:
+            await runtime.stop("test")
+    asyncio.run(run())
+
+
 def test_default_system_prompt要求普通聊天简短自然():
     assert "普通聊天默认简短、自然、直接" in DEFAULT_SYSTEM_PROMPT
     assert "复杂任务" in DEFAULT_SYSTEM_PROMPT
