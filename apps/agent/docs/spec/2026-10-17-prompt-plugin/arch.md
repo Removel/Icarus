@@ -94,11 +94,12 @@ class ExamplePlugin(BasePlugin):
 
 ## 已接入的内置贡献者
 
-六个业务插件通过 `static_prompt_sections()` 提供 `session` 层简短发现指导，详细流程按需提供；使用自己的 prompts.py 维护内容：
+七个业务插件通过 `static_prompt_sections()` 提供 `session` 层稳定指导，支持延迟工具的插件按需提供详细流程；使用自己的 prompts.py 维护内容：
 
 | 插件 | System 常驻 / 按需内容 | 业务路径 |
 |---|---|---|
 | memory | 自然使用/维护触发/领域边界 / 纠错、停用、删除流程 | 召回正文仍走TaskContextInput+Region+ACK，不在Prompt再注入一份 |
+| relationship | 缺身份/档案时查询，简单对话直接答 / 查写协作、身份确认、关系方向和部分写入 | 模型按需调用；Persona 的后台只读档案联动独立，不在此处发起 |
 | skill | 按需发现/先读正文 / 写入开关、作业验证 | 不在启动时扫描目录用于提示词；list/search 按调用扫描，正文按需read；生成/演化内部Agent及Job通知不变 |
 | process | 短命令与后台分工/任务归属 / 去重、readiness、logs、重试 | 不自动启动/查询进程，不回灌状态事件 |
 | knowledge | 知识库使用与任务写入范围 / 查读协作、引用与事实边界 | 不做自动RAG、不查询/上传后端 |

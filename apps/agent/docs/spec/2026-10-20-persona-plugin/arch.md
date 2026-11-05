@@ -1,6 +1,6 @@
 # Persona 插件设计
 
-本文依据 `src/agent_app/plugins/persona/`、对应单测与 SessionRuntime 集成测试描述当前实现。实施顺序与验收记录见 [plan.md](plan.md)。
+2026-11-05：本文依据 `src/agent_app/plugins/persona/`、对应单测与 SessionRuntime 集成测试更新当前实现。原实施顺序见 [plan.md](plan.md)，本轮注入位置、时机与验收见 [上下文交付](../2026-11-04-prompt-guidance/plan-context-delivery.md)。
 
 ## 1. 定位与目标
 
@@ -87,7 +87,7 @@ persona 插件同时是静态贡献者和动态贡献者：
 | `persona-01-identity` | soul、boundaries、anti-goals、voice、examples 按优先级拼接 |
 | `persona-05-evolution` | 仅在 JEV 启用且 Judge 非 NullJudge 时贡献演化场景指导；共通执行/权限规则归 base |
 
-空段不贡献。默认关闭 JEV 且无档案/演化笔记时，仅贡献 identity 一段。`invariants_text` 仍由 soul、boundaries、anti-goals 拼接后按 800 预算裁剪，传给演化判据；不随 identity 的渲染预算一起丢弃。人格正文边界没有为精简提示词而删除。
+空段不贡献。默认关闭 JEV 时，静态仅贡献有效的 identity 段；档案和演化观察均不进入静态分节。`invariants_text` 仍由 soul、boundaries、anti-goals 拼接后按 800 预算裁剪，传给演化判据；不随 identity 的渲染预算一起丢弃。人格正文边界没有为精简提示词而删除。
 
 动态分节（`source=persona`，`layer=contributor`）：
 
@@ -100,7 +100,7 @@ persona 插件同时是静态贡献者和动态贡献者：
 
 `prompt` 插件会等待所有动态贡献者或 5s 截止。persona 处理器**无论是否有内容都必须发布 `status="completed"` 的贡献**；关系读取与 JEV 判定并行，分别有界且错误独立。JEV 关闭仍交付已有观察/可用档案；两者皆无时发布空贡献。自定义 relationship_timeout_seconds 大于 Prompt 截止仍可能使 required 来源超时，应协调配置；默认2s/1.2s小于5s。
 
-persona 在两份默认 settings 的 `prompt.required_contributors` 中：静态分节不会在总预算紧张时被当作可选来源丢弃。正常判定失败会发布空的 completed 贡献，不让整轮失败；但插件自身崩溃或未能在 prompt 截止前送达，仍按 required contributor 的既有语义使该轮失败，不能保证绝对无新增失败路径。将 persona 设为 optional 时，需要同时从 `runtime.required_plugin_ids` 和 `prompt.required_contributors` 移除。
+persona 在两份默认 settings 的 `prompt.required_contributors` 中：静态分节不会在总预算紧张时被当作可选来源丢弃。正常判定失败只省略对应提醒，仍发布 completed 并保留已有观察和可用档案；无内容时贡献为空。但插件自身崩溃或未能在 prompt 截止前送达，仍按 required contributor 的既有语义使该轮失败，不能保证绝对无新增失败路径。将 persona 设为 optional 时，需要同时从 `runtime.required_plugin_ids` 和 `prompt.required_contributors` 移除。
 
 ## 4. 输入防御
 
@@ -194,7 +194,7 @@ persona_evolve(
 |---|---|---|
 | soul | 400 tokens | 硬截断并告警 |
 | identity 总块 | 1500 tokens | 按 soul > boundaries/anti-goals > voice > examples 顺序整节取舍 |
-| relationship 块 | 200 tokens | 从末尾丢弃完整条目 |
+| relationship 块 | 200保守预算单位 | 按顺序加入能容纳的完整事实，放不下的跳过并继续检查后续事实 |
 | evolved 块 | 600 tokens / 30 条 | 淘汰最旧条目 |
 | 每轮防御/重锚块 | 200保守预算单位 | 防御优先；放不下时整段省略并告警 |
 
@@ -208,7 +208,7 @@ persona_evolve(
 | jev 超时 / 失败（防御、漂移） | fail-open，正常生成 |
 | jev 超时 / 失败（演化） | fail-closed，拒绝写入 |
 | jev 未配置且 `jev_enabled=true` | 告警并禁用 jev；人格继续注入，不阻塞启动 |
-| `jev_enabled=false` | 跳过判定；`persona_evolve` 仍注册但返回 `judge_disabled`；policy 省略演化引导 |
+| `jev_enabled=false` | 跳过判定；`persona_evolve` 仍注册但返回 `judge_disabled`；不贡献 `persona-05-evolution` |
 | rela-mem 离线 / 超时 | 告警，跳过关系块，Session 正常启动 |
 
 ## 9. 插件形态、事件与配置
@@ -222,7 +222,7 @@ apps/agent/src/agent_app/plugins/persona/
 ├── store.py           # persona.md / evolved.yaml 加载、预算、原子写入
 ├── judge.py           # jev 客户端与 Judge Protocol
 ├── relationship.py    # 只读 rela-mem 档案读取
-├── prompts.py         # 防御、重锚、policy、关系与 overlay 的框架文案
+├── prompts.py         # 防御、重锚与演化指导；档案/观察包装由 relationship.py/store.py 维护
 └── tools.py           # persona_evolve
 ```
 
@@ -238,9 +238,9 @@ Manifest 关键字段：
 生命周期：
 
 - `start`：创建 jev 客户端（不发起网络请求）。
-- `on_session_start`：加载 persona/overlay、读取关系档案、构建静态分节；文件缺失时抛错使 required 插件启动失败。
-- `static_prompt_sections`：返回已构建的四个静态分节。
-- `on_event`：处理 `input.user_input` 与 `agent.completed`；输入事件始终发布动态贡献。
+- `on_session_start`：加载 persona/overlay，构建静态分节并冻结观察背景；不读取关系档案。文件缺失时抛错使 required 插件启动失败。
+- `static_prompt_sections`：返回非空身份段，以及 JEV 启用且 Judge 可用时的演化指导段，最多两段。
+- `on_input` / `on_completed`：分别处理 `input.user_input` 与 `agent.completed`；有效任务输入时并行读取关系档案和执行 JEV 判定，将可用背景及提醒作为动态贡献发布；完成事件更新助手消息窗口。
 - `build_tools`：返回 `persona_evolve`。
 - `quiesce`：停止接受新判定；`stop`：关闭 jev 与 HTTP 客户端。
 
@@ -285,7 +285,7 @@ max_dynamic_tokens: 200
 ## 10. 非目标与已知限制
 
 - 不支持多人格、运行中切换或 per-session 覆盖。
-- 不做对话中自动检索，不新增关系查询工具。
+- 不让模型为人格联动自主选择检索；开启联动后由插件按任务后台读取关系档案，不新增关系查询工具。
 - 不扫描记忆、工具输出、文件或网页里的间接提示词注入；V1 只检查用户输入。
 - 不检查 steer/context input，只检查每轮 `input.user_input`。
 - 不向 mem0 / rela-mem 回写任何内容。
@@ -296,7 +296,7 @@ max_dynamic_tokens: 200
 ## 11. 验收
 
 - 新 Session 的 System Prompt 含 `persona` 层内容；persona 是 required source，不会在总预算内被当作可选来源丢弃；运行中不刷新。
-- `jev_enabled=false` 时工具仍可见但返回 `judge_disabled`，policy 不包含演化引导。
+- `jev_enabled=false` 时工具仍可见但返回 `judge_disabled`，不贡献 `persona-05-evolution`；可用档案与会话冻结观察仍进入当轮 User。
 - 两个 Session 共享同一人格文件与 overlay；自演化写入后只有新 Session 看到。
 - 正常输入只注入可用背景；中/高档攻击另注入对应防御；JEV 超时不丢已有背景。
 - 第 5、10、15… 轮检测漂移；命中只重锚一次；jev 失败不影响生成。
