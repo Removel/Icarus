@@ -26,11 +26,44 @@ def test_static_sections_are_frozen_and_new_session_loads_evolution(tmp_path):
         await second.on_session_start()
         assert first.static_prompt_sections() == before
         text = "\n".join(s.content for s in second.static_prompt_sections())
-        assert "I use warmer greetings." in text
+        assert "I use warmer greetings." not in text
+        captured = []
+        async def publish(event):
+            captured.append(event)
+        second.publish = publish
+        from icarus.core.contracts.input import UserInputEvent
+        await second.on_input("user-input", UserInputEvent(task_id="task", prompt="hello"))
+        assert "I use warmer greetings." in captured[0].sections[0].content
         assert "PRIVATE" not in text
         assert "persona_evolve" not in text
         await first.stop()
         await second.stop()
+    asyncio.run(run())
+
+
+def test_relationship_snapshot_is_refreshed_for_each_task_and_never_in_system(tmp_path):
+    async def run():
+        value = plugin(tmp_path)
+        calls = []
+        captured = []
+        async def load():
+            calls.append(True)
+            return f"PROFILE-{len(calls)}"
+        async def publish(event):
+            captured.append(event)
+        value.relationship.load = load
+        value.publish = publish
+        await value.on_session_start()
+        assert not calls
+        static = value.static_prompt_sections()
+        from icarus.core.contracts.input import UserInputEvent
+        for number in (1, 2):
+            await value.on_input("user-input", UserInputEvent(task_id=f"t{number}", prompt="hello"))
+            assert captured[-1].sections[0].layer == "contributor"
+            assert captured[-1].sections[0].content == f"PROFILE-{number}"
+        assert value.static_prompt_sections() == static
+        assert "PROFILE" not in "".join(s.content for s in static)
+        await value.stop()
     asyncio.run(run())
 
 
@@ -57,7 +90,7 @@ def test_evolution_guidance_has_its_own_conditional_section(tmp_path, enabled, l
         assert bool(guidance) == (enabled and live_judge)
         if guidance:
             assert "persona_evolve" in guidance[0].content
-            assert "全局" in guidance[0].content and "新会话" in guidance[0].content
+            assert "global" in guidance[0].content and "new sessions" in guidance[0].content
             assert guidance[0].layer == "persona"
         await value.stop()
     asyncio.run(run())

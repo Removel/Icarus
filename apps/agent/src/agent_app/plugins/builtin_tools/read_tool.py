@@ -26,32 +26,32 @@ class ReadTool(BaseTool):
         return ToolDefinition(
             name="read",
             description=(
-                "按行分页读取本地 UTF-8 文本，每次默认最多2000字符。"
-                "先用相同行页的 next_text_offset 续读，truncated=false 后再用 next_offset 翻行页。"
-                "预算裁剪时用原 offset/text_offset 减小 max_chars 重读，不能跳过隐藏正文；文件修改后重新读取。"
+                "Read UTF-8 files by line pages, default 2000 characters per call. "
+                "Finish each page with next_text_offset before advancing next_offset when truncated=false. "
+                "If budget-clipped, reduce max_chars and retry the original offsets; never skip hidden text. Reread after edits."
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "需要读取的文件路径",
+                        "description": "File path to read.",
                     },
                     "offset": {
                         "type": "integer", "minimum": 1, "default": 1,
-                        "description": "行页起始行号，从1开始；同一行页续读时保持不变。",
+                        "description": "Starting line, 1-based; keep unchanged while continuing the same page.",
                     },
                     "text_offset": {"type": "integer", "minimum": 0, "default": 0,
-                                    "description": "当前行页内的字符偏移，从0开始；续读使用 next_text_offset。"},
+                                    "description": "Character offset within this line page, 0-based; continue with next_text_offset."},
                     "max_chars": {
                         "type": "integer", "minimum": 1, "maximum": 20000, "default": 2000,
-                        "description": "本次最多返回的字符数；预算裁剪时减小并用原偏移重读。",
+                        "description": "Maximum returned characters; reduce and retry original offsets after budget clipping.",
                     },
                     "limit": {
                         "type": "integer", "minimum": 1,
                         "maximum": self.maximum_limit,
                         "default": self.default_limit,
-                        "description": "行页最多包含的行数；同一行页续读时保持不变。",
+                        "description": "Maximum lines in this page; keep unchanged while continuing it.",
                     },
                 },
                 "required": ["path"],

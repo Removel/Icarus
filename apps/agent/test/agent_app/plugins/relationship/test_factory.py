@@ -65,12 +65,12 @@ def test_static_prompt_no_regions_and_close_before_start():
     assert not plugin.accepts_event("test", Event())
     section, = plugin.static_prompt_sections()
     assert section.layer == "session"
-    assert "memory_remember" in section.content
-    assert "上下文足够" in section.content
+    assert "Memory" in section.content
+    assert "context-sufficient" in section.content
     remember = next(tool.definition for tool in plugin.build_tools()
                     if tool.definition.name == "relationship_remember")
     assert "confirm_create=true ONLY after the user explicitly confirms" in remember.description
-    assert "relationship_relate" in section.content
+    assert "relationship_relate" in plugin.tool_scope_guidance()
     assert "credentials" in remember.description
     assert "work.role" in remember.input_schema["properties"]["profile"]["description"]
     asyncio.run(plugin.stop())
@@ -95,8 +95,8 @@ def test_actual_session_registers_optional_tools_and_static_guidance(tmp_path, m
             assert "relationship" not in config.runtime.required_plugin_ids
             assert len(plugin.build_tools()) == 5
             prompt = runtime.runtime_host.get_plugin("prompt")._system_prompt
-            assert "relationship_find" in prompt
-            assert "人物档案" in prompt
+            assert "Use Relationship" in prompt
+            assert "person" in prompt
             board = runtime.runtime_host.get_plugin("blackboard")
             assert "relationship" not in {definition.region for definition in board.region_registry.definitions()}
             result = plugin.build_tools()[0].invoke({"query": "张三"})
@@ -111,7 +111,7 @@ def test_actual_session_registers_optional_tools_and_static_guidance(tmp_path, m
 def test_memory_guidance_and_relationship_guidance_split_and_fallback():
     from agent_app.plugins.memory.prompts import MEMORY_GUIDANCE
     from agent_app.plugins.relationship.prompts import RELATIONSHIP_GUIDANCE
-    assert "relationship" in MEMORY_GUIDANCE
-    assert "未启用" in MEMORY_GUIDANCE
+    assert "Relationship" in MEMORY_GUIDANCE
+    assert "disabled" in MEMORY_GUIDANCE
     assert "relationship_remember" in RELATIONSHIP_GUIDANCE
     assert "relationship_relate" in RELATIONSHIP_GUIDANCE

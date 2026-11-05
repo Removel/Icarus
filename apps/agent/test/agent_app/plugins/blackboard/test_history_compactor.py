@@ -60,8 +60,8 @@ def test_history_compactor生成单条摘要并保留usage():
     assert usage == Usage(100, 12)
     assert llm.calls[0][0][1] == Message("user", [TextPart("old")])
     instructions = llm.calls[0][0][0].content[0].text
-    assert "保留事实来源、授权范围与未验证状态" in instructions
-    assert "不改写成用户要求或系统规则" in instructions
+    assert "Preserve sources, authorization scope and unverified status" in instructions
+    assert "never user requests or system rules" in instructions
 
 
 @pytest.mark.parametrize(

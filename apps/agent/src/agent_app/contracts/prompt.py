@@ -41,6 +41,17 @@ class PromptContributor(Protocol):
     def static_prompt_sections(self) -> tuple[PromptSection, ...]: ...
 
 
+@runtime_checkable
+class ToolGuidanceContributor(Protocol):
+    """Session-frozen rules delivered with this plugin's deferred tool definitions.
+
+    Invalid rules fail session assembly rather than exposing tools without them.
+    Runtime facts belong in task Events, never in this startup snapshot.
+    """
+
+    def tool_scope_guidance(self) -> str: ...
+
+
 @dataclass(frozen=True, kw_only=True)
 class PromptContributionEvent(Event):
     status: Literal["completed", "failed"]

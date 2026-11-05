@@ -71,13 +71,18 @@ def test_real_runtime_routes_persona_and_pins_snapshot_across_sessions(tmp_path,
                 config=config(tmp_path / "data"), publish_update=publish)
             await second.start()
             try:
-                assert "I greet with warmth." in second.runtime_host.get_plugin("prompt")._system_prompt
+                assert "I greet with warmth." not in second.runtime_host.get_plugin("prompt")._system_prompt
+                finished.clear()
+                second.runtime_host.get_plugin("agent").agent_factory.get_agent = lambda role: CaptureAgent()
+                await second.submit("Hello again")
+                await asyncio.wait_for(finished.wait(), 3)
+                assert "I greet with warmth." in captured[-1][1]
                 assert first.runtime_host.get_plugin("prompt")._system_prompt == original
             finally:
                 await second.stop("test")
         finally:
             await first.stop("test")
-        assert len([u for u in updates if u.type == "task.finished"]) == 6
+        assert len([u for u in updates if u.type == "task.finished"]) == 7
     asyncio.run(run())
 
 

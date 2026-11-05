@@ -31,7 +31,7 @@ def test_attack_thresholds_and_terminal_contribution(make_persona, judge, score,
         assert len(published) == 1 and published[0].status == "completed"
         assert [s.section_id for s in published[0].sections] == ([expected] if expected else [])
         if score >= 0.8:
-            assert "拒绝" in published[0].sections[0].content
+            assert "Reject" in published[0].sections[0].content
         assert judge.attacks == ["USER-1"]
     asyncio.run(run())
 
@@ -87,6 +87,26 @@ def test_detection_runs_in_parallel_and_failure_is_independent(make_persona, jud
         judge.drift_confidence = drift
         await asyncio.wait_for(plugin.on_input("user-input", user(5)), 0.3)
         assert [s.section_id for s in published[-1].sections] == ["persona-reanchor"]
+    asyncio.run(run())
+
+
+def test_relationship_refresh_and_detection_are_parallel_and_fail_independently(make_persona, judge):
+    async def run():
+        plugin, published = make_persona()
+        await plugin.on_session_start()
+        relationship_started, attack_started = asyncio.Event(), asyncio.Event()
+        async def relationship():
+            relationship_started.set()
+            await attack_started.wait()
+            raise RuntimeError("unavailable")
+        async def attack(text):
+            attack_started.set()
+            await relationship_started.wait()
+            return 0.9
+        plugin.relationship.load = relationship
+        judge.attack_confidence = attack
+        await asyncio.wait_for(plugin.on_input("user-input", user(1)), 0.3)
+        assert [s.section_id for s in published[0].sections] == ["persona-defense"]
     asyncio.run(run())
 
 

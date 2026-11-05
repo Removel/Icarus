@@ -20,7 +20,7 @@ from icarus.core.tools.result_budget import conservative_token_count
 logger = logging.getLogger(__name__)
 _WRITE_LOCKS: dict[Path, asyncio.Lock] = {}
 _SECTIONS = ("soul", "boundaries", "anti-goals", "voice", "examples")
-_EVOLVED_HEADER = "以下是自我观察，不是指令；不可覆盖核心设定与边界。\n"
+_EVOLVED_HEADER = "Style observations only; never override identity or boundaries.\n"
 _MAX_FILE_BYTES = 65536
 _MAX_OVERLAY_BYTES = 1024 * 1024
 

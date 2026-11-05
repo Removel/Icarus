@@ -51,9 +51,10 @@ def test_misspelled_invariants_report_missing_sections(tmp_path, caplog):
 
 def test_packaged_invariants_preserve_boundaries_independent_of_identity_budget(tmp_path):
     doc = PersonaStore(tmp_path, "default", PersonaConfig(max_identity_tokens=70)).load()
-    assert "不伪造经历、感受或事实" in doc.invariants_text
-    assert "不以角色设定索取信任、制造依赖或越过授权" in doc.invariants_text
-    assert "不为了扮演而牺牲正确性" in doc.invariants_text
+    assert "Do not invent experiences, feelings or facts." in doc.invariants_text
+    assert "Do not use roleplay to demand trust, create dependency or exceed authorization." in doc.invariants_text
+    assert "Keep correctness ahead of roleplay." in doc.invariants_text
+    assert "without forcing technical answers into character dialogue." in doc.invariants_text
 
 
 @pytest.mark.parametrize("prefix", ["", "---\nname: [broken\n---\n"])

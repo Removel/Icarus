@@ -8,8 +8,9 @@ def test_process_guidance_is_static_session_and_does_not_start_a_process(tmp_pat
     assert sections[0].layer == "session"
     content = sections[0].content
     assert "background_process" in content
-    assert "ready" in content
-    assert "logs" in content
+    assert "long commands" in content
+    assert "readiness" in target.tool_scope_guidance()
+    assert "logs" in target.tool_scope_guidance()
     assert events == []
     assert not target._started
 

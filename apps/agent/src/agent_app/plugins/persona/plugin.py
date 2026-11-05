@@ -36,6 +36,7 @@ class PersonaPlugin(BasePlugin):
         self.relationship = RelationshipReader(connection, api_token=os.getenv("RELA_MEM_API_TOKEN", "").strip())
         self.document = None
         self._sections: tuple[PromptSection, ...] = ()
+        self._background: tuple[PromptSection, ...] = ()
         self._accepting = True
         self.turn_count = 0
         self._seen_inputs = OrderedDict()
@@ -54,14 +55,13 @@ class PersonaPlugin(BasePlugin):
 
     async def on_session_start(self):
         self.document = self.store.load()
-        relationship = await self.relationship.load()
         evolution = (EVOLUTION_GUIDANCE
                      if self.config.jev_enabled and not isinstance(self.judge, NullJudge) else "")
         values = (("persona-01-identity", self.document.identity_text),
-                  ("persona-02-relationship", relationship),
-                  ("persona-03-evolved", self.document.evolved_text),
                   ("persona-05-evolution", evolution))
         self._sections = tuple(PromptSection(key, "persona", text) for key, text in values if text)
+        self._background = ((PromptSection("persona-observations", "contributor", self.document.evolved_text),)
+                            if self.document.evolved_text else ())
 
     def static_prompt_sections(self):
         return self._sections
@@ -97,13 +97,24 @@ class PersonaPlugin(BasePlugin):
     async def on_input(self, source, event):
         if not event.task_id or not self._remember(self._seen_inputs, event.task_id):
             return
-        sections: tuple[PromptSection, ...] = ()
+        sections: tuple[PromptSection, ...] = self._background
         if self.task_channels is not None:
             channel = self.task_channels.get(event.task_id)
             if channel is None or channel.status not in {
                     TaskChannelStatus.ACCEPTED, TaskChannelStatus.PREPARING_CONTEXT}:
                 await self.publish(PromptContributionEvent(task_id=event.task_id, status="completed"))
                 return
+        results = await asyncio.gather(self.relationship.load(), self._judged_sections(event), return_exceptions=True)
+        for index, result in enumerate(results):
+            if isinstance(result, BaseException):
+                self.logger.warning("Persona contribution degraded: error_type=%s", type(result).__name__)
+            elif index == 0 and result:
+                sections += (PromptSection("persona-relationship", "contributor", result),)
+            elif index == 1:
+                sections += result
+        await self.publish(PromptContributionEvent(task_id=event.task_id, status="completed", sections=sections))
+
+    async def _judged_sections(self, event):
         try:
             self.turn_count += 1
             self._recent = bounded_recent([*self._recent, ("user", event.prompt)])
@@ -133,10 +144,10 @@ class PersonaPlugin(BasePlugin):
                             section.section_id, measured, self.config.max_dynamic_tokens)
                         break
                     selected = proposed
-                sections = tuple(selected)
+                return tuple(selected)
         except Exception as error:
             self.logger.warning("Persona contribution degraded: error_type=%s", type(error).__name__)
-        await self.publish(PromptContributionEvent(task_id=event.task_id, status="completed", sections=sections))
+        return ()
 
     @handles(AgentCompletedEvent)
     async def on_completed(self, source, event):

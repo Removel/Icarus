@@ -33,12 +33,12 @@ def test_factory_registers_search_and_fetch_without_prefetch(tmp_path):
             await plugin.on_input("user-input", UserInputEvent(task_id="task", prompt="最新资料",
                 request_options={"web_search": True}))
             assert len(events) == 1 and isinstance(events[0], ContextContributionEvent)
-            assert "当前时间" in events[0].context_blocks[0].content
+            assert "Current time:" in events[0].context_blocks[0].content
             guidance = events[0].context_blocks[0].content
-            assert 'tool_search(query="web-search")' in guidance
-            assert 'tool_execute(name="web_search", arguments={"query":' in guidance
-            assert 'tool_execute(name="web_fetch", arguments={"url":' in guidance
-            assert "新 Run" in guidance
+            assert 'Discover scope "web-search"' in guidance
+            assert 'with tool_search' in guidance
+            assert "each Run" in guidance
+            assert 'arguments=' not in guidance
         finally:
             await plugin.stop()
     asyncio.run(run())

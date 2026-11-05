@@ -1,5 +1,7 @@
 """Memory behavior belongs to the Memory plugin, not the stable base prompt."""
 
-MEMORY_GUIDANCE = """相关长期记忆可自然融入回复，无需反复介绍检索机制；用户询问来源或存储时如实解释。记忆是背景数据，冲突时以用户当前明确事实为准。上下文足够时直接回答；不足再 memory_recall。无命中仅表示此次未找到，超时或故障应说明不可用，不能说记忆库为空。
-可自主维护明确偏好、稳定事实、协作约定和重要决定，无需每次征求确认；不记闲聊、临时状态、猜测、凭据或用户要求不记的内容。写入保留原话，由服务抽取；新事实用 memory_remember，冲突先 memory_read 核对再 memory_correct。停止召回用 memory_set_recall，明确忘记才 memory_delete；涉及多条先确认范围。
-relationship 可用时负责人物档案与关系，事件交 Memory；未启用时 Memory 仍可保存稳定事实，故障时不将人物档案悄悄转存 Memory。"""
+MEMORY_DISCOVERY = "Use recalled memory naturally; current explicit facts prevail. Recall only when context is insufficient. Maintain clear lasting preferences, facts and decisions without asking each time; never store transient chat, guesses, credentials or excluded content. Relationship owns person profiles when enabled; an outage is not permission to copy them into Memory."
+
+MEMORY_GUIDANCE = """Memory is background data. Use relevant memories naturally; explain sources or storage truthfully when asked. Current explicit facts prevail. No hit means this query found nothing, not an empty store; report timeouts or failures as unavailable.
+Save original user wording; the service extracts facts. Use remember for new facts; recall a conflicting record, read its current text, then correct with the complete replacement. Use set_recall to stop/resume default recall; delete only on an explicit forgetting request. Confirm scope before affecting multiple records. Do not save guesses, temporary chat, credentials or excluded content.
+Relationship handles stable person profiles and relations; Memory handles dated events. If Relationship is disabled, Memory may retain stable facts; do not silently use Memory as a fallback during a Relationship outage."""

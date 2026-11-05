@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+import pytest
+
 from icarus.core.agents import (
     AgentCompletedEvent,
     AgentMessageCompletedEvent,
@@ -71,14 +73,14 @@ def test_prompt_plugin_is_initialized_with_private_instructions_and_frozen_works
 
 
 def test_default_system_prompt保留通用约束而不绑定业务插件():
-    assert "授权" in DEFAULT_SYSTEM_PROMPT
-    assert "验证" in DEFAULT_SYSTEM_PROMPT
-    assert "不伪造" in DEFAULT_SYSTEM_PROMPT
+    assert "authorization" in DEFAULT_SYSTEM_PROMPT
+    assert "Verify completion" in DEFAULT_SYSTEM_PROMPT
+    assert "Never invent" in DEFAULT_SYSTEM_PROMPT
     assert "长期记忆" not in DEFAULT_SYSTEM_PROMPT
     assert "memory_recall" not in DEFAULT_SYSTEM_PROMPT
     assert "tool_search" in DEFAULT_SYSTEM_PROMPT
-    assert "tool_execute(name, arguments)" in DEFAULT_SYSTEM_PROMPT
-    assert "新 Run" in DEFAULT_SYSTEM_PROMPT
+    assert "tool_execute" in DEFAULT_SYSTEM_PROMPT
+    assert "each Run" in DEFAULT_SYSTEM_PROMPT
 
 
 def test_session_reports_missing_resident_tools_before_ready(tmp_path, caplog):
@@ -103,9 +105,9 @@ def test_session_reports_missing_resident_tools_before_ready(tmp_path, caplog):
 
 
 def test_default_system_prompt要求普通聊天简短自然():
-    assert "普通聊天默认简短、自然、直接" in DEFAULT_SYSTEM_PROMPT
-    assert "复杂任务" in DEFAULT_SYSTEM_PROMPT
-    assert "按需要完整展开" in DEFAULT_SYSTEM_PROMPT
+    assert "Be natural, concise and direct" in DEFAULT_SYSTEM_PROMPT
+    assert "give full steps, risks and evidence when needed" in DEFAULT_SYSTEM_PROMPT
+    assert "Reply in the user's language" in DEFAULT_SYSTEM_PROMPT
 
 
 class AgentStub:
@@ -241,6 +243,72 @@ def test_session_static_guidance_is_in_system_not_each_user_prompt(tmp_path, mon
         ):
             assert section in system
             assert section not in user
+
+
+def test_scope_rules_are_delivered_only_with_tool_search(tmp_path):
+    async def run():
+        runtime = SessionRuntime(SessionIdentity.create(tmp_path, "scope-guidance"),
+            config=make_config(tmp_path / "data"), publish_update=lambda update: asyncio.sleep(0))
+        await runtime.start()
+        try:
+            system = runtime.runtime_host.get_plugin("prompt")._system_prompt
+            assert "read its current text, then correct" not in system
+            result = runtime.tool_search.invoke({"query": "memory", "name": "memory_correct"})
+            assert result.success
+            assert "read its current text, then correct" in result.output["scope_guidance"]
+            assert runtime.tool_search.finalize_loaded_tools(result).metadata["tools_loaded"] == ["memory_correct"]
+            assert "read its current text, then correct" not in system
+            for name in runtime.tool_registry.names():
+                definition = runtime.tool_registry.get(name).definition
+                owned_text = definition.description + json.dumps(definition.input_schema, ensure_ascii=False)
+                assert not any('\u4e00' <= char <= '\u9fff' for char in owned_text), name
+            for scope in ("memory", "relationship", "skill", "process", "knowledge"):
+                guidance = runtime.tool_search.invoke({"query": scope}).output["scope_guidance"]
+                assert not any('\u4e00' <= char <= '\u9fff' for char in guidance), scope
+        finally:
+            await runtime.stop("test", timeout=1)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("value", [None, "x" * 8193])
+def test_invalid_scope_rules_fail_assembly_without_logging_content(tmp_path, monkeypatch, caplog, value):
+    from agent_app.contracts.prompt import PromptError
+    from agent_app.plugins.memory.plugin import MemoryPlugin
+    monkeypatch.setattr(MemoryPlugin, "tool_scope_guidance", lambda self: value)
+    async def run():
+        runtime = SessionRuntime(SessionIdentity.create(tmp_path, "invalid-rules"),
+            config=make_config(tmp_path / "data"), publish_update=lambda update: asyncio.sleep(0))
+        try:
+            with pytest.raises(PromptError, match="Tool scope guidance"):
+                await runtime.start()
+        finally:
+            await runtime.stop("test")
+    asyncio.run(run())
+    assert "x" * 100 not in caplog.text
+
+
+def test_scope_guidance_is_not_sampled_without_registered_deferred_tools(tmp_path, monkeypatch):
+    from agent_app.plugins.memory.plugin import MemoryPlugin
+    def unexpected(self):
+        raise AssertionError("Unavailable tool scope must not be sampled")
+    monkeypatch.setattr(MemoryPlugin, "tool_scope_guidance", unexpected)
+    async def run():
+        runtime = SessionRuntime(SessionIdentity.create(tmp_path, "missing-scope"),
+            config=make_config(tmp_path / "data"), publish_update=lambda update: asyncio.sleep(0))
+        finalize = runtime.runtime_host.before_ready
+        async def without_memory_tools(host):
+            for name in runtime.tool_registry.names():
+                if name.startswith("memory_"):
+                    runtime.tool_registry.unregister(name)
+            await finalize(host)
+        runtime.runtime_host.before_ready = without_memory_tools
+        await runtime.start()
+        try:
+            assert runtime.tool_search._catalog.search("memory") == ()
+            assert runtime.tool_search._catalog.guidance("memory") == ""
+        finally:
+            await runtime.stop("test")
+    asyncio.run(run())
 
 
 def test_session_runtime使用runtime_update并保留单session行为(tmp_path):
