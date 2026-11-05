@@ -1,5 +1,7 @@
 # 提示词引导与描述修复计划
 
+> 本文为已提交的第一轮实施计划。2026-11-05用户新增统一英文化和注入优化要求，当前交付见 [plan-context-delivery.md](plan-context-delivery.md)，新版逐条承接见 [plan-context-rule-mapping.md](plan-context-rule-mapping.md)。下文“本次不英文化”仅描述历史范围。
+
 日期：2026-11-04。第二版审阅与原仓库 `upstream/feature` 的源码复核后执行；实际执行基线与结果记入 process.md。
 
 ## 范围与规则承接

@@ -2,6 +2,8 @@
 
 日期：2026-11-05。供用户在 WSL 启动的应用中手工执行；本文是待执行方案，不表示真实模型已通过。规则依据见 [逐条承接表](plan-rule-mapping.md)，离线验证记录见 [process.md](process.md) 第 10 节。
 
+本轮英文化后请同时核对 [当前规则承接表](plan-context-rule-mapping.md)：中文提问应正常中文回复；需要延迟工具时先搜索，结果中同时有范围指导与定义，再分发调用。人物背景应位于当前User上下文，System保持稳定；仅看最终回复不能证明位置正确。
+
 ## 使用方法
 
 1. 重启 Gateway，让新会话加载当前源码和提示词：`./bin/icarus stop gateway`，再 `./bin/icarus start gateway`。确认状态正常后再打开 WebUI 新会话。

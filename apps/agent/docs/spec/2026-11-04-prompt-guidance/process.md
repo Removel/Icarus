@@ -319,3 +319,45 @@ Agent/Gateway src、test 及共享 packages 的 Linux compileall 通过，隔离
 文档提交补充 [真实模型手工验收问句](plan-manual-acceptance.md)：6 组无需持久写入的任务、4 组可选测试写入/续读任务及结果记录方式，明确后台自动召回不等于模型主动查询、回复自述不等于执行证据、单次通过不代表稳定通过。此文档为待执行方案，没有运行收费模型、外部服务行为评估或真实 JEV。
 
 最终提交范围为 47 个文件：原有 46 个，加手工验收方案。代码/测试与文档分别提交，未推送或创建远端 PR。第 9、10 节的“未提交”是当轮历史状态，以本节更新为准。
+
+## 12. 英文化与上下文交付轮（2026-11-05）
+
+本轮用户新要求：整理Codex调研文档，对照当前方案继续精简和增强提示词，统一英文，并调整各插件的注入位置/时机。继续 `feat/agent`，实施基线为上轮已提交的 `13743b0`。开始时fetch原仓库upstream/feature并检查祖先关系，上游仍为 `c019e9a`；未创建分支、合并、提交或推送。用户原有.gitignore、HTML，以及同期新增的web-search自主性文档不在本轮修改范围。
+
+### 资料与改动
+
+将根docs中的用户调研原文迁到 [reference-codex-research.md](reference-codex-research.md)，归属现有Agent专题。核对其本地Codex源码基线 `de6e72addd67d35e6bf83b7acac406116bf598a6`，将可采纳方法与不能直接证明的推论分开：稳定ID不保证缓存、增量不等于免除历史计费、未见源码引用不证明文件必为导出、标签不提供执行授权。官方文档检索/页面读取未返回可用正文，因此没有伪造官方引文或据此更换API/模型。
+
+实施和位置/时机表见 [plan-context-delivery.md](plan-context-delivery.md)；当前 [104条规则承接表](plan-context-rule-mapping.md) 保留旧ID逐条核对，旧表标注为历史文案。同步更新Prompt/Persona当前架构，不将旧中文短引文写成最终源码。
+
+- base、插件指导、内置工具/字段描述、记忆包装/状态、联网提示/错误、摘要、标题、JEV判据、默认人格统一英文。回复与标题仍按用户语言；用户/工作区/自定义人格/Skill/第三方内容不翻译。
+- Memory/Relationship/Process/Knowledge/Skill的System只保留发现和必要触发规则；完整跨工具指导在tool_search.scope_guidance交付。仅有效延迟scope采样，core仅保存普通字符串，不依赖应用契约；无效规则阻止装配。执行器在裁剪后验证指导与工具定义完整性，同步/异步可恢复。
+- Skill启动不再扫描目录用于提示词；调用list/search时扫描，正文再read；produce/evolve开关及Job确认按需交付。仅evolve开放的情况也明确要求确认作业完成。
+- Persona核心身份/完整边界保持System；人物档案按任务刷新，演化观察按会话冻结后作为当前User背景交付。关系与JEV并行且失败独立；原文人物关系方向保留，中文事实不翻译。防御/重锚仍条件注入且预算不变。
+- WebSearch当轮只交付时间、开关、深度及发现入口，具体调用/来源/预算规则放工具定义和实际结果。Memory仍走原Event/ACK链，不在Prompt复制召回正文。
+
+### 复核发现与修正
+
+首轮聚焦233项有5项失败：4项旧语言或注入位置断言、1项英文观察头占用过小自定义overlay预算。后者是真回归，缩短头部而不提高配置预算；补完整边界内容断言，防御默认200/自设110测试继续通过。进一步发现Skill仅evolve开放时的作业验证规则需要明确承接，已修正文案和独立用例；档案关系英文表达改为明确的“source is target's detail”，避免箭头语义含糊。
+
+全套mypy初次缺开发依赖，随后直接按文件运行又未加载应用pyproject，出现import-untyped；安装隔离开发依赖并改用仓库规定的make typecheck-agent，最终273源文件通过。没有为通过检查添加ignore或放宽类型规则，也未增加运行时依赖。
+
+### WSL验收和测量
+
+新建原生WSL持久隔离目录 `/home/guoshangyong/icarus-prompt-english-8q88kg5u/{baseline,current}`，从13743b0归档构造；当前副本应用本轮src/test变更，分别editable安装。仅注释空.env，不带凭据、服务运行数据、个人配置或生产数据库。最终命令由Python subprocess记录真实returncode，避免外层Shell重定向/尾部输出掩盖退出状态。
+
+最终：聚焦45 passed；Agent全套1304 passed；Gateway全套50 passed；Agent全套类型273文件通过；两应用脚本内compileall通过；WSL以最终补丁对基线执行git apply --check --whitespace=error通过；55个改动源码/测试与主工作树规范化CRLF/LF后逐文件一致。文档检查104条规则集合完全对应且无重复、4组新增证据、120处本地链接存在，测量JSON/探针可解析。原始输出、命令/退出码、环境及SHA保留本地wsl-english文件，继续排除提交。
+
+新增 [context_delivery_probe.py](context_delivery_probe.py)，使用生产运行时/Agent/执行器/历史/模型适配器和loopback脚本HTTP响应，两个版本各跑0/8个Skill、每组3任务5请求；断言搜索/执行均成功、System稳定、中文用户正文保留、Skill正文不预注入。tiktoken仅装在隔离开发环境。完整分项结果存 [改造前](measurements-context-before.json) / [改造后](measurements-context-current.json)，保留System/User/常驻schema/历史/当前工具步骤及各scope完整搜索响应。
+
+最终o200k输入代理值：0个Skill首请求3562→2910（约-18.3%）；3任务5次输入合计20383→17608（约-13.6%）。8个Skill首请求3862→2910，合计21883→17608（约-19.5%）。cl100k分项也在JSON。按需范围规则增加首次搜索成本，未以System节省量单独宣称净收益。临时路径统一为占位符后计量；不把脚本假usage当token，不承诺线上账单或真实模型质量。
+
+base字符/保守预算599→1497，但o200k代理394→270；生产Prompt12288/单节8192/Persona防御200不变，base单测文本护栏600→1800明确记录。Persona关系/观察移User后仍可能随历史重复累积，且开启关系时每任务增加读取；该成本夹具关闭这些可选背景，因此不外推节省比例。自定义关系超时大于Prompt等待窗口仍需协调配置。
+
+本轮没有调用收费模型、真实JEV或外部数据库；中文回答质量、工具选择/身份确认、抗注入等行为继续待真实模型验收。本轮修改未提交/未推送，原始日志仅本地保留。
+
+## 13. 草稿 PR 提交准备（2026-11-05）
+
+用户明确授权提交并创建草稿 PR。重新 fetch 原仓库 upstream/feature，仍为 c019e9a，祖先关系通过；origin/feat/agent 是当前分支祖先，可正常推送，无需强推。提交前在 WSL 重新比对全部 55 个源码/测试文件，与已通过验收的原生副本规范化行尾后完全一致，沿用第 12 节完整测试结果；文档规则/链接/JSON/探针检查重新通过。没有重复调用模型或修改服务配置。
+
+本轮代码与测试提交为 `077f9d2`（`feat(agent): deliver English prompt guidance on demand`）。更新 [PR 材料](plan-pull-request.md) 覆盖全部最终改动，文档单独提交。远端目标为 Removel/Icarus 的 feature，来源为 xilele777/Icarus 的 feat/agent；按用户要求发布为草稿，保留真实模型行为验收及远端 CI 的待办状态。用户其他改动和原始日志继续排除，不自动合并。

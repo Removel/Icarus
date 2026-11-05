@@ -248,7 +248,9 @@ def main():
     texts = {}
     for name, module, attribute in declarations:
         texts[name] = getattr(importlib.import_module("agent_app.plugins." + module), attribute, "")
-    texts["skill-empty-catalog"] = discovery_guidance([], allow_produce=False, allow_evolve=False)
+    import inspect
+    catalog_args = ([],) if "skills" in inspect.signature(discovery_guidance).parameters else ()
+    texts["skill-empty-catalog"] = discovery_guidance(*catalog_args, allow_produce=False, allow_evolve=False)
     # Definitions are measured separately: moving text out of static guidance
     # can increase the cost of a loaded capability and is not free token saving.
     from types import SimpleNamespace
