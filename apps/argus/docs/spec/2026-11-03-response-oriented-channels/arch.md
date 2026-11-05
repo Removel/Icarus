@@ -1,10 +1,12 @@
 # 回应驱动 Channel：当前接线
 
-核验日期：2026-11-03。描述当前工作区实现与本地测试，不代表已提交或部署；验收和剩余限制见[execution.md](execution.md)。业务设计见[plan-design.md](plan-design.md)。
+核验日期：2026-11-05。描述当前工作区实现，不代表已提交或部署；2026-11-03历史验证保留在[execution.md](execution.md)，本轮验证另记。设计见[plan-design.md](plan-design.md)。
 
 ## 输入与规则
 
-QQ HTTP入口先验证原始body HMAC，再对正常heartbeat/notice/request无操作应答。QQProtocol把message/message_sent规范成同一Observation，保留sender、消息类型、peer/self/reply/@元信息；self私聊必须有可靠对端。媒体不下载、不作视觉理解。
+QQProtocol额外保留群名片/昵称、发送时间、规范化来源和有界媒体描述；结构化segments与原始CQ字符串先归一化，媒体URL/二进制不进入内容视图。飞书保留chat_type、内容类型、时间及root/parent/thread事实，不把text当区域类型，root-only不重分区。公共语义上下文消费显式来源事实，旧key解释只在协议helper中；现有source key保持兼容。
+
+默认规则以正文或真实媒体类型摘要判断内容存在，纯媒体不直接等于空消息。媒体仍不下载，也不宣称可视理解。一个Icarus实例是独立对象；来源区域与平台账号分开，不因两个实例观察同群而合并内部记录。
 
 WorkflowRules先让订阅来源的已有Channel按规则判断；多个已有Channel可以接受同一Observation，不做独占消费。只要一个Channel接受，就在decide事务中把Observation.detail.discovery记录为existing，先于通知和Agent执行；该记录不随pending清理、业务提交或取消订阅消失。只有所有已有订阅Channel都明确拒绝后，才执行新建Channel判定；未读、defer、error或未判定的paused不算拒绝。入站、后台扫描和恢复直接调用discover均遵守这个顺序；创建与fallback认领在事务中再次核验游标及pending，防止迟到结果越过已有接受。订阅来源本身不表示接受，真正的新话题仍可新建。
 
@@ -20,10 +22,16 @@ semantic model_provider将criterion/context/candidates编码为一次Choice，�
 
 Channel业务表示维持goal/progress、规则、订阅和active/paused/completed，不新增JSON state或Argus业务列。session_key放既有runtime，在每个round冻结；确认提交next_session=new只改变下一轮选择键，progress/规则/确认及固定回执同事务应用。
 
-Bridge通过Gateway显式转发channel_id/session_key，Agent拥有真实Session和一对多关联，Argus不派生Session ID。旧无key在途轮明确待对账。任务终态没有确定commit且不可证明replay_safe时，round保留execution_outcome_unknown，不自动派发新Task。
+Bridge尽量先读取观测/检查快照和规则，再选择Session；选择后即用set_round_session保存。Agent仍拥有实际Session与一对多关联。新wake响应包含admission_state/attempt/retryable；仅not_admitted可恢复失败在原wake内退避重试，accepted不重复submit，unknown只查状态。set_round_submission在Channel行锁内保存接收结果并忽略较旧attempt；task_id只在accepted或旧协议任务响应时登记。旧缺接收证据轮次保持保守，未知执行不借新Session绕过。
 
 正式Agent继承普通Session能力，自行通过SnowLuma MCP回复后argus_commit；Argus没有平台发送客户端，不转发普通assistant文本。
 
+## 新 Channel 的名称
+
+新建判断通过后，配置可用时先用perception等命名模型无工具概括title，再进入Store事务创建；goal仍保留请求正文。命名严格JSON、1–60字符、10秒、256输出tokens、SDK不重试。原Observation保存一次性claim和结果；重启复用标题，失败/未知/缺配置回退首句，不阻止处理。默认启用，可通过ARGUS_CHANNEL_NAMING_*配置；没有自动改旧Channel名。命名不持有数据库锁，新建主路径也不占全局发现锁。该新增Store持久化仍待真实PG测试。
+
 ## 验证边界
 
-本地真实PG/TCP/正常Agent与假模型验证创建、确认和第二条相关消息复用同Channel/Session；Gateway实际stdio假MCP验证一次发送后一次提交。关联删除/重启和跨Session选择由Agent真实SQLite测试覆盖。真实QQ、付费语义质量与生产部署留给用户验收；self回声没有可信发送关联账本，不能声称确定性防循环。
+2026-11-03的真实隔离PG/TCP与假模型结果见execution.md，不用于证明本轮新增SQL已通过。本轮协议/桥接/规则SDK离线集87项通过，随后补充raw CQ泄漏用例RED→GREEN；本轮完整PostgreSQL集成尚未运行：Linux无可用Docker/PostgreSQL，Windows Docker引擎也不可连接，隔离runner退出1。新增Store事务及真实TCP闭环仍需数据库环境验证，不能拿生产库替代。
+
+Gateway本地真实Session/stdio假MCP验证普通工具、回执和按需指南/召回链；不代表真实QQ、付费模型质量或生产部署。不同实例需独立存储/后端身份范围，未自动创建部署隔离；self回声仍没有可信发送关联账本。

@@ -48,6 +48,13 @@ Other configuration:
   `ARGUS_DISCOVERY_FALLBACK_SETTINGS_PATH` optionally selects that settings JSON; otherwise the
   existing `ICARUS_SETTINGS_PATH` / default settings lookup applies. Credentials and base URLs
   come from the existing general-model configuration, not from `ARGUS_JEV_API_KEY`.
+- `ARGUS_CHANNEL_NAMING_ENABLED` (default true): after discovery chooses `new`, summarize a short
+  Channel title with one tool-free LLM call before the creation transaction. `ARGUS_CHANNEL_NAMING_MODEL`
+  defaults to the existing named model `perception`; `ARGUS_CHANNEL_NAMING_SETTINGS_PATH` optionally
+  selects Agent settings. At most one durable attempt per observation revision, 10s timeout,
+  max256 output tokens, SDK retries0; titles must be1–60 characters without control characters.
+  Missing configuration, invalid output, timeout or interrupted attempts retain the original
+  first-message title fallback, never drop the request. Naming does not change Channel goal or routing.
 - Existing Mem0/relationship/OpenKB endpoint/token configuration provides read-only evidence.
   Memory also requires `ARGUS_MEMORY_USER_ID`, `ARGUS_MEMORY_AGENT_ID`, `ARGUS_MEMORY_WORKSPACE_KEY`;
   knowledge requires `ARGUS_KNOWLEDGE_BASE`. Scripts cannot override trusted scopes.
