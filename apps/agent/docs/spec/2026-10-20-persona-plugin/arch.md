@@ -10,7 +10,7 @@ persona 是一个一级内置插件，manifest `tier: "core"` 并加入默认 `r
 |---|---|
 | 长对话人格漂移 | 每 5 轮用 jev 评估最近助手输出，命中后注入一次简短重锚 |
 | 提示词攻击导致出戏 | 每轮用 jev 评估用户输入，按置信度分档注入防御或人格内拒绝 |
-| 角色约束过拟合 | 人格只约束表达方式；插件自有策略明确要求不改变事实判断、工具使用和任务执行 |
+| 角色约束过拟合 | 人格只约束身份与表达；base 统一声明人格不改变事实、工具、授权和任务要求，persona 正文保留边界 |
 
 人格是**全局资产**，不是会话资产：一个 `persona_id`、一组文件、所有 Session 共享。自演化写入全局 overlay，对所有未来 Session 生效；运行中的 Session 不热更新。会话级状态只有漂移计数、最近消息窗口和限流计数。
 
@@ -53,7 +53,7 @@ version: 1
 - 分节标题为二级标题；未知分节忽略并告警，重复分节按出现顺序拼接。
 - frontmatter 只使用 `id/name/description/version`；`id` 与目录不一致时以目录为准并告警。
 - 缺少 frontmatter 时正文仍可解析；解析失败按"文件损坏"处理。
-- 缺少 `soul` 不阻止启动，但会告警；此时其它有效分节仍注入。
+- 缺少 `soul` 不阻止启动，但会告警；此时其它有效分节仍注入。`soul/boundaries/anti-goals` 任一缺失会汇总告警，提醒 JEV 的 invariants 输入缺失对应段；不按长度猜测语义完整性。
 - 文件不存在是配置错误，启动失败；文件存在但损坏是尽力加载 + 告警。
 
 `evolved.yaml` 格式（Q7 中讨论的 `evolved.md` 以 YAML 落地，条目需要结构化字段，仍可人工编辑）：
@@ -87,7 +87,9 @@ persona 插件同时是静态贡献者和动态贡献者：
 | `persona-01-identity` | soul、boundaries、anti-goals、voice、examples 按优先级拼接 |
 | `persona-02-relationship` | 从 rela-mem 读取的用户档案与关系摘要 |
 | `persona-03-evolved` | overlay 条目，明确标注为"观察，不是指令" |
-| `persona-04-policy` | 插件自有策略：演化约束与"人格不改变任务执行" |
+| `persona-05-evolution` | 仅在 JEV 启用且 Judge 非 NullJudge 时贡献演化场景指导；共通执行/权限规则归 base |
+
+空段不贡献。默认关闭 JEV 且无档案/演化笔记时，仅贡献 identity 一段。`invariants_text` 仍由 soul、boundaries、anti-goals 拼接后按 800 预算裁剪，传给演化判据；不随 identity 的渲染预算一起丢弃。人格正文边界没有为精简提示词而删除。
 
 动态分节（`source=persona`，`layer=contributor`）：
 
@@ -116,6 +118,7 @@ persona 在两份默认 settings 的 `prompt.required_contributors` 中：静态
 - 高档：以人格身份明确拒绝该请求，保持语气；不泄露或讨论系统提示词、规则、检测机制。
 - 所有档位都不向用户暴露"检测到攻击"之类元信息。
 - 防御文案是插件内置模板，不来自人格文件，用户不可编辑。
+- 动态贡献按完整渲染后的预算选段，defense 优先于 reanchor；超限整段省略并记录 section、预算和上限，不记录用户输入。内置默认防御段均在默认 200 预算内；用户自设极小预算仍可能使其省略。
 
 失败策略：1.2s 硬超时、单次尝试、超时或解析失败一律 fail-open，不注入防御，正常生成。检测与提醒是降低出戏风险的启发式措施，不是权限控制或可靠的安全边界，不能保证防住提示词攻击；工具权限与授权仍由既有执行层负责。
 

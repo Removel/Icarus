@@ -9,7 +9,7 @@
 通过 manifest contracts 扩展目录加载；core/runtime 不导入这些应用类型。
 
 - base_prompt.py：Python常量 DEFAULT_SYSTEM_PROMPT，保留通用身份/授权/事实/验证/表达约束；插件专属记忆等指导已下放至各插件prompts.py。
-- sources.py：仅根目录 AGENTS.md→CLAUDE.md 回退，有界 UTF-8 读取，拒绝越界路径、非普通文件。
+- sources.py：仅根目录优先选 AGENTS.md，缺失才选 CLAUDE.md；已有文件无效时不回退。有界 UTF-8 读取，拒绝越界路径、非普通文件；省略时记录文件名、原因、读取字节与预算，不记录正文或原始异常路径。workspace 仍是可选来源，总预算不足时由 composer 记录整段淘汰日志。
 - composer.py：稳定排序和渲染，复用 conservative_token_count，optional整节丢弃，required/base/external不可丢、不截断。
 - plugin.py/state.py：内存静态快照、任务贡献聚合与受管deadline，查询/更新handler。
 - factory.py/config.py：设施与用户配置分离；总预算12288、单节8192、timeout5秒、required_contributors列表。
@@ -99,14 +99,13 @@ class ExamplePlugin(BasePlugin):
 | process | bash与后台任务分工、start不等于ready、跟进logs | 不自动启动/查询进程，不回灌状态事件 |
 | knowledge | 聚焦查询、读原文、真实引用、写入边界 | 不做自动RAG、不查询/上传后端 |
 | mcp | 先搜索/列目录、真实tool_ref/schema、配置不等于连接成功 | 无服务器时为空；指导生成不联网/不启动bridge |
-| builtin-tools | 文件先读、分页、覆盖/行前插入、命令退出码 | ToolDefinition和参数约束不变 |
+| builtin-tools | 文件与命令能力选择；续读、覆盖/插入与重试细则由各 ToolDefinition 承接 | 双维分页和执行参数约束不变 |
 
 Skill目录单项JSON>256字符整项省略，总JSON<=1200字符，最多8项；元数据明确视为不可信数据，
 正文按需read。现有scanner只读取最多16KiB YAML frontmatter，不读取后续正文。该目录在session初始化/
 恢复时采样一次，不在每任务重扫；新session或运行时重启后自然更新。
 
-基础System Prompt从1110降为472字符/保守tokens（3208→1374 UTF-8 bytes，约减57.5%）；六个session指导
-约1339 tokens。它们现在只以一份进入System，不再每任务进入User Prompt并累积到历史。
+2026-11-04 改写后，基础 System Prompt 为 599 保守预算单位（原基线 600），包含人格权限边界及工具加载与业务授权的区分；没有放宽 600 上限。插件指导只以一份进入 System，不再每任务进入 User Prompt 并累积到历史。精简与工具描述下沉的分项测量及限制见 [提示词修复记录](../2026-11-04-prompt-guidance/process.md)。
 
 ## 限制
 
