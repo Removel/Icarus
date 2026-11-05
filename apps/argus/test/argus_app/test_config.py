@@ -56,3 +56,19 @@ def test_discovery_fallback_environment_uses_existing_settings(monkeypatch, tmp_
     assert config.discovery_fallback_enabled is True
     assert config.discovery_fallback_model == 'perception'
     assert config.discovery_fallback_settings_path == tmp_path / 'models.json'
+
+
+def test_channel_naming_defaults_to_perception_and_can_be_disabled(monkeypatch,tmp_path):
+    from argus_app.config import ArgusConfig
+    monkeypatch.setenv('ARGUS_DATABASE_URL','postgresql+asyncpg://unused/argus_test')
+    monkeypatch.setenv('ARGUS_AGENT_API_TOKEN','synthetic')
+    monkeypatch.setenv('ARGUS_GATEWAY_TOKEN','synthetic')
+    monkeypatch.setenv('ARGUS_DATA_DIR',str(tmp_path))
+    monkeypatch.delenv('ARGUS_CHANNEL_NAMING_ENABLED',raising=False)
+    monkeypatch.delenv('ARGUS_CHANNEL_NAMING_MODEL',raising=False)
+    config=ArgusConfig.from_environment()
+    assert config.channel_naming_enabled and config.channel_naming_model=='perception'
+    monkeypatch.setenv('ARGUS_CHANNEL_NAMING_ENABLED','false')
+    monkeypatch.setenv('ARGUS_CHANNEL_NAMING_MODEL','custom-title-model')
+    config=ArgusConfig.from_environment()
+    assert not config.channel_naming_enabled and config.channel_naming_model=='custom-title-model'

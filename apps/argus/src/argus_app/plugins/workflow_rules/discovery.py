@@ -1,14 +1,15 @@
 """Trusted initial discovery defaults; executed by the same restricted rule engine."""
 from pathlib import Path
 import json
+from argus_app.plugins.protocols.context import source_descriptor
 
 
 def semantic_context(current, history):
-    parts = current.source_key.split(':', 3)
-    conversation = {'source_key': current.source_key, 'platform': parts[0],
-        'account_id': str(current.detail.get('self_id', parts[1] if len(parts) > 1 else '')),
-        'kind': current.content.get('message_type', parts[2] if len(parts) > 2 else ''),
-        'peer_id': str(current.detail.get('peer_id', parts[3] if len(parts) > 3 else '')),
+    source = source_descriptor(current)
+    conversation = {'source_key': current.source_key, 'platform': source['platform'],
+        'account_id': source.get('account_id', ''), 'tenant_id': source.get('tenant_id', ''),
+        'kind': source['kind'], 'content_type': current.content.get('message_type', ''),
+        'peer_id': source['region_id'],
         'sender_id': str(current.content.get('sender_id', '')),
         'is_self': current.detail.get('is_self') is True,
         'mentioned_ids': [s['data']['qq'] for s in current.content.get('segments', [])
@@ -71,6 +72,8 @@ DEFAULT_DISCOVERY_RULE = 'CRITERION = ' + repr(RESPONSE_CRITERION) + '''
 def main(event, channel):
     text = event["content"].get("text", "")
     if not text.strip():
+        text = event["content"].get("media_summary", "")
+    if not text.strip():
         return {"action": "ignore", "reason": "empty message"}
     history = capability("history", {"limit": 8})
     context = {"conversation": channel.get("conversation", {}), "recent_history": history.get("observations", [])}
@@ -83,6 +86,8 @@ def main(event, channel):
 DEFAULT_RESPONSE_RULE = 'CRITERION = ' + repr(RESPONSE_CRITERION + '\n只判断当前消息是否与本Channel有关且需要Agent继续回应或处理。无关新话题不通过。') + '''
 def main(event, channel):
     text = event["content"].get("text", "")
+    if not text.strip():
+        text = event["content"].get("media_summary", "")
     if not text.strip():
         return {"passed": False, "reason": "empty message"}
     result = capability("semantic", {"text": text, "criterion": CRITERION,

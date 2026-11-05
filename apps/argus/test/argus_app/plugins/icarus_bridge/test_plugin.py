@@ -34,6 +34,10 @@ async def test_delivery_retry_keeps_identity_and_does_not_claim_actual_delivery(
                                    subscriptions={'qq:1': None}, rule_path='', version=4)
         async def observation(self, id):
             return SimpleNamespace(model_dump=lambda **kwargs: {'id': id})
+        async def set_round_session(self, *args):
+            pass
+        async def set_round_request(self, *args):
+            pass
         async def set_round_delivery(self, *args):
             self.delivery.append(args)
     class Client:

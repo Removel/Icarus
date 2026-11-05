@@ -49,23 +49,23 @@ class ClosedLoopProvider(ProviderHandler):
         type(self).model_calls.append(payload)
         count = len([m for m in payload['messages'] if m['role'] == 'tool'])
         if count == 0:
-            # Bypass the adapter's client guard once to prove the real server gate.
+            # Server-gate test uses the protected state API, never a leaked model ID.
+            current = httpx.get(type(self).argus_url + '/channels/' + type(self).channel_id,
+                headers={'Authorization': 'Bearer callback-secret'}, timeout=10)
+            current.raise_for_status()
+            binding_id = current.json()['runtime']['round']['binding_id']
             view = json.dumps(payload['messages'], ensure_ascii=False)
-            binding = re.search(r'\\"binding_id\\": \\"([^\\"]+)\\"', view)
-            if binding is None:
-                user_text = '\n'.join(str(m.get('content', '')) for m in payload['messages'] if m['role'] == 'user')
-                binding = re.search(r'"binding_id": "([^"]+)"', user_text)
-            assert binding is not None
+            assert binding_id not in view
             result = httpx.post(type(self).argus_url + '/agent/events',
                 headers={'Authorization': 'Bearer callback-secret'}, timeout=10,
-                json={'binding_id': binding.group(1), 'request_id': 'direct-early-update',
+                json={'binding_id': binding_id, 'request_id': 'direct-early-update',
                       'kind': 'channel.update_requested',
                       'payload': {'expected_version': 1, 'progress': 'must not commit'}})
             assert result.status_code == 422  # legacy multi-step writes are not accepted
         calls = [
             ('tool_search', {'query': 'argus'}),
             ('argus_rule_check', {'source': NEW_RULE}),
-            ('argus_commit', {'results': [{'ref': '1', 'status': 'handled'}],
+            ('argus_commit', {'results': [{'ref': 'm1', 'status': 'handled'}],
                               'progress': 'review handled from QQ and Feishu', 'rule_source': NEW_RULE}),
         ]
         if count < len(calls):
@@ -131,7 +131,7 @@ async def test_two_sources_real_tcp_agent_confirmation_and_rule_rewrite(tmp_path
             return {'match': False, 'discovery': {'action': 'ignore'}, 'reason': 'existing workflow evidence'}
         semantic_calls.append(args)
         return {'match': True, 'reason': 'fixture approval'}
-    config = ArgusConfig(database_url=SecretStr(url), data_dir=tmp_path / 'argus',
+    config = ArgusConfig(channel_naming_enabled=False, database_url=SecretStr(url), data_dir=tmp_path / 'argus',
                          agent_token=SecretStr('callback-secret'), gateway_token=SecretStr('gateway-secret'),
                          gateway_url=gateway_url, public_url=argus_url, qq_token=SecretStr('qq-secret'),
                          feishu_verification_token=SecretStr('feishu-secret'), scan_interval=.05)
@@ -152,6 +152,7 @@ async def test_two_sources_real_tcp_agent_confirmation_and_rule_rewrite(tmp_path
                           'source_keys': sources, 'rule_source': INITIAL_RULE})
                 assert created.status_code == 200, created.text
                 channel_id = created.json()['id']
+                ClosedLoopProvider.channel_id = channel_id
                 qq = {'post_type': 'message', 'self_id': 123, 'message_type': 'group', 'group_id': group,
                       'user_id': 789, 'message_id': uuid4().hex, 'raw_message': 'review request: wait for approval'}
                 raw = json.dumps(qq).encode()

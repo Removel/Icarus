@@ -40,7 +40,9 @@ async def test_empty_source_discovers_and_delivers_first_event_without_manual_ch
         # acceptance must prevent this classifier from seeing the follow-up.
         discovery_texts.append(args['text'])
         return {'match': True, 'reason': 'new response needed', 'discovery': {'action': 'new'}}
-    app = create_app(config, store=store, semantic=semantic)
+    async def name_channel(text, *, reason):
+        return '体检安排'
+    app = create_app(config, store=store, semantic=semantic, channel_namer=name_channel)
     # Provider's model responses are deterministic; callback requests go to real Argus.
     ArgusProvider.callbacks, ArgusProvider.model_calls = [], []
     with local_provider(ArgusProvider) as port:
@@ -65,6 +67,7 @@ async def test_empty_source_discovers_and_delivers_first_event_without_manual_ch
                         await asyncio.sleep(.03)
                 ch = channels[0]
                 assert ch['goal'] == payload['raw_message']
+                assert ch['title'] == '体检安排'
                 assert ch['rule_path'] and len(ch['rule_hash']) == 64
                 item = await store.observation(first_id)
                 assert item.detail['discovery'] == {'status': 'created', 'channel_id': ch['id']}

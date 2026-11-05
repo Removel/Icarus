@@ -23,6 +23,7 @@ class WorkflowRules(BasePlugin):
         super().__init__(plugin_id)
         self.store, self.engine, self.rule_files = store, engine, rule_files
         self.discovery_fallback = discovery_fallback
+        self.channel_namer = None
         self.discovery_enabled = discovery_enabled
         self.discovery_source = load_discovery_rule(discovery_rule_path)
         self._discovery_lock = asyncio.Lock()
@@ -39,7 +40,15 @@ class WorkflowRules(BasePlugin):
             await self.discover(await self.store.observation(event.observation_id))
 
     async def discover(self, event):
+        resume = await self._discover(event)
+        if resume is not None:
+            # A persisted fallback can need title generation as well. Do not await
+            # that model while holding the shared discovery decision lock.
+            await self._resume_discovery_fallback(*resume)
+
+    async def _discover(self, event):
         pending = None
+        pending_new = None
         async with self._discovery_lock:
             current = await self.store.observation(event.id)
             state = current.detail.get('discovery', {})
@@ -56,8 +65,7 @@ class WorkflowRules(BasePlugin):
             current = await self.store.observation(current.id)
             state = current.detail.get('discovery', {})
             if state.get('status') == 'fallback_pending':
-                await self._resume_discovery_fallback(current, state)
-                return
+                return current, state
             if state.get('next_retry_at', '') > datetime.now(UTC).isoformat():
                 return
             owners = [ch for ch in await self.store.channels()
@@ -121,25 +129,51 @@ class WorkflowRules(BasePlugin):
                         latest = await self.store.observation(current.id)
                         latest_state = latest.detail.get('discovery', {})
                         if latest_state.get('status') == 'fallback_pending':
-                            await self._resume_discovery_fallback(latest, latest_state)
-                            return
+                            return latest, latest_state
                         if latest_state.get('status') in {'created', 'existing', 'ignored', 'exhausted'}:
                             return
                 if pending is None:
-                    await self._record_discovery(current, decision, versions)
+                    if decision['action'] == 'new' and self.channel_namer is not None:
+                        pending_new = (current, decision, versions)
+                    else:
+                        await self._record_discovery(current, decision, versions)
             except Exception as exc:
                 await self.store.record_discovery(current.id, {'error': getattr(exc, 'code', 'discovery_failed')})
                 return
         # The durable claim has committed; no transaction or global discovery lock
         # is held while waiting for a general model. RuleEngine limits stay unchanged.
+        if pending_new is not None:
+            await self._record_discovery(*pending_new)
         if pending is not None:
             await self._run_discovery_fallback(*pending)
 
     async def _record_discovery(self, current, decision, versions=None, fallback_token=None):
         artifact = {}
         if decision['action'] == 'new':
+            if self.channel_namer is not None:
+                token = await self.store.claim_channel_name(current.id)
+                if token is not None:
+                    try:
+                        async with asyncio.timeout(10):
+                            title = await self.channel_namer(current.content.get('text') or current.content.get('media_summary',''),
+                                reason=decision.get('reason',''))
+                        if not isinstance(title,str) or not title.strip() or len(title)>60 or any(ord(c)<32 for c in title):
+                            raise DomainError('invalid_output')
+                    except asyncio.CancelledError:
+                        await asyncio.shield(self.store.finish_channel_name(current.id, token, error_code='cancelled'))
+                        raise
+                    except Exception as error:
+                        code = 'timeout' if isinstance(error,TimeoutError) else getattr(error,'code','unavailable')
+                        await self.store.finish_channel_name(current.id, token, error_code=code if code in {'timeout','invalid_output','unavailable'} else 'unavailable')
+                    else:
+                        await self.store.finish_channel_name(current.id, token, title=title.strip())
+                naming = await self.store.channel_name(current.id)
+                if naming and naming.get('status') == 'started':
+                    return  # Another worker holds the bounded persistent attempt.
+                if naming and naming.get('status') == 'completed':
+                    artifact['title'] = naming['title']
             identity = self.store.discovered_channel_id(current)
-            artifact = self.rule_files.publish(INITIAL_CHANNEL_RULE, identity)
+            artifact.update(self.rule_files.publish(INITIAL_CHANNEL_RULE, identity))
         channel_id = await self.store.record_discovery(current.id, decision,
             candidate_versions=versions, fallback_token=fallback_token, **artifact)
         if channel_id:

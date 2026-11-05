@@ -9,6 +9,7 @@ def create_plugin(plugin_id, workspace_path, session_id, config, required_capabi
                            discovery_rule_path=config.get('discovery_rule_path'),
                            discovery_fallback=config.get('discovery_fallback'))
     plugin.safety_review = config.get('safety_review')
+    plugin.channel_namer = config.get('channel_namer')
     return PluginRegistration(plugin=plugin, capabilities=tuple(
         ProvidedCapability(contract.capability_id, contract.version, plugin)
         for contract in plugin.provided_capabilities))

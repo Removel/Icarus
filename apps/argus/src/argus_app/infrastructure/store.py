@@ -407,6 +407,52 @@ class Store:
                 ch["runtime"]["pending"] = {}
             await self._save(conn, ch)
 
+    async def set_round_session(self, channel_id: str, wake_id: str, session_id: str) -> None:
+        async with self.engine.begin() as conn:
+            ch = await self._channel(conn, channel_id, lock=True)
+            current = ch['runtime'].get('round')
+            if not current or current['closed'] or current['wake_id'] != wake_id:
+                raise DomainError('stale_round')
+            if current.get('session_id') not in {None, session_id}:
+                raise DomainError('delivery_conflict')
+            current['session_id'] = session_id
+            await self._save(conn, ch)
+
+    async def set_round_request(self, channel_id: str, wake_id: str, payload: dict) -> None:
+        async with self.engine.begin() as conn:
+            ch = await self._channel(conn, channel_id, lock=True)
+            current = ch['runtime'].get('round')
+            if not current or current['closed'] or current['wake_id'] != wake_id:
+                raise DomainError('stale_round')
+            if 'wake_payload' in current and canonical(current['wake_payload']) != canonical(payload):
+                raise DomainError('wake_payload_conflict')
+            current['wake_payload'] = copy.deepcopy(payload)
+            await self._save(conn, ch)
+
+    async def set_round_submission(self, channel_id: str, wake_id: str, admission_state: str, *,
+                                   attempt: int, retryable: bool = False,
+                                   error_code: str | None = None) -> None:
+        if admission_state not in {'prepared', 'not_admitted', 'accepted', 'submitting', 'unknown'} or type(attempt) is not int or attempt < 0:
+            raise DomainError('invalid_admission_state')
+        async with self.engine.begin() as conn:
+            ch = await self._channel(conn, channel_id, lock=True)
+            current = ch['runtime'].get('round')
+            if not current or current['closed'] or current['wake_id'] != wake_id:
+                return  # A concurrent business commit may already have closed this round.
+            previous = current.get('submission', {})
+            if attempt < previous.get('attempt', 0):
+                return
+            old = previous.get('admission_state')
+            if old == 'accepted' and admission_state != 'accepted':
+                return
+            if old in {'submitting', 'unknown'} and admission_state == 'not_admitted':
+                admission_state = 'unknown'
+            safe = admission_state == 'not_admitted' and retryable is True and attempt < 3
+            current['submission'] = {'admission_state': admission_state, 'attempt': attempt,
+                'retryable': safe, 'error_code': error_code,
+                'next_retry_at': (datetime.now(timezone.utc) + timedelta(seconds=2 ** max(0, attempt-1))).isoformat() if safe else None}
+            await self._save(conn, ch)
+
     async def set_round_delivery(self, channel_id: str, wake_id: str, session_id: str,
                                  task_id: str) -> None:
         async with self.engine.begin() as conn:
@@ -414,7 +460,7 @@ class Store:
             current = ch["runtime"].get("round")
             if not current or current["closed"] or current["wake_id"] != wake_id:
                 raise DomainError("stale_round")
-            if current["session_id"] is not None and (current["session_id"] != session_id or current["task_id"] != task_id):
+            if current["session_id"] not in {None, session_id} or current.get('task_id') not in {None, task_id}:
                 raise DomainError("delivery_conflict")
             if current["session_id"] == session_id and current["task_id"] == task_id:
                 return
@@ -671,10 +717,51 @@ class Store:
                                       .limit(self._limit(limit, 50)))).mappings().all()
             return [observation(row) for row in rows]
 
+    async def claim_channel_name(self, observation_id: str) -> str | None:
+        async with self.engine.begin() as conn:
+            row = await self._observation(conn, observation_id, lock=True)
+            if row['kind'] != MESSAGE or row['detail'].get('channel_name'):
+                return None
+            if row['detail'].get('discovery',{}).get('status') in {'created','existing','ignored','exhausted'}:
+                return None
+            token = str(uuid4())
+            detail = copy.deepcopy(row['detail'])
+            detail['channel_name'] = {'status':'started','token':token,
+                'deadline_at':(datetime.now(timezone.utc)+timedelta(seconds=15)).isoformat()}
+            await conn.execute(update(observed_items).where(observed_items.c.id == row['id']).values(detail=detail))
+            return token
+
+    async def finish_channel_name(self, observation_id: str, token: str, *, title: str | None = None, error_code: str | None = None) -> None:
+        if title is not None and (not title.strip() or len(title)>60 or any(ord(c)<32 for c in title)):
+            raise DomainError('invalid_channel_title')
+        async with self.engine.begin() as conn:
+            row = await self._observation(conn, observation_id, lock=True)
+            detail = copy.deepcopy(row['detail'])
+            naming = detail.get('channel_name',{})
+            if naming.get('token') != token or naming.get('status') != 'started':
+                raise DomainError('channel_name_conflict')
+            expired = naming['deadline_at'] <= datetime.now(timezone.utc).isoformat()
+            naming.update(status='completed' if title and not expired else 'failed',
+                title=title if not expired else None, error_code='outcome_unknown' if expired else error_code)
+            detail['channel_name'] = naming
+            await conn.execute(update(observed_items).where(observed_items.c.id==row['id']).values(detail=detail))
+
+    async def channel_name(self, observation_id: str) -> dict | None:
+        async with self.engine.begin() as conn:
+            row = await self._observation(conn, observation_id, lock=True)
+            naming = copy.deepcopy(row['detail'].get('channel_name'))
+            if naming and naming.get('status')=='started' and naming['deadline_at'] <= datetime.now(timezone.utc).isoformat():
+                naming.update(status='failed',error_code='outcome_unknown')
+                detail = copy.deepcopy(row['detail']); detail['channel_name'] = naming
+                await conn.execute(update(observed_items).where(observed_items.c.id==row['id']).values(detail=detail))
+            return naming
+
     async def record_discovery(self, observation_id: str, decision: dict,
                                rule_path: str = "", rule_hash: str = "",
                                candidate_versions: dict | None = None,
-                               fallback_token: str | None = None) -> str | None:
+                               fallback_token: str | None = None, title: str | None = None) -> str | None:
+        if title is not None and (not isinstance(title,str) or not title.strip() or len(title)>60 or any(ord(c)<32 for c in title)):
+            raise DomainError('invalid_channel_title')
         error = decision.get('error')
         parsed = None if error else DiscoveryDecision.model_validate(decision)
         async with self.engine.begin() as conn:
@@ -739,7 +826,7 @@ class Store:
                         pending = {item.id: {'status': 'passed', 'decision': {'passed': True, 'reason': parsed.reason},
                                    'channel_version': 1, 'attempt_count': 0, 'next_retry_at': None,
                                    'delivery_attempt_count': 0, 'delivery_error': ''}}
-                        ch = Channel(id=channel_id, title=(message or 'New observed request')[:120],
+                        ch = Channel(id=channel_id, title=title or (message or 'New observed request')[:120],
                                      goal=(message or parsed.reason)[:4000],
                                      subscriptions={item.source_key: str(row['position'])},
                                      rule_path=rule_path, rule_hash=rule_hash,

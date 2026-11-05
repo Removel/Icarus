@@ -52,6 +52,20 @@ async def test_discovery_creates_channel_seeds_first_event_and_is_idempotent(dis
 
 
 @pytest.mark.asyncio
+async def test_channel_name_claim_is_once_and_saved_before_creation(discovery_store):
+    item = await incoming(discovery_store)
+    token = await discovery_store.claim_channel_name(item.id)
+    assert token
+    assert await discovery_store.claim_channel_name(item.id) is None
+    await discovery_store.finish_channel_name(item.id,token,title='接口评审跟进')
+    assert (await discovery_store.channel_name(item.id))['title']=='接口评审跟进'
+    channel_id=await discovery_store.record_discovery(item.id,{'action':'new','reason':'request'},
+        rule_path='bootstrap.py',rule_hash='seed',title='接口评审跟进')
+    assert (await discovery_store.channel(channel_id)).title=='接口评审跟进'
+    assert (await discovery_store.channel(channel_id)).goal==item.content['text']
+
+
+@pytest.mark.asyncio
 async def test_discovery_ignore_is_durable_without_creating_channel(discovery_store):
     item = await incoming(discovery_store)
     assert await discovery_store.record_discovery(item.id, {'action': 'ignore', 'reason': 'not a task'}) is None

@@ -26,6 +26,9 @@ class ArgusConfig(BaseModel):
     max_body_bytes: int = Field(default=262144, ge=1024, le=1048576)
     auto_scan: bool = True
     discovery_enabled: bool = True
+    channel_naming_enabled: bool = True
+    channel_naming_model: str = Field(default='perception', min_length=1)
+    channel_naming_settings_path: Path | None = None
     discovery_rule_path: str | None = None
     semantic_api_key: SecretStr = SecretStr("")
     semantic_base_url: str | None = None
@@ -88,6 +91,9 @@ class ArgusConfig(BaseModel):
                    semantic_api_key=SecretStr(os.getenv("ARGUS_JEV_API_KEY", "")),
                    discovery_enabled=os.getenv("ARGUS_DISCOVERY_ENABLED", "true").lower() in {"true", "1", "yes"},
                    discovery_rule_path=os.getenv("ARGUS_DISCOVERY_RULE_PATH"),
+                   channel_naming_enabled=os.getenv('ARGUS_CHANNEL_NAMING_ENABLED','true').lower() in {'true','1','yes'},
+                   channel_naming_model=os.getenv('ARGUS_CHANNEL_NAMING_MODEL','perception'),
+                   channel_naming_settings_path=os.getenv('ARGUS_CHANNEL_NAMING_SETTINGS_PATH') or None,
                    discovery_fallback_enabled=os.getenv('ARGUS_DISCOVERY_FALLBACK_ENABLED', 'false').lower() in {'true', '1', 'yes'},
                    discovery_fallback_model=os.getenv('ARGUS_DISCOVERY_FALLBACK_MODEL', ''),
                    discovery_fallback_settings_path=os.getenv('ARGUS_DISCOVERY_FALLBACK_SETTINGS_PATH') or None,

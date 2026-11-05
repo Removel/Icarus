@@ -59,7 +59,7 @@ async def recovery_scan_once(host, store) -> list[str]:
 
 def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
                bridge_client=None, evidence_backends: dict | None = None,
-               discovery_fallback=None) -> FastAPI:
+               discovery_fallback=None, channel_namer=None) -> FastAPI:
     config = config or ArgusConfig.from_environment()
 
     @asynccontextmanager
@@ -107,6 +107,19 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
                         config.discovery_fallback_model, config.discovery_fallback_settings_path)
                     resources.push_async_callback(fallback_owner.aclose)
                 configs['workflow-rules']['discovery_fallback'] = current_fallback
+            if config.channel_naming_enabled:
+                current_namer = channel_namer
+                if current_namer is None:
+                    try:
+                        from argus_app.model_provider.channel_naming import configured_channel_namer
+                        current_namer, naming_owner = configured_channel_namer(
+                            config.channel_naming_model, config.channel_naming_settings_path)
+                    except (ValueError, OSError):
+                        # Naming is cosmetic: missing model configuration must not stop ingress.
+                        LOG.warning('Channel naming unavailable; preserving fallback titles')
+                    else:
+                        resources.push_async_callback(naming_owner.aclose)
+                configs['workflow-rules']['channel_namer'] = current_namer
             from argus_app.rule_sdk.guide import rule_guide
             guide = rule_guide(config)
             guide['capabilities']['semantic']['configured'] = current_semantic is not None

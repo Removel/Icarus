@@ -17,7 +17,7 @@ from argus_app.infrastructure.store import Store
 async def test_real_host_grouped_plugins_two_tables_and_confirmation_gate(tmp_path, database_url):
     url = os.environ["ARGUS_TEST_DATABASE_URL"]
     store = Store(url)
-    config = ArgusConfig(database_url=SecretStr(url), data_dir=tmp_path,
+    config = ArgusConfig(channel_naming_enabled=False, database_url=SecretStr(url), data_dir=tmp_path,
                          agent_token=SecretStr("agent-test"), gateway_token=SecretStr("gateway-test"),
                          qq_token=SecretStr("qq-test"), auto_scan=False)
     class AcceptedBridge:
@@ -88,7 +88,7 @@ async def test_configured_fallback_is_injected_and_closed_on_shutdown(tmp_path, 
         builds.append((model_name, settings_path))
         return fallback, owner
     monkeypatch.setattr('argus_app.model_provider.discovery_fallback.configured_discovery_fallback', build)
-    config = ArgusConfig(database_url=SecretStr(database_url), data_dir=tmp_path,
+    config = ArgusConfig(channel_naming_enabled=False, database_url=SecretStr(database_url), data_dir=tmp_path,
         agent_token=SecretStr('agent-test'), gateway_token=SecretStr('gateway-test'), auto_scan=False,
         discovery_fallback_enabled=True, discovery_fallback_model='perception')
     app = create_app(config)
@@ -112,7 +112,7 @@ async def test_injected_fallback_is_not_owned_and_disabled_fallback_is_not_built
         raise AssertionError('must not build an injected or disabled backend')
     monkeypatch.setattr('argus_app.model_provider.discovery_fallback.configured_discovery_fallback', unexpected_build)
     for enabled in (True, False):
-        config = ArgusConfig(database_url=SecretStr(database_url), data_dir=tmp_path,
+        config = ArgusConfig(channel_naming_enabled=False, database_url=SecretStr(database_url), data_dir=tmp_path,
             agent_token=SecretStr('agent-test'), gateway_token=SecretStr('gateway-test'), auto_scan=False,
             discovery_fallback_enabled=enabled, discovery_fallback_model='perception')
         app = create_app(config, discovery_fallback=fallback)
@@ -134,7 +134,7 @@ async def test_fallback_owner_is_closed_if_host_startup_fails(tmp_path, database
     async def fail_start(self):
         raise RuntimeError('synthetic startup failure')
     monkeypatch.setattr('argus_app.application.PluginRuntimeHost.start', fail_start)
-    config = ArgusConfig(database_url=SecretStr(database_url), data_dir=tmp_path,
+    config = ArgusConfig(channel_naming_enabled=False, database_url=SecretStr(database_url), data_dir=tmp_path,
         agent_token=SecretStr('agent-test'), gateway_token=SecretStr('gateway-test'), auto_scan=False,
         discovery_fallback_enabled=True, discovery_fallback_model='perception')
     app = create_app(config)
