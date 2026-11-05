@@ -26,8 +26,7 @@ def argus_router(runtime):
     @router.post('/wake', dependencies=[Depends(authorized)])
     async def wake(request: WakeRequest):
         try:
-            result = await bridge.wake(request)
-            return {'task_id':result['task_id'],'status':result['status']}
+            return await bridge.wake(request)
         except BridgeConflict as error:
             raise HTTPException(409, str(error)) from error
 

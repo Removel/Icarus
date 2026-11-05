@@ -52,6 +52,9 @@ def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
                 response = await client.post('/argus/wake', json=payload)
                 assert response.status_code == 200, response.text
                 task_id = response.json()['task_id']
+                assert response.json()['admission_state'] == 'accepted'
+                assert response.json()['attempt'] == 1
+                assert response.json()['retryable'] is False
                 assert (await client.post('/argus/wake', json=payload)).json()['task_id'] == task_id
                 assert (await client.post('/argus/wake', json=payload | {'channel_version':2})).status_code == 422
                 for _ in range(200):
@@ -59,7 +62,8 @@ def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
                     if status['status'] in {'completed','failed'}:
                         break
                     await asyncio.sleep(.02)
-                assert status == {'task_id':task_id,'session_id':session,'status':'completed','commit_state':'none','replay_safe':False}
+                assert status == {'task_id':task_id,'session_id':session,'status':'completed','commit_state':'none','replay_safe':False,
+                    'admission_state':'accepted','attempt':1,'retryable':False,'error_code':None}
                 unsafe = await client.post('/argus/wake', json=payload | {'wake_id': str(uuid4()),
                     'binding_id': str(uuid4()), 'session_id': other.json()['session_id'], 'session_key': 'slot-b'})
                 assert unsafe.status_code == 409, 'new Session must not replay an unresolved Channel execution'

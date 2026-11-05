@@ -54,12 +54,20 @@ class ReplyProvider(ArgusProvider):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         type(self).model_calls.append(body)
         count = sum(m['role'] == 'tool' for m in body['messages'])
+        user_texts = [m['content'] if isinstance(m.get('content'), str) else '\n'.join(
+            part.get('text', '') for part in m.get('content', []) if isinstance(part, dict))
+            for m in body['messages'] if m['role'] == 'user']
+        current = next(text for text in reversed(user_texts) if 'ARGUS CURRENT MESSAGES\n' in text)
+        view, _ = json.JSONDecoder().raw_decode(current.split('ARGUS CURRENT MESSAGES\n', 1)[1].lstrip())
+        target = view['messages'][0]['reply_target']
+        assert target['platform'] == 'qq' and target['kind'] == 'private'
+        assert target['account_id'] == '100'
         sequence = [
             ('mcp_tool_search', {'server': 'snowluma', 'query': 'invoke_action'}),
             ('mcp_tool_execute', {'tool_ref': 'snowluma/invoke_action', 'arguments': {
-                'action': 'send_private_msg', 'params': {'user_id': 200, 'message': 'synthetic reply'}}}),
+                'action': 'send_private_msg', 'params': {'user_id': int(target['user_id']), 'message': 'synthetic reply'}}}),
             ('tool_execute', {'name': 'argus_commit', 'arguments': {'results': [
-                {'ref': '1', 'status': 'handled' if self.reply_retcode == 0 else 'no_action',
+                {'ref': 'm1', 'status': 'handled' if self.reply_retcode == 0 else 'no_action',
                  'reason': 'platform success message_id=901' if self.reply_retcode == 0 else 'platform rejected send'}],
                 'progress': 'replied' if self.reply_retcode == 0 else 'send failed',
                 'lifecycle': 'active', 'next_session': 'new'}}),
@@ -129,7 +137,8 @@ if __name__ == "__main__":
                     goal='respond to greeting', progress='', lifecycle='active', version=1,
                     source_keys=['qq:100:private:200'], rule_source=''), rule_sdk={'version': 2},
                     items=[dict(id=obs, source_key='qq:100:private:200', message_id='m', kind='message.observed',
-                        revision=1, observed_at='2026-11-03T00:00:00Z', content={'text': 'synthetic greeting'}, detail={})],
+                        revision=1, observed_at='2026-11-03T00:00:00Z', content={'text': 'synthetic greeting', 'message_type': 'private'},
+                        detail={'protocol':'onebot', 'self_id':'100', 'peer_id':'200'})],
                     argus_url=f'http://127.0.0.1:{port}')
                 response = await client.post('/argus/wake', json=payload)
                 assert response.status_code == 200, response.text
@@ -151,6 +160,10 @@ if __name__ == "__main__":
     assert commits[0]['payload']['results'][0]['observation_id'] == obs
     assert commits[0]['payload']['results'][0]['status'] == ('handled' if retcode == 0 else 'no_action')
     assert commits[0]['payload']['progress'] == ('replied' if retcode == 0 else 'send failed')
+    system_view = '\n'.join(str(m['content']) for m in ReplyProvider.model_calls[0]['messages'] if m['role'] == 'system')
+    assert 'your platform identity' in system_view and 'before argus_commit' in system_view
+    assert 'ordinary chat' in system_view and 'internal operator' in system_view
+    assert 'qq:100:private:200' not in system_view and obs not in system_view
     # The scripted model saw the actual business envelope, not just MCP transport success.
     marker = '901' if retcode == 0 else '1401'
     assert any(marker in str(m) and 'retcode' in str(m) for p in ReplyProvider.model_calls for m in p['messages'] if m['role'] == 'tool')

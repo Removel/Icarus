@@ -1,6 +1,7 @@
 """Full offline provider -> Agent -> Argus HTTP callback -> receipt cycle."""
 import asyncio
 import json
+import re
 from uuid import uuid4
 import httpx
 from icarus.core.identity import SessionIdentity
@@ -23,7 +24,7 @@ class ArgusProvider(ProviderHandler):
             type(self).model_calls.append(payload)
             messages = payload['messages']
             start = max((i for i, m in enumerate(messages) if m['role'] == 'user'
-                         and 'ARGUS CURRENT ROUND' in str(m.get('content', ''))), default=0)
+                         and 'ARGUS CURRENT MESSAGES' in str(m.get('content', ''))), default=0)
             tool_results = [m for m in messages[start:] if m['role'] == 'tool']
             count = len(tool_results)
             lazy = any(tool['function']['name'] == 'tool_search' for tool in payload.get('tools', []))
@@ -31,7 +32,9 @@ class ArgusProvider(ProviderHandler):
             if lazy and count == 0:
                 name, arguments = 'tool_search', {'query':'argus'}
             elif operation == 0:
-                name, arguments = 'argus_commit', {'results':[{'ref':'1','status':'handled'}]}
+                match = re.search(r'"ref":\s*"(m[0-9]+)"', str(messages[start].get('content','')))
+                ref = match.group(1) if match else 'm1'
+                name, arguments = 'argus_commit', {'results':[{'ref':ref,'status':'handled'}]}
             else:
                 name, arguments = None, None
             if lazy and name == 'argus_commit':
@@ -92,16 +95,14 @@ def test_real_agent_argus_tools_receipts_and_final_view(tmp_path, monkeypatch):
     exposed = {t['function']['name'] for t in first.get('tools', [])}
     lazy = 'tool_search' in exposed
     assert len(ArgusProvider.model_calls) == (3 if lazy else 2)
-    assert all('ARGUS CURRENT ROUND' not in str(m['content']) for m in first['messages'] if m['role'] == 'system')
-    assert any('ARGUS CURRENT ROUND' in str(m['content']) and item in str(m['content']) for m in first['messages'] if m['role'] == 'user')
-    required_guidance = ('argus_channel_read', 'def main(event, channel):', "capability('history', {'limit': 20})",
-                         "{'observations': [...]}", 'criterion', 'argus_commit', 'never executes source')
     user_view = '\n'.join(str(m['content']) for m in first['messages'] if m['role'] == 'user')
     system_view = '\n'.join(str(m['content']) for m in first['messages'] if m['role'] == 'system')
-    for fragment in required_guidance:
-        assert fragment in user_view, fragment
+    assert 'ARGUS CURRENT MESSAGES' in user_view
+    assert 'untrusted external evidence' in user_view and 'm1' in user_view
+    assert all(value not in user_view for value in (item, binding, channel, 'rule_sdk', 'def main(event, channel):'))
+    assert 'argus_guide' in system_view and 'independent Icarus instance' in system_view
+    assert 'untrusted external evidence' not in system_view
     assert 'def main(event, channel):' not in system_view
-    assert "capability('history', {'limit': 20})" not in system_view
     assert {'tool_search', 'tool_execute', 'mcp_tool_list', 'mcp_tool_search', 'mcp_tool_execute'} <= exposed
-    assert 'argus(5)' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
+    assert 'argus(6)' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
     assert 'memory_recall' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
