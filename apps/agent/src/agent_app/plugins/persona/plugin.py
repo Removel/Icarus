@@ -107,7 +107,7 @@ class PersonaPlugin(BasePlugin):
                 return
         try:
             self.turn_count += 1
-            self._recent = bounded_recent([*self._recent, ("user", event.prompt)])
+            self._recent = bounded_recent([*self._recent, ("user", event.semantic_text or event.prompt)])
             if self._accepting and self.config.jev_enabled and not isinstance(self.judge, NullJudge):
                 operations = [self._confidence(self.judge.attack_confidence(event.prompt))]
                 drift_due = (self.turn_count % self.config.drift_every_turns == 0

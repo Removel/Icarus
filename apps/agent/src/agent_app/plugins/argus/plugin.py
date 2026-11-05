@@ -7,6 +7,11 @@ class ArgusPlugin(BasePlugin):
         self.bridge = bridge
         self.task_channels = task_channels
 
+    def static_prompt_sections(self):
+        from agent_app.contracts.prompt import PromptSection
+        from .prompts import ARGUS_GUIDANCE
+        return (PromptSection('argus', 'session', ARGUS_GUIDANCE),)
+
     def accepts_event(self, source_plugin_id, event):
         return False
 

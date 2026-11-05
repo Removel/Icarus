@@ -249,17 +249,18 @@ class SessionApi:
         request_options: dict[str, object] | None = None,
         task_id: str | None = None,
         bridge: bool = False,
+        semantic_text: str | None = None,
     ) -> InputAccepted:
         self._require_accepting()
         if session_id.startswith("argus-") and not bridge:
             raise ValueError("Reserved bridge session")
         if not submission_id.strip():
             raise ValueError("submission_id cannot be empty")
-        request_options = dict(UserInputEvent(prompt=prompt, request_options=request_options or {}).request_options)
+        request_options = dict(UserInputEvent(prompt=prompt, semantic_text=semantic_text, request_options=request_options or {}).request_options)
         identity = SessionIdentity.create(workspace_path, session_id)
         entry = await self._entry(identity)
         fingerprint = _submission_fingerprint(
-            prompt, resources, display_text, request_options
+            prompt, resources, display_text, request_options, semantic_text
         )
         while True:
             wait_for: asyncio.Task | None = None
@@ -281,15 +282,21 @@ class SessionApi:
                         entry.load_task = self._begin_load_locked(entry)
                     wait_for = entry.load_task
                 else:
-                    images = await self._import_resources(
-                        entry.runtime, resources
-                    )
+                    try:
+                        images = await self._import_resources(entry.runtime, resources)
+                    except Exception as error:
+                        if bridge:
+                            from agent_app.application.errors import SubmissionNotAdmitted
+                            raise SubmissionNotAdmitted('resource_import_failed', retryable=False) from error
+                        raise
                     task_id = task_id or uuid4().hex
+                    options: dict[str, Any] = {}
+                    if request_options:
+                        options['request_options'] = request_options
+                    if semantic_text is not None:
+                        options['semantic_text'] = semantic_text
                     accepted = await entry.runtime.submit(
-                        prompt,
-                        images,
-                        task_id=task_id,
-                        **({"request_options": request_options} if request_options else {}),
+                        prompt, images, task_id=task_id, **options,
                     )
                     now = self._clock()
                     entry.last_task_activity_at = now
@@ -313,6 +320,7 @@ class SessionApi:
                                 task_id=accepted.task_id,
                                 type="user.message",
                                 payload={
+                                    **({'semantic_text': semantic_text} if semantic_text is not None else {}),
                                     "text": (
                                         prompt
                                         if display_text is None
@@ -350,7 +358,15 @@ class SessionApi:
                     await self._updates.publish(user_update)
                     return accepted
             assert wait_for is not None
-            await asyncio.shield(wait_for)
+            try:
+                await asyncio.shield(wait_for)
+            except Exception as error:
+                # No input submission has happened in this invocation yet. Cancellation
+                # is deliberately not caught: the shielded operation may still be live.
+                if bridge:
+                    from agent_app.application.errors import SubmissionNotAdmitted
+                    raise SubmissionNotAdmitted('runtime_load_failed', retryable=True) from error
+                raise
 
     async def cancel_task(
         self,

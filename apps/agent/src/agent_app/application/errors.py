@@ -1,5 +1,14 @@
 """Application failures exported through the stable facade."""
 
+class SubmissionNotAdmitted(RuntimeError):
+    """The application has proved this attempt never entered input submission."""
+
+    def __init__(self, code: str, *, retryable: bool):
+        self.code = code
+        self.retryable = retryable
+        super().__init__(code)
+
+
 class SubmissionConflictError(ValueError):
     pass
 

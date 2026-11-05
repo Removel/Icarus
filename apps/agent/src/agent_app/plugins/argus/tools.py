@@ -8,26 +8,34 @@ import os
 from typing import Annotated, Any, Literal
 
 import httpx
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 
 from agent_app.argus_protocol import WireModel, Id
 from icarus.core.models.messages import ToolDefinition
 from icarus.core.tools import BaseTool, ToolExecutionResult
 
-TOOL_NAMES = ('argus_channel_read', 'argus_read', 'argus_history', 'argus_rule_check', 'argus_commit')
+TOOL_NAMES = ('argus_channel_read', 'argus_read', 'argus_history', 'argus_rule_check', 'argus_commit', 'argus_guide')
 
 
 class Empty(WireModel):
     pass
 
 
+class ChannelRead(WireModel):
+    include_rule: bool = False
+
+
+class Guide(WireModel):
+    topic: Literal['overview', 'rules', 'sources', 'commit'] = 'overview'
+
+
 class Read(WireModel):
-    observation_id: Id
+    ref: Id = Field(validation_alias=AliasChoices('ref', 'observation_id'))
 
 
 class History(WireModel):
     limit: Annotated[int, Field(ge=1, le=50)] = 20
-    before: Id | None = None
+    before_ref: Id | None = Field(default=None, validation_alias=AliasChoices('before_ref', 'before'))
     text: Annotated[str, Field(max_length=4096)] | None = None
 
 
@@ -44,7 +52,7 @@ class Receipt(WireModel):
 class Commit(WireModel):
     results: Annotated[list[Receipt], Field(min_length=1, max_length=20)]
     progress: Annotated[str, Field(max_length=8192)] | None = None
-    source_keys: Annotated[list[Annotated[str, Field(min_length=1, max_length=512)]], Field(max_length=16)] | None = None
+    source_refs: Annotated[list[Annotated[str, Field(min_length=1, max_length=512)]], Field(max_length=16)] | None = Field(default=None, validation_alias=AliasChoices('source_refs', 'source_keys'))
     rule_source: Annotated[str, Field(max_length=32768)] | None = None
     lifecycle: Literal['active', 'paused', 'completed'] | None = None
     next_session: Literal['reuse', 'new'] | None = None
@@ -58,14 +66,15 @@ class Commit(WireModel):
         return self
 
 
-MODELS: dict[str, type[WireModel]] = dict(zip(TOOL_NAMES, (Empty, Read, History, Check, Commit)))
+MODELS: dict[str, type[WireModel]] = dict(zip(TOOL_NAMES, (ChannelRead, Read, History, Check, Commit, Guide)))
 KINDS = {'argus_rule_check': 'rule.check_requested', 'argus_commit': 'agent.commit_requested'}
 DESCRIPTIONS = {
-    'argus_channel_read': 'Read or refresh current Channel goal, progress, version and rule source. Optional when the current snapshot is sufficient.',
+    'argus_channel_read': 'Read or refresh the current matter goal, progress and source regions. Request include_rule only when inspecting or modifying the current rule.',
+    'argus_guide': 'Read Argus help by topic: overview, rules, sources, commit. Read-only documentation, not permission or a required step for known tools.',
     'argus_read': 'Read an observation from the current frozen round using its short reference. Does not acknowledge it.',
     'argus_history': 'Query authorized Channel history as evidence. History is not part of the current round and is never acknowledged by this read.',
     'argus_rule_check': 'Statically compile and security-check a Python file with main(event, channel). Never executes source or calls models; does not activate a rule.',
-    'argus_commit': 'Atomically submit every current message result and optional Channel changes/rule source, then close the round. Omitted fields stay unchanged. Only a committed server receipt means success; technical identities and version are supplied automatically.',
+    'argus_commit': 'Report every current work result and optional Channel changes, then close this round. Perform intended actions before committing: if replying, send through the original platform using reply_target and check business success first. Final assistant text is internal, not a platform reply; drafting it is not handled work. Use no_action with a reason when no action is needed; non-reply work needs no send. Omitted fields stay unchanged; code supplies technical identities/version. Only a committed receipt means this report succeeded.',
 }
 
 
@@ -97,15 +106,45 @@ class ArgusTool(BaseTool):
                 raise ValueError('Inactive or cancelled Argus task binding')
             channel.raise_if_cancelled()
             wake = binding['wake']
-            refs = {str(i + 1): item['id'] for i, item in enumerate(wake['items'])}
+            v2 = binding.get('view_version') == 2
+            if self.name == 'argus_guide':
+                if binding['finished']:
+                    raise ValueError('Argus binding is already finished')
+                from .guide import guide
+                return ToolExecutionResult(True, output=guide(payload.get('topic', 'overview'), binding.get('sdk', wake.get('rule_sdk', {}))))
+            if v2 and self.name in {'argus_read','argus_history','argus_commit'}:
+                await bridge.references.validate(bridge.identity_for_wake(wake),
+                    message_refs=binding['message_refs'], source_refs=binding['source_refs'])
+            frozen = {item['id'] for item in wake['items']}
+            refs = ({alias: id for id, alias in binding['message_refs'].items() if id in frozen}
+                    if v2 else {str(i + 1): item['id'] for i, item in enumerate(wake['items'])})
             def resolve(ref):
-                value = refs.get(ref, ref)
-                if value not in refs.values():
+                value = refs.get(ref) if v2 else refs.get(ref, ref)
+                if value not in frozen:
                     raise ValueError('Reference is outside the current frozen round')
                 return value
             if self.name == 'argus_read':
-                payload['observation_id'] = resolve(payload['observation_id'])
+                payload = {'observation_id': resolve(payload['ref'])}
+            if self.name == 'argus_history' and 'before_ref' in payload:
+                ref = payload.pop('before_ref')
+                if v2:
+                    matches = [id for id, alias in binding['message_refs'].items() if alias == ref]
+                    if not matches:
+                        raise ValueError('Unknown history reference')
+                    payload['before'] = matches[0]
+                else:
+                    payload['before'] = ref
             if self.name == 'argus_commit':
+                if 'source_refs' in payload:
+                    values = payload.pop('source_refs')
+                    if v2:
+                        authorized = set(binding.get('authorized_sources', wake.get('channel_snapshot', {}).get('source_keys', [])))
+                        reverse = {ref:key for key,ref in binding['source_refs'].items() if key in authorized}
+                        if any(ref not in reverse for ref in values):
+                            raise ValueError('Unknown source reference')
+                        payload['source_keys'] = [reverse[ref] for ref in values]
+                    else:
+                        payload['source_keys'] = values
                 results = []
                 for item in payload['results']:
                     item = dict(item)
@@ -138,7 +177,8 @@ class ArgusTool(BaseTool):
                         request_id = hashlib.sha256((wake['binding_id'] + kind + canonical).encode()).hexdigest()
                         result = await self._callback(client, task_id, binding, kind, payload, request_id)
                         if result.get('applied') is not True:
-                            return ToolExecutionResult(False, output=result, error=str(result.get('code', 'Argus rejected operation')))
+                            output = self._receipt_view(result) if v2 else result
+                            return ToolExecutionResult(False, output=output, error=str(result.get('code', 'Argus rejected operation')))
                         if self.name == 'argus_commit':
                             if result.get('committed') is not True:
                                 raise ValueError('Missing committed business receipt')
@@ -156,9 +196,37 @@ class ArgusTool(BaseTool):
                         result = response.json()
                         if self.name == 'argus_channel_read':
                             binding['snapshot_version'] = result['version']
+                            binding['authorized_sources'] = list(result.get('subscriptions', {}))
+                            binding['sdk'] = result.get('rule_sdk', wake.get('rule_sdk', {}))
+                    if v2:
+                        result = await self._present(result, binding, payload)
                     return ToolExecutionResult(True, output=result)
         except Exception as error:
             return ToolExecutionResult(False, error=f'Argus operation failed: {error}')
+
+    @staticmethod
+    def _receipt_view(result):
+        return {key:result[key] for key in ('applied','committed','passed','code','diagnostics','policy_version') if key in result}
+
+    async def _present(self, result, binding, payload):
+        from .presentation import project_observation, source_view
+        if self.name in KINDS:
+            return self._receipt_view(result)
+        bridge, wake = self.plugin.bridge, binding['wake']
+        if self.name == 'argus_channel_read':
+            value = {key:result[key] for key in ('title','goal','progress','lifecycle') if key in result}
+            value['sources'] = [binding['source_refs'][key] for key in result.get('subscriptions', {}) if key in binding['source_refs']]
+            if payload.get('include_rule'):
+                value['rule_source'] = result.get('rule_source','')
+            return value
+        rows = result if self.name == 'argus_history' else [result]
+        identity = bridge.identity_for_wake(wake)
+        messages, sources = await bridge.references.ensure(identity,
+            observation_ids=tuple(row['id'] for row in rows), source_keys=tuple(row['source_key'] for row in rows))
+        binding['message_refs'], binding['source_refs'] = messages, sources
+        view = [project_observation(row, ref=messages[row['id']], role='context' if self.name == 'argus_history' else 'work') |
+                {'source':sources[row['source_key']], 'region':source_view(row)} for row in rows]
+        return {'messages':view} if self.name == 'argus_history' else view[0]
 
     async def _callback(self, client, task_id, binding, kind, payload, request_id):
         channel = self.plugin.task_channels.get(task_id)

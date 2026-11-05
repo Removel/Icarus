@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime
 import logging
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from icarus.core.ports import InputSubmission, TaskControl
 
 from icarus.core.hooks import hook_context
@@ -72,14 +72,17 @@ class SessionHost:
         *,
         task_id: str | None = None,
         request_options: dict[str, object] | None = None,
+        semantic_text: str | None = None,
     ) -> InputAccepted:
         if not self._started or self._user_input is None:
             raise RuntimeError("SessionRuntime is not running")
+        options: dict[str, Any] = {}
+        if request_options:
+            options['request_options'] = request_options
+        if semantic_text is not None:
+            options['semantic_text'] = semantic_text
         return await self._user_input.submit(
-            prompt,
-            input_images,
-            task_id=task_id,
-            **({"request_options": request_options} if request_options else {}),
+            prompt, input_images, task_id=task_id, **options,
         )
 
     async def checkpoint(self) -> tuple[str, ...]:

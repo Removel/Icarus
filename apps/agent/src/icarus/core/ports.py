@@ -14,7 +14,8 @@ class InputSubmission(Protocol):
     def queued_count(self) -> int: ...
     async def submit(self, prompt: str, input_images: list[ImagePart | str | Path] | None = None,
                      *, task_id: str | None = None,
-                     request_options: dict[str, object] | None = None) -> InputAccepted: ...
+                     request_options: dict[str, object] | None = None,
+                     semantic_text: str | None = None) -> InputAccepted: ...
 
 
 @runtime_checkable

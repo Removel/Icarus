@@ -154,8 +154,9 @@ class MemoryPlugin(BasePlugin):
             await self._publish_terminal(event, input_id, (), "timeout")
             return
         try:
+            query = event.semantic_text if event.semantic_text is not None else event.prompt
             recall_operation = self.backend.arecall(
-                event.prompt, workspace_key=self.workspace_key, scope=None,
+                query, workspace_key=self.workspace_key, scope=None,
                 include_stopped=False, top_k=self.top_k,
                 threshold=self.threshold,
             )
@@ -163,11 +164,11 @@ class MemoryPlugin(BasePlugin):
             items, truncated = _bound_items(
                 result.items, self.top_k, self.max_context_chars
             )
-            bounded_result = MemoryRecallResult(items, event.prompt, truncated)
+            bounded_result = MemoryRecallResult(items, query, truncated)
             self._remember_automatic_result(
                 event.task_id,
                 _recall_fingerprint(
-                    event.prompt, None, False, self.top_k, self.threshold,
+                    query, None, False, self.top_k, self.threshold,
                     self.max_context_chars,
                 ),
                 bounded_result,

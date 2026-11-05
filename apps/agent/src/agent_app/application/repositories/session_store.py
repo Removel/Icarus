@@ -33,7 +33,7 @@ from icarus.core.runtime_update import RuntimeUpdate, RuntimeUpdateType
 
 _SUMMARY_MAX_LENGTH = 256
 _UPDATE_TYPES = frozenset(get_args(RuntimeUpdateType)) | frozenset({
-    "argus.session", "argus.wake", "argus.failed", "argus.callback", "argus.receipt",
+    "argus.session", "argus.wake", "argus.failed", "argus.callback", "argus.receipt", "argus.submission", "argus.references",
 })
 
 

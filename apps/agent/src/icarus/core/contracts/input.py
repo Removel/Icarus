@@ -13,10 +13,14 @@ from icarus.core.models.messages import ImagePart
 @dataclass(frozen=True, kw_only=True)
 class UserInputEvent(Event):
     prompt: str
+    semantic_text: str | None = None
     input_images: list[ImagePart] = field(default_factory=list)
     request_options: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.semantic_text is not None and (
+                not isinstance(self.semantic_text, str) or not self.semantic_text.strip() or len(self.semantic_text) > 8192):
+            raise ValueError('semantic_text must contain 1..8192 characters')
         encoded = json.dumps(dict(self.request_options), ensure_ascii=False, allow_nan=False)
         if len(encoded) > 4096:
             raise ValueError("request_options exceeds 4096 characters")
