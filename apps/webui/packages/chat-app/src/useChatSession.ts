@@ -11,7 +11,7 @@ import {
 import { applyUpdate, emptyTranscript } from './updates';
 import useChatPreference from './useChatPreference';
 import useWorkspaceHistory from './useWorkspaceHistory';
-import { localClock, type RequestOptions } from './webSearch';
+import { localClock, searchPreference, type RequestOptions } from './webSearch';
 import { deleteHistory, readHistory, saveHistory } from './historyCache';
 import useImageInputs from './useImageInputs';
 import type { ImageResource } from './imageResources';
@@ -60,7 +60,7 @@ export default function useChatSession(hash: string) {
   const [unknown, setUnknown] = useState(false);
   const [queue, setQueue] = useState<Submission[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
-  const [webSearch, setWebSearch] = useChatPreference('icarus.chat.webSearch', false);
+  const [webSearch, setWebSearch] = useChatPreference('icarus.chat.autoWebSearch', true);
   const [deepSearch, setDeepSearch] = useChatPreference('icarus.chat.deepSearch', false);
   const client = useRef<Gateway | undefined>(undefined);
   const pending = useRef<Submission | undefined>(undefined);
@@ -363,7 +363,7 @@ export default function useChatSession(hash: string) {
                 resources,
                 workspace,
                 session: session.session_id,
-                requestOptions: { web_search: webSearch, deep_search: deepSearch },
+                requestOptions: searchPreference(webSearch, deepSearch),
               }
             : undefined,
       };
@@ -519,7 +519,7 @@ export default function useChatSession(hash: string) {
       const gateway = client.current;
       try {
         if (!submission.taskId) {
-          submission.requestOptions ??= { web_search: false, deep_search: false };
+          submission.requestOptions ??= { deep_search: false };
           if (!submission.requestOptions.local_time)
             Object.assign(submission.requestOptions, localClock());
         }
@@ -725,7 +725,7 @@ export default function useChatSession(hash: string) {
       resources,
       workspace,
       session: sessionId,
-      requestOptions: { web_search: webSearch, deep_search: deepSearch },
+      requestOptions: searchPreference(webSearch, deepSearch),
       ...(steer ? { taskId: transcript.tasks[0] } : {}),
     };
     if (!steer && (submitting || transcript.tasks.length || queue.length)) {
