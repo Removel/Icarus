@@ -295,7 +295,7 @@ class GatewayMethods:
                 submission_id=value.submission_id,
                 resources=resources,
                 display_text=value.display_text,
-                **({"request_options": value.request_options.model_dump()} if value.request_options else {}),
+                **({"request_options": value.request_options.model_dump(exclude_unset=True)} if value.request_options else {}),
             )
         except ResourceUnavailableError as error:
             raise _business(
