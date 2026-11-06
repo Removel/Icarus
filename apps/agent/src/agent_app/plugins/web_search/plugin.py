@@ -8,6 +8,7 @@ import math
 import time
 
 from agent_app.contracts.web_search import WebSearchUpdatedEvent
+from agent_app.contracts.request_options import validate_search_request_options
 from agent_app.plugins.web_search.config import PluginConfig
 from agent_app.plugins.web_search.http_backend import SearchUnavailable
 from agent_app.plugins.web_search.pipeline import PAGE_BUDGET, TOTAL_BUDGET, normalize_url, parse_sources, rank_sources
@@ -82,17 +83,25 @@ class WebSearchPlugin(BasePlugin):
     async def on_input(self, source, event: UserInputEvent):
         if not self._accepting or not event.task_id or event.task_id in self.tasks:
             return
-        state = _TaskState(event.prompt, event.request_options.get("web_search") is True,
+        try:
+            validate_search_request_options(event.request_options)
+        except ValueError as error:
+            self.tasks[event.task_id] = _TaskState(event.prompt, False, False)
+            await self.publish(ContextContributionEvent(task_id=event.task_id, status="failed", error=str(error)))
+            return
+        state = _TaskState(event.prompt, event.request_options.get("web_search", True) is True,
             event.request_options.get("deep_search") is True)
         self.tasks[event.task_id] = state
         content = time_context(event.request_options)
-        if state.enabled:
+        if not state.enabled:
+            content += "\nWeb tools disabled for this task; do not call or retry them."
+        elif not self.backend.api_key:
+            content += "\nSearch API key missing; web tools unavailable. Answer without claiming web evidence."
+        else:
             content += (f'\nWeb tools enabled for this task; use only when needed. Discover scope "{self.plugin_id}" '
                         'with tool_search before execution in each Run.')
             if state.deep:
                 content += "\nDeep research requested: cross-check sources, read originals and investigate gaps within remaining budgets."
-        else:
-            content += "\nWeb tools disabled for this task; do not call or retry them."
         await self.publish(ContextContributionEvent(task_id=event.task_id, status="completed",
             context_blocks=[ContextBlock(source_plugin_id=self.plugin_id, context_type="web-research", content=content)]))
 

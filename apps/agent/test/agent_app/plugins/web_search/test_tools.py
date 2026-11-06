@@ -17,7 +17,8 @@ from agent_app.plugins.web_search.http_backend import SearchUnavailable
 from apps.agent.test.agent_app.application.test_session_runtime import make_config
 
 
-def test_factory_registers_search_and_fetch_without_prefetch(tmp_path):
+def test_factory_registers_search_and_fetch_without_prefetch(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICARUS_WEB_SEARCH_API_KEY", "test-only")
     async def run():
         registration = create_plugin("web-search", tmp_path, "test", {
             "config_model": make_config(tmp_path / "data"),
@@ -91,7 +92,7 @@ class Backend:
         self.closed = True
 
 
-async def setup_plugin(*, enabled=True, deep=False, deadline=45, clock=None):
+async def setup_plugin(*, enabled=True, deep=False, deadline=45, clock=None, request_options=None):
     backend = Backend()
     channels = TaskChannelRegistry()
     channel = channels.create("task")
@@ -105,10 +106,64 @@ async def setup_plugin(*, enabled=True, deep=False, deadline=45, clock=None):
         events.append(event)
     plugin.bind_publisher(publish)
     await plugin.on_input("user-input", UserInputEvent(task_id="task", prompt="original question",
-        request_options={"web_search": enabled, "deep_search": deep}))
+        request_options=request_options if request_options is not None else {"web_search": enabled, "deep_search": deep}))
     registry = ToolRegistry()
     registry.register_many(plugin.build_tools())
     return plugin, backend, events, ToolExecutor(registry)
+
+
+@pytest.mark.parametrize("options,enabled,deep", [
+    ({}, True, False), ({"local_time": "2026-11-05T12:00:00+08:00"}, True, False),
+    ({"web_search": True}, True, False), ({"web_search": False}, False, False),
+    ({"deep_search": True}, True, True), ({"web_search": False, "deep_search": True}, False, True),
+])
+def test_default_web_access_and_explicit_disable(options, enabled, deep):
+    async def run():
+        plugin, backend, events, executor = await setup_plugin(request_options=options)
+        try:
+            assert backend.calls == []
+            assert events[0].status == "completed"
+            assert plugin.tasks["task"].enabled is enabled
+            assert plugin.tasks["task"].deep is deep
+            for name, args in [("web_search", {"query": "facts"}), ("web_fetch", {"url": "https://example.com/a"})]:
+                result = await executor.aexecute(ToolCall(name, name, args), task_id="task")
+                assert result.success is enabled
+            assert len(backend.calls) == (2 if enabled else 0)
+        finally:
+            await plugin.stop()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("field", ["web_search", "deep_search"])
+@pytest.mark.parametrize("value", [None, 0, 1, "true", "false", [], {}])
+def test_invalid_input_event_finishes_context_and_denies_tools(field, value):
+    async def run():
+        plugin, backend, events, executor = await setup_plugin(request_options={field: value})
+        try:
+            assert events[0].status == "failed"
+            assert field in events[0].error
+            for name, args in [("web_search", {"query": "facts"}), ("web_fetch", {"url": "https://example.com/a"})]:
+                assert not (await executor.aexecute(ToolCall(name, name, args), task_id="task")).success
+            assert backend.calls == []
+        finally:
+            await plugin.stop()
+    asyncio.run(run())
+
+
+def test_missing_key_guidance_does_not_advertise_available_web_tools():
+    async def run():
+        plugin, backend, events, executor = await setup_plugin()
+        try:
+            backend.api_key = ""
+            await plugin.on_input("user-input", UserInputEvent(task_id="next", prompt="hello"))
+            guidance = events[-1].context_blocks[0].content
+            assert "API key missing" in guidance
+            assert "Web tools enabled" not in guidance
+            assert "Discover scope" not in guidance
+            assert backend.calls == []
+        finally:
+            await plugin.stop()
+    asyncio.run(run())
 
 
 def test_search_then_fetch_then_search_keep_citations_and_old_snapshots():
