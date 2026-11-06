@@ -3,6 +3,46 @@
 验证日期：2026-10-23 至 2026-10-24；对照基线：`57e4a41`。
 原规格与适配范围见 [实施计划](plan.md)。本记录对应本地验证，未执行推送或部署。
 
+## 2026-11-05：默认自动联网
+
+实施基线 `96006ec`，分支 `feat/agent`；方案见 [plan-agent-autonomy.md](plan-agent-autonomy.md)。
+使用新偏好 `icarus.chat.autoWebSearch`，默认 true，不读取或迁移旧联网偏好。
+自动模式省略 web_search，关闭模式发送 false；新会话首条、普通提交与排队共用构造规则。
+排队、重连及结果未知重试保留原选项、时间和 submission_id。按钮改为“自动联网”，
+说明关闭影响新任务，深度设置仍不能覆盖关闭。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 新增默认浏览器用例，改动前 | 默认未选中，行为断言失败 |
+| 搜索浏览器专项 | **19 passed in 55.42s** |
+| Windows 独立 dev server 全套 | **366 passed、13 skipped、7 failed in 615.24s** |
+| `pnpm typecheck` | 通过 |
+| 修改的三个 TS/TSX 文件 Prettier 检查 | 通过 |
+| 修改的 Python 测试 compileall | 通过 |
+| 界面检查 | 已查看 390px 搜索截图；自动按钮可见，无裁切 |
+
+全套通过应用原生入口执行：
+
+```powershell
+& apps/agent/.venv/windows/Scripts/python.exe apps/webui/scripts/test.py -q --tb=short
+```
+
+7 项失败全部位于未修改的 `test/test_lifecycle_scripts.py`。以 `git archive HEAD` 导出原代码，
+使用相同 WebUI Windows 解释器和依赖复跑该文件，得到 **7 failed、3 passed in 0.88s**。
+逐项身份相同：6 项安装测试找不到 POSIX 工具；1 项启动测试的无扩展名模拟 node 在 Windows
+未被找到。未修改无关脚本、放宽断言或增加 skip。基线目录为
+`C:/Users/郭尚勇/AppData/Local/Temp/icarus-web-autonomy-baseline-p1rmtyly`。
+13 项既有真实服务跳过不计通过。
+
+专项覆盖旧 key 两种值都不影响新默认、改版后开关持久化、两方向排队快照、新会话首条、
+未知提交重试及显式关闭加深度；既有搜索、Fetch、来源引用、历史与停止回归通过。
+重试测试等待连接恢复后再点击，沿用现有聊天用例的连接前提。
+
+浏览器通过模拟 Gateway 验证请求和展示；Agent 生产循环及真实 Gateway socket 的离线结果
+分别见 [Agent 记录](../../../../agent/docs/spec/2026-10-23-web-search/plan-validation.md) 与
+[Gateway 记录](../../../../gateway/docs/spec/2026-10-23-web-search/plan-validation.md)。
+未执行真实模型/Search/Fetch、部署、提交或推送。以下为历史版本记录，不代表当前默认行为。
+
 ## 已通过的检查
 
 | 范围 | 结果 | 覆盖内容 |
