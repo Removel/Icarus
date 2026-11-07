@@ -8,9 +8,14 @@ embedded Git repository or require Git submodules.
 
 Current modifications:
 
-- The administrative `GET /memories/page` endpoint filters and sorts a bounded
-  snapshot before pagination and preserves SDK identity/source field ownership.
+- The administrative `GET /memories/page` endpoint delegates complete filtering,
+  stable ordering, counts and facets to PGVector in one SQL snapshot (PostgreSQL
+  16+). It preserves SDK identity/source field ownership; unsupported stores
+  return an explicit 501 instead of a misleading truncated result.
   See the [memory browser architecture](docs/spec/2026-10-05-memory-browser/arch.md).
+- Sync and async inferred adds propagate failed vector persistence after the
+  per-record fallback, instead of returning ADD references and recording ADD
+  history for an unsuccessful write. Successful fallback retains its behavior.
 - Memory updates record category and expiration changes in both sync and async history.
   SQLite adds the `changes` column without discarding existing history; back up history.db
   before upgrading and preserve that backup when rolling back to older schema handling.

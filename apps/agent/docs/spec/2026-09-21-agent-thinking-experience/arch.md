@@ -144,6 +144,11 @@ assistant.thinking
 空文本在投影层再次过滤。`RuntimeUpdatePlugin` 不重新聚合 delta，不从
 `AgentResponse.reasoning` 猜测缺失的完整块。
 
+2026-11-07 补充：`assistant.message` 表示一轮完整模型响应，其 payload 除 `step`、`text` 外包含
+`has_tool_calls: bool`，直接取自统一 `Message.tool_calls` 是否非空。它不等于 task 已完成，工具参数
+不会附带公开；text delta 仍原样传递。该字段通过既有 Gateway 和持久化通路保留，客户端可据此
+将工具前说明归入过程区；旧记录缺少字段时只能结合同一步工具事件解释。不新增模型供应商分支。
+
 ## 持久化和历史
 
 `AgentRuntime` 的非持久化集合扩展为：
