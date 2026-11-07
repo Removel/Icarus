@@ -19,6 +19,7 @@ from apps.tui.src.event_pipeline import (
     FinishTurn,
     SetRuntimeStatus,
     UpdateToolCompleted,
+    UpdateWebSources,
 )
 from apps.tui.src.widgets.chat.composer import PersistentComposer
 from apps.tui.src.widgets.chat.conversation import (
@@ -105,6 +106,36 @@ class ConversationTestApp(App):
 
     def compose(self) -> ComposeResult:
         yield ConversationView(self.workspace, id="conversation")
+
+
+def test_citations_render_without_changing_raw_stream_and_accept_late_sources(tmp_path):
+    from textual.widgets._markdown import MarkdownParagraph
+
+    async def run():
+        app = ConversationTestApp(tmp_path)
+        async with app.run_test(size=(70, 24)) as pilot:
+            view = app.query_one(ConversationView)
+            await view.apply_action(AppendUserMessage("a", "查询"))
+            await view.apply_action(UpdateWebSources("a", (12,)))
+            for text in ("结论", "[", "1", "2", "]", "，保留代码 `[12]`，尾部["):
+                await view.apply_action(AppendAssistantDelta("a", text))
+                await pilot.pause()
+            assistant = view.query_one(AssistantMessage)
+            assert "[12]" in assistant.markdown_text
+            await view.apply_action(CompleteAssistantMessage("a", "最终结论[12]，代码 `[12]`，尾部["))
+            await view.apply_action(FinishTurn("a", "completed"))
+            await pilot.pause()
+            def displayed():
+                return "".join(node._content.plain for node in assistant.query(MarkdownParagraph))
+            assert displayed() == "最终结论，代码 [12]，尾部["
+            await view.apply_action(UpdateWebSources("a", ()))
+            await pilot.pause()
+            assert displayed() == "最终结论[12]，代码 [12]，尾部["
+            await view.apply_action(UpdateWebSources("a", (12,)))
+            await pilot.pause()
+            assert displayed() == "最终结论，代码 [12]，尾部["
+            assert view.projection.units[-1].text == "最终结论[12]，代码 `[12]`，尾部["
+    asyncio.run(run())
 
 
 class ConversationPointerTestApp(App):

@@ -16,6 +16,7 @@ from apps.tui.src.event_pipeline import (
     FinishTurn,
     UiAction,
     UpdateToolCompleted,
+    UpdateWebSources,
 )
 
 
@@ -40,6 +41,7 @@ class DisplayUnit:
     error: str | None = None
     applied_before_step: int | None = None
     children: list[DisplayUnit] = field(default_factory=list)
+    citation_indices: tuple[int, ...] = ()
 
 
 @dataclass
@@ -67,12 +69,16 @@ class ConversationProjection:
         self._thinking: dict[tuple[str, int], DisplayUnit] = {}
         self._completed_thinking: set[tuple[str, int]] = set()
         self._tools: dict[tuple[str, str], DisplayUnit] = {}
+        self._sources: dict[str, tuple[int, ...]] = {}
 
     def snapshot_for_turn(self, index: int) -> list[DisplayUnit]:
         return self.turns[index].units
 
     def turn_index(self, task_id: str) -> int | None:
         return self._task_indices.get(task_id)
+
+    def citation_indices(self, task_id: str) -> tuple[int, ...]:
+        return self._sources.get(task_id, ())
 
     def _place(self, unit: DisplayUnit, *, after: DisplayUnit | None = None) -> None:
         turn = self._task_turns.get(unit.task_id)
@@ -123,7 +129,8 @@ class ConversationProjection:
         key = task_id, step
         candidate = self._candidates.get(key)
         if candidate is None:
-            candidate = DisplayUnit("assistant", task_id, step=step)
+            candidate = DisplayUnit("assistant", task_id, step=step,
+                                    citation_indices=self._sources.get(task_id, ()))
             self._candidates[key] = candidate
             self._place(candidate)
         return candidate
@@ -145,6 +152,11 @@ class ConversationProjection:
             self._task_turns[action.task_id] = turn
             self._task_indices[action.task_id] = len(self.turns) - 1
             self._place(DisplayUnit("user", action.task_id, action.text))
+        elif isinstance(action, UpdateWebSources):
+            self._sources[action.task_id] = action.indices
+            for unit in self.units:
+                if unit.task_id == action.task_id and unit.kind in {"assistant", "progress"}:
+                    unit.citation_indices = action.indices
         elif isinstance(action, AppendAssistantDelta):
             key = action.task_id, action.step
             if key not in self._candidate_completed:
