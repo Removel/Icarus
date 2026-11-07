@@ -19,18 +19,51 @@ def test_static_sections_are_frozen_and_new_session_loads_evolution(tmp_path):
         second = plugin(tmp_path)
         await first.on_session_start()
         before = first.static_prompt_sections()
-        assert [s.section_id for s in before] == ["persona-01-identity", "persona-04-policy"]
+        assert [s.section_id for s in before] == ["persona-01-identity"]
         assert all(s.layer == "persona" for s in before)
         await PersonaStore(tmp_path, "default", PersonaConfig()).append(
             EvolvedEntry("e_a", "voice", "I use warmer greetings.", "PRIVATE-REASON", "2026-10-20T12:00:00Z", "PRIVATE-SESSION"))
         await second.on_session_start()
         assert first.static_prompt_sections() == before
         text = "\n".join(s.content for s in second.static_prompt_sections())
-        assert "I use warmer greetings." in text
+        assert "I use warmer greetings." not in text
+        captured = []
+        async def publish(event):
+            captured.append(event)
+        second.publish = publish
+        from icarus.core.contracts.input import UserInputEvent
+        await second.on_input("user-input", UserInputEvent(task_id="task", prompt="hello"))
+        assert "I use warmer greetings." in captured[0].sections[0].content
         assert "PRIVATE" not in text
         assert "persona_evolve" not in text
         await first.stop()
         await second.stop()
+    asyncio.run(run())
+
+
+def test_relationship_snapshot_is_refreshed_for_each_task_and_never_in_system(tmp_path):
+    async def run():
+        value = plugin(tmp_path)
+        calls = []
+        captured = []
+        async def load():
+            calls.append(True)
+            return f"PROFILE-{len(calls)}"
+        async def publish(event):
+            captured.append(event)
+        value.relationship.load = load
+        value.publish = publish
+        await value.on_session_start()
+        assert not calls
+        static = value.static_prompt_sections()
+        from icarus.core.contracts.input import UserInputEvent
+        for number in (1, 2):
+            await value.on_input("user-input", UserInputEvent(task_id=f"t{number}", prompt="hello"))
+            assert captured[-1].sections[0].layer == "contributor"
+            assert captured[-1].sections[0].content == f"PROFILE-{number}"
+        assert value.static_prompt_sections() == static
+        assert "PROFILE" not in "".join(s.content for s in static)
+        await value.stop()
     asyncio.run(run())
 
 
@@ -43,11 +76,21 @@ def test_missing_persona_fails_start(tmp_path):
     asyncio.run(run())
 
 
-def test_policy_preserves_competence(tmp_path):
+@pytest.mark.parametrize("enabled,live_judge", [(False, False), (True, False), (True, True), (False, True)])
+def test_evolution_guidance_has_its_own_conditional_section(tmp_path, enabled, live_judge):
     async def run():
-        value = plugin(tmp_path)
+        from apps.agent.test.agent_app.plugins.persona.conftest import FakeJudge
+        value = plugin(tmp_path, jev_enabled=enabled)
+        if live_judge:
+            value.judge = FakeJudge()
         await value.on_session_start()
-        policy = value.static_prompt_sections()[-1].content
-        assert "事实" in policy and "工具" in policy and "合理" in policy
+        sections = value.static_prompt_sections()
+        assert all(s.section_id != "persona-04-policy" for s in sections)
+        guidance = [s for s in sections if s.section_id == "persona-05-evolution"]
+        assert bool(guidance) == (enabled and live_judge)
+        if guidance:
+            assert "persona_evolve" in guidance[0].content
+            assert "global" in guidance[0].content and "new sessions" in guidance[0].content
+            assert guidance[0].layer == "persona"
         await value.stop()
     asyncio.run(run())

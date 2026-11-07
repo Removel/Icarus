@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from agent_app.contracts.prompt import PromptSection
-from agent_app.plugins.knowledge.prompts import KNOWLEDGE_GUIDANCE
+from agent_app.plugins.knowledge.prompts import KNOWLEDGE_DISCOVERY, KNOWLEDGE_GUIDANCE
 from agent_app.plugins.knowledge.config import PluginConfig
 
 from contextlib import ExitStack
@@ -74,7 +74,10 @@ class KnowledgePlugin(BasePlugin):
         return False
 
     def static_prompt_sections(self):
-        return (PromptSection("knowledge-use", "session", KNOWLEDGE_GUIDANCE),)
+        return (PromptSection("knowledge-use", "session", KNOWLEDGE_DISCOVERY),)
+
+    def tool_scope_guidance(self):
+        return KNOWLEDGE_GUIDANCE
 
 
     async def stop(self) -> None:

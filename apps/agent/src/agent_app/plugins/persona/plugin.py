@@ -9,7 +9,7 @@ from agent_app.contracts.prompt import PromptContributionEvent, PromptSection
 from agent_app.plugins.persona.judge import Judge, bounded_recent, create_judge, NullJudge
 from agent_app.plugins.persona.relationship import RelationshipReader
 from agent_app.plugins.persona.store import PersonaStore
-from agent_app.plugins.persona.prompts import DEFENSE, EVOLUTION_GUIDANCE, POLICY, REANCHOR, STRONG_DEFENSE
+from agent_app.plugins.persona.prompts import DEFENSE, EVOLUTION_GUIDANCE, REANCHOR, STRONG_DEFENSE
 from icarus.core.models.messages import TextPart
 from icarus.core.tools.result_budget import conservative_token_count
 from icarus.core.run_control import TaskChannelStatus
@@ -36,6 +36,7 @@ class PersonaPlugin(BasePlugin):
         self.relationship = RelationshipReader(connection, api_token=os.getenv("RELA_MEM_API_TOKEN", "").strip())
         self.document = None
         self._sections: tuple[PromptSection, ...] = ()
+        self._background: tuple[PromptSection, ...] = ()
         self._accepting = True
         self.turn_count = 0
         self._seen_inputs = OrderedDict()
@@ -54,15 +55,13 @@ class PersonaPlugin(BasePlugin):
 
     async def on_session_start(self):
         self.document = self.store.load()
-        relationship = await self.relationship.load()
-        policy = POLICY
-        if self.config.jev_enabled and not isinstance(self.judge, NullJudge):
-            policy += EVOLUTION_GUIDANCE
+        evolution = (EVOLUTION_GUIDANCE
+                     if self.config.jev_enabled and not isinstance(self.judge, NullJudge) else "")
         values = (("persona-01-identity", self.document.identity_text),
-                  ("persona-02-relationship", relationship),
-                  ("persona-03-evolved", self.document.evolved_text),
-                  ("persona-04-policy", policy))
+                  ("persona-05-evolution", evolution))
         self._sections = tuple(PromptSection(key, "persona", text) for key, text in values if text)
+        self._background = ((PromptSection("persona-observations", "contributor", self.document.evolved_text),)
+                            if self.document.evolved_text else ())
 
     def static_prompt_sections(self):
         return self._sections
@@ -98,13 +97,24 @@ class PersonaPlugin(BasePlugin):
     async def on_input(self, source, event):
         if not event.task_id or not self._remember(self._seen_inputs, event.task_id):
             return
-        sections: tuple[PromptSection, ...] = ()
+        sections: tuple[PromptSection, ...] = self._background
         if self.task_channels is not None:
             channel = self.task_channels.get(event.task_id)
             if channel is None or channel.status not in {
                     TaskChannelStatus.ACCEPTED, TaskChannelStatus.PREPARING_CONTEXT}:
                 await self.publish(PromptContributionEvent(task_id=event.task_id, status="completed"))
                 return
+        results = await asyncio.gather(self.relationship.load(), self._judged_sections(event), return_exceptions=True)
+        for index, result in enumerate(results):
+            if isinstance(result, BaseException):
+                self.logger.warning("Persona contribution degraded: error_type=%s", type(result).__name__)
+            elif index == 0 and result:
+                sections += (PromptSection("persona-relationship", "contributor", result),)
+            elif index == 1:
+                sections += result
+        await self.publish(PromptContributionEvent(task_id=event.task_id, status="completed", sections=sections))
+
+    async def _judged_sections(self, event):
         try:
             self.turn_count += 1
             self._recent = bounded_recent([*self._recent, ("user", event.prompt)])
@@ -127,13 +137,17 @@ class PersonaPlugin(BasePlugin):
                 for section in candidates:
                     proposed = [*selected, section]
                     rendered = "\n\n".join(f"## contributor/{self.plugin_id}/{s.section_id}\n{s.content}" for s in proposed)
-                    if conservative_token_count(rendered) > self.config.max_dynamic_tokens:
+                    measured = conservative_token_count(rendered)
+                    if measured > self.config.max_dynamic_tokens:
+                        self.logger.warning(
+                            "Persona dynamic section omitted: section=%s reason=budget units=%s max_tokens=%s",
+                            section.section_id, measured, self.config.max_dynamic_tokens)
                         break
                     selected = proposed
-                sections = tuple(selected)
+                return tuple(selected)
         except Exception as error:
             self.logger.warning("Persona contribution degraded: error_type=%s", type(error).__name__)
-        await self.publish(PromptContributionEvent(task_id=event.task_id, status="completed", sections=sections))
+        return ()
 
     @handles(AgentCompletedEvent)
     async def on_completed(self, source, event):

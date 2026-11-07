@@ -64,11 +64,11 @@ def test_rate_gate_is_shared_by_backend_instances_and_wait_can_timeout():
 
 
 @pytest.mark.parametrize("status,message", [
-    (401, "密钥无效"),
-    (402, "余额不足"),
-    (403, "拒绝访问"),
-    (429, "请求过于频繁"),
-    (404, "不支持"),
+    (401, "invalid or expired"),
+    (402, "credit exhausted"),
+    (403, "access denied"),
+    (429, "rate limit"),
+    (404, "does not support"),
 ])
 def test_search_http_errors_explain_configuration_without_exposing_response(status, message):
     async def run():
@@ -91,7 +91,7 @@ def test_fetch_security_rejection_is_reported_without_claiming_missing_search_pe
         backend = SearchHttpBackend("https://search.example", "private-key",
             transport=httpx.MockTransport(lambda request: httpx.Response(403)))
         try:
-            with pytest.raises(SearchUnavailable, match="安全策略"):
+            with pytest.raises(SearchUnavailable, match="security policy"):
                 await backend.fetch("https://page.example/article")
         finally:
             await backend.aclose()

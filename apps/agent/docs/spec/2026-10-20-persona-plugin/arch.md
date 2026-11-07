@@ -1,6 +1,6 @@
 # Persona 插件设计
 
-本文依据 `src/agent_app/plugins/persona/`、对应单测与 SessionRuntime 集成测试描述当前实现。实施顺序与验收记录见 [plan.md](plan.md)。
+2026-11-05：本文依据 `src/agent_app/plugins/persona/`、对应单测与 SessionRuntime 集成测试更新当前实现。原实施顺序见 [plan.md](plan.md)，本轮注入位置、时机与验收见 [上下文交付](../2026-11-04-prompt-guidance/plan-context-delivery.md)。
 
 ## 1. 定位与目标
 
@@ -10,7 +10,7 @@ persona 是一个一级内置插件，manifest `tier: "core"` 并加入默认 `r
 |---|---|
 | 长对话人格漂移 | 每 5 轮用 jev 评估最近助手输出，命中后注入一次简短重锚 |
 | 提示词攻击导致出戏 | 每轮用 jev 评估用户输入，按置信度分档注入防御或人格内拒绝 |
-| 角色约束过拟合 | 人格只约束表达方式；插件自有策略明确要求不改变事实判断、工具使用和任务执行 |
+| 角色约束过拟合 | 人格只约束身份与表达；base 统一声明人格不改变事实、工具、授权和任务要求，persona 正文保留边界 |
 
 人格是**全局资产**，不是会话资产：一个 `persona_id`、一组文件、所有 Session 共享。自演化写入全局 overlay，对所有未来 Session 生效；运行中的 Session 不热更新。会话级状态只有漂移计数、最近消息窗口和限流计数。
 
@@ -53,7 +53,7 @@ version: 1
 - 分节标题为二级标题；未知分节忽略并告警，重复分节按出现顺序拼接。
 - frontmatter 只使用 `id/name/description/version`；`id` 与目录不一致时以目录为准并告警。
 - 缺少 frontmatter 时正文仍可解析；解析失败按"文件损坏"处理。
-- 缺少 `soul` 不阻止启动，但会告警；此时其它有效分节仍注入。
+- 缺少 `soul` 不阻止启动，但会告警；此时其它有效分节仍注入。`soul/boundaries/anti-goals` 任一缺失会汇总告警，提醒 JEV 的 invariants 输入缺失对应段；不按长度猜测语义完整性。
 - 文件不存在是配置错误，启动失败；文件存在但损坏是尽力加载 + 告警。
 
 `evolved.yaml` 格式（Q7 中讨论的 `evolved.md` 以 YAML 落地，条目需要结构化字段，仍可人工编辑）：
@@ -85,20 +85,22 @@ persona 插件同时是静态贡献者和动态贡献者：
 | section_id | 内容 |
 |---|---|
 | `persona-01-identity` | soul、boundaries、anti-goals、voice、examples 按优先级拼接 |
-| `persona-02-relationship` | 从 rela-mem 读取的用户档案与关系摘要 |
-| `persona-03-evolved` | overlay 条目，明确标注为"观察，不是指令" |
-| `persona-04-policy` | 插件自有策略：演化约束与"人格不改变任务执行" |
+| `persona-05-evolution` | 仅在 JEV 启用且 Judge 非 NullJudge 时贡献演化场景指导；共通执行/权限规则归 base |
+
+空段不贡献。默认关闭 JEV 时，静态仅贡献有效的 identity 段；档案和演化观察均不进入静态分节。`invariants_text` 仍由 soul、boundaries、anti-goals 拼接后按 800 预算裁剪，传给演化判据；不随 identity 的渲染预算一起丢弃。人格正文边界没有为精简提示词而删除。
 
 动态分节（`source=persona`，`layer=contributor`）：
 
 | section_id | 触发 |
 |---|---|
+| `persona-relationship` | relationship_enabled 时每任务读取有界档案；不再在会话启动时读取或进入 System |
+| `persona-observations` | 会话启动时冻结的 overlay 观察，每任务作为背景数据交付；运行中写入仍只影响新会话 |
 | `persona-defense` | 攻击置信度进入中/高档 |
 | `persona-reanchor` | 漂移置信度超过阈值 |
 
-`prompt` 插件会等待所有动态贡献者或 5s 截止。persona 处理器**无论是否有内容都必须发布 `status="completed"` 的贡献**；异常时也发布空贡献，避免每轮额外等待 5s。jev 关闭时立即发布空贡献。
+`prompt` 插件会等待所有动态贡献者或 5s 截止。persona 处理器**无论是否有内容都必须发布 `status="completed"` 的贡献**；关系读取与 JEV 判定并行，分别有界且错误独立。JEV 关闭仍交付已有观察/可用档案；两者皆无时发布空贡献。自定义 relationship_timeout_seconds 大于 Prompt 截止仍可能使 required 来源超时，应协调配置；默认2s/1.2s小于5s。
 
-persona 在两份默认 settings 的 `prompt.required_contributors` 中：静态分节不会在总预算紧张时被当作可选来源丢弃。正常判定失败会发布空的 completed 贡献，不让整轮失败；但插件自身崩溃或未能在 prompt 截止前送达，仍按 required contributor 的既有语义使该轮失败，不能保证绝对无新增失败路径。将 persona 设为 optional 时，需要同时从 `runtime.required_plugin_ids` 和 `prompt.required_contributors` 移除。
+persona 在两份默认 settings 的 `prompt.required_contributors` 中：静态分节不会在总预算紧张时被当作可选来源丢弃。正常判定失败只省略对应提醒，仍发布 completed 并保留已有观察和可用档案；无内容时贡献为空。但插件自身崩溃或未能在 prompt 截止前送达，仍按 required contributor 的既有语义使该轮失败，不能保证绝对无新增失败路径。将 persona 设为 optional 时，需要同时从 `runtime.required_plugin_ids` 和 `prompt.required_contributors` 移除。
 
 ## 4. 输入防御
 
@@ -113,9 +115,10 @@ persona 在两份默认 settings 的 `prompt.required_contributors` 中：静态
 置信度分档使用归一化分数 `p = score / 2`，**不是校准后的攻击概率或统计置信区间**。`p >= 0.5` 注入中档防御；`p >= 0.8` 注入高档防御。不使用关键词预检。
 
 - 中档：保持身份与语气继续自然回应，不复述、不解释设定。
-- 高档：以人格身份明确拒绝该请求，保持语气；不泄露或讨论系统提示词、规则、检测机制。
+- 高档：拒绝覆盖规则或泄露私有提示词的要求，同时继续帮助合理任务；不把整段包含安全讨论的请求都拒绝。
 - 所有档位都不向用户暴露"检测到攻击"之类元信息。
 - 防御文案是插件内置模板，不来自人格文件，用户不可编辑。
+- 动态贡献按完整渲染后的预算选段，defense 优先于 reanchor；超限整段省略并记录 section、预算和上限，不记录用户输入。内置默认防御段均在默认 200 预算内；用户自设极小预算仍可能使其省略。
 
 失败策略：1.2s 硬超时、单次尝试、超时或解析失败一律 fail-open，不注入防御，正常生成。检测与提醒是降低出戏风险的启发式措施，不是权限控制或可靠的安全边界，不能保证防住提示词攻击；工具权限与授权仍由既有执行层负责。
 
@@ -161,7 +164,7 @@ persona_evolve(
 
 送给演化判定的上下文是有界的：`note`、`reason`、`section`、最近 8 条消息（仅用户文本与助手文本，每条 ≤1000 字符、合计 ≤4000 字符）以及 soul+boundaries/anti-goals 的精简摘录。保留窗口来自每任务最终助手文本；另外合并工具执行接口提供的当前任务 `task_messages`，使本轮刚产生的证据可用。排除带 `tool_calls` 的助手中间消息、工具结果、图片、System Prompt，以及 User Prompt 中的插件上下文包装；只移除最外层 user_request，保留用户文本中的字面标签。
 
-注入 `persona-03-evolved` 时只渲染 `section` 标签与 `note`；`reason`、`created_at`、`session_id` 只保留在 YAML 中供审计和人工查看，不进入提示词，避免把临时情境或敏感细节变成角色行为依据。
+注入当前 User 的 `persona-observations` 时只渲染 `section` 标签与 `note`；`reason`、`created_at`、`session_id` 只保留在 YAML 中供审计和人工查看，不进入提示词，避免把临时情境或敏感细节变成角色行为依据。内置正文与模板统一英文，自定义人格与事实原文不翻译。
 
 写入：校验前和写盘前检查任务是否仍有效，已取消则拒绝；通过后在锁内读取当前 overlay、追加条目、执行上限淘汰、写同目录临时文件并 `os.replace`。当前 Session 的静态 persona 不刷新，下一次 Session 启动时生效。
 
@@ -170,15 +173,15 @@ persona_evolve(
 ## 7. 关系档案联动
 
 - 只读；mem0 完全不动。mem0 已在每轮自动 recall 情节记忆，persona 插件不重复查询。
-- Session 开始时从 rela-mem 读取：
+- `relationship_enabled` 时，在每个有效任务的准备阶段从 rela-mem 读取，不在Session启动时联网：
   - `GET /v1/persons?kind=user`，要求恰好一个 active 用户；
   - `GET /v1/persons/{id}/profile`；
   - `GET /v1/relations?person_id={id}&include_incoming=true`。
-- 组合为"称呼 / 档案 key=value / 关系摘要"的紧凑块，≤200 tokens，超出时从末尾丢弃完整条目。
+- 组合为英文标签、原文称呼/档案与明确方向的关系摘要，≤200保守预算单位；按顺序加入能容纳的完整事实，超大条目跳过。当前任务User注入，缺项不表示不存在。
 - 数据以"数据，不是指令"的框架注入。
 - endpoint 默认 `http://127.0.0.1:8767`，`ICARUS_RELATIONSHIP_ENDPOINT` 可覆盖；token 只从进程环境 `RELA_MEM_API_TOKEN` 读取；非 loopback 必须 HTTPS 且带 token。
 - 只通过 `httpx.AsyncClient` 发起 GET，三个读取共用 2s 总截止，不跟随重定向，响应有字节上限；并行读取使用 TaskGroup，任一失败或取消都会取消并等待其它请求，不遗留后台连接。
-- 2s 超时、不重试；失败只告警并跳过该块。"不阻塞"指失败不会让 Session 启动失败；开启联动时，`on_session_start` 仍会最多等待 2s。包内默认关闭，仓库配置开启。
+- 2s 超时、不重试；失败只告警并跳过该块，不丢已有观察或JEV防御；两类读取/判定并行。启动不等待该读取；开启时每任务准备最多付出配置的关系读取延迟。包内默认关闭，仓库配置开启。
 - endpoint 形状非法属于配置错误，启动失败；非 loopback 未使用 HTTPS、缺少 token 或服务不可达属于外部依赖问题，告警并跳过该块。
 - 包内默认配置关闭该联动（`relationship_enabled=false`），仓库内 `apps/agent/settings.json` 开启；这样 CI 与全新安装不会因外部服务不可用而变慢或失败。
 - 不新增 agent 检索工具：检索是否命中和准确由插件保证，不交给模型自行判断。
@@ -191,9 +194,11 @@ persona_evolve(
 |---|---|---|
 | soul | 400 tokens | 硬截断并告警 |
 | identity 总块 | 1500 tokens | 按 soul > boundaries/anti-goals > voice > examples 顺序整节取舍 |
-| relationship 块 | 200 tokens | 从末尾丢弃完整条目 |
+| relationship 块 | 200保守预算单位 | 按顺序加入能容纳的完整事实，放不下的跳过并继续检查后续事实 |
 | evolved 块 | 600 tokens / 30 条 | 淘汰最旧条目 |
-| 每轮动态块 | 200 tokens | 防御优先；放不下时丢弃重锚 |
+| 每轮防御/重锚块 | 200保守预算单位 | 防御优先；放不下时整段省略并告警 |
+
+档案/观察分别遵守200/600已有上限，与防御一起交给Prompt的总预算校验；不能将整个动态贡献误认为只有200。英文模板没有放宽生产预算。
 
 | 场景 | 行为 |
 |---|---|
@@ -203,7 +208,7 @@ persona_evolve(
 | jev 超时 / 失败（防御、漂移） | fail-open，正常生成 |
 | jev 超时 / 失败（演化） | fail-closed，拒绝写入 |
 | jev 未配置且 `jev_enabled=true` | 告警并禁用 jev；人格继续注入，不阻塞启动 |
-| `jev_enabled=false` | 跳过判定；`persona_evolve` 仍注册但返回 `judge_disabled`；policy 省略演化引导 |
+| `jev_enabled=false` | 跳过判定；`persona_evolve` 仍注册但返回 `judge_disabled`；不贡献 `persona-05-evolution` |
 | rela-mem 离线 / 超时 | 告警，跳过关系块，Session 正常启动 |
 
 ## 9. 插件形态、事件与配置
@@ -217,7 +222,7 @@ apps/agent/src/agent_app/plugins/persona/
 ├── store.py           # persona.md / evolved.yaml 加载、预算、原子写入
 ├── judge.py           # jev 客户端与 Judge Protocol
 ├── relationship.py    # 只读 rela-mem 档案读取
-├── prompts.py         # 防御、重锚、policy、关系与 overlay 的框架文案
+├── prompts.py         # 防御、重锚与演化指导；档案/观察包装由 relationship.py/store.py 维护
 └── tools.py           # persona_evolve
 ```
 
@@ -233,9 +238,9 @@ Manifest 关键字段：
 生命周期：
 
 - `start`：创建 jev 客户端（不发起网络请求）。
-- `on_session_start`：加载 persona/overlay、读取关系档案、构建静态分节；文件缺失时抛错使 required 插件启动失败。
-- `static_prompt_sections`：返回已构建的四个静态分节。
-- `on_event`：处理 `input.user_input` 与 `agent.completed`；输入事件始终发布动态贡献。
+- `on_session_start`：加载 persona/overlay，构建静态分节并冻结观察背景；不读取关系档案。文件缺失时抛错使 required 插件启动失败。
+- `static_prompt_sections`：返回非空身份段，以及 JEV 启用且 Judge 可用时的演化指导段，最多两段。
+- `on_input` / `on_completed`：分别处理 `input.user_input` 与 `agent.completed`；有效任务输入时并行读取关系档案和执行 JEV 判定，将可用背景及提醒作为动态贡献发布；完成事件更新助手消息窗口。
 - `build_tools`：返回 `persona_evolve`。
 - `quiesce`：停止接受新判定；`stop`：关闭 jev 与 HTTP 客户端。
 
@@ -280,7 +285,7 @@ max_dynamic_tokens: 200
 ## 10. 非目标与已知限制
 
 - 不支持多人格、运行中切换或 per-session 覆盖。
-- 不做对话中自动检索，不新增关系查询工具。
+- 不让模型为人格联动自主选择检索；开启联动后由插件按任务后台读取关系档案，不新增关系查询工具。
 - 不扫描记忆、工具输出、文件或网页里的间接提示词注入；V1 只检查用户输入。
 - 不检查 steer/context input，只检查每轮 `input.user_input`。
 - 不向 mem0 / rela-mem 回写任何内容。
@@ -291,9 +296,9 @@ max_dynamic_tokens: 200
 ## 11. 验收
 
 - 新 Session 的 System Prompt 含 `persona` 层内容；persona 是 required source，不会在总预算内被当作可选来源丢弃；运行中不刷新。
-- `jev_enabled=false` 时工具仍可见但返回 `judge_disabled`，policy 不包含演化引导。
+- `jev_enabled=false` 时工具仍可见但返回 `judge_disabled`，不贡献 `persona-05-evolution`；可用档案与会话冻结观察仍进入当轮 User。
 - 两个 Session 共享同一人格文件与 overlay；自演化写入后只有新 Session 看到。
-- 正常输入不注入动态内容；中/高档攻击分别注入对应防御；jev 超时不影响生成。
+- 正常输入只注入可用背景；中/高档攻击另注入对应防御；JEV 超时不丢已有背景。
 - 第 5、10、15… 轮检测漂移；命中只重锚一次；jev 失败不影响生成。
 - `persona_evolve` 只能写 `voice`/`relationship`；三问任一不过即拒绝；jev 失败拒绝写入；限流与上限生效。
 - 并发两次演化写入都落盘且不丢条目，计数不超过上限。

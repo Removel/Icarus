@@ -25,6 +25,12 @@ class CompleteAssistantMessage:
 
 
 @dataclass(frozen=True)
+class UpdateWebSources:
+    task_id: str
+    indices: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class AppendThinkingDelta:
     task_id: str
     step: int
@@ -110,4 +116,5 @@ UiAction: TypeAlias = (
     | SetRuntimeStatus
     | ShowNotification
     | FinishTurn
+    | UpdateWebSources
 )

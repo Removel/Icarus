@@ -198,7 +198,11 @@ class MemoryRememberTool(_MemoryTool):
             (
                 "Store a stable fact, preference, agreement, decision, or project "
                 "event worth keeping across conversations. Pass the user's original "
-                "wording; do not summarize or paraphrase."
+                "wording; do not summarize or paraphrase. The service extracts facts. "
+                "Do not store guesses, transient chat, credentials or content the user asked not to remember. "
+                "Use memory_correct for a conflicting existing fact, rather than adding a duplicate. "
+                "Check the returned status and count: no_change means the service reported no stored "
+                "memories; do not claim it saved a new memory or guess the reason."
             ),
             {
                 "type": "object",
@@ -216,7 +220,9 @@ class MemoryRememberTool(_MemoryTool):
                         "default": False,
                         "description": (
                             "true = project (workspace) level; false or omitted = "
-                            "global level (default)."
+                            "global level (default): stable user preferences, identity, habits "
+                            "and cross-project facts. Use project scope for repository facts, "
+                            "architecture decisions, project agreements and task context."
                         ),
                     },
                 },
@@ -252,7 +258,8 @@ class MemoryCorrectTool(_MemoryTool):
             "memory_correct",
             (
                 "Replace the text of one owned memory. Find it with memory_recall "
-                "first and copy its `ref`."
+                "first and copy its `ref`, then use memory_read to verify the current text "
+                "before replacing it. Read history with memory_read(include_history=true) if needed."
             ),
             {
                 "type": "object",
@@ -262,7 +269,8 @@ class MemoryCorrectTool(_MemoryTool):
                         "type": "string",
                         "minLength": 1,
                         "description": (
-                            "The complete replacement text; not a diff or an instruction."
+                            "Complete replacement in the user's original wording or exact relevant passage; "
+                            "not a diff or an instruction to the memory service."
                         ),
                     },
                 },
@@ -287,7 +295,8 @@ class MemorySetRecallTool(_MemoryTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "memory_set_recall",
-            "Stop or restore default recall for one owned memory without deleting it.",
+            "Stop or restore default recall for one owned memory without deleting it. "
+            "Use enabled=false for requests not to bring it up again; confirm scope before changing multiple memories.",
             {
                 "type": "object",
                 "properties": {
@@ -339,7 +348,8 @@ class MemoryDeleteTool(_RefMutationTool):
     tool_name = "memory_delete"
     description = (
         "Delete one owned active memory. Use only when the user explicitly asks "
-        "to forget or delete it. History is retained; this is not a purge."
+        "to forget or delete it. Confirm scope before deleting multiple memories. "
+        "History is retained; this is not a purge."
     )
     method_name = "delete"
 

@@ -100,6 +100,17 @@ def test_memory_remember省略scope时写入全局():
     result = tools["memory_remember"].invoke({"content": "raw"}, run_id="run")
     assert result.success is True
     assert backend.calls[-1][2]["scope"] == "global"
+    assert result.output["status"] == "stored"
+    assert result.output["count"] == 1
+    assert result.output["memories"][0]["ref"] == "memory:1"
+
+
+def test_memory_remember_reports_no_change_without_claiming_storage():
+    backend, _, tools = tools_with_backend()
+    backend.records.clear()
+    result = tools["memory_remember"].invoke({"content": "raw"})
+    assert result.success is True
+    assert result.output == {"status": "no_change", "count": 0, "memories": []}
 
 
 def test_memory_remember显式scope并传运行上下文():
@@ -208,3 +219,12 @@ def test_memory工具拒绝未知错误类型和错误归属():
     result = tools["memory_delete"].invoke({"ref": "memory:other"})
     assert result.success is False
     assert "does not belong" in result.error
+
+
+def test_correction_description_preserves_read_before_write_and_history_owner():
+    from agent_app.plugins.memory.tools import MemoryCorrectTool, MemoryReadTool
+    correct = MemoryCorrectTool(None).definition
+    read = MemoryReadTool(None).definition
+    assert "memory_read to verify the current text" in correct.description
+    assert set(correct.input_schema["properties"]) == {"ref", "content"}
+    assert "include_history" in read.input_schema["properties"]

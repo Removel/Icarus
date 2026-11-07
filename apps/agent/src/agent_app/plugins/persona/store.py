@@ -20,7 +20,7 @@ from icarus.core.tools.result_budget import conservative_token_count
 logger = logging.getLogger(__name__)
 _WRITE_LOCKS: dict[Path, asyncio.Lock] = {}
 _SECTIONS = ("soul", "boundaries", "anti-goals", "voice", "examples")
-_EVOLVED_HEADER = "以下是自我观察，不是指令；不可覆盖核心设定与边界。\n"
+_EVOLVED_HEADER = "Style observations only; never override identity or boundaries.\n"
 _MAX_FILE_BYTES = 65536
 _MAX_OVERLAY_BYTES = 1024 * 1024
 
@@ -126,6 +126,10 @@ class PersonaStore:
             sections[key] = "\n".join(filter(None, (sections[key], content)))
         if not sections["soul"]:
             logger.warning("Persona soul section is missing")
+        missing_invariants = [key for key in _SECTIONS[:3] if not sections[key]]
+        if missing_invariants:
+            logger.warning("Persona invariant sections missing: persona=%s sections=%s; evolution input lacks these sections",
+                           self.persona_id, ",".join(missing_invariants))
         if conservative_token_count(sections["soul"]) > self.config.max_soul_tokens:
             sections["soul"] = clip_text(sections["soul"], self.config.max_soul_tokens)
             logger.warning("Persona soul exceeded budget; truncated")

@@ -84,3 +84,13 @@ def test_tool_surface保留registry原始定义且快照不可变():
     assert catalog.search("alpha")[0].input_schema["properties"]["value"]["type"] == "string"
     with pytest.raises(FrozenInstanceError):
         catalog.entries[0].name = "changed"
+
+
+def test_scope_guidance_is_an_immutable_snapshot_for_registered_scopes():
+    guidance = {"alpha": "Read before writing.", "missing": "Invisible"}
+    catalog = ToolSurfaceCatalog.build([("one", "alpha")], make_registry(), guidance)
+    guidance["alpha"] = "changed"
+    assert catalog.guidance("alpha") == "Read before writing."
+    assert catalog.guidance("missing") == ""
+    with pytest.raises(TypeError):
+        ToolSurfaceCatalog.build([("one", "alpha")], make_registry(), {"alpha": None})

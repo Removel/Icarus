@@ -14,17 +14,17 @@ class InsertTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="insert",
-            description="在 UTF-8 文本文件的指定行前插入内容",
+            description="Insert before a UTF-8 file line. Read first to verify current line numbers; line=count+1 appends. Include needed newlines in content. Line numbers may change after writing; inspect before retrying to avoid duplicates.",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "目标文件路径"},
+                    "path": {"type": "string", "description": "Target file path."},
                     "line": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "从 1 开始的插入行号",
+                        "description": "Line to insert before, 1-based.",
                     },
-                    "content": {"type": "string", "description": "插入内容"},
+                    "content": {"type": "string", "description": "Text to insert, including needed newlines."},
                 },
                 "required": ["path", "line", "content"],
                 "additionalProperties": False,

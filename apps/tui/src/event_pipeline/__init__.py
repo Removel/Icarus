@@ -14,6 +14,7 @@ from apps.tui.src.event_pipeline.actions import (
     ShowNotification,
     UiAction,
     UpdateToolCompleted,
+    UpdateWebSources,
 )
 from apps.tui.src.event_pipeline.dispatcher import (
     ProjectorRegistry,
@@ -36,6 +37,7 @@ __all__ = [
     "ShowNotification",
     "UiAction",
     "UpdateToolCompleted",
+    "UpdateWebSources",
     "UpdateProjector",
     "create_default_projector_registry",
 ]

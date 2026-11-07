@@ -187,10 +187,10 @@ export default function DswComposer({
               aria-pressed={chat.webSearch}
               disabled={unknown}
               onClick={() => chat.setWebSearch(!chat.webSearch)}
-              title="允许按需联网：需要最新资料、查证或明确要求搜索时才检索；失败仍继续回答"
+              title="由 Agent 按需搜索和阅读网页；关闭后新任务不能使用联网工具"
             >
               <AnimatedToggleIcon kind="search" enabled={chat.webSearch} />
-              联网搜索
+              自动联网
             </button>
             <div className="composer-actions">
               {unknown ? (

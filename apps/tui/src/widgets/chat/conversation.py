@@ -21,6 +21,7 @@ from apps.tui.src.event_pipeline import (
     FinishTurn,
     UiAction,
     UpdateToolCompleted,
+    UpdateWebSources,
 )
 from apps.tui.src.stores.conversation import (
     DisplayUnit,
@@ -796,6 +797,8 @@ class ConversationView(VerticalScroll):
                 if unit.kind == "assistant"
                 else AssistantProgressBlock(unit.step)
             )
+            widget.task_id = unit.task_id
+            widget.citation_indices = unit.citation_indices
             await self.mount(widget)
             await widget.complete_text(unit.text)
             if unit.completed or unit.kind == "progress":
@@ -882,11 +885,15 @@ class ConversationView(VerticalScroll):
         if (
             self._detached_window
             and (self._live_tail_task != action.task_id or self._live_tail_task is None)
-            and not isinstance(action, AppendUserMessage)
+            and not isinstance(action, (AppendUserMessage, UpdateWebSources))
         ):
             return True
         if isinstance(action, AppendUserMessage):
             await self.append_user_message(action.text, task_id=action.task_id)
+        elif isinstance(action, UpdateWebSources):
+            for assistant in self.query("AssistantMessage, AssistantProgressBlock"):
+                if assistant.task_id == action.task_id:
+                    await assistant.set_citation_indices(action.indices)
         elif isinstance(action, AppendAssistantDelta):
             if (action.task_id, action.step) in self._candidate_completed:
                 return True
@@ -1039,6 +1046,8 @@ class ConversationView(VerticalScroll):
         assistant = self._assistant_candidates.get(key)
         if assistant is None:
             assistant = AssistantMessage()
+            assistant.task_id = task_id
+            assistant.citation_indices = self.projection.citation_indices(task_id)
             self._assistant_candidates[key] = assistant
             await self.mount(assistant)
         return assistant

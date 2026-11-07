@@ -106,6 +106,17 @@ def test_gateway按连接关注session过滤runtime_update():
                 "considering"
             )
             assert notification["params"]["sequence"] is None
+            for has_tool_calls in (True, False):
+                payload = {"step": 2, "text": "response", "has_tool_calls": has_tool_calls}
+                client.portal.call(
+                    runtime.stream.publish,
+                    RuntimeUpdate(
+                        workspace_key="workspace", session_id="a", task_id="task",
+                        type="assistant.message", payload=payload,
+                        occurred_at=datetime.now(UTC),
+                    ),
+                )
+                assert websocket.receive_json()["params"]["payload"] == payload
 
 
 def test_gateway通过既有runtime_update转发process状态():

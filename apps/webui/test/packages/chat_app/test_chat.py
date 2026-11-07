@@ -2,7 +2,7 @@ import json
 
 import pytest
 from playwright.sync_api import expect
-from test.navigation import follow_link, open_sessions, open_settings, delete_session
+from test.navigation import open_process, follow_link, open_sessions, open_settings, delete_session
 
 
 def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None, selected='session-1', generated_title=None, hold_title=False, hold_submit=False, steer_status='accepted', hold_steer=False, disconnect_steer=False, hold_create=False, reject_create=False, disconnect_create=False):
@@ -119,26 +119,27 @@ def test_stream_tools_cancel_and_history_reload(page):
     emit('user.message', {'text': '帮我读取资料'})
     emit('assistant.text_delta', {'step': 1, 'text': '正在'})
     emit('assistant.text_delta', {'step': 1, 'text': '读取'})
-    expect(page.locator('.chat-assistant')).to_contain_text('正在读取')
-    emit('assistant.message', {'step': 1, 'text': '读取完毕'})
+    expect(page.locator('.chat-progress-text')).to_contain_text('正在读取')
+    emit('assistant.message', {'step': 1, 'text': '读取完毕', 'has_tool_calls': True})
     emit('assistant.text_delta', {'step': 1, 'text': '迟到片段'})
     emit('tool.started', {'call_id': 'call-1', 'tool_name': 'read', 'arguments': {'path': 'demo'}})
     emit('tool.completed', {'call_id': 'call-1', 'tool_name': 'read', 'success': True, 'output_preview': {'content': '资料内容'}})
     emit('future.event', {'text': '不可显示'})
     expect(page.locator('.chat-tool-name')).to_have_text('read')
     expect(page.locator('.chat-tool-status')).to_have_text('已完成')
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     page.locator('.chat-tool summary').click()
     expect(page.locator('.chat-tool pre').first).to_contain_text('demo')
     expect(page.locator('.chat-tool pre').last).to_contain_text('资料内容')
-    expect(page.locator('.chat-assistant')).to_contain_text('读取完毕')
-    assert page.locator('.chat-assistant').count() == 1
+    expect(page.locator('.chat-progress-text')).to_contain_text('读取完毕')
+    assert page.locator('.chat-assistant').count() == 0
     page.get_by_role('button', name='停止执行').click()
     expect(page.get_by_role('button', name='停止执行')).to_have_count(0)
     page.reload()
     expect(page.get_by_text('已连接', exact=True)).to_be_visible()
-    expect(page.locator('.chat-assistant')).to_contain_text('读取完毕')
-    assert page.locator('.chat-assistant').count() == 1
+    open_process(page)
+    expect(page.locator('.chat-progress-text')).to_contain_text('读取完毕')
+    assert page.locator('.chat-assistant').count() == 0
     assert any(call['method'] == 'session.subscribe' for call in state['calls'])
     assert next(call for call in state['calls'] if call['method'] == 'session.cancel')['params']['task_id'] == 'task-1'
 
@@ -221,7 +222,7 @@ def test_thinking_placeholder_is_immediate_and_replaced_by_first_response(page, 
     emit(kind, payload)
     expect(placeholder).to_have_count(0)
     if kind == 'assistant.text_delta':
-        expect(page.locator('.chat-assistant')).to_contain_text('首个输出片段')
+        expect(page.locator('.chat-progress-text')).to_contain_text('首个输出片段')
     else:
         expect(page.locator('.chat-process > summary')).to_contain_text('思考与工具')
 
@@ -303,7 +304,7 @@ def test_burst_output_and_thinking_reveal_progressively_and_history_is_immediate
     expect(content).to_have_text(answer)
     page.reload()
     expect(content).to_have_text(answer)
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     page.locator('.chat-thinking summary').click()
     expect(thought).to_have_text(thinking)
     expect(content).not_to_have_attribute('data-streaming', 'true')
@@ -542,7 +543,7 @@ def test_process_is_grouped_and_message_navigation_preserves_reading_position(pa
         emit('tool.completed', {'call_id': str(step), 'tool_name': 'read', 'success': True, 'output_preview': 'result'})
         emit('assistant.message', {'step': step, 'text': f'回答 {step}。' * 120})
     expect(page.locator('.chat-process')).to_have_count(1)
-    assert page.locator('.chat-process').get_attribute('open') is None
+    expect(page.locator('.chat-process')).to_have_attribute('open', '')
     navigation = page.get_by_role('navigation', name='对话目录')
     navigation.get_by_role('button', name='问题 1', exact=True).click()
     first = page.locator('.chat-user').first
@@ -617,7 +618,7 @@ def test_process_window_is_capped_and_respects_manual_scroll(page, width):
     for step in range(1, 9):
         emit('assistant.thinking', {'step': step, 'text': f'过程 {step}' * 100})
     expect(page.locator('.chat-thinking')).to_have_count(8)
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     items = page.locator('.chat-process-items')
     page.wait_for_function('''() => {
         const el = document.querySelector('.chat-process-items');
@@ -1030,7 +1031,7 @@ def test_reasoning_loads_on_demand_without_blocking_message_copy(page):
     answer = '```python\nprint(1)\n```'
     emit('assistant.message', {'step': 1, 'text': answer})
     emit('assistant.thinking_delta', {'step': 2, 'text': '**继续分析**'})
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     expect(page.locator('.chat-thinking strong')).to_have_text('继续分析')
     expect(page.locator('.semi-ai-chat-dialogue-reasoning')).to_have_count(0)
     page.get_by_role('button', name='复制回答', exact=True).click()
@@ -1043,7 +1044,7 @@ def test_semi_reasoning_preserves_manual_collapse_and_history(page, motion):
     _, emit = gateway(page)
     emit('task.started', {})
     emit('assistant.thinking_delta', {'step': 1, 'text': '第一段思考'})
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     thought = page.locator('.chat-thinking')
     header = thought.locator('summary')
     panel = thought.locator('.chat-reasoning-text')
@@ -1058,7 +1059,7 @@ def test_semi_reasoning_preserves_manual_collapse_and_history(page, motion):
     expect(panel).to_have_text('第一段思考，第二段思考')
     emit('task.finished', {'status': 'completed'})
     page.reload()
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     expect(panel).not_to_be_visible()
     header.click()
     expect(panel).to_have_text('第一段思考，第二段思考')

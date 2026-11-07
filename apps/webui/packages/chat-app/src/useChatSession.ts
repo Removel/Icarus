@@ -11,10 +11,11 @@ import {
 import { applyUpdate, emptyTranscript } from './updates';
 import useChatPreference from './useChatPreference';
 import useWorkspaceHistory from './useWorkspaceHistory';
-import { localClock, type RequestOptions } from './webSearch';
+import { localClock, searchPreference, type RequestOptions } from './webSearch';
 import { deleteHistory, readHistory, saveHistory } from './historyCache';
 import useImageInputs from './useImageInputs';
 import type { ImageResource } from './imageResources';
+import { touchSession } from './sessionActivity';
 
 type Submission = {
   id: string;
@@ -60,7 +61,7 @@ export default function useChatSession(hash: string) {
   const [unknown, setUnknown] = useState(false);
   const [queue, setQueue] = useState<Submission[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
-  const [webSearch, setWebSearch] = useChatPreference('icarus.chat.webSearch', false);
+  const [webSearch, setWebSearch] = useChatPreference('icarus.chat.autoWebSearch', true);
   const [deepSearch, setDeepSearch] = useChatPreference('icarus.chat.deepSearch', false);
   const client = useRef<Gateway | undefined>(undefined);
   const pending = useRef<Submission | undefined>(undefined);
@@ -207,7 +208,11 @@ export default function useChatSession(hash: string) {
       )
         return;
       if (!ready) buffered.push(update);
-      else setTranscript((previous) => applyUpdate(previous, update, true));
+      else {
+        setTranscript((previous) => applyUpdate(previous, update, true));
+        if (update.occurred_at)
+          setSessions((items) => touchSession(items, sessionId, update.occurred_at!));
+      }
     };
     async function load() {
       const started = performance.now();
@@ -243,7 +248,11 @@ export default function useChatSession(hash: string) {
       createdStatus.current = undefined;
       state = { ...state, tasks: status.active_task_ids.filter((id) => !state.finished.has(id)) };
       for (const update of buffered)
-        if (update.workspace_key === key) state = applyUpdate(state, update);
+        if (update.workspace_key === key) {
+          state = applyUpdate(state, update);
+          if (update.occurred_at)
+            setSessions((items) => touchSession(items, sessionId, update.occurred_at!));
+        }
       ready = true;
       readySelection.current = workspace + '\u0000' + sessionId;
       setTranscript(state);
@@ -363,7 +372,7 @@ export default function useChatSession(hash: string) {
                 resources,
                 workspace,
                 session: session.session_id,
-                requestOptions: { web_search: webSearch, deep_search: deepSearch },
+                requestOptions: searchPreference(webSearch, deepSearch),
               }
             : undefined,
       };
@@ -519,7 +528,7 @@ export default function useChatSession(hash: string) {
       const gateway = client.current;
       try {
         if (!submission.taskId) {
-          submission.requestOptions ??= { web_search: false, deep_search: false };
+          submission.requestOptions ??= { deep_search: false };
           if (!submission.requestOptions.local_time)
             Object.assign(submission.requestOptions, localClock());
         }
@@ -569,14 +578,17 @@ export default function useChatSession(hash: string) {
             : [...new Set([...previous.tasks, result.task_id])],
         }));
         setSessions((previous) =>
-          previous.map((item) =>
-            item.session_id === submission.session
-              ? {
-                  ...item,
-                  first_user_input: item.first_user_input || submission.text || '[Image]',
-                  updated_at: new Date().toISOString(),
-                }
-              : item,
+          touchSession(
+            previous.map((item) =>
+              item.session_id === submission.session
+                ? {
+                    ...item,
+                    first_user_input: item.first_user_input || submission.text || '[Image]',
+                  }
+                : item,
+            ),
+            submission.session,
+            new Date().toISOString(),
           ),
         );
         if (!sessions.find((item) => item.session_id === submission.session)?.title)
@@ -725,7 +737,7 @@ export default function useChatSession(hash: string) {
       resources,
       workspace,
       session: sessionId,
-      requestOptions: { web_search: webSearch, deep_search: deepSearch },
+      requestOptions: searchPreference(webSearch, deepSearch),
       ...(steer ? { taskId: transcript.tasks[0] } : {}),
     };
     if (!steer && (submitting || transcript.tasks.length || queue.length)) {

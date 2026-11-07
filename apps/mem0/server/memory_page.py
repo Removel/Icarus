@@ -1,4 +1,4 @@
-"""Administrative memory browsing over the server's bounded listing snapshot."""
+"""Administrative memory serialization and reference pagination semantics."""
 
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
@@ -39,13 +39,13 @@ def memory_page(
         except (ValueError, TypeError, OverflowError, OSError):
             return 0
 
-    query = query.strip().casefold()
+    query = query.strip().lower()
     filtered = [row for row in rows
                 if (state == "all" or expired(row) == (state == "expired"))
                 and (not category or category_of(row) == category)
                 and (not user_id or row.get("user_id") == user_id)
                 and (not run_id or row.get("run_id") == run_id)
-                and query in f'{row.get("memory", "")} {category_of(row)} {row.get("user_id", "")}'.casefold()]
+                and query in f'{row.get("memory", "")} {category_of(row)} {row.get("user_id", "")}'.lower()]
     filtered.sort(key=lambda row: (timestamp(row), str(row.get("id", ""))), reverse=descending)
     total = len(filtered)
     page = min(page, max(1, (total + page_size - 1) // page_size))

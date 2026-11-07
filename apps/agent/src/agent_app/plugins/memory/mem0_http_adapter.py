@@ -141,11 +141,17 @@ class Mem0HttpAdapter:
             "preserve_input_language": self.preserve_input_language,
         }
         value = self._request("POST", "/memories", json=payload)
-        rows = value.get("results", []) if isinstance(value, dict) else []
+        rows = value.get("results") if isinstance(value, dict) else None
+        if not isinstance(rows, list):
+            raise MemoryBackendError("memory remember failed: Mem0 returned invalid results")
         records = []
         for row in rows:
-            if not isinstance(row, dict) or not row.get("id"):
-                continue
+            if (
+                not isinstance(row, dict)
+                or not isinstance(row.get("id"), str)
+                or not row["id"].strip()
+            ):
+                raise MemoryBackendError("memory remember failed: Mem0 returned invalid results")
             records.append(
                 self._record(
                     {

@@ -19,8 +19,12 @@ export type WebSearchState = {
   browsing: boolean;
   notice: string;
 };
-export type SearchPreference = { web_search: boolean; deep_search: boolean };
+export type SearchPreference = { web_search?: boolean; deep_search: boolean };
 export type RequestOptions = SearchPreference & { local_time?: string; time_zone?: string };
+
+export function searchPreference(enabled: boolean, deep: boolean): SearchPreference {
+  return { ...(enabled ? {} : { web_search: false }), deep_search: deep };
+}
 
 export function localClock() {
   const now = new Date();

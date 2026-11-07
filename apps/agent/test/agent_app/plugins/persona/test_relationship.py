@@ -43,6 +43,29 @@ def test_relationship_selects_user_and_bounds_complete_facts():
     asyncio.run(run())
 
 
+def test_english_wrapper_preserves_relation_direction_and_original_facts():
+    async def run():
+        def handler(request):
+            if request.url.path == "/v1/persons":
+                rows = [{"person_id": "user", "kind": "user", "status": "active", "display_name": "小王"}]
+            elif request.url.path.endswith("/profile"):
+                rows = [{"attr_key": "likes", "attr_value": "茶"}]
+            else:
+                rows = [{"from_person_id": "parent", "to_person_id": "user",
+                         "forward_detail": "父亲", "reverse_detail": "女儿"}]
+            return httpx.Response(200, json={"items": rows, "has_more": False})
+        value = reader(handler, max_relationship_tokens=800)
+        try:
+            text = await value.load()
+            assert 'Display name: "小王"' in text
+            assert 'likes="茶"' in text
+            assert '"parent" is "user"\'s "父亲"' in text
+            assert '"user" is "parent"\'s "女儿"' in text
+        finally:
+            await value.aclose()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("rows,more", [([], False), ([{"person_id": "a"}, {"person_id": "b"}], False),
     ([{"person_id": "a", "kind": "user", "status": "active", "display_name": "U"}], True)])
 def test_unknown_or_ambiguous_user_skips_context(rows, more, caplog):

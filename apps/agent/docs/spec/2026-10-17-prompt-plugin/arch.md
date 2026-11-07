@@ -1,15 +1,15 @@
 # 提示词插件｜当前实现
 
-> 2026-10-17：本文按当前源码与测试编写。设计见 [plan.md](plan.md)，验证见 [plan-validation.md](plan-validation.md)。
+> 2026-11-05：本文按当前源码与测试更新。原设计见 [plan.md](plan.md)，本轮交付与测量见 [英文提示词和上下文交付](../2026-11-04-prompt-guidance/plan-context-delivery.md)。
 
 ## 职责与结构
 
 `agent_app.plugins.prompt` 是第12个内置插件，tier=base，默认 required，无工具和持久化 state。
-`agent_app.contracts.prompt` 声明静态贡献 Protocol、PromptSection、两类业务 Event 与 prompt.read 事件能力，
+`agent_app.contracts.prompt` 声明静态/工具范围指导贡献 Protocol、PromptSection、两类业务 Event 与 prompt.read 事件能力，
 通过 manifest contracts 扩展目录加载；core/runtime 不导入这些应用类型。
 
 - base_prompt.py：Python常量 DEFAULT_SYSTEM_PROMPT，保留通用身份/授权/事实/验证/表达约束；插件专属记忆等指导已下放至各插件prompts.py。
-- sources.py：仅根目录 AGENTS.md→CLAUDE.md 回退，有界 UTF-8 读取，拒绝越界路径、非普通文件。
+- sources.py：仅根目录优先选 AGENTS.md，缺失才选 CLAUDE.md；已有文件无效时不回退。有界 UTF-8 读取，拒绝越界路径、非普通文件；省略时记录文件名、原因、读取字节与预算，不记录正文或原始异常路径。workspace 仍是可选来源，总预算不足时由 composer 记录整段淘汰日志。
 - composer.py：稳定排序和渲染，复用 conservative_token_count，optional整节丢弃，required/base/external不可丢、不截断。
 - plugin.py/state.py：内存静态快照、任务贡献聚合与受管deadline，查询/更新handler。
 - factory.py/config.py：设施与用户配置分离；总预算12288、单节8192、timeout5秒、required_contributors列表。
@@ -21,7 +21,7 @@
 以及 prompt.update 生产者；传入复制后的静态数据和允许来源，不把 sibling 对象交给 Prompt。
 
 静态按 base/workspace/session/persona/external 渲染；动态按 mode/contributor/runtime，同层来源+section_id排序。
-六段稳定业务指导属于 session 静态层，只在初始化/恢复时进入 System，不进入每任务 User Prompt。
+稳定能力发现规则属于 session 静态层，在初始化/恢复时进入 System；详细的跨工具流程通过 tool_search 的 scope_guidance 按需交付，不进入每任务 User Prompt。
 Prompt 消费 UserInput 是为真正动态来源保留的路径；没有动态来源时仍会发一次空 completed，保证 Blackboard readiness 推进。
 缺失来源在input时间+timeout后完成；接收时记录绝对cutoff，入队与提前缓存贡献都检查接收时间/事件时间，不能靠零延时timer竞态延长截止。optional跳过，required使task失败。贡献先到可缓存；重复/迟到准备结果不转成run-time更新。
 等待放在runtime托管后台任务，prompt.read不被普通Event等待阻塞。
@@ -49,6 +49,10 @@ lazy create、unload/reload、进程重启均使用同一私有持久化记录�
 
 静态：实现 `static_prompt_sections() -> tuple[PromptSection,...]`；当前允许 `session` 与 `persona` 层。`session` 用于稳定的业务/工具使用指导，`persona` 用于身份与表达；应用在初始化结束后自动采样，只构建一次并放入 System Prompt。
 
+按需工具指导：实现 `tool_scope_guidance() -> str`。应用在初始化完成后，仅对有实际延迟工具的有效插件采样，按单节预算校验后传入 core 的不可变 ToolSurfaceCatalog。该接口只放会话稳定规则，动态事实仍走 Event。声明此接口却返回无效/超限内容会使装配失败，避免工具暴露而其必要规则缺失；不静默丢弃。core 只保存字符串，不依赖应用契约或插件实现。
+
+`tool_search(query=plugin_id, name=optional_exact_name)` 返回 `scope_guidance` 与完整工具定义；执行器在裁剪后同时校验指导原文和每项定义，只有两者完整才能载入本 Run。裁剪恢复可精确重搜或提高 `_execution.max_output_tokens`。加载不等于业务授权，读取保存文件也不构成加载。每次搜索会重新附带该范围规则，没有增加跨 Run 的隐藏加载状态。
+
 动态：只用于真正随任务变化的内容。manifest声明消费input.user_input、发布prompt.contribution，handler返回或publish
 PromptContributionEvent(task_id=event.task_id,status="completed",sections=(...))，失败也发终态。
 若需运行中更新，另外声明发布prompt.update；无task为待生效persona静态，有task为当前动态提醒。
@@ -66,17 +70,17 @@ from icarus.core.plugin import BasePlugin, handles
 
 class ExamplePlugin(BasePlugin):
     def static_prompt_sections(self):
-        return (PromptSection("guidance", "session", "稳定的使用指导"),)
+        return (PromptSection("guidance", "session", "Discover this scope when its capability is needed."),)
 
-    def static_persona_sections(self):
-        return (PromptSection("persona", "persona", "人格描述"),)
+    def tool_scope_guidance(self):
+        return "Inspect current state before a write; verify completion before retrying."
 
     @handles(UserInputEvent)
     async def on_input(self, source_plugin_id, event):
         return (PromptContributionEvent(
             task_id=event.task_id,
             status="completed",
-            sections=(PromptSection("task-guidance", "mode", "当前任务要求"),),
+            sections=(PromptSection("task-guidance", "mode", "Current task conditions."),),
         ),)
 ```
 
@@ -90,23 +94,21 @@ class ExamplePlugin(BasePlugin):
 
 ## 已接入的内置贡献者
 
-六个业务插件通过 `static_prompt_sections()` 提供 `session` 层稳定指导，使用自己的prompts.py维护内容：
+七个业务插件通过 `static_prompt_sections()` 提供 `session` 层稳定指导，支持延迟工具的插件按需提供详细流程；使用自己的 prompts.py 维护内容：
 
-| 插件 | 当前贡献 | 不改变的业务路径 |
+| 插件 | System 常驻 / 按需内容 | 业务路径 |
 |---|---|---|
-| memory | 长期记忆使用/自然表达/维护边界 | 召回正文仍走TaskContextInput+Region+ACK，不在Prompt再注入一份 |
-| skill | 发现/先读SKILL.md规则、当前写入开关说明、最多8项轻量目录 | 生成/演化内部Agent及Job通知不变；不自动执行Skill |
-| process | bash与后台任务分工、start不等于ready、跟进logs | 不自动启动/查询进程，不回灌状态事件 |
-| knowledge | 聚焦查询、读原文、真实引用、写入边界 | 不做自动RAG、不查询/上传后端 |
+| memory | 自然使用/维护触发/领域边界 / 纠错、停用、删除流程 | 召回正文仍走TaskContextInput+Region+ACK，不在Prompt再注入一份 |
+| relationship | 缺身份/档案时查询，简单对话直接答 / 查写协作、身份确认、关系方向和部分写入 | 模型按需调用；Persona 的后台只读档案联动独立，不在此处发起 |
+| skill | 按需发现/先读正文 / 写入开关、作业验证 | 不在启动时扫描目录用于提示词；list/search 按调用扫描，正文按需read；生成/演化内部Agent及Job通知不变 |
+| process | 短命令与后台分工/任务归属 / 去重、readiness、logs、重试 | 不自动启动/查询进程，不回灌状态事件 |
+| knowledge | 知识库使用与任务写入范围 / 查读协作、引用与事实边界 | 不做自动RAG、不查询/上传后端 |
 | mcp | 先搜索/列目录、真实tool_ref/schema、配置不等于连接成功 | 无服务器时为空；指导生成不联网/不启动bridge |
-| builtin-tools | 文件先读、分页、覆盖/行前插入、命令退出码 | ToolDefinition和参数约束不变 |
+| builtin-tools | 文件与命令能力选择；续读、覆盖/插入与重试细则由各 ToolDefinition 承接 | 双维分页和执行参数约束不变 |
 
-Skill目录单项JSON>256字符整项省略，总JSON<=1200字符，最多8项；元数据明确视为不可信数据，
-正文按需read。现有scanner只读取最多16KiB YAML frontmatter，不读取后续正文。该目录在session初始化/
-恢复时采样一次，不在每任务重扫；新session或运行时重启后自然更新。
+Skill 的轻量目录不再放入 System；现有 scanner 在 list/search 时读取最多16KiB YAML frontmatter，不读取后续正文。用户正文、工作区规范、自定义人格、Skill 文件和第三方 MCP 描述保持原文。
 
-基础System Prompt从1110降为472字符/保守tokens（3208→1374 UTF-8 bytes，约减57.5%）；六个session指导
-约1339 tokens。它们现在只以一份进入System，不再每任务进入User Prompt并累积到历史。
+仓库维护的 base、指导、工具/字段描述、摘要、默认人格、JEV 判据和标题系统指令统一英文，回复/标题仍跟随用户语言。英文字符数与真实模型 token 不是同一口径；生产 Prompt 总预算12288、单节8192未变。base 测试的文本长度护栏从600调整到1800，不是线上预算扩容。完整请求比较见 [本轮交付](../2026-11-04-prompt-guidance/plan-context-delivery.md)，历史轮次见 [process.md](../2026-11-04-prompt-guidance/process.md)。
 
 ## 限制
 

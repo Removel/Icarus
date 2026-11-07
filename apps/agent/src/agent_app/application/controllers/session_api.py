@@ -5,6 +5,7 @@ from __future__ import annotations
 from icarus.runtime.fanout import DEFAULT_QUEUE_CAPACITY
 
 from agent_app.contracts.prompt import PromptError
+from agent_app.contracts.request_options import validate_search_request_options
 from agent_app.plugins.prompt.composer import validate_instructions
 from agent_app.plugins.prompt.config import PluginConfig as PromptConfig
 from agent_app.application.errors import SubmissionConflictError, AgentRuntimeStoppingError
@@ -224,6 +225,7 @@ class SessionApi:
         if not submission_id.strip():
             raise ValueError("submission_id cannot be empty")
         request_options = dict(UserInputEvent(prompt=prompt, request_options=request_options or {}).request_options)
+        validate_search_request_options(request_options)
         identity = SessionIdentity.create(workspace_path, session_id)
         entry = await self._entry(identity)
         fingerprint = _submission_fingerprint(

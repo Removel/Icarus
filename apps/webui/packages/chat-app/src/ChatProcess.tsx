@@ -5,15 +5,25 @@ import { IconThinking, IconChevronDown } from './dswui/Icons';
 import type { ChatItem } from './updates';
 import ChatSearch from './ChatSearch';
 import ChatTool from './ChatTool';
+import ChatContent from './ChatContent';
+import type { WebSource } from './webSearch';
 
 export default function ChatProcess({
+  disclosureKey,
+  disclosures,
+  onDisclosure,
   entries,
+  sources,
   running,
   active,
   loading,
   onGrowth,
 }: {
+  disclosureKey: string;
+  disclosures: Record<string, boolean>;
+  onDisclosure: (key: string, expanded: boolean) => void;
   entries: ChatItem[];
+  sources?: WebSource[];
   running: boolean;
   active: boolean;
   loading: boolean;
@@ -41,10 +51,15 @@ export default function ChatProcess({
   }, [entries, active, grow]);
   return (
     <details
+      open={
+        disclosures[disclosureKey] ??
+        Boolean(!loading && (running || entries.some((entry) => entry.live)))
+      }
       className={`think chat-process ${running ? 'thinking' : ''}`}
       data-live={entries.some((entry) => entry.live) || undefined}
       onToggle={(event) => {
         if (event.target !== event.currentTarget) return;
+        onDisclosure(disclosureKey, event.currentTarget.open);
         followedTop.current = viewport.current?.scrollTop ?? 0;
         if (running) scrollLatest();
         else if (viewport.current) viewport.current.scrollTop = 0;
@@ -85,8 +100,20 @@ export default function ChatProcess({
               search={entry.search}
               active={active && running && !loading}
             />
+          ) : entry.kind === 'assistant' ? (
+            <div key={entry.id} className="chat-progress-text" aria-label="执行说明">
+              <ChatContent
+                text={entry.text}
+                live={false}
+                streaming={Boolean(entry.live && !entry.final && active && !loading)}
+                onGrowth={grow}
+                sources={sources}
+              />
+            </div>
           ) : entry.kind === 'thinking' ? (
             <ChatReasoning
+              expanded={disclosures[`${disclosureKey}:${entry.id}`]}
+              onDisclosure={(expanded) => onDisclosure(`${disclosureKey}:${entry.id}`, expanded)}
               key={entry.id}
               entry={entry}
               running={running}
