@@ -6,6 +6,7 @@ export type RuntimeUpdate = {
   type: string;
   payload: Record<string, unknown>;
   sequence: number | null;
+  occurred_at?: string;
 };
 export type Session = {
   session_id: string;

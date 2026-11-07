@@ -7,6 +7,7 @@ import useChatPreference from './useChatPreference';
 import { BookOpen, Brain, Download, Pencil, Pin, Users } from 'lucide-react';
 import type { ManagementPage } from './ChatSettings';
 import ChatDialog from './ChatDialog';
+import { sessionTime, sortSessions } from './sessionActivity';
 import {
   IconCheck,
   IconClose,
@@ -39,12 +40,12 @@ function groupSessions(sessions: Session[], pinned: string[]) {
     更早: [],
     对话: [],
   };
-  for (const session of sessions) {
+  for (const session of sortSessions(sessions)) {
     if (pinned.includes(session.session_id)) {
       buckets.置顶.push(session);
       continue;
     }
-    const timestamp = Date.parse(session.updated_at || session.created_at || '');
+    const timestamp = sessionTime(session);
     const days = (today.getTime() - timestamp) / 86400000;
     const label = !Number.isFinite(timestamp)
       ? '对话'

@@ -3,7 +3,7 @@ import json
 import pytest
 from playwright.sync_api import expect
 
-from test.navigation import open_settings
+from test.navigation import open_process, open_settings
 from test.packages.chat_app.test_chat import gateway
 
 
@@ -19,7 +19,7 @@ def test_conversation_and_thinking_use_dswui_scrollbars(page, theme, width):
     emit('assistant.message', {'step': 9, 'text': '对话正文\n\n' * 60})
     emit('task.finished', {'status': 'completed'})
     expect(page.locator('.chat-thinking')).to_have_count(8)
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     page.mouse.move(0, 0)
     for selector in ['.chat-transcript', '.chat-process-items']:
         container = page.locator(selector)

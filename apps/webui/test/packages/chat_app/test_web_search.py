@@ -3,7 +3,7 @@ import json
 import pytest
 from playwright.sync_api import expect
 
-from test.navigation import open_settings
+from test.navigation import open_process, open_settings
 from test.packages.chat_app.test_chat import gateway
 
 
@@ -48,7 +48,7 @@ def test_search_sources_fetch_nodes_citations_and_history(page, width):
     assert not any("favicon-third-party" in url for url in requests)
     page.reload()
     expect(page.locator(".chat-assistant")).to_contain_text("最新结论")
-    page.locator(".chat-process > summary").click()
+    open_process(page)
     expect(page.locator(".search-step")).to_contain_text("搜索到 24 个网页")
     expect(page.locator(".open-pages-list li")).to_have_count(3)
     assert len([r for r in state["records"] if r["type"] == "web_search.updated"]) == 1
@@ -82,14 +82,14 @@ def test_queries_rotate_and_stop_survives_reload(page):
     progress = snapshot("searching", pages=0, total=0)
     progress["sources"] = []
     emit("web_search.updated", progress)
-    page.locator(".chat-process > summary").click()
+    open_process(page)
     expect(page.locator(".search-query")).to_have_text("最新资料 官方来源")
     expect(page.locator(".search-query")).to_have_text("最新资料 数据对比", timeout=3000)
     page.get_by_role("button", name="停止执行").click()
     expect(page.locator(".search-step")).to_have_text("搜索已停止")
     expect(page.locator(".open-pages")).to_have_count(0)
     page.reload()
-    page.locator(".chat-process > summary").click()
+    open_process(page)
     expect(page.locator(".search-step")).to_have_text("搜索已停止")
     assert any(call["method"] == "session.cancel" for call in state["calls"])
 
@@ -110,7 +110,7 @@ def test_failures_do_not_fake_browsing_or_interrupt_answer(page, status, total, 
     emit("assistant.message", {"step": 1, "text": "本轮资料不足，仍然可以正常回答。"})
     emit("task.finished", {"status": "completed"})
     expect(page.locator(".chat-assistant")).to_contain_text("正常回答")
-    page.locator(".chat-process > summary").click()
+    open_process(page)
     expect(page.locator(".search-step")).to_contain_text(label)
     expect(page.locator(".open-pages")).to_have_count(0)
     if notice:
@@ -242,7 +242,7 @@ def test_deep_search_and_real_six_page_overflow(page):
     emit("user.message", {"text": "深度检索"})
     emit("web_search.updated", snapshot(pages=6))
     emit("task.finished", {"status": "completed"})
-    page.locator(".chat-process > summary").click()
+    open_process(page)
     expect(page.locator(".open-pages-list li")).to_have_count(5)
     page.get_by_role("button", name="查看全部（6）").click()
     expect(page.locator(".open-pages-list li")).to_have_count(6)
@@ -267,12 +267,12 @@ def test_agent_direct_fetch_shows_browsing_without_inventing_search_results(page
     emit("web_search.updated", done)
     emit("assistant.message", {"step": 2, "text": "网页结论 [1]。"})
     emit("task.finished", {"status": "completed"})
-    page.locator(".chat-process > summary").click()
+    open_process(page)
     expect(page.locator(".search-step")).to_contain_text("已读取 1 个网页")
     expect(page.locator(".open-pages-list li")).to_have_count(1)
     expect(page.locator(".web-citation")).to_have_count(1)
     page.reload()
-    page.locator(".chat-process > summary").click()
+    open_process(page)
     expect(page.locator(".search-step")).to_contain_text("已读取 1 个网页")
     expect(page.locator(".web-citation")).to_have_count(1)
 

@@ -53,6 +53,14 @@ def open_settings(page):
     expect(page.get_by_role('dialog', name='设置', exact=True)).to_be_visible()
 
 
+def open_process(page):
+    process = page.locator('.chat-process')
+    expect(process).to_have_count(1)
+    if not process.evaluate('(node) => node.open'):
+        process.locator(':scope > summary').click()
+    expect(process).to_have_attribute('open', '')
+
+
 def delete_session(page, title):
     page.get_by_role('button', name=f'会话操作：{title}', exact=True).click()
     page.get_by_role('menuitem', name=f'删除会话：{title}', exact=True).click()

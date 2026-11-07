@@ -65,6 +65,20 @@ def test_public分发事件保持外层配对且不暴露内部参数():
     assert "dispatched_tool" not in str(result.as_dict())
 
 
+def test_completed_message_reports_tool_presence_without_exposing_arguments():
+    updates = project([
+        ("agent", AgentMessageCompletedEvent(task_id="task", step=1, message=Message(
+            "assistant", [TextPart("先核对")],
+            tool_calls=[ToolCall("read", "read", {"secret": "do-not-publish"})],
+        ))),
+        ("agent", AgentMessageCompletedEvent(task_id="task", step=2,
+            message=Message("assistant", [TextPart("核对结果")]))),
+    ])
+    assert dict(updates[0].payload) == {"step": 1, "text": "先核对", "has_tool_calls": True}
+    assert dict(updates[1].payload) == {"step": 2, "text": "核对结果", "has_tool_calls": False}
+    assert "do-not-publish" not in str([dict(update.payload) for update in updates])
+
+
 def test_runtime_update_plugin投影首期公共事件并保留时间顺序():
     call = ToolCall(id="call-1", name="read", arguments={"path": "a"})
     completed = AgentCompletedEvent(
@@ -118,7 +132,7 @@ def test_runtime_update_plugin投影首期公共事件并保留时间顺序():
         "task.usage",
         "task.finished",
     ]
-    assert updates[3].payload == {"step": 1, "text": "hi"}
+    assert updates[3].payload == {"step": 1, "text": "hi", "has_tool_calls": False}
     assert updates[4].payload["arguments"] == {"path": "a"}
     assert updates[7].payload == {
         "input_tokens": 10,

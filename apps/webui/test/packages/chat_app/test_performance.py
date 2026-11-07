@@ -173,9 +173,9 @@ def test_long_transcript_bounds_dom_and_can_jump_to_unmounted_messages(page, wid
     expect(page.get_by_role('button', name='回到最新消息')).to_be_visible()
     assert abs(log.evaluate('el => el.scrollTop') - before) < 2
     page.get_by_role('button', name='回到最新消息').click()
-    expect(page.locator('.chat-assistant').last).to_contain_text('新输出')
+    expect(page.locator('.chat-progress-text').last).to_contain_text('新输出')
     page.wait_for_function('''() => { const el = document.querySelector('.chat-transcript');
         return el.scrollHeight - el.clientHeight - el.scrollTop < 2; }''')
     page.set_viewport_size({'width': 768, 'height': 800})
-    expect(page.locator('.chat-assistant').last).to_contain_text('新输出')
+    expect(page.locator('.chat-progress-text').last).to_contain_text('新输出')
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')

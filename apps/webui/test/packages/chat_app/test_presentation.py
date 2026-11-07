@@ -1,7 +1,7 @@
 import pytest
 from playwright.sync_api import expect
 
-from test.navigation import open_sessions
+from test.navigation import open_process, open_sessions
 from test.packages.chat_app.test_chat import gateway
 
 
@@ -34,7 +34,7 @@ def test_tool_timeline_keeps_input_result_and_terminal_status(page, width):
     emit('user.message', {'text': '读取资料'})
     emit('task.started', {})
     emit('tool.started', {'call_id': 'one', 'tool_name': 'read_file', 'arguments': {'path': 'notes.md'}})
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     tool = page.locator('.chat-tool')
     expect(tool).to_have_attribute('data-status', 'running')
     tool.locator('summary').click()
@@ -49,7 +49,7 @@ def test_tool_timeline_keeps_input_result_and_terminal_status(page, width):
     expect(page.locator('.chat-tool').last).to_have_attribute('data-status', 'stopped')
     page.screenshot(path=f'test-results/tool-timeline-{width}.png')
     page.reload()
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     expect(page.locator('.chat-tool').last).to_have_attribute('data-status', 'stopped')
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
 
