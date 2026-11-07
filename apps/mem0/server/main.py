@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from models import RequestLog, User
-from memory_page import memory_page, serialize_memory
+from memory_page import serialize_memory
 from pydantic import BaseModel, Field
 from rate_limit import limiter
 from routers import api_keys as api_keys_router
@@ -414,18 +414,24 @@ def browse_memories(
     state: str = Query("all", pattern="^(all|active|expired)$"),
     descending: bool = True, _auth=Depends(verify_auth),
 ):
-    """Admin browser: filter and sort the bounded snapshot before slicing a page."""
+    """Admin browser: complete, storage-side filtering, sorting and pagination."""
     auth_type = getattr(request.state, "auth_type", "none")
     if _auth is not None and _auth.role != "admin" and auth_type not in {"admin_api_key", "disabled"}:
         raise HTTPException(status_code=403, detail="Admin role required to browse all memories.")
     try:
-        rows = _list_all_memories(limit=ALL_MEMORIES_LIMIT + 1)["results"]
-        result = memory_page(
-            rows[:ALL_MEMORIES_LIMIT], page=page, page_size=page_size, query=query,
+        from mem0.vector_stores.pgvector import PGVector
+
+        store = get_memory_instance().vector_store
+        if not isinstance(store, PGVector):
+            raise HTTPException(status_code=501, detail="Complete memory browsing requires the pgvector store.")
+        result = store.browse_memories(
+            page=page, page_size=page_size, query=query,
             category=category, user_id=user_id, run_id=run_id, state=state, descending=descending,
         )
-        result["truncated"] = len(rows) > ALL_MEMORIES_LIMIT
+        result["results"] = [serialize_memory(row) for row in result["results"]]
         return result
+    except HTTPException:
+        raise
     except Exception:
         raise upstream_error()
 

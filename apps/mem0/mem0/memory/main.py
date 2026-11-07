@@ -1070,6 +1070,9 @@ class Memory(MemoryBase):
                     self.vector_store.insert(vectors=[vec], ids=[mid], payloads=[pay])
                 except Exception as e:
                     logger.error(f"Failed to insert memory {mid}: {e}")
+                    raise RuntimeError(
+                        "Memory persistence failed; some records may already have been written"
+                    ) from e
 
         # Batch history
         history_records = [
@@ -2741,6 +2744,9 @@ class AsyncMemory(MemoryBase):
                     await asyncio.to_thread(self.vector_store.insert, vectors=[vec], ids=[mid], payloads=[pay])
                 except Exception as e:
                     logger.error(f"Failed to insert memory {mid} (async): {e}")
+                    raise RuntimeError(
+                        "Memory persistence failed; some records may already have been written"
+                    ) from e
 
         # Batch history
         history_records = [
