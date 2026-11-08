@@ -4,7 +4,7 @@ import json
 from argus_app.plugins.protocols.context import source_descriptor
 
 
-def semantic_context(current, history):
+def semantic_context(current, history, window=()):
     source = source_descriptor(current)
     conversation = {'source_key': current.source_key, 'platform': source['platform'],
         'account_id': source.get('account_id', ''), 'tenant_id': source.get('tenant_id', ''),
@@ -17,6 +17,16 @@ def semantic_context(current, history):
     if current.detail.get('reply_to') is not None:
         conversation['reply_to'] = current.detail['reply_to']
     result = {'conversation': conversation, 'recent_history': []}
+    if window:
+        result['current_window'] = [{
+            'text':item.content.get('text') or item.content.get('media_summary',''),
+            'sender_id':item.content.get('sender_id',''),
+            'sender_name':item.content.get('sender_name',''),
+            'observed_at':item.observed_at, 'is_self':item.detail.get('is_self') is True,
+            **{key:item.detail[key] for key in ('reply_to','thread_id','root_id','parent_id','sent_at') if item.detail.get(key)}}
+            for item in window]
+        if len(json.dumps(result,ensure_ascii=False).encode()) > 16300:
+            raise ValueError('current_window_too_large')
     for row in history[:8]:
         if row.get('source_key') != current.source_key:
             continue

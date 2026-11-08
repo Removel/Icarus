@@ -27,9 +27,12 @@ class WorkflowRules(BasePlugin):
         self.discovery_enabled = discovery_enabled
         self.discovery_source = load_discovery_rule(discovery_rule_path)
         self._discovery_lock = asyncio.Lock()
+        self._naming_pending: set[str] = set()
         self._scan_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
         self._discovery_after: str | None = None
+        self.quiet_seconds = 0.0  # Application factory supplies the production quiet-window policy.
+        self.max_wait_seconds = 30.0
 
     @handles(ObservationRecorded)
     async def observation_recorded(self, source, event):
@@ -50,10 +53,19 @@ class WorkflowRules(BasePlugin):
         pending = None
         pending_new = None
         async with self._discovery_lock:
+            if event.id in self._naming_pending:
+                return
             current = await self.store.observation(event.id)
             state = current.detail.get('discovery', {})
             if state.get('status') in {'created', 'existing', 'ignored', 'exhausted'}:
                 return
+            window = ()
+            if self.quiet_seconds > 0:
+                window = await self.store.message_window(current.id, quiet_seconds=self.quiet_seconds,
+                    max_wait_seconds=self.max_wait_seconds)
+                if not window:
+                    return
+                current = await self.store.observation(current.id)
             # Existing Channels all get their normal opportunity to accept. New
             # Channel classification is a fallback, not a parallel consumer.
             owners = [ch for ch in await self.store.channels()
@@ -75,7 +87,7 @@ class WorkflowRules(BasePlugin):
                 return
             candidates = candidate_summaries(owners)
             versions = {ch.id: ch.version for ch in owners}
-            trusted_context = semantic_context(current, [])
+            trusted_context = semantic_context(current, [], window=window)
             context = {'mode': 'discovery', 'source_key': current.source_key, 'candidates': candidates,
                        'subscriptions': {current.source_key: None}, 'progress': '', **trusted_context}
             low_confidence = False
@@ -109,7 +121,7 @@ class WorkflowRules(BasePlugin):
                 response = await self.request(request_type(channel_id='', args=safe_args, timeout_seconds=5))
                 data = response.unwrap().data
                 if name == 'history':
-                    trusted_context = semantic_context(current, data.get('observations', []))
+                    trusted_context = semantic_context(current, data.get('observations', []), window=window)
                     if not semantic_task_frozen:
                         task['context'] = trusted_context
                     return {'observations': trusted_context['recent_history'],
@@ -135,6 +147,7 @@ class WorkflowRules(BasePlugin):
                 if pending is None:
                     if decision['action'] == 'new' and self.channel_namer is not None:
                         pending_new = (current, decision, versions)
+                        self._naming_pending.add(current.id)
                     else:
                         await self._record_discovery(current, decision, versions)
             except Exception as exc:
@@ -143,7 +156,10 @@ class WorkflowRules(BasePlugin):
         # The durable claim has committed; no transaction or global discovery lock
         # is held while waiting for a general model. RuleEngine limits stay unchanged.
         if pending_new is not None:
-            await self._record_discovery(*pending_new)
+            try:
+                await self._record_discovery(*pending_new)
+            finally:
+                self._naming_pending.discard(pending_new[0].id)
         if pending is not None:
             await self._run_discovery_fallback(*pending)
 
@@ -254,7 +270,7 @@ class WorkflowRules(BasePlugin):
             bounds[key] = rows[0].id if rows else None
         return bounds
 
-    def _broker(self, channel, bounds, event=None):
+    def _broker(self, channel, bounds, event=None, window=()):
         async def call(name, args):
             request_type = RULE_FUNCTIONS.get(name)
             if request_type is None:
@@ -264,8 +280,10 @@ class WorkflowRules(BasePlugin):
                 safe_args['source_bounds'] = bounds
             if name == 'semantic' and event is not None:
                 provided = safe_args.get('context', {})
+                facts = semantic_context(event, [], window=window)
+                facts.pop('recent_history', None)
                 safe_args['context'] = {**(provided if isinstance(provided, dict) else {'rule_context': provided}),
-                    'conversation': semantic_context(event, [])['conversation']}
+                    **facts}
             response = await self.request(request_type(channel_id=channel.id, args=safe_args, timeout_seconds=5))
             try:
                 return response.unwrap().data
@@ -283,6 +301,9 @@ class WorkflowRules(BasePlugin):
             if not events:
                 return
             bounds = await self._bounds(channel)
+            if self.quiet_seconds > 0:
+                await self._process_windows(channel, events, bounds)
+                return
             for event in events:
                 channel = await self.store.channel(channel_id)
                 if channel.lifecycle != 'active':
@@ -306,6 +327,42 @@ class WorkflowRules(BasePlugin):
                     return
                 if value.get('passed'):
                     await self.publish(RulePassed(channel_id=channel_id))
+
+    async def _process_windows(self, channel, events, bounds):
+        processed = set()
+        for event in events:
+            if event.id in processed:
+                continue
+            window = await self.store.message_window(event.id, quiet_seconds=self.quiet_seconds,
+                max_wait_seconds=self.max_wait_seconds)
+            if not window:
+                continue
+            window_ids = {item.id for item in window}
+            group = await self.store.window_unread(channel.id, event.id)
+            processed.update(window_ids)
+            current = await self.store.channel(channel.id)
+            if current.lifecycle != 'active':
+                return
+            decisions = []
+            for item in group:
+                try:
+                    source = self.rule_files.read(current.rule_path, current.rule_hash)
+                    decision = await self.engine.evaluate(source, item, current,
+                        self._broker(current, bounds, item, window))
+                    value = decision.model_dump()
+                except Exception as error:
+                    value = {'error':f"{getattr(error, 'code', 'rule_failed')}: {error}"[:512]}
+                decisions.append((item.id, value))
+            try:
+                applied = await self.store.decide_window(channel.id, decisions, current.version)
+            except DomainError as error:
+                if error.code != 'pending_capacity':
+                    raise
+                return
+            if not applied:
+                return
+            if any(value.get('passed') for _, value in decisions):
+                await self.publish(RulePassed(channel_id=channel.id))
 
     @handles(RuleControlRequest)
     async def control_requested(self, source, request):

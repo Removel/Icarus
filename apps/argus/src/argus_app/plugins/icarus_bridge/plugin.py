@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 import httpx
+import json
 from icarus.core.plugin import BasePlugin, handles
 from argus_app.contracts.events import RulePassed
 
@@ -11,6 +12,7 @@ class BridgePlugin(BasePlugin):
         self.store, self.client, self.argus_url = store, bridge_client, argus_url.rstrip('/')
         self.rule_files, self.guide = rule_files, guide or {}
         self._delivery_lock = asyncio.Lock()
+        self._notified: dict[str,tuple[str,str]] = {}
 
     @handles(RulePassed)
     async def rule_passed(self, source, event):
@@ -68,6 +70,20 @@ class BridgePlugin(BasePlugin):
                 binding_id=round_['binding_id'], channel_version=round_.get('channel_version', channel.version),
                 channel_snapshot=snapshot, rule_sdk=self.guide,
                 session_id=session_id, session_key=round_['session_key'], items=items, argus_url=self.argus_url)
+            if round_.get('window_observation_ids'):
+                body_ids = list(dict.fromkeys(round_['window_observation_ids'] + round_['observation_ids']))
+                body = [await self.store.observation(id) for id in body_ids]
+                body.sort(key=lambda row:(row.observed_at,row.id))
+                payload['window_items'] = [row.model_dump(mode='json') for row in body]
+                history = await self.store.observations(list(channel.subscriptions),limit=10,before=body[0].id)
+                selected_history = []
+                for row in reversed(history):
+                    value = row.model_dump(mode='json')
+                    if len(json.dumps(payload | {'history_items':selected_history+[value]}).encode()) > 480*1024:
+                        break  # Historical selection is bounded; current body is never removed.
+                    selected_history.append(value)
+                if selected_history:
+                    payload['history_items'] = selected_history
             await self.store.set_round_request(channel_id, round_['wake_id'], payload)
             result = await self.client.wake(**payload)
             return await self._record_result(channel_id, round_ | {'session_id':session_id}, result)
@@ -87,4 +103,21 @@ class BridgePlugin(BasePlugin):
                 await self.store.reconcile_round(channel_id, round_['wake_id'], result['status'])
             elif round_.get('task_id') and result.get('commit_state') != 'applied':
                 await self.store.mark_round_outcome_unknown(channel_id, round_['wake_id'])
+        if result.get('status') in {'accepted','running'} and hasattr(self.client,'notify'):
+            try:
+                state=await self.store.inbox_state(round_['binding_id'])
+            except Exception as error:
+                if getattr(error,'code',None) != 'invalid_binding':
+                    raise
+            else:
+                signature=(round_['wake_id'],state.get('watermark'))
+                if state['pending_count'] and self._notified.get(channel_id)!=signature:
+                    response=await self.client.notify(wake_id=round_['wake_id'],session_id=round_['session_id'],
+                        binding_id=round_['binding_id'],watermark=state['watermark'])
+                    if response.get('notified'):
+                        self._notified[channel_id]=signature
+                elif not state['pending_count']:
+                    self._notified.pop(channel_id,None)
+        elif result.get('status') in {'failed','cancelled','completed'}:
+            self._notified.pop(channel_id,None)
         return result

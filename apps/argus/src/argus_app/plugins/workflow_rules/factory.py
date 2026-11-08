@@ -10,6 +10,8 @@ def create_plugin(plugin_id, workspace_path, session_id, config, required_capabi
                            discovery_fallback=config.get('discovery_fallback'))
     plugin.safety_review = config.get('safety_review')
     plugin.channel_namer = config.get('channel_namer')
+    plugin.quiet_seconds = config.get('quiet_seconds', 5.0)
+    plugin.max_wait_seconds = config.get('max_wait_seconds', 30.0)
     return PluginRegistration(plugin=plugin, capabilities=tuple(
         ProvidedCapability(contract.capability_id, contract.version, plugin)
         for contract in plugin.provided_capabilities))

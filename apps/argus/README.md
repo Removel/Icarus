@@ -41,6 +41,10 @@ Other configuration:
   be accepted by the selected route; key presence is not proof of working authentication.
 - `ARGUS_SAFETY_REVIEW_ENABLED` (default false), `ARGUS_SAFETY_REVIEW_BUDGET` (default16):
   optional fail-closed typed LLM review before publishing candidate commit rules; static lint never invokes it.
+- `ARGUS_MESSAGE_QUIET_SECONDS` (default5) and `ARGUS_MESSAGE_MAX_WAIT_SECONDS` (default30):
+  seal consecutive per-source message windows after a pause or maximum wait. Private messages and
+  mentions do not bypass this window. Current window bodies stay complete even if not every fragment
+  needs its own action; work confirmation scope is separate. Explicit quiet0 preserves immediate mode.
 - `ARGUS_DISCOVERY_ENABLED`, `ARGUS_DISCOVERY_RULE_PATH`: ongoing discovery and optional replacement script.
 - `ARGUS_DISCOVERY_FALLBACK_ENABLED` (default false): enable a single tool-free LLM decision
   after a valid low-confidence semantic discovery result, not after transport/authentication errors.

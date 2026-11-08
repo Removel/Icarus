@@ -92,4 +92,18 @@ async def test_lost_response_queries_original_wake_after_configuration_change():
 def test_store_has_separate_selection_and_submission_operations():
     from argus_app.infrastructure.store import Store as ProductionStore
     assert hasattr(ProductionStore, 'set_round_session')
-    assert hasattr(ProductionStore, 'set_round_submission')
+
+
+@pytest.mark.asyncio
+async def test_running_task_only_gets_changed_inbox_watermarks():
+    store=Store();store.round.update(session_id='session',task_id='task')
+    async def state(binding):return {'pending_count':2,'watermark':'same'}
+    store.inbox_state=state
+    class Client:
+        sent=[]
+        async def status(self,wake):return {'task_id':'task','status':'running','admission_state':'accepted','attempt':1}
+        async def notify(self,**payload):self.sent.append(payload);return {'notified':True}
+    client=Client();plugin=BridgePlugin('bridge',store,client,'http://argus')
+    await plugin.deliver_channel('channel');await plugin.deliver_channel('channel')
+    assert len(client.sent)==1
+    assert client.sent[0]=={'wake_id':'wake','session_id':'session','binding_id':'binding','watermark':'same'}

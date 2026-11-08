@@ -22,6 +22,8 @@ class ArgusConfig(BaseModel):
     feishu_verification_token: SecretStr = SecretStr("")
     feishu_encrypt_key: SecretStr = SecretStr("")
     scan_interval: float = Field(default=1.0, gt=0, le=60)
+    message_quiet_seconds: float = Field(default=5.0, ge=0, le=60)
+    message_max_wait_seconds: float = Field(default=30.0, gt=0, le=120)
     rule_timeout: float = Field(default=10.0, gt=0, le=30)
     max_body_bytes: int = Field(default=262144, ge=1024, le=1048576)
     auto_scan: bool = True
@@ -51,6 +53,8 @@ class ArgusConfig(BaseModel):
 
     @model_validator(mode='after')
     def configured_discovery_fallback(self):
+        if self.message_quiet_seconds > self.message_max_wait_seconds:
+            raise ValueError('message quiet window must not exceed max wait')
         if self.discovery_fallback_enabled and not self.discovery_fallback_model.strip():
             raise ValueError('discovery_fallback_model must name a configured model when enabled')
         return self
@@ -91,6 +95,8 @@ class ArgusConfig(BaseModel):
                    semantic_api_key=SecretStr(os.getenv("ARGUS_JEV_API_KEY", "")),
                    discovery_enabled=os.getenv("ARGUS_DISCOVERY_ENABLED", "true").lower() in {"true", "1", "yes"},
                    discovery_rule_path=os.getenv("ARGUS_DISCOVERY_RULE_PATH"),
+                   message_quiet_seconds=float(os.getenv('ARGUS_MESSAGE_QUIET_SECONDS','5')),
+                   message_max_wait_seconds=float(os.getenv('ARGUS_MESSAGE_MAX_WAIT_SECONDS','30')),
                    channel_naming_enabled=os.getenv('ARGUS_CHANNEL_NAMING_ENABLED','true').lower() in {'true','1','yes'},
                    channel_naming_model=os.getenv('ARGUS_CHANNEL_NAMING_MODEL','perception'),
                    channel_naming_settings_path=os.getenv('ARGUS_CHANNEL_NAMING_SETTINGS_PATH') or None,

@@ -82,7 +82,8 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
                           "memory-evidence", "relationship-evidence", "knowledge-evidence")
             configs = {name: {"store": current_store} for name in plugin_ids}
             configs["workflow-rules"].update(engine=engine, rule_files=files,
-                discovery_enabled=config.discovery_enabled, discovery_rule_path=config.discovery_rule_path)
+                discovery_enabled=config.discovery_enabled, discovery_rule_path=config.discovery_rule_path,
+                quiet_seconds=config.message_quiet_seconds, max_wait_seconds=config.message_max_wait_seconds)
             configs["agent-protocol"].update(rule_files=files)
             current_semantic = semantic
             if current_semantic is None and config.semantic_api_key.get_secret_value():
@@ -283,6 +284,11 @@ def create_app(config: ArgusConfig | None = None, *, store=None, semantic=None,
             raise HTTPException(422, "invalid_control") from None
         return await guarded(app.state.host.get_plugin("agent-protocol").submit(
             binding_id=event.binding_id, request_id=event.request_id, kind=event.kind, payload=event.payload))
+
+    @app.get('/agent/inbox/{binding_id}')
+    async def inbox_available(binding_id: str, request: Request):
+        authorized(request)
+        return await guarded(app.state.store.inbox_state(binding_id))
 
     @app.get('/agent/commits/{binding_id}/{request_id}')
     async def commit_status(binding_id: str, request_id: str, request: Request):

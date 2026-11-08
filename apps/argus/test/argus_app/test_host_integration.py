@@ -17,11 +17,11 @@ from argus_app.infrastructure.store import Store
 async def test_real_host_grouped_plugins_two_tables_and_confirmation_gate(tmp_path, database_url):
     url = os.environ["ARGUS_TEST_DATABASE_URL"]
     store = Store(url)
-    config = ArgusConfig(channel_naming_enabled=False, database_url=SecretStr(url), data_dir=tmp_path,
+    config = ArgusConfig(channel_naming_enabled=False, message_quiet_seconds=0, database_url=SecretStr(url), data_dir=tmp_path,
                          agent_token=SecretStr("agent-test"), gateway_token=SecretStr("gateway-test"),
                          qq_token=SecretStr("qq-test"), auto_scan=False)
     class AcceptedBridge:
-        async def ensure_session(self, channel_id, request_id):
+        async def ensure_session(self, channel_id, request_id, session_key):
             return "session-test"
         async def wake(self, **payload):
             return {"task_id": "task-test", "status": "accepted"}

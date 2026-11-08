@@ -16,6 +16,11 @@ class BridgeClient:
         response.raise_for_status()
         return response.json()
 
+    async def notify(self, **payload) -> dict:
+        response = await self.client.post('/argus/notify',json=payload)
+        response.raise_for_status()
+        return response.json()
+
     async def status(self, wake_id: str) -> dict:
         response = await self.client.post('/argus/status', json={'wake_id': wake_id})
         response.raise_for_status()

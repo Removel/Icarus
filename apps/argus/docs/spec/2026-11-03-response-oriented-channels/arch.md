@@ -26,6 +26,22 @@ Bridge尽量先读取观测/检查快照和规则，再选择Session；选择后
 
 正式Agent继承普通Session能力，自行通过SnowLuma MCP回复后argus_commit；Argus没有平台发送客户端，不转发普通assistant文本。
 
+## 来源消息窗口与整批决定
+
+生产入口默认5秒安静、30秒最长等待，私聊/@不直接绕过。Store以Source和持久观察时间/position封存有界窗口，成员只写原Observation.detail；窗口不是Channel身份，旧历史终态不因此全库重放。窗口超过20条时余项留待下一窗口，quiet=0是显式兼容模式。
+
+规则仍逐条决定归属，但broker为每次语义判断提供完整current_window（身份、时间、正文、引用/thread）。WorkflowRules读取整个已封存窗口的eligible成员，而不是只取50条扫描页交集；decide_window在同一Channel事务应用全部决定，CAS/容量冲突整批回滚，完成后才通知一次。begin_round还要求来源游标已覆盖窗口末尾，不能首条seed后抢先交付半句话。
+
+round的observation_ids仍是确认范围，window_observation_ids保存涉及窗口的完整正文，包括不单独触发回应的原话。Bridge通过window_items和有界history_items交给Agent，重试仍使用原始不可变载荷。当前窗口原文不因为是否值得单独回复而省略。阶段一未扩展已冻结集合；第二阶段新增独立补充批次，见下节。
+
+## 活动任务补充批次
+
+`inbox_state(binding_id)`统计当前Channel已判通过但未领取的合格窗口工作。新控制`agent.batch_requested`通过原agent/events持久化请求和固定回执，在Channel行锁内领取；初始round.observation_ids与wake_payload不修改，补充批次另存observation_ids。最多4批、每批20工作项/128KiB完整正文；超容量留pending，不静默裁剪。
+
+agent.delivered允许确认初始与领取批次中的工作；业务commit严格覆盖其精确并集（最多100）且全部有实际可见回执。尚未领取工作不会被本次commit清除。领取与关闭竞态由同一行锁串行化，关闭后拒绝新claim；丢领取响应重试同request返回同批。
+
+Bridge仅在accepted/running任务、待领取水位变化时notify原session/wake/binding；通知无正文，不新增Task；终态不通知，重复水位不重复发送。Agent读取/等待/监听清理见其arch；真实本地一次Task/一次模拟send的闭环已通过，未真实部署。
+
 ## 新 Channel 的名称
 
 新建判断通过后，配置可用时先用perception等命名模型无工具概括title，再进入Store事务创建；goal仍保留请求正文。命名严格JSON、1–60字符、10秒、256输出tokens、SDK不重试。原Observation保存一次性claim和结果；重启复用标题，失败/未知/缺配置回退首句，不阻止处理。默认启用，可通过ARGUS_CHANNEL_NAMING_*配置；没有自动改旧Channel名。命名不持有数据库锁，新建主路径也不占全局发现锁。该新增Store持久化仍待真实PG测试。

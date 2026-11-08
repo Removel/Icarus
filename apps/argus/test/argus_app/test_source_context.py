@@ -81,3 +81,15 @@ def test_pure_media_is_not_empty_message(body):
         {'goal':'discuss picture','progress':'','conversation':{}})
     assert result['passed'] is True
     assert calls[0]['text'] == '[image: content unavailable]'
+
+
+def test_window_context_keeps_speaker_and_thread_facts():
+    current=SimpleNamespace(source_key='feishu:tenant:chat:chat',content={'text':'caption','sender_id':'member'},
+        detail={'source':{'platform':'feishu','kind':'group','region_id':'chat','tenant_id':'tenant'}})
+    row=SimpleNamespace(content={'text':'caption','sender_id':'member','sender_name':'Member'},
+        detail={'thread_id':'thread','root_id':'root','reply_to':'parent','sent_at':'2026-11-05T00:00:00Z','is_self':True},
+        observed_at='2026-11-05T00:00:01Z')
+    result=semantic_context(current,[],window=[row])['current_window'][0]
+    assert result['is_self'] is True
+    assert result['thread_id']=='thread' and result['reply_to']=='parent'
+    assert result['sent_at']=='2026-11-05T00:00:00Z'

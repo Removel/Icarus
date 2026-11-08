@@ -14,7 +14,7 @@ class CommitResult(Fact):
 
 class CommitPayload(Fact):
     expected_version: Annotated[int, Field(ge=1)]
-    results: Annotated[list[CommitResult], Field(min_length=1, max_length=20)]
+    results: Annotated[list[CommitResult], Field(min_length=1, max_length=100)]
     progress: Annotated[str, Field(max_length=8192)] | None = None
     source_keys: Annotated[list[Annotated[str, Field(min_length=1, max_length=512)]], Field(max_length=16)] | None = None
     rule_path: str | None = None

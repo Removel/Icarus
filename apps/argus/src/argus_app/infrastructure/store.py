@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from argus_app.contracts.models import Channel, Decision, DiscoveryDecision, DomainError, Observation
 from argus_app.contracts.commit import CommitPayload
 from pydantic import ValidationError
+from .message_windows import ready_prefix
 
 metadata = MetaData()
 observed_items = Table(
@@ -48,7 +49,7 @@ channels = Table(
     Column("runtime", JSON, nullable=False),
 )
 MESSAGE = "message.observed"
-CONTROL_KINDS = {'agent.delivered', 'rule.check_requested', 'agent.commit_requested'}
+CONTROL_KINDS = {'agent.delivered', 'rule.check_requested', 'agent.commit_requested', 'agent.batch_requested'}
 
 
 def canonical(value):
@@ -97,7 +98,7 @@ class Store:
         if not source_key or not message_id or not kind or not isinstance(content, dict):
             raise DomainError("invalid_observation")
         detail = copy.deepcopy(detail or {})
-        if any(key in detail for key in ("result", "_request_hash", "discovery")):
+        if any(key in detail for key in ("result", "_request_hash", "discovery", "message_window")):
             raise DomainError("reserved_detail")
         serialized = canonical({"kind": kind, "content": content, "detail": detail})
         if len(serialized.encode()) > 1024 * 1024:
@@ -128,6 +129,84 @@ class Store:
                        content=copy.deepcopy(content), detail=detail)
             saved = (await conn.execute(observed_items.insert().values(**row).returning(observed_items))).mappings().one()
             return observation(saved)
+
+    async def _window_rows(self, conn, row):
+        window_id = row['detail'].get('message_window')
+        if not window_id:
+            return [row]
+        return (await conn.execute(select(observed_items).where(
+            observed_items.c.kind == MESSAGE, observed_items.c.source_key == row['source_key'],
+            observed_items.c.detail['message_window'].as_string() == window_id,
+            latest()).order_by(observed_items.c.position))).mappings().all()
+
+    async def window_members(self, observation_id: str) -> list[Observation]:
+        async with self.engine.connect() as conn:
+            row = await self._observation(conn, observation_id)
+            return [observation(item) for item in await self._window_rows(conn, row)]
+
+    async def window_unread(self, channel_id: str, observation_id: str) -> list[Observation]:
+        """Select the entire eligible sealed window, not a truncated scan-page intersection."""
+        async with self.engine.connect() as conn:
+            ch = await self._channel(conn, channel_id)
+            if ch['lifecycle'] != 'active':
+                return []
+            row = await self._observation(conn, observation_id)
+            if row['source_key'] not in ch['subscriptions']:
+                return []
+            current = ch['runtime'].get('round')
+            frozen = self._round_work(current) if current and not current.get('closed') else set()
+            selected = []
+            for member in await self._window_rows(conn, row):
+                if member['id'] in frozen:
+                    continue
+                entry = ch['runtime']['pending'].get(member['id'])
+                if ((entry is not None and self._retryable(ch, member['id'], entry)) or
+                        (entry is None and member['position'] > int(ch['subscriptions'][member['source_key']] or 0))):
+                    selected.append(observation(member))
+            return selected
+
+    async def message_window(self, observation_id: str, *, quiet_seconds: float,
+                             max_wait_seconds: float, limit: int = 20) -> list[Observation]:
+        limit = self._limit(limit, 20)
+        if quiet_seconds < 0 or max_wait_seconds <= 0 or quiet_seconds > max_wait_seconds:
+            raise DomainError('invalid_message_window')
+        async with self.engine.begin() as conn:
+            row = await self._observation(conn, observation_id)
+            if row['kind'] != MESSAGE:
+                raise DomainError('invalid_window_event')
+            # The same lock used by ingress fences sealing against concurrent arrivals.
+            await conn.execute(text('SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))'), {'key':row['source_key']})
+            row = await self._observation(conn, observation_id, lock=True)
+            if row['detail'].get('message_window'):
+                return [observation(item) for item in await self._window_rows(conn, row)]
+            state = observed_items.c.detail['discovery']['status'].as_string()
+            first = (await conn.execute(select(observed_items).where(
+                observed_items.c.kind == MESSAGE, observed_items.c.source_key == row['source_key'], latest(),
+                observed_items.c.detail['message_window'].as_string().is_(None),
+                or_(state.is_(None), ~state.in_(['created','existing','ignored','exhausted']), observed_items.c.id == observation_id))
+                .order_by(observed_items.c.position).limit(1))).mappings().first()
+            if first is not None:
+                row = first
+            window_id = row['id']
+            rows = (await conn.execute(select(observed_items).where(
+                observed_items.c.kind == MESSAGE, observed_items.c.source_key == row['source_key'],
+                observed_items.c.position >= row['position'], latest())
+                .order_by(observed_items.c.position).limit(limit+1))).mappings().all()
+            available = []
+            for item in rows:
+                if item['detail'].get('message_window') or (item['id'] != observation_id and
+                        item['detail'].get('discovery',{}).get('status') in {'created','existing','ignored','exhausted'}):
+                    break
+                available.append(item)
+            selected = ready_prefix(available, now=datetime.now(timezone.utc), quiet_seconds=quiet_seconds,
+                max_wait_seconds=max_wait_seconds, limit=limit)
+            if not selected or observation_id not in {item['id'] for item in selected}:
+                return []
+            for item in selected:
+                detail = copy.deepcopy(item['detail']);detail['message_window'] = window_id
+                await conn.execute(update(observed_items).where(observed_items.c.id == item['id']).values(detail=detail))
+            return [observation(item) for item in await self._window_rows(conn,
+                {**dict(row), 'detail':{**row['detail'], 'message_window':window_id}})]
 
     async def observation(self, id: str) -> Observation:
         async with self.engine.connect() as conn:
@@ -234,7 +313,7 @@ class Store:
 
     def _retryable(self, ch, id, entry):
         current = ch["runtime"].get("round")
-        if current and id in current["observation_ids"]:
+        if current and id in self._round_work(current):
             return False
         if entry["channel_version"] < ch["version"]:
             return True
@@ -246,7 +325,7 @@ class Store:
         """Discard only non-frozen obsolete revisions or removed subscriptions."""
         pending = ch["runtime"]["pending"]
         current = ch["runtime"].get("round")
-        frozen = set(current["observation_ids"]) if current else set()
+        frozen = self._round_work(current) if current else set()
         candidates = set(pending) - frozen
         if not candidates:
             return False
@@ -275,57 +354,73 @@ class Store:
 
     async def decide(self, channel_id: str, observation_id: str, expected_version: int,
                      decision: dict) -> bool:
-        error = decision.get("error")
-        parsed = None if error else Decision.model_validate(decision)
         async with self.engine.begin() as conn:
             ch = await self._channel(conn, channel_id, lock=True)
             row = await self._observation(conn, observation_id, lock=True)
-            if ch["version"] != expected_version or ch["lifecycle"] != "active" or row["kind"] != MESSAGE or row["source_key"] not in ch["subscriptions"]:
-                return False
-            if await self._retire_pending(conn, ch):
-                await self._save(conn, ch)
-            if (await conn.execute(select(observed_items.c.id).where(
-                    observed_items.c.id == observation_id, latest()))).scalar_one_or_none() is None:
-                return False
-            pending = ch["runtime"]["pending"]
-            round_ = ch["runtime"].get("round")
-            if round_ and observation_id in round_["observation_ids"]:
-                return False
-            entry = pending.get(observation_id)
-            retry = entry is not None and self._retryable(ch, observation_id, entry)
-            if entry is not None and not retry:
-                return False
-            if not retry:
-                first = (await conn.execute(self._unread_query(ch, row["source_key"]).limit(1))).mappings().first()
-                if first is None or first["id"] != observation_id:
-                    return False
-            keep = bool(error) or parsed.passed or parsed.defer
-            if keep and observation_id not in pending and len(pending) >= self.max_pending:
-                raise DomainError("pending_capacity")
-            if keep:
-                status = "error" if error else "passed" if parsed.passed else "deferred"
-                value = {"error": str(error)[:2048]} if error else parsed.model_dump()
-                if len(canonical(value)) > 8192:
-                    raise DomainError("decision_too_large")
-                attempts = (entry or {}).get("attempt_count", 0) if (entry or {}).get("channel_version") == ch["version"] else 0
-                attempts = attempts + 1 if status in {"deferred", "error"} else 0
-                pending[observation_id] = {"status": status, "decision": value,
-                    "channel_version": ch["version"], "attempt_count": attempts,
-                    "delivery_attempt_count": (entry or {}).get("delivery_attempt_count", 0),
-                    "delivery_error": (entry or {}).get("delivery_error", ""),
-                    "next_retry_at": (datetime.now(timezone.utc) +
-                        timedelta(seconds=5 if attempts == 1 else 30)).isoformat()
-                    if attempts else None}
-            else:
-                pending.pop(observation_id, None)
-            if parsed is not None and parsed.passed:
-                # Acceptance is durable before notification/Agent execution. It is
-                # a witness against creating a Channel, not exclusive consumption.
-                await self._record_existing_acceptance(conn, row, channel_id)
-            previous = int(ch["subscriptions"][row["source_key"]] or 0)
-            ch["subscriptions"][row["source_key"]] = str(max(previous, row["position"]))
-            await self._save(conn, ch)
+            return await self._decide_locked(conn, ch, row, expected_version, decision)
+
+    async def decide_window(self, channel_id: str, decisions: list[tuple[str, dict]], expected_version: int) -> bool:
+        try:
+            async with self.engine.begin() as conn:
+                ch = await self._channel(conn, channel_id, lock=True)
+                for id, decision in decisions:
+                    try:
+                        row = await self._observation(conn, id, lock=True)
+                    except DomainError:
+                        raise DomainError('window_changed') from None
+                    if not await self._decide_locked(conn, ch, row, expected_version, decision):
+                        raise DomainError('window_changed')
             return True
+        except DomainError as error:
+            if error.code == 'window_changed':
+                return False
+            raise
+
+    async def _decide_locked(self, conn, ch, row, expected_version, decision):
+        observation_id, channel_id = row['id'], ch['id']
+        error = decision.get('error')
+        parsed = None if error else Decision.model_validate(decision)
+        if ch['version'] != expected_version or ch['lifecycle'] != 'active' or row['kind'] != MESSAGE or row['source_key'] not in ch['subscriptions']:
+            return False
+        await self._retire_pending(conn, ch)
+        if (await conn.execute(select(observed_items.c.id).where(
+                observed_items.c.id == observation_id, latest()))).scalar_one_or_none() is None:
+            return False
+        pending = ch['runtime']['pending']
+        round_ = ch['runtime'].get('round')
+        if round_ and observation_id in self._round_work(round_):
+            return False
+        entry = pending.get(observation_id)
+        retry = entry is not None and self._retryable(ch, observation_id, entry)
+        if entry is not None and not retry:
+            return False
+        if not retry:
+            first = (await conn.execute(self._unread_query(ch, row['source_key']).limit(1))).mappings().first()
+            if first is None or first['id'] != observation_id:
+                return False
+        keep = bool(error) or parsed.passed or parsed.defer
+        if keep and observation_id not in pending and len(pending) >= self.max_pending:
+            raise DomainError('pending_capacity')
+        if keep:
+            status = 'error' if error else 'passed' if parsed.passed else 'deferred'
+            value = {'error': str(error)[:2048]} if error else parsed.model_dump()
+            if len(canonical(value)) > 8192:
+                raise DomainError('decision_too_large')
+            attempts = (entry or {}).get('attempt_count', 0) if (entry or {}).get('channel_version') == ch['version'] else 0
+            attempts = attempts + 1 if status in {'deferred', 'error'} else 0
+            pending[observation_id] = {'status':status, 'decision':value,
+                'channel_version':ch['version'], 'attempt_count':attempts,
+                'delivery_attempt_count':(entry or {}).get('delivery_attempt_count',0),
+                'delivery_error':(entry or {}).get('delivery_error',''),
+                'next_retry_at':(datetime.now(timezone.utc)+timedelta(seconds=5 if attempts==1 else 30)).isoformat() if attempts else None}
+        else:
+            pending.pop(observation_id, None)
+        if parsed is not None and parsed.passed:
+            await self._record_existing_acceptance(conn, row, channel_id)
+        previous = int(ch['subscriptions'][row['source_key']] or 0)
+        ch['subscriptions'][row['source_key']] = str(max(previous,row['position']))
+        await self._save(conn, ch)
+        return True
 
     async def begin_round(self, channel_id: str, limit: int = 20) -> dict | None:
         limit = self._limit(limit, 20)
@@ -342,11 +437,17 @@ class Store:
                           if value["status"] == "passed" and value["channel_version"] == ch["version"]
                           and value.get("delivery_attempt_count", 0) < 3]
             ids = []
-            size = 2  # serialized list brackets; same ensure_ascii default as Gateway
+            window_rows = {}
+            size = 2  # Account for both frozen work and full current-window body.
             rejected = False
             for id in candidates:
                 row = await self._observation(conn, id)
-                item_size = len(json.dumps(observation(row).model_dump(mode="json")).encode())
+                members = await self._window_rows(conn, row) if row['detail'].get('message_window') else []
+                if members and int(ch['subscriptions'].get(row['source_key']) or 0) < max(x['position'] for x in members):
+                    continue  # Seed/partial evaluations cannot race ahead of the rest of the window.
+                new_members = {x['id']:x for x in members if x['id'] not in window_rows}
+                body_size = sum(len(json.dumps(observation(x).model_dump(mode='json')).encode()) for x in new_members.values())
+                item_size = len(json.dumps(observation(row).model_dump(mode="json")).encode()) + body_size
                 if item_size + 2 > 384 * 1024:
                     entry = ch["runtime"]["pending"][id]
                     entry["delivery_attempt_count"] = 3
@@ -354,9 +455,10 @@ class Store:
                     rejected = True
                     continue
                 addition = item_size + (2 if ids else 0)
-                if len(ids) >= limit or size + addition > 384 * 1024:
+                if len(ids) >= limit or len(window_rows) + len(new_members) > 200 or size + addition > 384 * 1024:
                     break
                 ids.append(id)
+                window_rows.update(new_members)
                 size += addition
             if not ids:
                 if rejected:
@@ -367,6 +469,8 @@ class Store:
                            channel_version=ch["version"], session_key=selection,
                            delivered=[], confirmed={}, session_id=None, task_id=None,
                            update_request_id=None, closed=False)
+            if window_rows:
+                current['window_observation_ids'] = [x['id'] for x in sorted(window_rows.values(), key=lambda row:row['position'])]
             ch["runtime"]["round"] = current
             await self._save(conn, ch)
             return current
@@ -497,6 +601,57 @@ class Store:
             return {'state': 'pending'}
         return {'state': 'applied' if result.get('applied') else 'rejected', 'result': result}
 
+    @staticmethod
+    def _round_work(round_):
+        return set(round_['observation_ids']) | {id for batch in round_.get('batches',[]) for id in batch['observation_ids']}
+
+    async def _inbox_rows(self, conn, ch):
+        round_ = ch['runtime']['round']
+        claimed = self._round_work(round_)
+        ids = [id for id,entry in ch['runtime']['pending'].items() if id not in claimed
+            and entry['status']=='passed' and entry['channel_version']==ch['version']]
+        if not ids or ch['lifecycle'] != 'active':
+            return []
+        rows = (await conn.execute(select(observed_items).where(observed_items.c.id.in_(ids),
+            observed_items.c.source_key.in_(ch['subscriptions']),latest()).order_by(observed_items.c.position))).mappings().all()
+        ready = []
+        for row in rows:
+            members = await self._window_rows(conn,row)
+            if int(ch['subscriptions'][row['source_key']] or 0) >= max(item['position'] for item in members):
+                ready.append(row)
+        return ready
+
+    async def inbox_state(self, binding_id: str) -> dict:
+        async with self.engine.connect() as conn:
+            ch = await self._bound(conn,binding_id)
+            rows = await self._inbox_rows(conn,ch)
+            return {'pending_count':len(rows),'watermark':hashlib.sha256(canonical([r['id'] for r in rows]).encode()).hexdigest() if rows else None}
+
+    async def _claim_batch(self, conn, ch, row, payload):
+        if set(payload) != {'limit'} or type(payload['limit']) is not int or not 1<=payload['limit']<=20:
+            raise DomainError('invalid_receive')
+        round_ = ch['runtime']['round']
+        if len(round_.get('batches',[])) >= 4:
+            raise DomainError('inbox_batch_capacity')
+        remaining = min(payload['limit'],100-len(self._round_work(round_)))
+        rows = await self._inbox_rows(conn,ch)
+        selected, body = [], {}
+        for item in rows[:remaining]:
+            members = await self._window_rows(conn,item)
+            expanded = body | {m['id']:m for m in members}
+            if len(json.dumps([observation(m).model_dump(mode='json') for m in expanded.values()]).encode()) > 128*1024:
+                if not selected:
+                    raise DomainError('inbox_window_too_large')
+                break
+            selected.append(item);body=expanded
+        result = {'applied':True,'batch_id':row['message_id'],
+            'items':[observation(m).model_dump(mode='json') for m in selected],
+            'window_items':[observation(m).model_dump(mode='json') for m in sorted(body.values(),key=lambda m:m['position'])]}
+        if selected:
+            round_.setdefault('batches',[]).append({'batch_id':row['message_id'],
+                'observation_ids':[m['id'] for m in selected]})
+        return result
+
     async def apply_control(self, observation_id: str, *, prepared_rule: dict | None = None) -> dict:
         async with self.engine.begin() as conn:
             # Subscription publication and first-Channel creation share this short
@@ -523,12 +678,16 @@ class Store:
                             or 'rule_hash' in payload or 'rule_path' in payload):
                         raise DomainError('unprepared_rule')
                     payload.update(prepared_rule)
-                changed = self._apply(ch, row, payload)
+                if row['kind'] == 'agent.batch_requested':
+                    result = await self._claim_batch(conn,ch,row,payload)
+                    changed = False
+                else:
+                    changed = self._apply(ch, row, payload)
+                    result = {"applied": True, "channel_id": ch["id"], "version": ch["version"]}
+                    if row['kind'] == 'agent.commit_requested':
+                        result.update(committed=True, rule_hash=ch['rule_hash'])
                 await self._retire_pending(conn, ch)
                 await self._save(conn, ch, publish=bool(changed))
-                result = {"applied": True, "channel_id": ch["id"], "version": ch["version"]}
-                if row['kind'] == 'agent.commit_requested':
-                    result.update(committed=True, rule_hash=ch['rule_hash'])
             except DomainError as exc:
                 result = {"applied": False, "code": exc.code}
             detail["result"] = result
@@ -537,7 +696,7 @@ class Store:
 
     def _apply(self, ch, row, payload):
         round_ = ch["runtime"]["round"]
-        frozen = set(round_["observation_ids"])
+        frozen = self._round_work(round_)
         if row['kind'] == 'agent.commit_requested':
             try:
                 commit = CommitPayload.model_validate(payload)

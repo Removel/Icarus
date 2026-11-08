@@ -14,7 +14,7 @@
 
 - 一个Icarus实例是一个独立对象；Source是外部区域；窗口不是任务路由身份。
 - 不以“不到一秒六句话”规定产品行为；5秒安静窗口、30秒最长等待可配置；私聊/@不绕过聚合。
-- 当前窗口内原话都是正文。是否需要确认某条工作项，不得决定这条原话是否进入Agent输入。以前已处理对话才是history。
+- 当前窗口内原话都是正文。是否需要确认某条工作项，不得决定这条原话是否进入Agent输入。以前时间上更早的观察才是history；history标签本身不证明该观察已完成业务处理。
 - 保留来源/发送者/时间/引用；不合并成丢失原消息身份的一段字符串。
 - 保留现有规则入口、原子commit、持久Session关联与未知外发不重放；不修改ReActAgent或在Hook里调度。
 - 不重新评估全部历史终态消息，不迁移生产库，不改变旧轮次的请求/指纹。
@@ -57,9 +57,9 @@ round保持原`observation_ids`作为确认范围，新增`window_observation_id
 
 ## Task1：稳定来源窗口
 
-**Files:** 新增`apps/argus/src/argus_app/plugins/workflow_rules/message_windows.py`；修改`config.py`、`application.py`、`plugins/workflow_rules/factory.py`、`infrastructure/store.py`。
+**Files:** 新增`apps/argus/src/argus_app/infrastructure/message_windows.py`；修改`config.py`、`application.py`、`plugins/workflow_rules/factory.py`、`infrastructure/store.py`。
 
-**Interfaces:** `Store.message_window(observation_id, *, quiet_seconds, max_wait_seconds, limit=20) -> list[Observation]`，未到窗口边界返回空；`Store.window_members(observation_id) -> list[Observation]`只读已封存成员。纯helper负责时间切段，DB负责原子封存和position顺序。生产配置`message_quiet_seconds=5`/`message_max_wait_seconds=30`，环境变量`ARGUS_MESSAGE_QUIET_SECONDS`/`ARGUS_MESSAGE_MAX_WAIT_SECONDS`。
+**Interfaces:** `Store.message_window(observation_id, *, quiet_seconds, max_wait_seconds, limit=20) -> list[Observation]`，未到窗口边界返回空；`Store.window_members(observation_id) -> list[Observation]`只读已封存成员；`window_unread(channel_id, observation_id)`读取整个封存窗口中仍需当前Channel判断的成员，不能与50条扫描页取交集导致半窗口占满容量。纯helper负责时间切段，DB负责原子封存和position顺序。生产配置`message_quiet_seconds=5`/`message_max_wait_seconds=30`，环境变量`ARGUS_MESSAGE_QUIET_SECONDS`/`ARGUS_MESSAGE_MAX_WAIT_SECONDS`。
 
 - [ ] 测试消息间隔2秒持续补充会延长quiet；到30秒必须放行；不同Source不互相拖延；20条上限余项不丢；重启复用封存成员；旧终态不全量重放。
 - [ ] RED后实现，使用可控时钟而非sleep。
@@ -94,4 +94,4 @@ round保持原`observation_ids`作为确认范围，新增`window_observation_id
 
 ## 交付状态
 
-当前是实施前文档，不能据此称窗口已恢复。运行中后续工作读取是第二阶段，不在此阶段扩展冻结集合。对生产真实六条消息只读取证，本轮使用合成复现，不自动重放或替用户补发回复。
+当前第一阶段核心已写入工作区并通过本地完整PG/Agent/Gateway验证，尚未提交或部署，证据见[执行记录](plan-execution-message-windows.md)。运行中后续工作读取仍是第二阶段，不在此阶段扩展冻结集合。对生产真实六条消息只读取证，本轮使用合成复现，不自动重放或替用户补发回复。
