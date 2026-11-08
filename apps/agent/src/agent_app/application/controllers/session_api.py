@@ -64,6 +64,9 @@ from agent_app.application.services.resource_importer import ResourceImporter
 from agent_app.application.services.update_pipeline import UpdatePipeline
 from agent_app.application.services.history_projector import HistoryProjector
 from agent_app.application.services.session_reaper import SessionReaper
+from agent_app.application.services.update_pipeline import UpdateBarrier
+from agent_app.application.services.persona_consolidation import PersonaConsolidationService
+from agent_app.contracts.persona import PersonaConsolidationRequest
 
 class SessionApi:
     def __init__(
@@ -106,7 +109,7 @@ class SessionApi:
         self._path_resolver: DataPathResolver | None = None
         self._capacity_override = update_queue_capacity
         self._updates = RuntimeUpdateStream(update_queue_capacity or DEFAULT_QUEUE_CAPACITY)
-        self._update_queue: asyncio.Queue[RuntimeUpdate] = asyncio.Queue()
+        self._update_queue: asyncio.Queue[RuntimeUpdate | UpdateBarrier] = asyncio.Queue()
         self._update_task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._started = False
@@ -118,6 +121,9 @@ class SessionApi:
         self.updates = UpdatePipeline(begin_unload_locked=self._begin_unload_locked, clock=self._clock, entries=self._entries, has_nonterminal_tasks=self._has_nonterminal_tasks, lifecycle_update=self._lifecycle_update, remember_task=self._remember_task, store=self._store, update_queue=self._update_queue, updates=self._updates, logger=self.logger)
         self.history = HistoryProjector(clock=self._clock, entry=self._entry, require_accepting=self._require_accepting, require_not_discarding=self._require_not_discarding, store=self._store, updates=self._updates)
         self.reaper = SessionReaper(begin_unload_locked=self._begin_unload_locked, clock=self._clock, entries=self._entries, entries_lock=self._entries_lock, entry=self._entry, has_active_agent_work=self._has_active_agent_work, require_accepting=self._require_accepting, require_not_discarding=self._require_not_discarding, status=self._status, store=self._store, cleanup_interval=self.cleanup_interval, idle_timeout=self.idle_timeout, logger=self.logger)
+        self.persona_consolidation = PersonaConsolidationService(config_loader=self._config_loader,
+            store=self._store, entry=self._entry, flush_updates=self.updates.flush,
+            data_dir=lambda: self._data_dir, logger=self.logger)
 
     @property
     def update_queue_capacity(self) -> int:
@@ -400,6 +406,11 @@ class SessionApi:
                     )
             return result
 
+    async def request_persona_consolidation(self, workspace_path: str | Path,
+                                           session_id: str) -> PersonaConsolidationRequest:
+        self._require_accepting()
+        return await self.persona_consolidation.request(SessionIdentity.create(workspace_path, session_id))
+
     async def unload_session(
         self, workspace_path: str | Path, session_id: str
     ) -> UnloadResult:
@@ -524,6 +535,7 @@ class SessionApi:
         if not self._started:
             return
         self._stopping = True
+        await self.persona_consolidation.aclose()
         cleanup = self._cleanup_task
         self._cleanup_task = None
         if cleanup is not None:

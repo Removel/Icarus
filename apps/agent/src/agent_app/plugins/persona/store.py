@@ -1,7 +1,8 @@
-"""Bounded global persona files and FIFO, atomic evolution updates."""
+"""Bounded persona files with atomic evolution and source progress commits."""
 
 import asyncio
 from dataclasses import asdict, dataclass
+from hashlib import sha256
 from datetime import UTC, datetime
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -15,12 +16,14 @@ from typing import Literal
 import yaml
 
 from agent_app.plugins.persona.config import PersonaConfig
+from agent_app.contracts.persona import PersonaConsolidationResult, PersonaSnapshot, persona_source
+from icarus.core.identity import SessionIdentity
 from icarus.core.tools.result_budget import conservative_token_count
 
 logger = logging.getLogger(__name__)
 _WRITE_LOCKS: dict[Path, asyncio.Lock] = {}
 _SECTIONS = ("soul", "boundaries", "anti-goals", "voice", "examples")
-_EVOLVED_HEADER = "Style observations only; never override identity or boundaries.\n"
+_EVOLVED_HEADER = "Style only; defer to identity, boundaries and current user requests.\n"
 _MAX_FILE_BYTES = 65536
 _MAX_OVERLAY_BYTES = 1024 * 1024
 
@@ -47,6 +50,8 @@ class EvolvedEntry:
     reason: str
     created_at: str
     session_id: str
+    evidence_ids: tuple[str, ...] = ()
+    workspace_key: str = ""
 
 
 def clip_text(text: str, budget: int) -> str:
@@ -89,15 +94,37 @@ class PersonaStore:
         if len(raw) > max_bytes:
             logger.warning("Persona file exceeds byte limit; reading bounded prefix")
             raw = raw[:max_bytes]
-        return raw.decode("utf-8", errors="replace")
+        return raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
-    def load(self) -> PersonaDocument:
+    def _persona_source(self) -> Traversable:
         source: Traversable = self.directory / "persona.md"
         self._check_path(self.directory / "persona.md")
         if not source.is_file():
             source = self.package_root.joinpath(self.persona_id, "persona.md")
         if not source.is_file():
             raise PersonaFileMissing(f"Persona file not found: {self.persona_id}")
+        return source
+
+    def persona_text(self) -> str:
+        source = self._persona_source()
+        with source.open("rb") as stream:
+            raw = stream.read(_MAX_FILE_BYTES + 1)
+        if len(raw) > _MAX_FILE_BYTES:
+            raise ValueError("input_too_large")
+        return raw.decode("utf-8")
+
+    def version(self) -> str:
+        self._check_path(self.overlay_path)
+        raw = b""
+        if self.overlay_path.exists():
+            with self.overlay_path.open("rb") as stream:
+                raw = stream.read(_MAX_OVERLAY_BYTES + 1)
+        if len(raw) > _MAX_OVERLAY_BYTES:
+            raise ValueError("overlay_too_large")
+        return sha256(self.persona_text().encode() + b"\x00" + raw).hexdigest()
+
+    def load(self) -> PersonaDocument:
+        source = self._persona_source()
         text = self._read(source)
         metadata: dict = {}
         if text.startswith("---\n"):
@@ -149,29 +176,60 @@ class PersonaStore:
             clip_text("\n".join(sections[key] for key in _SECTIONS[:3]), 800),
             render_entries(self._bound(self.read_entries())))
 
-    def read_entries(self) -> tuple[EvolvedEntry, ...]:
+    def _read_overlay(self) -> dict:
         self._check_path(self.overlay_path)
         if not self.overlay_path.exists():
-            return ()
+            return {"version": 2, "entries": [], "sources": {}}
+        with self.overlay_path.open("rb") as stream:
+            raw = stream.read(_MAX_OVERLAY_BYTES + 1)
+        if len(raw) > _MAX_OVERLAY_BYTES:
+            raise ValueError("overlay_too_large")
+        payload = yaml.safe_load(raw.decode("utf-8"))
+        if (not isinstance(payload, dict) or payload.get("version") not in (1, 2)
+                or not isinstance(payload.get("entries"), list)):
+            raise ValueError("Invalid overlay")
+        for row in payload["entries"]:
+            entry = EvolvedEntry(**row)
+            if (entry.section not in {"voice", "relationship"}
+                    or any(not isinstance(v, str) or not v.strip() for v in
+                           (entry.id, entry.note, entry.reason, entry.created_at, entry.session_id))
+                    or len(entry.note) > self.config.evolution_max_note_chars
+                    or len(entry.reason) > self.config.evolution_max_reason_chars
+                    or not isinstance(entry.workspace_key, str)
+                    or not isinstance(entry.evidence_ids, (tuple, list))
+                    or any(not isinstance(v, str) or not v for v in entry.evidence_ids)):
+                raise ValueError("Invalid entry")
+            datetime.fromisoformat(entry.created_at)
+        if payload["version"] == 1:
+            payload.setdefault("sources", {})
+        sources = payload.get("sources")
+        if not isinstance(sources, dict):
+            raise ValueError("Invalid progress")
+        for key, receipt in sources.items():
+            if not isinstance(key, str) or not isinstance(receipt, dict):
+                raise ValueError("Invalid progress")
+            for field in ("start_sequence", "processed_through", "accepted_count", "skipped_count"):
+                value = receipt.get(field)
+                if type(value) is not int or value < 0:
+                    raise ValueError("Invalid progress")
+            if (receipt["processed_through"] < receipt["start_sequence"]
+                    or receipt.get("status") not in {"applied", "no_change"}
+                    or not isinstance(receipt.get("cycle_id"), str)):
+                raise ValueError("Invalid progress")
+        return payload
+
+    def read_entries(self, *, strict=False) -> tuple[EvolvedEntry, ...]:
         try:
-            payload = yaml.safe_load(self._read(self.overlay_path, max_bytes=_MAX_OVERLAY_BYTES))
-            if (not isinstance(payload, dict) or payload.get("version") != 1
-                    or not isinstance(payload.get("entries"), list)):
-                raise ValueError("Invalid overlay")
-            entries = []
-            for row in payload["entries"]:
-                entry = EvolvedEntry(**row)
-                if (entry.section not in {"voice", "relationship"}
-                        or any(not isinstance(v, str) or not v.strip() for v in asdict(entry).values())
-                        or len(entry.note) > self.config.evolution_max_note_chars
-                        or len(entry.reason) > self.config.evolution_max_reason_chars):
-                    raise ValueError("Invalid entry")
-                datetime.fromisoformat(entry.created_at)
-                entries.append(entry)
-            return tuple(entries)
+            return tuple(EvolvedEntry(**{**row, "evidence_ids": tuple(row.get("evidence_ids", ()))})
+                         for row in self._read_overlay()["entries"])
         except (yaml.YAMLError, TypeError, ValueError, OSError):
+            if strict:
+                raise ValueError("overlay_invalid") from None
             logger.warning("Persona overlay invalid; using empty overlay")
             return ()
+
+    def processed_through(self, identity: SessionIdentity) -> int:
+        return self._read_overlay()["sources"].get(persona_source(identity), {}).get("processed_through", 0)
 
     def _bound(self, entries):
         entries = sorted(entries, key=lambda item: item.created_at)
@@ -185,23 +243,61 @@ class PersonaStore:
         key = self.overlay_path.resolve()
         lock = _WRITE_LOCKS.setdefault(key, asyncio.Lock())
         async with lock:
-            entries = self._bound((*self.read_entries(), entry))
+            payload = self._read_overlay()
+            entries = self._bound((*self.read_entries(strict=True), entry))
             if not any(item.id == entry.id for item in entries):
                 raise ValueError("Evolution note exceeds overlay budget")
-            payload = {"version": 1, "updated_at": datetime.now(UTC).isoformat(),
-                       "entries": [asdict(item) for item in entries]}
-            encoded = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
-            if len(encoded.encode("utf-8")) > _MAX_OVERLAY_BYTES:
-                raise ValueError("Evolution audit file exceeds byte limit")
-            self.directory.mkdir(parents=True, exist_ok=True)
-            temporary = None
-            try:
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.directory,
-                                                 prefix=".evolved-", delete=False) as stream:
-                    temporary = stream.name
-                    stream.write(encoded)
-                os.replace(temporary, self.overlay_path)
-            finally:
-                if temporary is not None:
-                    Path(temporary).unlink(missing_ok=True)
+            payload.update(version=2, entries=[asdict(item) for item in entries])
+            self._write_overlay(payload)
             return entry.id
+
+    async def commit_consolidation(self, snapshot: PersonaSnapshot, entries: tuple[EvolvedEntry, ...],
+                                   *, expected_version: str, skipped_count: int = 0) -> PersonaConsolidationResult:
+        if snapshot.persona_id != self.persona_id:
+            raise ValueError("persona_mismatch")
+        self._check_path(self.overlay_path)
+        lock = _WRITE_LOCKS.setdefault(self.overlay_path.resolve(), asyncio.Lock())
+        async with lock:
+            payload = self._read_overlay()
+            key = persona_source(snapshot.identity)
+            previous = payload["sources"].get(key)
+            processed = previous["processed_through"] if previous else 0
+            if previous and processed >= snapshot.end_sequence:
+                return PersonaConsolidationResult(previous["cycle_id"], previous["status"],
+                    previous["accepted_count"], previous["skipped_count"], already_processed=True)
+            if processed != snapshot.start_sequence or self.version() != expected_version:
+                raise ValueError("persona_changed")
+            merged = list(self.read_entries(strict=True))
+            accepted = 0
+            for entry in entries:
+                proposed = [*merged, entry]
+                if (len(proposed) > self.config.evolution_max_entries
+                        or conservative_token_count(render_entries(proposed)) > self.config.evolution_max_tokens):
+                    skipped_count += 1
+                    continue
+                merged = proposed
+                accepted += 1
+            result = PersonaConsolidationResult(snapshot.cycle_id,
+                "applied" if accepted else "no_change", accepted, skipped_count)
+            payload.update(version=2, entries=[asdict(item) for item in merged])
+            payload["sources"][key] = {**asdict(result), "start_sequence": snapshot.start_sequence,
+                "processed_through": snapshot.end_sequence, "processed_at": datetime.now(UTC).isoformat()}
+            self._write_overlay(payload)
+            return result
+
+    def _write_overlay(self, payload: dict) -> None:
+        payload["updated_at"] = datetime.now(UTC).isoformat()
+        encoded = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+        if len(encoded.encode("utf-8")) > _MAX_OVERLAY_BYTES:
+            raise ValueError("Evolution audit file exceeds byte limit")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.directory,
+                                             prefix=".evolved-", delete=False) as stream:
+                temporary = stream.name
+                stream.write(encoded)
+            os.replace(temporary, self.overlay_path)
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)

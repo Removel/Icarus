@@ -6,10 +6,10 @@ import math
 import os
 
 from agent_app.contracts.prompt import PromptContributionEvent, PromptSection
-from agent_app.plugins.persona.judge import Judge, bounded_recent, create_judge, NullJudge
+from agent_app.plugins.persona.judge import Judge, create_judge, NullJudge
 from agent_app.plugins.persona.relationship import RelationshipReader
 from agent_app.plugins.persona.store import PersonaStore
-from agent_app.plugins.persona.prompts import DEFENSE, EVOLUTION_GUIDANCE, REANCHOR, STRONG_DEFENSE
+from agent_app.plugins.persona.prompts import DEFENSE, REANCHOR, STRONG_DEFENSE
 from icarus.core.models.messages import TextPart
 from icarus.core.tools.result_budget import conservative_token_count
 from icarus.core.run_control import TaskChannelStatus
@@ -36,32 +36,20 @@ class PersonaPlugin(BasePlugin):
         self.relationship = RelationshipReader(connection, api_token=os.getenv("RELA_MEM_API_TOKEN", "").strip())
         self.document = None
         self._sections: tuple[PromptSection, ...] = ()
-        self._background: tuple[PromptSection, ...] = ()
         self._accepting = True
         self.turn_count = 0
         self._seen_inputs = OrderedDict()
         self._seen_completed = OrderedDict()
         self._assistant: deque[str] = deque(maxlen=5)
-        self._recent = []
-        self._evolution_lock = asyncio.Lock()
-        self._last_evolution_turn = None
-
-    def build_tools(self):
-        from agent_app.plugins.persona.tools import PersonaEvolveTool
-        return (PersonaEvolveTool(self),)
 
     async def start(self):
         self.judge = create_judge(self.config)
 
     async def on_session_start(self):
         self.document = self.store.load()
-        evolution = (EVOLUTION_GUIDANCE
-                     if self.config.jev_enabled and not isinstance(self.judge, NullJudge) else "")
         values = (("persona-01-identity", self.document.identity_text),
-                  ("persona-05-evolution", evolution))
+                  ("persona-02-style", self.document.evolved_text))
         self._sections = tuple(PromptSection(key, "persona", text) for key, text in values if text)
-        self._background = ((PromptSection("persona-observations", "contributor", self.document.evolved_text),)
-                            if self.document.evolved_text else ())
 
     def static_prompt_sections(self):
         return self._sections
@@ -97,7 +85,7 @@ class PersonaPlugin(BasePlugin):
     async def on_input(self, source, event):
         if not event.task_id or not self._remember(self._seen_inputs, event.task_id):
             return
-        sections: tuple[PromptSection, ...] = self._background
+        sections: tuple[PromptSection, ...] = ()
         if self.task_channels is not None:
             channel = self.task_channels.get(event.task_id)
             if channel is None or channel.status not in {
@@ -117,7 +105,6 @@ class PersonaPlugin(BasePlugin):
     async def _judged_sections(self, event):
         try:
             self.turn_count += 1
-            self._recent = bounded_recent([*self._recent, ("user", event.prompt)])
             if self._accepting and self.config.jev_enabled and not isinstance(self.judge, NullJudge):
                 operations = [self._confidence(self.judge.attack_confidence(event.prompt))]
                 drift_due = (self.turn_count % self.config.drift_every_turns == 0
@@ -125,7 +112,7 @@ class PersonaPlugin(BasePlugin):
                 if drift_due:
                     assert self.document is not None
                     operations.append(self._confidence(self.judge.drift_confidence(
-                        tuple(self._assistant), self.document.drift_reference_text)))
+                        tuple(self._assistant), self.document.drift_reference_text + "\n" + self.document.evolved_text)))
                 results = await asyncio.gather(*operations)
                 candidates = []
                 if results[0] is not None and results[0] >= self.config.attack_defend_threshold:
@@ -158,4 +145,3 @@ class PersonaPlugin(BasePlugin):
             self._assistant.append(text[:1000])
             while sum(map(len, self._assistant)) > 4000:
                 self._assistant.popleft()
-            self._recent = bounded_recent([*self._recent, ("assistant", text)])

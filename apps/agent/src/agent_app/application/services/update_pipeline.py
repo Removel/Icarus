@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 from typing import Any, cast
+from dataclasses import dataclass
+import asyncio
 
 
 from agent_app.application.models.status import SessionLifecycle, TaskStatus
@@ -21,6 +23,11 @@ from agent_app.application.models.session_entry import _SessionEntry
 from agent_app.application.services.common import _safe_error
 
 
+@dataclass(frozen=True)
+class UpdateBarrier:
+    completed: asyncio.Future[None]
+
+
 class UpdatePipeline:
     def __init__(self, *, begin_unload_locked, clock, entries, has_nonterminal_tasks, lifecycle_update, remember_task, store, update_queue, updates, logger):
         self._begin_unload_locked = begin_unload_locked
@@ -37,9 +44,19 @@ class UpdatePipeline:
     async def _handle_update(self, update: RuntimeUpdate) -> None:
         await self._update_queue.put(update)
 
+    async def flush(self) -> None:
+        completed = asyncio.get_running_loop().create_future()
+        await self._update_queue.put(UpdateBarrier(completed))
+        await completed
+
     async def _update_loop(self) -> None:
         while True:
             update = await self._update_queue.get()
+            if isinstance(update, UpdateBarrier):
+                if not update.completed.done():
+                    update.completed.set_result(None)
+                self._update_queue.task_done()
+                continue
             try:
                 entry = self._entries.get(
                     (update.workspace_key, update.session_id)
