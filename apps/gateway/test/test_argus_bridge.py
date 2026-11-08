@@ -64,6 +64,13 @@ def test_argus_real_runtime_retry_restart_and_auth(tmp_path, monkeypatch):
                     await asyncio.sleep(.02)
                 assert status == {'task_id':task_id,'session_id':session,'status':'completed','commit_state':'none','replay_safe':False,
                     'admission_state':'accepted','attempt':1,'retryable':False,'error_code':None}
+                before_notify_calls=len([p for path,p in ProviderHandler.requests if path.endswith('/chat/completions')])
+                notice={'wake_id':wake,'session_id':session,'binding_id':binding,'watermark':'new-information'}
+                assert (await client.post('/argus/notify',json=notice,headers={'Authorization':'Bearer wrong'})).status_code==401
+                assert (await client.post('/argus/notify',json=notice|{'body':'not allowed'})).status_code==422
+                assert (await client.post('/argus/notify',json=notice|{'session_id':'wrong'})).status_code==409
+                assert (await client.post('/argus/notify',json=notice)).json()=={'notified':False}
+                assert len([p for path,p in ProviderHandler.requests if path.endswith('/chat/completions')])==before_notify_calls
                 unsafe = await client.post('/argus/wake', json=payload | {'wake_id': str(uuid4()),
                     'binding_id': str(uuid4()), 'session_id': other.json()['session_id'], 'session_key': 'slot-b'})
                 assert unsafe.status_code == 409, 'new Session must not replay an unresolved Channel execution'

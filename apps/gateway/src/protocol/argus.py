@@ -2,7 +2,7 @@
 import hmac
 import os
 from fastapi import APIRouter, Depends, Header, HTTPException
-from agent_app.argus_protocol import SessionRequest, WakeRequest, StatusRequest
+from agent_app.argus_protocol import SessionRequest, WakeRequest, StatusRequest, NotifyRequest
 from agent_app.application.services.argus_bridge import ArgusBridge, BridgeConflict
 
 
@@ -29,6 +29,13 @@ def argus_router(runtime):
             return await bridge.wake(request)
         except BridgeConflict as error:
             raise HTTPException(409, str(error)) from error
+
+    @router.post('/notify',dependencies=[Depends(authorized)])
+    async def notify(request: NotifyRequest):
+        try:
+            return await bridge.notify(request.wake_id,request.session_id,request.binding_id,request.watermark)
+        except BridgeConflict as error:
+            raise HTTPException(409,str(error)) from error
 
     @router.post('/status', dependencies=[Depends(authorized)])
     async def status(request: StatusRequest):

@@ -10,7 +10,7 @@ import pytest
 
 from agent_app.application import AgentRuntime
 from apps.gateway.src.app import create_app
-from apps.gateway.test.test_argus_tools_e2e import ArgusProvider
+from apps.gateway.test.test_argus_tools_e2e import ArgusProvider, current_argus_view
 from apps.gateway.test.test_runtime_e2e import config_for, local_provider
 
 
@@ -54,11 +54,7 @@ class ReplyProvider(ArgusProvider):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         type(self).model_calls.append(body)
         count = sum(m['role'] == 'tool' for m in body['messages'])
-        user_texts = [m['content'] if isinstance(m.get('content'), str) else '\n'.join(
-            part.get('text', '') for part in m.get('content', []) if isinstance(part, dict))
-            for m in body['messages'] if m['role'] == 'user']
-        current = next(text for text in reversed(user_texts) if 'ARGUS CURRENT MESSAGES\n' in text)
-        view, _ = json.JSONDecoder().raw_decode(current.split('ARGUS CURRENT MESSAGES\n', 1)[1].lstrip())
+        view = current_argus_view(body['messages'])
         target = view['messages'][0]['reply_target']
         assert target['platform'] == 'qq' and target['kind'] == 'private'
         assert target['account_id'] == '100'
@@ -67,8 +63,8 @@ class ReplyProvider(ArgusProvider):
             ('mcp_tool_execute', {'tool_ref': 'snowluma/invoke_action', 'arguments': {
                 'action': 'send_private_msg', 'params': {'user_id': int(target['user_id']), 'message': 'synthetic reply'}}}),
             ('tool_execute', {'name': 'argus_commit', 'arguments': {'results': [
-                {'ref': 'm1', 'status': 'handled' if self.reply_retcode == 0 else 'no_action',
-                 'reason': 'platform success message_id=901' if self.reply_retcode == 0 else 'platform rejected send'}],
+                {'ref': ref, 'status': 'handled' if self.reply_retcode == 0 else 'no_action',
+                 'reason': 'platform success message_id=901' if self.reply_retcode == 0 else 'platform rejected send'} for ref in view['work_refs']],
                 'progress': 'replied' if self.reply_retcode == 0 else 'send failed',
                 'lifecycle': 'active', 'next_session': 'new'}}),
         ]
@@ -95,7 +91,8 @@ class ReplyProvider(ArgusProvider):
 
 
 @pytest.mark.parametrize('retcode,lose_receipt', [(0, False), (1401, False), (0, True)])
-def test_agent_sends_via_real_mcp_then_confirms_argus(tmp_path, monkeypatch, retcode, lose_receipt):
+@pytest.mark.parametrize('complete_window',[False,True])
+def test_agent_sends_via_real_mcp_then_confirms_argus(tmp_path, monkeypatch, retcode, lose_receipt, complete_window):
     monkeypatch.setenv('ARGUS_GATEWAY_TOKEN', 'gateway-secret')
     monkeypatch.setenv('ARGUS_AGENT_API_TOKEN', 'callback-secret')
     monkeypatch.setenv('ARGUS_WORKSPACE_PATH', str(tmp_path / 'workspace'))
@@ -140,6 +137,13 @@ if __name__ == "__main__":
                         revision=1, observed_at='2026-11-03T00:00:00Z', content={'text': 'synthetic greeting', 'message_type': 'private'},
                         detail={'protocol':'onebot', 'self_id':'100', 'peer_id':'200'})],
                     argus_url=f'http://127.0.0.1:{port}')
+                if complete_window:
+                    body=[payload['items'][0]]
+                    for fragment in ('有人来问项目','问有没有经费','嗯','我们是在一起做开源项目','我说的是项目协作'):
+                        body.append(payload['items'][0] | {'id':str(uuid4()),'message_id':str(uuid4()),'content':{'text':fragment,'message_type':'private'}})
+                    payload['window_items']=body
+                    payload['history_items']=[payload['items'][0] | {'id':str(uuid4()),'message_id':'earlier',
+                        'content':{'text':'earlier discussion'},'observed_at':'2026-11-02T00:00:00Z'}]
                 response = await client.post('/argus/wake', json=payload)
                 assert response.status_code == 200, response.text
                 for _ in range(600):
@@ -160,6 +164,20 @@ if __name__ == "__main__":
     assert commits[0]['payload']['results'][0]['observation_id'] == obs
     assert commits[0]['payload']['results'][0]['status'] == ('handled' if retcode == 0 else 'no_action')
     assert commits[0]['payload']['progress'] == ('replied' if retcode == 0 else 'send failed')
+    first_view = current_argus_view(ReplyProvider.model_calls[0]['messages'])
+    assert first_view['work_refs']==['m1']
+    if complete_window:
+        assert [m['text'] for m in first_view['messages']]==[
+            'synthetic greeting','有人来问项目','问有没有经费','嗯','我们是在一起做开源项目','我说的是项目协作']
+        assert first_view['history'][0]['text']=='earlier discussion'
+        assert first_view['history'][0]['ref'] not in first_view['work_refs']
+    user_content='\n'.join(m['content'] if isinstance(m['content'],str) else '\n'.join(
+        p.get('text','') for p in m['content'] if isinstance(p,dict))
+        for m in ReplyProvider.model_calls[0]['messages'] if m['role']=='user')
+    assert '<plugin_context>' in user_content
+    trigger=user_content.split('<user_request>',1)[1].split('</user_request>',1)[0]
+    assert 'ARGUS CURRENT MESSAGES' not in trigger
+    assert 'Argus plugin' in trigger
     system_view = '\n'.join(str(m['content']) for m in ReplyProvider.model_calls[0]['messages'] if m['role'] == 'system')
     assert 'your platform identity' in system_view and 'before argus_commit' in system_view
     assert 'ordinary chat' in system_view and 'internal operator' in system_view

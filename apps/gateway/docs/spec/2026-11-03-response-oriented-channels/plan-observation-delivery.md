@@ -45,6 +45,10 @@
 - [ ] 已发送commit失联不重发，旧view_version兼容，新wake原文不可变；改配置不重建旧请求。
 - [ ] 最小测试RED→GREEN，再`make test-gateway`、相关Agent/Argus套件、compileall/diff。
 
+## 当前验证
+
+已新增完整窗口/历史下的平台成功、失败和丢commit回执本地MCP场景；脚本provider读取实际plugin_context和work_refs，而非假设第一个消息就是工作项。必需Argus贡献缺失/超时测试证明不启动模型。验证结果与限制见[执行记录](../../../../argus/docs/spec/2026-11-03-response-oriented-channels/plan-execution-message-windows.md)。
+
 ## 交付
 
 保留运行服务当前状态；本阶段完成后如需加载新插件机制，另确认空闲任务和重载。旧生产消息不重放、已发送内容不补发；更新arch仅根据实际实现与测试证据。

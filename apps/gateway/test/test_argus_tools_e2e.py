@@ -10,6 +10,23 @@ from apps.gateway.src.app import create_app
 from apps.gateway.test.test_runtime_e2e import ProviderHandler, config_for, local_provider
 
 
+def current_argus_view(messages):
+    for message in reversed(messages):
+        if message['role'] != 'user':
+            continue
+        content = message.get('content','')
+        text = content if isinstance(content,str) else '\n'.join(p.get('text','') for p in content if isinstance(p,dict))
+        candidates = [text]
+        if '<plugin_context>' in text:
+            blocks, _ = json.JSONDecoder().raw_decode(text.split('<plugin_context>',1)[1].lstrip())
+            candidates.extend(b['content'] for b in blocks if isinstance(b,dict) and isinstance(b.get('content'),str))
+        for candidate in candidates:
+            marker = 'ARGUS CURRENT MESSAGES\n'
+            if marker in candidate:
+                return json.JSONDecoder().raw_decode(candidate.split(marker,1)[1].lstrip())[0]
+    raise AssertionError('No Argus observations in actual model input')
+
+
 class ArgusProvider(ProviderHandler):
     callbacks = []
     model_calls = []
@@ -32,9 +49,9 @@ class ArgusProvider(ProviderHandler):
             if lazy and count == 0:
                 name, arguments = 'tool_search', {'query':'argus'}
             elif operation == 0:
-                match = re.search(r'"ref":\s*"(m[0-9]+)"', str(messages[start].get('content','')))
-                ref = match.group(1) if match else 'm1'
-                name, arguments = 'argus_commit', {'results':[{'ref':ref,'status':'handled'}]}
+                view = current_argus_view(messages)
+                refs = view.get('work_refs') or [m['ref'] for m in view['messages'] if m['role']=='work']
+                name, arguments = 'argus_commit', {'results':[{'ref':ref,'status':'handled'} for ref in refs]}
             else:
                 name, arguments = None, None
             if lazy and name == 'argus_commit':
@@ -104,5 +121,5 @@ def test_real_agent_argus_tools_receipts_and_final_view(tmp_path, monkeypatch):
     assert 'untrusted external evidence' not in system_view
     assert 'def main(event, channel):' not in system_view
     assert {'tool_search', 'tool_execute', 'mcp_tool_list', 'mcp_tool_search', 'mcp_tool_execute'} <= exposed
-    assert 'argus(6)' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
+    assert 'argus(7)' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
     assert 'memory_recall' in next(t['function']['description'] for t in first['tools'] if t['function']['name'] == 'tool_search')
