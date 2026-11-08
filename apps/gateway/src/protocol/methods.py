@@ -23,7 +23,9 @@ from agent_app.application import (
     SessionNotFoundError,
     SubmissionConflictError,
 )
-from apps.gateway.src.protocol.responses import SessionStatusModel, TaskStatusModel, UnloadResultModel
+from apps.gateway.src.protocol.responses import (
+    SessionStatusModel, TaskStatusModel, UnloadResultModel, PersonaConsolidationRequestModel,
+)
 from apps.gateway.src.protocol.errors import (
     BUSINESS_ERROR,
     INTERNAL_ERROR,
@@ -141,6 +143,7 @@ class GatewayMethods:
             "settings.get": self._settings_get,
             "settings.update": self._settings_update,
             "session.create": self._session_create,
+            "session.consolidate_persona": self._session_consolidate_persona,
             "session.list": self._session_list,
             "session.generate_title": self._session_generate_title,
             "session.rename": self._session_rename,
@@ -236,6 +239,11 @@ class GatewayMethods:
         return SessionStatusModel.model_validate(
             await self.runtime.get_session_status(value.workspace_path, session_id)
         ).model_dump(mode="json")
+
+    async def _session_consolidate_persona(self, params):
+        value = self._validate(SessionParams, params)
+        result = await self.runtime.request_persona_consolidation(value.workspace_path, value.session_id)
+        return PersonaConsolidationRequestModel.model_validate(result).model_dump(mode="json")
 
     async def _session_list(self, params):
         value = self._validate(WorkspaceParams, params)
