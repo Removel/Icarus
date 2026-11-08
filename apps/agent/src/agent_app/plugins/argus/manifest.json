@@ -6,9 +6,9 @@
   "python_requires": ["httpx>=0.27,<1"],
   "required_capabilities": [],
   "provided_capabilities": [],
-  "provided_tools": ["argus_channel_read", "argus_read", "argus_history", "argus_rule_check", "argus_commit", "argus_guide"],
-  "published_events": [],
-  "consumed_events": [],
+  "provided_tools": ["argus_channel_read", "argus_read", "argus_history", "argus_rule_check", "argus_commit", "argus_guide", "argus_receive"],
+  "published_events": ["prompt.contribution", "prompt.update"],
+  "consumed_events": ["input.user_input", "context.ready", "input.finished"],
   "state_scopes": [],
   "tier": "core",
   "required_config": ["bridge"]

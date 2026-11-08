@@ -35,7 +35,7 @@ class References:
                 if record.type != 'argus.wake':
                     continue
                 binding = record.payload['binding']
-                if binding.get('view_version') != 2:
+                if binding.get('view_version',1) < 2:
                     continue
                 for key, mapping in [('message_refs',messages),('source_refs',sources)]:
                     if any(mapping.get(target) != alias for target,alias in binding.get(key,{}).items()):

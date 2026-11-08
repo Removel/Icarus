@@ -195,6 +195,12 @@ class SessionApi:
                 raise ValueError("Argus session must be initialized through protected bridge")
             config = config.model_copy(deep=True)
             config.runtime.plugin_config["argus"] = settings
+            prompt_config = dict(config.runtime.plugin_config.get('prompt',{}))
+            required = list(prompt_config.get('required_contributors',[]))
+            if 'argus' not in required:
+                required.append('argus')
+            prompt_config['required_contributors'] = required
+            config.runtime.plugin_config['prompt'] = prompt_config
             # Bridge origin adds business context, not a reduced permission profile.
             # Keep ordinary session defaults and any explicitly supplied tool policy.
             if "argus" not in config.runtime.required_plugin_ids:

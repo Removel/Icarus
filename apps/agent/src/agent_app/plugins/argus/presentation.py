@@ -71,14 +71,49 @@ def reply_target(item, *, source_ref: str):
 def render_round(wake, *, message_refs: dict[str,str], source_refs: dict[str,str]) -> str:
     wake = _dict(wake)
     sources, messages = {}, []
-    for item in wake['items']:
+    work_ids = {item['id'] for item in wake['items']}
+    current = wake.get('window_items') or wake['items']
+    for item in current:
         source_ref = source_refs[item['source_key']]
         sources[source_ref] = source_view(item)
-        messages.append(project_observation(item,ref=message_refs[item['id']],role='work') |
+        messages.append(project_observation(item,ref=message_refs[item['id']],role='work' if item['id'] in work_ids else 'current') |
             {'source':source_ref, 'reply_target':reply_target(item, source_ref=source_ref)})
+    history = []
+    for item in wake.get('history_items',[]):
+        source_ref = source_refs[item['source_key']]
+        sources.setdefault(source_ref,source_view(item))
+        history.append(project_observation(item,ref=message_refs[item['id']],role='context') | {'source':source_ref})
     snapshot = wake['channel_snapshot']
     context = {k:snapshot[k] for k in ('goal','progress') if snapshot.get(k)}
-    return 'ARGUS CURRENT MESSAGES\n' + json.dumps({'context':context,'sources':sources,'messages':messages}, ensure_ascii=False, sort_keys=True)
+    return 'ARGUS CURRENT MESSAGES\n' + json.dumps({'context':context,'sources':sources,'messages':messages,
+        'work_refs':[message_refs[item['id']] for item in wake['items']], 'history':history}, ensure_ascii=False, sort_keys=True)
+
+
+def observations_visible(body: str, text: str) -> bool:
+    if not body:
+        return False
+    if body in text:
+        return True
+    marker = '<plugin_context>'
+    start = text.find(marker)
+    while start >= 0:
+        # Decode actual envelopes without splitting on marker-like text inside JSON.
+        try:
+            blocks, _ = json.JSONDecoder().raw_decode(text[start+len(marker):].lstrip())
+        except (ValueError,TypeError):
+            blocks = []
+        if isinstance(blocks,list) and any(isinstance(block,dict) and
+                isinstance(block.get('content'),str) and body in block['content'] for block in blocks):
+            return True
+        start = text.find(marker,start+len(marker))
+    return False
+
+
+def initial_task_prompt(wake) -> str:
+    wake = _dict(wake)
+    subject = semantic_subject(wake.get('window_items') or wake['items'],max_chars=256)
+    return ('Consider the conversation observations supplied by the Argus plugin. Understand the complete '
+        'current window before deciding whether to reply or act.\nSubject (observed data): ' + subject)
 
 
 def semantic_subject(items, *, max_chars: int = 8192) -> str:

@@ -13,7 +13,7 @@ def test_commit_schema_only_requests_business_fields():
     assert 'argus_commit' in MODELS
     assert set(MODELS['argus_commit'].model_json_schema()['properties']) == {
         'results', 'progress', 'source_refs', 'rule_source', 'lifecycle', 'next_session'}
-    assert set(TOOL_NAMES) == {'argus_channel_read', 'argus_read', 'argus_history', 'argus_rule_check', 'argus_commit', 'argus_guide'}
+    assert set(TOOL_NAMES) == {'argus_channel_read', 'argus_read', 'argus_history', 'argus_rule_check', 'argus_commit', 'argus_guide', 'argus_receive'}
     assert set(MODELS['argus_rule_check'].model_json_schema()['properties']) == {'source'}
 
 

@@ -14,7 +14,7 @@ from agent_app.argus_protocol import WireModel, Id
 from icarus.core.models.messages import ToolDefinition
 from icarus.core.tools import BaseTool, ToolExecutionResult
 
-TOOL_NAMES = ('argus_channel_read', 'argus_read', 'argus_history', 'argus_rule_check', 'argus_commit', 'argus_guide')
+TOOL_NAMES = ('argus_channel_read', 'argus_read', 'argus_history', 'argus_rule_check', 'argus_commit', 'argus_guide', 'argus_receive')
 
 
 class Empty(WireModel):
@@ -27,6 +27,12 @@ class ChannelRead(WireModel):
 
 class Guide(WireModel):
     topic: Literal['overview', 'rules', 'sources', 'commit'] = 'overview'
+
+
+class Receive(WireModel):
+    timeout_seconds: Annotated[float,Field(ge=0,le=30)] = 0
+    max_chars: Annotated[int,Field(ge=256,le=16384)] = 8192
+    limit: Annotated[int,Field(ge=1,le=20)] = 20
 
 
 class Read(WireModel):
@@ -50,7 +56,7 @@ class Receipt(WireModel):
 
 
 class Commit(WireModel):
-    results: Annotated[list[Receipt], Field(min_length=1, max_length=20)]
+    results: Annotated[list[Receipt], Field(min_length=1, max_length=100)]
     progress: Annotated[str, Field(max_length=8192)] | None = None
     source_refs: Annotated[list[Annotated[str, Field(min_length=1, max_length=512)]], Field(max_length=16)] | None = Field(default=None, validation_alias=AliasChoices('source_refs', 'source_keys'))
     rule_source: Annotated[str, Field(max_length=32768)] | None = None
@@ -66,9 +72,10 @@ class Commit(WireModel):
         return self
 
 
-MODELS: dict[str, type[WireModel]] = dict(zip(TOOL_NAMES, (ChannelRead, Read, History, Check, Commit, Guide)))
+MODELS: dict[str, type[WireModel]] = dict(zip(TOOL_NAMES, (ChannelRead, Read, History, Check, Commit, Guide, Receive)))
 KINDS = {'argus_rule_check': 'rule.check_requested', 'argus_commit': 'agent.commit_requested'}
 DESCRIPTIONS = {
+    'argus_receive': 'Read later related messages into this running task, optionally waiting up to30 seconds. Claims one immutable batch; large bodies are read as contiguous pages, with offsets managed by code. Call again to continue; reduce max_chars if a page is truncated. Returns full window body and all current work_refs. Reading is not completion: report each claimed work ref in the final argus_commit. Unread messages remain for a later round. No new Agent is started.',
     'argus_channel_read': 'Read or refresh the current matter goal, progress and source regions. Request include_rule only when inspecting or modifying the current rule.',
     'argus_guide': 'Read Argus help by topic: overview, rules, sources, commit. Read-only documentation, not permission or a required step for known tools.',
     'argus_read': 'Read an observation from the current frozen round using its short reference. Does not acknowledge it.',
@@ -106,7 +113,7 @@ class ArgusTool(BaseTool):
                 raise ValueError('Inactive or cancelled Argus task binding')
             channel.raise_if_cancelled()
             wake = binding['wake']
-            v2 = binding.get('view_version') == 2
+            v2 = binding.get('view_version',1) >= 2
             if self.name == 'argus_guide':
                 if binding['finished']:
                     raise ValueError('Argus binding is already finished')
@@ -115,7 +122,8 @@ class ArgusTool(BaseTool):
             if v2 and self.name in {'argus_read','argus_history','argus_commit'}:
                 await bridge.references.validate(bridge.identity_for_wake(wake),
                     message_refs=binding['message_refs'], source_refs=binding['source_refs'])
-            frozen = {item['id'] for item in wake['items']}
+            from .inbox import work_items
+            frozen = {item['id'] for item in work_items(binding)}
             refs = ({alias: id for id, alias in binding['message_refs'].items() if id in frozen}
                     if v2 else {str(i + 1): item['id'] for i, item in enumerate(wake['items'])})
             def resolve(ref):
@@ -163,12 +171,26 @@ class ArgusTool(BaseTool):
                     raise ValueError('Argus binding is already finished')
                 async with httpx.AsyncClient(timeout=20, follow_redirects=False, trust_env=False,
                     headers={'Authorization': 'Bearer ' + token}) as client:
+                    if self.name in {'argus_receive','argus_commit'}:
+                        from .inbox import synchronize
+                        await synchronize(self,client,task_id,binding,task_messages)
+                    if self.name == 'argus_receive':
+                        from .inbox import receive
+                        result = await receive(self,client,task_id,binding,payload,task_messages)
+                        signal = binding.get('availability_signal')
+                        if signal is not None:
+                            signal.set()
+                        return result
                     text = '\n'.join(m.content if isinstance(m.content, str) else '\n'.join(
                         getattr(p, 'text', '') for p in (m.content or ())) for m in task_messages if m.role == 'user')
-                    if not binding['delivered'] and binding['prompt'] in text:
+                    body = binding.get('observation_prompt') if binding.get('view_version',1) >= 3 else binding['prompt']
+                    from .presentation import observations_visible
+                    if not binding['delivered'] and body and observations_visible(body,text):
                         delivered = await self._callback(client, task_id, binding, 'agent.delivered',
-                            {'observation_ids': list(refs.values())}, 'delivered-' + wake['binding_id'])
+                            {'observation_ids': [item['id'] for item in wake['items']]}, 'delivered-' + wake['binding_id'])
                         binding['delivered'] = delivered.get('applied') is True
+                    if self.name == 'argus_commit' and any(not b.get('delivered') for b in binding.get('inbox_batches',[])):
+                        raise ValueError('Supplemental batch is not fully visible in the final model view')
                     if self.name == 'argus_commit' and not binding['delivered']:
                         raise ValueError('Full frozen content is not visible in the final model view')
                     if self.name in KINDS:
@@ -183,6 +205,9 @@ class ArgusTool(BaseTool):
                             if result.get('committed') is not True:
                                 raise ValueError('Missing committed business receipt')
                             binding['finished'] = True
+                            signal=binding.get('availability_signal')
+                            if signal is not None:
+                                signal.set()
                     else:
                         params: dict[str, Any]
                         if self.name == 'argus_channel_read':

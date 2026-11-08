@@ -68,6 +68,10 @@ Argus会话在应用配置中将argus加入prompt.required_contributors，正常
 - [ ] 旧轮次/重启/丢回执/取消保持；不通过删真实Session或变更生产轮次避测试。
 - [ ] 最小插件→`make test-agent`→`make test-gateway`→`make typecheck-agent`→compile/diff；真实模型与服务加载另授权。
 
+## 当前验证
+
+第一阶段v3插件贡献、窗口/历史契约、实际正文可见性与旧协议兼容已写入工作区；Agent完整1371项通过、typecheck286源文件清洁。缺失/超时必需贡献的真实Session验证阻止provider启动，完整六句正文经本地MCP只发送一次。详见[执行记录](../../../../argus/docs/spec/2026-11-03-response-oriented-channels/plan-execution-message-windows.md)。未提交、未重启服务，不宣称线上已加载。
+
 ## 第二阶段边界
 
 运行中新观察由available/read/wait和受控领取后续不可变批次处理，不能偷偷扩当前items。可以复用现有PromptUpdateEvent通知，但该阶段需要持久批次与终态停止语义；本次不实现，也不再引入旧任务永久查询。

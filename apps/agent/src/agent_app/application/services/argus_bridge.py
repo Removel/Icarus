@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from collections.abc import Callable
 from uuid import NAMESPACE_URL, uuid5
 from icarus.core.identity import SessionIdentity
 from icarus.core.runtime_update import RuntimeUpdate
@@ -29,6 +30,7 @@ class ArgusBridge:
         self.loop = None
         self.bindings: dict[str, dict] = {}
         self._live_tasks: set[str] = set()
+        self.listeners: dict[str,Callable[[str,str],bool]] = {}
         from .argus_sessions import ArgusSessions
         self.sessions = ArgusSessions(runtime, self.workspace)
         from agent_app.plugins.argus.references import References
@@ -67,6 +69,10 @@ class ArgusBridge:
     async def wake(self, wake: WakeRequest):
         self.loop = asyncio.get_running_loop()
         data = wake.model_dump()
+        # New optional fields must not change fingerprints of immutable legacy requests.
+        for key in ('window_items','history_items'):
+            if not data[key]:
+                data.pop(key)
         fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
         async with self._lock:
             existing = await self._find(wake.wake_id)
@@ -97,15 +103,19 @@ class ArgusBridge:
                     if status['commit_state'] != 'applied':
                         raise BridgeConflict('channel has an unresolved execution; reconcile before a new wake')
             task_id = uuid5(NAMESPACE_URL, 'icarus:argus:wake:' + wake.wake_id).hex
-            from agent_app.plugins.argus.presentation import render_round, semantic_subject
+            from agent_app.plugins.argus.presentation import render_round, semantic_subject, initial_task_prompt
+            current_items = wake.window_items or wake.items
+            displayed = current_items + wake.history_items
             messages, sources = await self.references.ensure(identity,
-                observation_ids=tuple(item.id for item in wake.items),
-                source_keys=tuple(dict.fromkeys(wake.channel_snapshot.source_keys + [item.source_key for item in wake.items])))
-            prompt = render_round(wake, message_refs=messages, source_refs=sources)
-            binding = {'wake':data, 'prompt':prompt, 'delivered':False, 'confirmed':[], 'finished':False,
-                       'admission_version': 1, 'view_version': 2,
+                observation_ids=tuple(item.id for item in displayed),
+                source_keys=tuple(dict.fromkeys(wake.channel_snapshot.source_keys + [item.source_key for item in displayed])))
+            body = render_round(wake, message_refs=messages, source_refs=sources)
+            prompt = initial_task_prompt(wake)
+            binding = {'wake':data, 'prompt':prompt, 'observation_prompt':body,
+                       'delivered':False, 'confirmed':[], 'finished':False,
+                       'admission_version': 1, 'view_version': 3,
                        'message_refs':messages, 'source_refs':sources,
-                       'semantic_text':semantic_subject(wake.items)}
+                       'semantic_text':semantic_subject(current_items)}
             claim = await self.append(identity, 'argus.wake', {'wake_id':wake.wake_id,'fingerprint':fingerprint,'binding':binding}, task_id)
             await self.append(identity, 'argus.submission', {'attempt': 0, 'phase': 'prepared'}, task_id)
             return await self._submit(identity, claim, SubmissionState('prepared'))
@@ -120,7 +130,7 @@ class ArgusBridge:
     async def _submit(self, identity, claim, state):
         binding, task_id = dict(claim.payload['binding']), claim.task_id
         wake = binding['wake']
-        if binding.get('view_version') == 2:
+        if binding.get('view_version',1) >= 2:
             await self.references.validate(identity, message_refs=binding['message_refs'], source_refs=binding['source_refs'])
         # Revalidate deletion/selection even on a safe retry after restart.
         await self.sessions.require(wake['channel_id'], wake['session_key'], wake['session_id'])
@@ -145,6 +155,22 @@ class ArgusBridge:
             await self.append(identity, 'argus.submission', {'attempt': attempt, 'phase': 'accepted'}, task_id)
         records, _ = await self.runtime.session_store.read_updates(identity)
         return await self._status((identity, claim, records))
+
+    async def notify(self, wake_id, session_id, binding_id, watermark):
+        async with self._lock:
+            found=await self._find(wake_id)
+            if found is None:
+                raise BridgeConflict('Unknown notification wake')
+            identity,claim,_=found
+            wake=claim.payload['binding']['wake']
+            if identity.session_id!=session_id or wake['binding_id']!=binding_id:
+                raise BridgeConflict('Notification binding mismatch')
+            task_id=claim.task_id
+            current=self.bindings.get(task_id)
+            listener=self.listeners.get(task_id)
+            notified=bool(task_id in self._live_tasks and current and not current.get('finished')
+                and listener and listener(task_id,watermark))
+            return {'notified':notified}
 
     async def status(self, wake_id):
         async with self._lock:

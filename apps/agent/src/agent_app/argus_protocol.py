@@ -69,6 +69,8 @@ class WakeRequest(WireModel):
     session_id: Id
     session_key: Id
     items: Annotated[list[Observation], Field(min_length=1, max_length=20)]
+    window_items: Annotated[list[Observation], Field(max_length=200)] = Field(default_factory=list)
+    history_items: Annotated[list[Observation], Field(max_length=50)] = Field(default_factory=list)
     argus_url: Annotated[str, Field(max_length=2048)]
 
     @field_validator('argus_url')
@@ -87,9 +89,31 @@ class WakeRequest(WireModel):
             raise ValueError('Rule SDK metadata exceeds 32 KiB')
         if len({item.id for item in self.items}) != len(self.items):
             raise ValueError('duplicate observation IDs')
+        work_ids = {item.id for item in self.items}
+        window_ids = {item.id for item in self.window_items}
+        history_ids = {item.id for item in self.history_items}
+        if len(window_ids) != len(self.window_items) or len(history_ids) != len(self.history_items):
+            raise ValueError('duplicate window/history observation IDs')
+        if self.window_items and not work_ids.issubset(window_ids):
+            raise ValueError('window must include every work observation')
+        window_by_id = {item.id:item for item in self.window_items}
+        if self.window_items and any(window_by_id[item.id] != item for item in self.items):
+            raise ValueError('window body differs from frozen work observation')
+        if history_ids & (work_ids | window_ids):
+            raise ValueError('history overlaps the current window')
+        allowed = set(self.channel_snapshot.source_keys)
+        if any(item.source_key not in allowed for item in self.window_items + self.history_items):
+            raise ValueError('window/history source outside Channel scope')
         if len(json.dumps(self.model_dump()).encode()) > 512 * 1024:
             raise ValueError('wake exceeds 512 KiB')
         return self
+
+class NotifyRequest(WireModel):
+    wake_id: Id
+    session_id: Id
+    binding_id: Id
+    watermark: Id
+
 
 class StatusRequest(WireModel):
     wake_id: Id

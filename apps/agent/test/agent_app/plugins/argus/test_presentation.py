@@ -27,6 +27,18 @@ def test_projection_exposes_semantics_not_internal_ids():
     assert semantic_subject([item]) == 'Member: Build the picture viewer'
 
 
+def test_complete_current_window_is_body_even_if_a_fragment_is_not_work():
+    from agent_app.plugins.argus.presentation import render_round
+    def item(id,text):return {'id':id,'source_key':'source','message_id':id,'content':{'text':text},'detail':{}}
+    first=item('first','有人问资金');explanation=item('explanation','我们是在找项目合作者');history=item('history','previous discussion')
+    wake={'items':[first],'window_items':[first,explanation],'history_items':[history],'channel_snapshot':{}}
+    view=json.loads(render_round(wake,message_refs={'first':'m1','explanation':'m2','history':'m3'},source_refs={'source':'s1'}).split('\n',1)[1])
+    assert [x['text'] for x in view['messages']]==['有人问资金','我们是在找项目合作者']
+    assert view['work_refs']==['m1']
+    assert [x['ref'] for x in view['history']]==['m3']
+    assert all(x['ref']!='m3' for x in view['messages'])
+
+
 def test_each_message_has_the_original_platform_reply_target():
     from agent_app.plugins.argus.presentation import render_round
     items=[]
