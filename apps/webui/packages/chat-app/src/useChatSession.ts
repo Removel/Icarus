@@ -822,6 +822,16 @@ export default function useChatSession(hash: string) {
       go({ workspace: destination });
     },
     createSession,
+    requestPersonaConsolidation: (sourceWorkspace: string, sourceSessionId: string) => {
+      const connection = client.current;
+      if (!connection || !connected || !sourceWorkspace || !sourceSessionId) return;
+      void connection
+        .request('session.consolidate_persona', {
+          workspace_path: sourceWorkspace,
+          session_id: sourceSessionId,
+        })
+        .catch(() => {});
+    },
     deleteSession,
     deleteSessions,
     deleteError,
