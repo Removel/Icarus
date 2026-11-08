@@ -208,3 +208,12 @@ def test_memory工具拒绝未知错误类型和错误归属():
     result = tools["memory_delete"].invoke({"ref": "memory:other"})
     assert result.success is False
     assert "does not belong" in result.error
+
+
+def test_correction_description_preserves_read_before_write_and_history_owner():
+    from agent_app.plugins.memory.tools import MemoryCorrectTool, MemoryReadTool
+    correct = MemoryCorrectTool(None).definition
+    read = MemoryReadTool(None).definition
+    assert "memory_read to verify the current text" in correct.description
+    assert set(correct.input_schema["properties"]) == {"ref", "content"}
+    assert "include_history" in read.input_schema["properties"]

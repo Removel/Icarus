@@ -154,7 +154,8 @@ class KnowledgeUploadTool(_KnowledgeTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "knowledge_upload",
-            "Upload and compile one or more regular files inside the current workspace.",
+            "Upload and compile one or more regular files inside the current workspace. "
+            "This writes to the knowledge base; upload only files needed for the user's task.",
             {
                 "type": "object",
                 "properties": {
@@ -189,7 +190,9 @@ class KnowledgeRecompileTool(_KnowledgeTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             "knowledge_recompile",
-            "Recompile one exact document or explicitly recompile all documents.",
+            "Recompile one exact document or explicitly recompile all documents. "
+            "This changes generated knowledge; do it only for the user's task. "
+            "Choose document OR all_documents=true, not both.",
             {
                 "type": "object",
                 "properties": {

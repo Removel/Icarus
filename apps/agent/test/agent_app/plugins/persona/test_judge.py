@@ -69,6 +69,29 @@ def test_drift_and_evolution_send_bounded_typed_questions():
     asyncio.run(run())
 
 
+def test_consolidation_judgment_preserves_full_context_and_checks_existing_observations():
+    async def run():
+        requests = []
+        def handler(request):
+            data = json.loads(request.content)
+            requests.append(data)
+            return httpx2.Response(200, json=response_for(data["questions"]))
+        judge = build_judge(handler)
+        recent = [("user", "EARLY: only for this task"), *[("assistant", "later") for _ in range(12)]]
+        persona = "core " * 500
+        try:
+            await judge.evolution_verdict(note="I am warmer", reason="preference", section="voice",
+                recent=recent, invariants=persona, existing=("I keep replies concise.",))
+            state = requests[0]["state"]
+            assert state["recent"] == [list(row) for row in recent]
+            assert state["invariants"] == persona
+            assert state["existing"] == ["I keep replies concise."]
+            assert "conflicting" in requests[0]["questions"]["in_scope"]["instructions"]
+        finally:
+            await judge.aclose()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("mode", ["timeout", "http", "malformed", "nan", "wrong_type"])
 def test_failed_calls_raise_safe_judge_unavailable_without_retries(mode):
     async def run():

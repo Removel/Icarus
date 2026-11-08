@@ -80,8 +80,11 @@ export default function ChatApp({
   const empty = !chat.transcript.items.length && !chat.loading && !chat.submitting;
   const newChat = () => {
     if (chat.busy || chat.submitting) return;
+    const sourceWorkspace = chat.workspace;
+    const sourceSessionId = chat.sessionId;
     if (narrow) setSidebarOpen(false);
     chat.guard.requestLeave(() => {
+      chat.requestPersonaConsolidation(sourceWorkspace, sourceSessionId);
       chat.clearDraft();
       chat.go({ workspace: chat.workspace });
     });

@@ -2,6 +2,17 @@
 
 首次记录：2026-10-23。
 
+## 2026-11-05：默认自动联网
+
+执行拆分见 [默认自动联网方案](plan-agent-autonomy.md)。WebUI 的“自动联网”按钮默认选中，
+表示让 Agent 按需决定搜索或读页；选中时请求省略 web_search，主动关闭才发送 false。
+使用 `icarus.chat.autoWebSearch` 保存改版后的选择，开发阶段不读取/迁移旧
+`icarus.chat.webSearch`。deep_search 偏好独立保留。
+
+首条消息、正常提交、排队统一捕获联网/深度快照；首次发送生成时间/时区，结果未知重试复用
+同一选项和 submission_id。steer 不更改运行中任务的策略；已有搜索进度、引用和历史组件复用。
+本节描述当前实现，下文保留此前适配与历史过程；验证结果见 [验证记录](plan-validation.md)。
+
 ## 原规格与本地位置
 
 用户提供的《DeepSeek 联网搜索复刻 · 实施规格书》已存在于

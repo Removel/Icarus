@@ -8,7 +8,7 @@
   "python_requires": ["typesafe-sdk>=0.7.2,<0.8"],
   "required_capabilities": [],
   "provided_capabilities": [],
-  "provided_tools": ["persona_evolve"],
+  "provided_tools": [],
   "published_events": ["prompt.contribution"],
   "consumed_events": ["input.user_input", "agent.completed"],
   "state_scopes": []

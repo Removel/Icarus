@@ -14,12 +14,12 @@ class WriteTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="write",
-            description="使用 UTF-8 覆盖写入本地文本文件",
+            description="Write UTF-8, replacing the entire file and creating missing parents. Read existing files before editing; content is the full replacement. Clipped results do not mean the write failed: inspect before retrying.",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "目标文件路径"},
-                    "content": {"type": "string", "description": "写入内容"},
+                    "path": {"type": "string", "description": "Target file path."},
+                    "content": {"type": "string", "description": "Complete file contents."},
                 },
                 "required": ["path", "content"],
                 "additionalProperties": False,

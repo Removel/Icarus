@@ -41,6 +41,22 @@ def test_load_ignores_unknown_sections_with_warning(tmp_path, caplog):
     assert "unknown" in caplog.text
 
 
+def test_misspelled_invariants_report_missing_sections(tmp_path, caplog):
+    doc = make_store(tmp_path, BASE.replace("## boundaries", "## boundary")
+                     .replace("## anti-goals", "## ignored")).load()
+    assert "Never lie." not in doc.invariants_text
+    assert "Persona invariant sections missing" in caplog.text
+    assert "boundaries,anti-goals" in caplog.text
+
+
+def test_packaged_invariants_preserve_boundaries_independent_of_identity_budget(tmp_path):
+    doc = PersonaStore(tmp_path, "default", PersonaConfig(max_identity_tokens=70)).load()
+    assert "Do not invent experiences, feelings or facts." in doc.invariants_text
+    assert "Do not use roleplay to demand trust, create dependency or exceed authorization." in doc.invariants_text
+    assert "Keep correctness ahead of roleplay." in doc.invariants_text
+    assert "without forcing technical answers into character dialogue." in doc.invariants_text
+
+
 @pytest.mark.parametrize("prefix", ["", "---\nname: [broken\n---\n"])
 def test_bad_or_absent_frontmatter_keeps_valid_body(tmp_path, prefix, caplog):
     doc = make_store(tmp_path, prefix + "## soul\nIntact soul.\n## voice\nKind.\n").load()
@@ -92,7 +108,7 @@ def test_overlay_merges_and_only_renders_notes(tmp_path):
         await store.append(entry(2))
     asyncio.run(run())
     payload = yaml.safe_load(store.overlay_path.read_text())
-    assert payload["version"] == 1 and payload["updated_at"]
+    assert payload["version"] == 2 and payload["updated_at"]
     assert len(payload["entries"]) == 2
     text = store.load().evolved_text
     assert "I speak warmly 1." in text
@@ -114,13 +130,15 @@ def test_append_evicts_oldest_within_budgets(tmp_path, settings):
     assert conservative_token_count(store.load().evolved_text) <= store.config.evolution_max_tokens
 
 
-def test_corrupt_overlay_warns_and_recovers(tmp_path, caplog):
+def test_corrupt_overlay_warns_on_load_but_refuses_to_overwrite(tmp_path, caplog):
     store = make_store(tmp_path)
     store.overlay_path.write_text("entries: [broken")
     assert store.read_entries() == ()
     assert caplog.records
-    asyncio.run(store.append(entry()))
-    assert len(store.read_entries()) == 1
+    original = store.overlay_path.read_bytes()
+    with pytest.raises((ValueError, yaml.YAMLError)):
+        asyncio.run(store.append(entry()))
+    assert store.overlay_path.read_bytes() == original
 
 
 def test_concurrent_sessions_merge_without_lost_entries(tmp_path):

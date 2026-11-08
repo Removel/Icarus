@@ -50,6 +50,7 @@
 | --- | --- | --- |
 | 记忆归属与范围 | `memory.get_context` | 可选绝对 `workspace_path`；仅返回 user_id、agent_id、run_id 和规范化路径，不创建会话、不返回凭据 |
 | 会话列表、新建、状态 | `session.list` / `session.create` / `session.get` | 传服务端 `workspace_path`，会话使用稳定 session ID；WebUI 新建传 `load_runtime: false`，首次提交再加载 Agent |
+| 新建时后台整理人格 | `session.consolidate_persona` | 现有新建动作在允许离开后传旧工作区和 session ID；不等待结果，不关闭旧会话，失败不阻断新聊天 |
 | AI 会话标题 | `session.generate_title` | 传 workspace_path、session_id；从首条已保存的用户消息生成并保存标题，返回 title，失败时为 null。列表同时提供 title、created_at、updated_at |
 | 订阅 | `session.subscribe` | 传状态返回的 workspace_key 与 session_id |
 | 恢复历史 | `session.get_history` | 每页最多 500，使用 after_sequence 游标；先订阅并缓存通知，再加载历史 |

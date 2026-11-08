@@ -45,23 +45,23 @@ class SearchHttpBackend:
             response = await self.client.post(self.endpoint + "/tools/" + name, json=payload,
                 headers={"Authorization": f"Bearer {self.api_key}"}, timeout=15 if name == "search" else 20)
             messages = {
-                401: "联网搜索服务密钥无效或已失效，请检查配置，已继续正常回答。",
-                402: "联网搜索服务账户余额不足，已继续正常回答。",
-                403: ("联网搜索服务拒绝访问，请检查接口权限，已继续正常回答。" if name == "search"
-                      else "网页抓取被服务安全策略拒绝。"),
-                429: "联网搜索请求过于频繁，请稍后重试，已继续正常回答。",
+                401: "Search API key is invalid or expired; check configuration and answer from available evidence.",
+                402: "Search service credit exhausted; answer from available evidence.",
+                403: ("Search access denied; check API permissions and answer from available evidence." if name == "search"
+                      else "Page fetch rejected by the service security policy."),
+                429: "Search rate limit reached; answer from available evidence and retry later if needed.",
             }
             if response.status_code in messages:
                 raise SearchUnavailable(messages[response.status_code])
             if response.status_code in {404, 405, 501} and name == "search":
-                raise SearchUnavailable("该中转不支持深度检索，已继续正常回答。")
+                raise SearchUnavailable("Search endpoint does not support this operation; answer from available evidence.")
             response.raise_for_status()
             return response.json()
         except SearchUnavailable:
             raise
         except Exception:
             # Do not put response bodies, URLs or credentials into public errors.
-            raise SearchUnavailable("联网搜索暂不可用，已继续正常回答。") from None
+            raise SearchUnavailable("Search unavailable; answer from available evidence.") from None
 
     async def search(self, query, question, started=None):
         result = await self._post("search", {"query": query[:128], "count": 10,

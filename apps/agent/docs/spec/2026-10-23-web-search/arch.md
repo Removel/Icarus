@@ -1,6 +1,7 @@
 # Agent 按需联网工具
 
-本文描述当前源码实现。改造目标、评审边界与任务拆分见 [实施计划](plan.md)，
+本文描述当前源码实现。默认自主联网的任务拆分见 [执行方案](plan-agent-autonomy.md)，
+此前工具化过程见 [实施计划](plan.md)，
 实际检查及未完成的外部验收见 [验证记录](plan-validation.md)。
 请求选项由 [Gateway](../../../../gateway/docs/spec/2026-10-23-web-search/arch.md)
 校验；展示由 [WebUI](../../../../webui/docs/spec/2026-10-23-web-search/plan.md) 负责。
@@ -31,20 +32,30 @@ Blackboard 和供应商适配层没有新增搜索专用逻辑。主 Agent 通�
 
 ## 输入上下文与执行权限
 
-`UserInputEvent` 到达后，插件先按 `task_id` 保存原问题及严格布尔开关快照，再立即
-发布 `status=completed` 的 `ContextContributionEvent`。贡献包含本轮时间、联网是否
-启用、深度查证及引用指引，不包含预取资料，也不发起规划或搜索请求。
+AgentRuntime 和 UserInputPlugin 在加载会话/入队前复用应用契约层的
+`validate_search_request_options()`，校验显式 web_search/deep_search 必须是严格 bool，
+不补入默认字段、不改变提交指纹的原始选项。
+
+`UserInputEvent` 到达后，插件按 `task_id` 保存原问题及有效开关快照：web_search
+缺省或 true 都允许按需调用；false 显式关闭；deep_search 缺省为 false。
+随后立即发布 `status=completed` 的 `ContextContributionEvent`，只贡献本轮时间、联网
+可用/关闭/缺配置及深度指引；具体工具用法、引用和信任边界由工具定义及结果承接。
+不包含预取资料，也不发起规划或搜索请求。
 这只是初始上下文准备完成；之后仍可执行多个工具操作。
+
+对绕过正常提交直接投递的非法选项，插件保存禁用状态并发布 failed contribution，
+让 required context 得到终态，避免挂起；后续工具调用仍被拒绝。
 
 SessionRuntime 保留 `web-search` 为 required context source 的等待关系：任务快照
 建立、完成态贡献、context.ready、Agent 启动、工具调用按既有事件流程衔接。
 动态内容进入当前 User Prompt，稳定 System Prompt 不变。不开工具的回答零搜索请求。
 
 执行入口要求插件仍接纳工作、任务快照存在且有效、TaskChannel 为 RUNNING、
-本轮 `web_search is True`、搜索 Key 已配置。未知、结束、取消或关闭的任务均拒绝，
+本轮有效策略允许、搜索 Key 已配置。未知、结束、取消或关闭的任务均拒绝，
 不借用“最近任务”。发现或加载工具不代表启用联网；即使加载成功，关闭开关或缺少 Key 仍在
-业务执行入口拒绝，且不发送 HTTP。User Prompt 在启用时给出当前插件 scope 与桥接调用方式，
-关闭时明确提示调用会失败。
+业务执行入口拒绝，且不发送 HTTP。User Prompt 在可用时给出当前插件 scope 及每个 Run
+重新发现的指引，关闭或缺 Key 时明确提示不可用。省略选项的 TUI/进程内调用同样适用，
+不需要客户端先开启开关；模型不调用工具时仍是零搜索请求。
 该开关仅约束这两个联网工具；Bash 等其它工具的网络权限不由此控制。
 
 两个业务 schema 均拒绝额外参数。ToolExecutor 先解析并剥离合法的 `_execution`

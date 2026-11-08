@@ -25,6 +25,15 @@ def gateway(page, *, reject=False, disconnect=False, records=None, sessions=None
                 state['sockets'].append(socket)
             state['calls'].append(call)
             result = {}
+            if method == 'session.consolidate_persona':
+                if state.get('hold_consolidation'):
+                    state['pending_consolidation'] = (socket, call['id'])
+                    return
+                if state.get('reject_consolidation'):
+                    socket.send(json.dumps({'jsonrpc': '2.0', 'id': call['id'], 'error': {
+                        'code': state.get('consolidation_error_code', -32000), 'message': '整理暂不可用'}}))
+                    return
+                result = {'session_id': params['session_id'], 'status': 'accepted', 'request_id': 'persona-request', 'reason': None}
             if method == 'session.list':
                 result = {'sessions': state['sessions']}
             elif method in ('session.get', 'session.create'):

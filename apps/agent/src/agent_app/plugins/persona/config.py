@@ -1,6 +1,7 @@
 """Global persona configuration; external services are opt-in."""
 
 import math
+import logging
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
@@ -23,7 +24,11 @@ class PersonaConfig(BaseModel):
     evolution_max_tokens: StrictInt = Field(default=600, ge=1)
     evolution_max_note_chars: StrictInt = Field(default=300, ge=1, le=300)
     evolution_max_reason_chars: StrictInt = Field(default=500, ge=1, le=500)
-    evolution_min_turns_between_accepts: StrictInt = Field(default=10, ge=1)
+    evolution_enabled: StrictBool = False
+    evolution_model_role: str = Field(default="perception", min_length=1)
+    evolution_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    evolution_max_input_tokens: StrictInt = Field(default=12000, ge=1)
+    evolution_max_candidates: StrictInt = Field(default=5, ge=1, le=10)
     relationship_enabled: StrictBool = False
     relationship_endpoint: str = "http://127.0.0.1:8767"
     relationship_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
@@ -31,6 +36,15 @@ class PersonaConfig(BaseModel):
     max_soul_tokens: StrictInt = Field(default=400, ge=1)
     max_relationship_tokens: StrictInt = Field(default=200, ge=1)
     max_dynamic_tokens: StrictInt = Field(default=200, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_tool_config(cls, value):
+        if isinstance(value, dict) and "evolution_min_turns_between_accepts" in value:
+            value = dict(value)
+            value.pop("evolution_min_turns_between_accepts")
+            logging.getLogger(__name__).warning("Removed persona tool cooldown setting ignored")
+        return value
 
     @field_validator("jev_base_url", "relationship_endpoint")
     @classmethod
