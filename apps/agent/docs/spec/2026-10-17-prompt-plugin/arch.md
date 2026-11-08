@@ -1,6 +1,6 @@
 # 提示词插件｜当前实现
 
-> 2026-11-05：本文按当前源码与测试更新。原设计见 [plan.md](plan.md)，本轮交付与测量见 [英文提示词和上下文交付](../2026-11-04-prompt-guidance/plan-context-delivery.md)。
+> 2026-11-05：本文按当前源码与测试更新。原设计见 [plan.md](plan.md)，本轮交付见 [提示词实施计划](../2026-11-04-prompt-guidance/plan.md)，测量见 [验证记录](../2026-11-04-prompt-guidance/plan-validation.md)。
 
 ## 职责与结构
 
@@ -108,7 +108,7 @@ class ExamplePlugin(BasePlugin):
 
 Skill 的轻量目录不再放入 System；现有 scanner 在 list/search 时读取最多16KiB YAML frontmatter，不读取后续正文。用户正文、工作区规范、自定义人格、Skill 文件和第三方 MCP 描述保持原文。
 
-仓库维护的 base、指导、工具/字段描述、摘要、默认人格、JEV 判据和标题系统指令统一英文，回复/标题仍跟随用户语言。英文字符数与真实模型 token 不是同一口径；生产 Prompt 总预算12288、单节8192未变。base 测试的文本长度护栏从600调整到1800，不是线上预算扩容。完整请求比较见 [本轮交付](../2026-11-04-prompt-guidance/plan-context-delivery.md)，历史轮次见 [process.md](../2026-11-04-prompt-guidance/process.md)。
+仓库维护的 base、指导、工具/字段描述、摘要、默认人格、JEV 判据和标题系统指令统一英文，回复/标题仍跟随用户语言。英文字符数与真实模型 token 不是同一口径；生产 Prompt 总预算12288、单节8192未变。base 测试的文本长度护栏从600调整到1800，不是线上预算扩容。完整请求比较与分阶段验证见 [验证记录](../2026-11-04-prompt-guidance/plan-validation.md)。
 
 ## 限制
 

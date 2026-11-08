@@ -38,7 +38,7 @@ Web 开关只约束这两个工具，不扩展为 Bash/MCP 等其它工具的网
   开始前已 fetch 并确认包含 `upstream/feature` 的 `c019e9a`；未混用 origin 基线，
   未切换分支、合并、提交或推送。
 - 英文提示词/上下文按需交付改动在实施前已提交，见
-  [对应计划](../2026-11-04-prompt-guidance/plan-context-delivery.md)。本轮基于该实现做最小补丁，
+  [对应计划](../2026-11-04-prompt-guidance/plan.md)。本轮基于该实现做最小补丁，
   保留提示词交付时机、英文指导及工具加载完整性；未覆盖其它工作区产物。
 - 不修改 ReActAgent、通用 Plugin Runtime、Blackboard、供应商适配协议、搜索后端协议、
   Event 字段或数据库结构。动态能力状态留在当前 User Prompt，工具规则在现有工具面交付。

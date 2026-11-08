@@ -1,6 +1,6 @@
 # Persona 插件设计
 
-2026-11-05：本文依据 `src/agent_app/plugins/persona/`、对应单测与 SessionRuntime 集成测试更新当前实现。原实施顺序见 [plan.md](plan.md)，本轮注入位置、时机与验收见 [上下文交付](../2026-11-04-prompt-guidance/plan-context-delivery.md)。
+2026-11-05：本文依据 `src/agent_app/plugins/persona/`、对应单测与 SessionRuntime 集成测试更新当前实现。原实施顺序见 [plan.md](plan.md)，本轮注入位置、时机与验收见 [上下文交付](../2026-11-04-prompt-guidance/plan.md)。
 
 ## 1. 定位与目标
 
