@@ -36,7 +36,7 @@ def assert_frozen_tool_surface(calls):
     assert all(definitions == surface for _, definitions in calls)
 
 
-@pytest.mark.parametrize("mode", ["off", "skip", "missing-key", "timeout", "on", "direct", "search-failed", "empty", "fetch-failed", "cancel-search", "cancel-fetch"])
+@pytest.mark.parametrize("mode", ["off", "deep-off", "skip", "missing-key", "timeout", "on", "default", "direct", "search-failed", "empty", "fetch-failed", "cancel-search", "cancel-fetch"])
 def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
     async def empty_recall(self, query, **kwargs):
         return MemoryRecallResult((), query)
@@ -82,7 +82,7 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
             steps = []
         else:
             steps = [web_tool_step("web_search", {"query": "first query"}, 1)]
-        if mode == "on":
+        if mode in {"on", "default"}:
             steps += [web_tool_step("web_fetch", {"url": "https://example.com/a"}, 2),
                 web_tool_step("web_search", {"query": "followup"}, 3)]
         if steps:
@@ -92,8 +92,10 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
         runtime.runtime_host.get_plugin("agent").agent_factory.llm_factory.create_llm = lambda **kwargs: llm
         system = runtime.runtime_host.get_plugin("prompt")._system_prompt
         try:
-            accepted = await runtime.submit("当前资料", request_options={"web_search": mode != "off",
-                "deep_search": False, "local_time": "2026-10-26T20:00:00+08:00", "time_zone": "Asia/Shanghai"})
+            options = {"local_time": "2026-10-26T20:00:00+08:00", "time_zone": "Asia/Shanghai"}
+            if mode not in {"default", "direct", "skip", "missing-key"}:
+                options.update(web_search=mode not in {"off", "deep-off"}, deep_search=mode == "deep-off")
+            accepted = await runtime.submit("当前资料", request_options=options)
             if mode.startswith("cancel"):
                 await asyncio.wait_for(entered.wait(), 5)
                 await runtime.cancel_task(accepted.task_id)
@@ -117,7 +119,7 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
             assert "当前时间" not in system
             assert all(set(u.payload) == {"status", "total", "queries", "sources", "pages", "browsing", "notice"}
                 for u in progress)
-            if mode in {"off", "skip", "missing-key"}:
+            if mode in {"off", "deep-off", "skip", "missing-key"}:
                 assert requests == [] and progress == []
             elif mode.startswith("cancel"):
                 assert stopped.is_set()
@@ -135,13 +137,13 @@ def test_real_agent_drives_tools_and_progress(tmp_path, monkeypatch, mode):
             else:
                 last = progress[-1].payload
                 assert len(last["pages"]) == 1 and last["browsing"] is False
-                assert last["total"] == (4 if mode == "on" else 0)
+                assert last["total"] == (4 if mode in {"on", "default"} else 0)
                 assert last["sources"][0]["citeIndex"] == 1
                 assert "content" not in str(last["sources"])
             assert plugin.tasks == {}
             assert not any(u.type == "task.error" and u.payload.get("fatal") for u in updates)
             # Tool messages really return to the next model step, rather than prefilled User Prompt.
-            if mode == "on":
+            if mode in {"on", "default"}:
                 assert len(llm.calls) == 5
                 assert any(m.role == "tool" for m in llm.calls[2][0])
                 assert "body facts" in str(llm.calls[3][0])

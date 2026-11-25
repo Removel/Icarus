@@ -3,6 +3,58 @@
 日期：2026-10-26。实现基线：`0cb13f8`，工作分支保持 `feat/webui`。
 与 [计划](plan.md)、[当前架构](arch.md) 配套阅读。
 
+## 2026-11-06：用户验收与 PR 交付
+
+用户确认本轮 WebSearch 改造验收通过，并授权提交 PR。TUI 中引用编号的显示调整
+明确留到后续 WebUI 分支处理，本轮未修改 TUI、引用格式或历史消息正文。
+用户未提供逐项人工调用日志；此确认不替代下文远端抓取防护的专项证据，也不代表代理
+执行过真实模型或付费服务测试。
+
+当前分支 `feat/agent` 已有面向 `Removel/Icarus:feature` 的 PR #17，包含此前提示词改造。
+本轮以分应用实现/测试提交及独立文档提交追加到同一 PR，并更新其整体范围和验证说明；
+不合并或部署。无关 `.gitignore` 修改及本地 HTML 实验文件不纳入本轮提交。
+
+## 2026-11-05：默认允许 Agent 按需联网
+
+实施基线 `96006ec`，分支 `feat/agent`；执行细节见 [本轮方案](plan-agent-autonomy.md)。
+开始前 fetch 并确认当前包含 `upstream/feature`（c019e9a），未混用 origin 基线，未创建分支、
+提交或推送。此前提示词改动已提交，继续保留英文及按需交付规则。
+
+AgentRuntime/UserInputPlugin 在加载会话/入队前复用应用契约的严格 bool 校验；不补选项字段。
+WebSearchPlugin 缺省允许、false 禁用；非法直接输入事件发布 failed context 并保留禁用状态，
+缺 Key 的动态指引明确不可用。工具、预算、来源、取消和延迟加载继续沿用。
+Gateway 保留字段缺失，WebUI 默认“自动联网”，开发阶段不迁移旧开关记录。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Windows 新增插件目标行为用例，改动前 | 18 failed、3 passed；缺省禁用、非法事件未失败、缺 Key 指引不准确 |
+| Windows 插件工具/输入队列/应用提交专项，改动后 | 91 passed in 5.79s |
+| Windows 联网插件完整专项 | 98 passed in 50.85s |
+| 原生 WSL `make test-agent` | **1352 passed in 26.67s**，脚本 compileall 同时通过 |
+| 原生 WSL `make test-gateway` | **77 passed in 10.17s** |
+| 原生 WSL `make typecheck-agent` | **274 个源文件通过** |
+| Windows 源码/测试 compileall、diff 检查 | 通过 |
+| WebUI 搜索专项 / Windows 全套 | 19 passed / 366 passed、13 skipped、7 个基线可复现失败 |
+
+最终标准检查在 `/home/guoshangyong/icarus-web-autonomy-9fj6v8ep` 运行：HEAD archive 加源码/
+测试补丁，应用各自独立 editable 环境，Python 3.14，仅注释空 .env，无开发机凭据或数据库。
+原始日志在本机 `/tmp/icarus-web-agent-test.log`、`/tmp/icarus-web-gateway-test.log`。
+复制环境起初缺少已声明的 typesafe-sdk，补齐 `typesafe-sdk==0.7.2` 后重跑，两个环境 pip check
+均通过；12 个修改/新增源码及测试文件与主工作树逐文件 SHA 校验一致。
+初次 collection/插件加载失败不算验收。主工作树 Windows mypy 报告 4 个无关文件中
+13 个 POSIX 接口平台差异；不改动无关代码，采用原生 Linux 标准检查结论。
+挂载盘 `/mnt/f` 的重复 Agent 全套耗时过长，原生副本全套通过后中止，未将部分结果计作通过；
+挂载盘类型检查也已完成，274 个源文件通过。
+
+新增默认/直接 Fetch/跳过/深度关闭场景复用生产 ReAct 工具循环，验证结果传回后续模型消息、
+冻结工具面、新 Run 重新加载、来源与历史、预算和取消。提交与输入测试验证非法类型不创建任务，
+缺省重试保持幂等，改为显式 false 返回冲突。Gateway socket 专项另外验证完全省略 options
+的 TUI 请求形状；详见 [Gateway 记录](../../../../gateway/docs/spec/2026-10-23-web-search/plan-validation.md)。
+
+WebUI 检查与界面证据见 [WebUI 记录](../../../../webui/docs/spec/2026-10-23-web-search/plan-validation.md)。
+未执行真实模型、真实 Search/Fetch、远端 DNS/IP/重定向防护验收，未重启实际服务或改动配置；
+下文旧版本的真实服务待验边界仍保留，不把预置模型调用序列称为模型已学会自主检索。
+
 ## 2026-10-28：动态工具加载集成适配
 
 合入工具面延迟加载后，默认 Session 只暴露常驻九工具；本插件不再直接出现在模型 tools 列表。

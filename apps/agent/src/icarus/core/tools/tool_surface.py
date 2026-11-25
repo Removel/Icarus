@@ -39,6 +39,7 @@ class ToolSurfaceCatalog:
     _by_scope: Mapping[str, tuple[ToolSurfaceEntry, ...]] = field(
         default_factory=lambda: MappingProxyType({}), repr=False
     )
+    _guidance: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}), repr=False)
 
     @property
     def entries(self) -> tuple[ToolSurfaceEntry, ...]:
@@ -49,6 +50,7 @@ class ToolSurfaceCatalog:
         cls,
         pairs: Iterable[tuple[str, str]],
         registry: ToolRegistry,
+        guidance: Mapping[str, str] | None = None,
     ) -> Self:
         entries = []
         for name, plugin_id in sorted(pairs, key=lambda pair: (pair[1], pair[0])):
@@ -66,7 +68,16 @@ class ToolSurfaceCatalog:
             )
             for plugin_id in sorted({entry.plugin_id for entry in entries})
         }
-        return cls(tuple(entries), MappingProxyType(by_scope))
+        selected = {}
+        for scope, text in (guidance or {}).items():
+            if not isinstance(text, str):
+                raise TypeError("Tool scope guidance must be a string")
+            if scope in by_scope and text:
+                selected[scope] = text
+        return cls(tuple(entries), MappingProxyType(by_scope), MappingProxyType(selected))
+
+    def guidance(self, scope: str) -> str:
+        return self._guidance.get(scope, "")
 
     def search(self, scope: str) -> tuple[ToolDefinition, ...]:
         return tuple(

@@ -47,6 +47,23 @@ async def wait_until(predicate, timeout: float = 1) -> None:
     await asyncio.wait_for(poll(), timeout=timeout)
 
 
+@pytest.mark.parametrize("field", ["web_search", "deep_search"])
+@pytest.mark.parametrize("value", [None, 0, 1, "true", [], {}])
+def test_invalid_search_options_never_enter_input_queue(field, value):
+    async def run():
+        plugin = UserInputPlugin("user-input", SessionStub())
+        await plugin.start()
+        try:
+            with pytest.raises(ValueError, match=field):
+                await plugin.submit("hello", task_id="invalid", request_options={field: value})
+            assert plugin.task_channels.get("invalid") is None
+            assert plugin._outstanding_count == 0
+            assert plugin._queue.empty()
+        finally:
+            await plugin.stop()
+    asyncio.run(run())
+
+
 def test_user_input_plugin_fifo并返回queue_position():
     async def run():
         manager = PluginManager()

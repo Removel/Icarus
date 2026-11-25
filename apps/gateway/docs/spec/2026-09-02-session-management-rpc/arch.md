@@ -189,3 +189,9 @@ Gateway 不需要知道哪个连接是“当前 TUI”。连接断开不取消 T
 `session.delete` 使用与 `session.get` 相同的 `workspace_path`、`session_id` 参数，调用 `AgentRuntime.delete_session`。复用 `DiscardSessionResult` 与 `DiscardEmptySessionResultModel`，返回 `discarded`、`busy` 或 `not_found`。它允许删除非空会话；`session.discard_empty` 仍拒绝非空会话。Gateway 不直接操作数据库或运行时注册表。
 
 `session.generate_title` 使用 SessionParams 调用 AgentRuntime.generate_session_title，返回 title 字符串或 null。模型失败由应用层回退，不把供应商异常传给浏览器；会话不存在和停止中的错误复用既有映射。公共 SessionSummaryModel 增加可选 title、created_at、updated_at，保留 first_user_input 字段与旧参数。当前 TUI 客户端通过同一公共模型解析新增字段，原摘要展示保持兼容。
+
+## 新建对话时的可选人格整理请求（2026-11-08）
+
+`session.consolidate_persona` 复用 `SessionParams`，显式传入旧 `workspace_path/session_id`，调用 `AgentRuntime.request_persona_consolidation`，返回 `session_id/status/request_id/reason`。`status` 为 `accepted/already_running/skipped`；接收只表示应用内任务已登记，不代表人格已更新。Gateway 不等待模型，不提供本轮完成通知或结果查询。
+
+该方法独立于 `session.create`、历史选择、连接清理和 unload，不改变旧会话的可输入状态。并发去重、历史快照和模型任务由 Agent 应用层处理，Gateway 仅做参数校验、转发和现有错误映射。当前由 WebUI 既有新建动作尽力调用；协议与验证见[接入计划](../2026-11-08-persona-consolidation/plan.md)。

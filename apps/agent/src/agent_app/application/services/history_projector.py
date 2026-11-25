@@ -4,13 +4,47 @@ from __future__ import annotations
 
 
 from pathlib import Path
+from collections.abc import Sequence
+from typing import Literal
 
 from icarus.core.identity import SessionIdentity
+from agent_app.contracts.persona import PersonaEvidence, PersonaSnapshot
 from agent_app.application.repositories.session_store import SessionNotFoundError
 from icarus.core.runtime_update import RuntimeUpdate
 
 
 from agent_app.application.services.common import _coalesce_legacy_assistant_deltas
+
+
+def persona_snapshot(identity: SessionIdentity, persona_id: str,
+                     records: Sequence[RuntimeUpdate], start_sequence: int,
+                     end_sequence: int) -> PersonaSnapshot:
+    """Project only persisted user evidence and successful final assistant text."""
+    selected = [item for item in records if item.sequence is not None and item.sequence <= end_sequence]
+    statuses = {item.task_id: str(item.payload["status"]) for item in selected
+                if item.type == "task.finished"}
+    if any(item.task_id and item.task_id not in statuses for item in selected):
+        raise ValueError("history_busy")
+    final_assistants = {item.task_id: item.sequence for item in selected
+                        if item.type == "assistant.message"}
+    messages = []
+    for item in selected:
+        assert item.sequence is not None
+        if item.sequence <= start_sequence:
+            continue
+        role: Literal["user", "assistant"]
+        if item.type in {"user.message", "user.correction"}:
+            role = "user"
+        elif (item.type == "assistant.message" and statuses.get(item.task_id) == "completed"
+              and final_assistants.get(item.task_id) == item.sequence
+              and item.payload.get("has_tool_calls") is not True):
+            role = "assistant"
+        else:
+            continue
+        text = item.payload.get("text")
+        if isinstance(text, str) and text.strip():
+            messages.append(PersonaEvidence(item.sequence, role, text, item.task_id, statuses.get(item.task_id)))
+    return PersonaSnapshot(identity, persona_id, start_sequence, end_sequence, tuple(messages))
 
 
 class HistoryProjector:

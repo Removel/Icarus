@@ -60,6 +60,8 @@ def test_tool_search命中功能面返回完整定义和加载metadata():
     assert entry["input_schema"]["required"] == ["path"]
     assert entry["input_schema"]["additionalProperties"] is False
     assert "_execution" not in entry["input_schema"]
+    assert "_execution.max_output_tokens" in tool.definition.description
+    assert "without granting permission" in tool.definition.description
 
 
 def test_search精确name及最终完整性逐项检查():
@@ -162,3 +164,43 @@ def test_tool_search参数错误和异步行为与同步一致():
     assert asynced.success == synced.success
     assert asynced.output == synced.output
     assert asynced.metadata["tools_loaded"] == synced.metadata["tools_loaded"]
+
+
+def test_loading_requires_complete_scope_guidance_and_definitions_sync_and_async():
+    registry = ToolRegistry()
+    registry.register(StubTool("one", "Read alpha."))
+    catalog = ToolSurfaceCatalog.build([("one", "alpha")], registry, {"alpha": "Inspect before writing."})
+    tool = ToolSearchTool(catalog)
+    result = tool.invoke({"query": "alpha", "name": "one"})
+    assert result.output["scope_guidance"] == "Inspect before writing."
+    assert tool.finalize_loaded_tools(result).metadata["tools_loaded"] == ["one"]
+    assert asyncio.run(tool.ainvoke({"query": "alpha", "name": "one"})).output == result.output
+    for missing in (None, "Inspect"):
+        clipped = deepcopy(result.output)
+        if missing is None:
+            clipped.pop("scope_guidance")
+        else:
+            clipped["scope_guidance"] = missing
+        candidate = ToolExecutionResult(True, clipped, metadata=result.metadata)
+        assert tool.finalize_loaded_tools(candidate).metadata["tools_loaded"] == []
+
+
+def test_executor_clipped_guidance_prevents_loading_and_larger_budget_recovers():
+    async def run(asynchronous):
+        registry = ToolRegistry()
+        registry.register(StubTool("one", "Read alpha."))
+        guidance = "Keep all required scope rules. " * 100
+        registry.register(ToolSearchTool(ToolSurfaceCatalog.build([("one", "alpha")], registry, {"alpha": guidance})))
+        executor = ToolExecutor(registry)
+        async def execute(budget):
+            calls = [ToolCall("s", "tool_search", {"query": "alpha", "name": "one",
+                "_execution": {"max_output_tokens": budget}})]
+            results = await executor.aexecute_many(calls) if asynchronous else executor.execute_many(calls)
+            return results[0][1]
+        clipped = await execute(512)
+        assert clipped.metadata["tools_loaded"] == []
+        recovered = await execute(5000)
+        assert recovered.output["scope_guidance"] == guidance
+        assert recovered.metadata["tools_loaded"] == ["one"]
+    for asynchronous in (False, True):
+        asyncio.run(run(asynchronous))

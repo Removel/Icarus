@@ -37,3 +37,10 @@ class UnloadResultModel(DomainWireModel):
     workspace_key: str
     session_id: str
     status: Literal["unloaded", "already_unloaded", "busy", "not_found"]
+
+
+class PersonaConsolidationRequestModel(DomainWireModel):
+    session_id: str
+    status: Literal["accepted", "already_running", "skipped"]
+    request_id: str | None = None
+    reason: str | None = None

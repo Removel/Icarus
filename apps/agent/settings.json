@@ -19,6 +19,7 @@
         "required_contributors": ["persona"]
       },
       "persona": {
+        "evolution_enabled": true,
         "jev_enabled": true,
         "relationship_enabled": true
       },

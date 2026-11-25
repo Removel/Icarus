@@ -51,26 +51,26 @@ class BashTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="bash",
-            description="使用 Bash 执行本地命令并返回退出码和输出",
+            description="Run a local Bash command; inspect its exit code and output. Use background_process for services or long jobs. A timeout, nonzero exit or partial output is not proof of success.",
             input_schema={
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "需要执行的 Bash 命令",
+                        "description": "Bash command to execute.",
                     },
                     "workdir": {
                         "type": "string",
-                        "description": "可选工作目录",
+                        "description": "Optional working directory.",
                     },
                     "timeout": {
                         "type": "number",
                         "exclusiveMinimum": 0,
-                        "description": "可选超时秒数",
+                        "description": "Optional timeout in seconds.",
                     },
                     "parallel": {
                         "type": "boolean",
-                        "description": "确认命令与相邻调用无资源冲突时设为 true",
+                        "description": "True only when this command has no resource conflicts with adjacent calls.",
                         "default": False,
                     },
                 },

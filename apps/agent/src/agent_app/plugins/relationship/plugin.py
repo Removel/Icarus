@@ -9,7 +9,7 @@ from icarus.core.plugin import BasePlugin
 from agent_app.plugins.relationship.backend import RelationshipBackend, RelationshipBackendError
 from agent_app.contracts.prompt import PromptSection
 from agent_app.plugins.relationship.config import RelationshipConfig
-from agent_app.plugins.relationship.prompts import RELATIONSHIP_GUIDANCE
+from agent_app.plugins.relationship.prompts import RELATIONSHIP_DISCOVERY, RELATIONSHIP_GUIDANCE
 from agent_app.plugins.relationship.models import PersonSummary
 
 
@@ -24,7 +24,10 @@ class RelationshipPlugin(BasePlugin):
         return False
 
     def static_prompt_sections(self):
-        return (PromptSection("relationship.guidance", "session", RELATIONSHIP_GUIDANCE),)
+        return (PromptSection("relationship.guidance", "session", RELATIONSHIP_DISCOVERY),)
+
+    def tool_scope_guidance(self):
+        return RELATIONSHIP_GUIDANCE
 
     def build_tools(self):
         from agent_app.plugins.relationship.tools import create_relationship_tools

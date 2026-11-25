@@ -15,7 +15,7 @@ def test_mcp_guidance_is_static_session_and_configuration_only(configured):
         content = sections[0].content
         assert "mcp_tool_search" in content
         assert "tool_ref" in content
-        assert "不代表" in content
+        assert "not proof" in content
     else:
         assert sections == ()
     assert not bridge.is_running

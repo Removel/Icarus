@@ -41,6 +41,38 @@ def test_missing_files_are_optional_and_nested_files_are_not_discovered(tmp_path
     assert load(tmp_path) is None
 
 
+@pytest.mark.parametrize("raw,budget,reason", [
+    (b"", 100, "empty"), (b"\xff", 100, "invalid_utf8"),
+    (b"x" * 101, 100, "section_budget"), (b"x" * 301, 100, "byte_limit"),
+])
+def test_omission_logs_reason_and_budget_without_body(tmp_path, caplog, raw, budget, reason):
+    (tmp_path / "AGENTS.md").write_bytes(raw)
+    assert load(tmp_path, max_tokens=budget) is None
+    assert f"reason={reason}" in caplog.text
+    assert "max_tokens=100" in caplog.text
+    assert "file=AGENTS.md" in caplog.text
+    assert str(tmp_path) not in caplog.text
+
+
+@pytest.mark.parametrize("character,count", [("中", 8192), ("😀", 6144)])
+def test_multibyte_workspace_exact_budget_is_loaded(tmp_path, character, count):
+    (tmp_path / "AGENTS.md").write_bytes((character * count).encode("utf-8"))
+    assert load(tmp_path, max_tokens=8192).content == character * count
+
+
+def test_unreadable_workspace_reason_does_not_leak_exception(tmp_path, caplog, monkeypatch):
+    from pathlib import Path
+    (tmp_path / "AGENTS.md").write_bytes(b"PRIVATE-BODY")
+
+    def denied(*args, **kwargs):
+        raise PermissionError("PRIVATE-EXCEPTION")
+
+    monkeypatch.setattr(Path, "open", denied)
+    assert load(tmp_path) is None
+    assert "reason=unreadable" in caplog.text
+    assert "PRIVATE" not in caplog.text
+
+
 def test_workspace_symlink_cannot_read_outside_root(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

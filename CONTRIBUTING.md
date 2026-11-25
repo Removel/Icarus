@@ -84,6 +84,19 @@ counterpart just to fill the directory. Templates are in `docs/templates/spec/`.
 Architecture documents describe verified source/test behavior; distinguish proposed
 changes from implemented behavior and update descriptions when code evolves.
 
+Keep `plan.md` as the feature's current scope, decisions, steps, and status. Add a
+`plan-<purpose>.md` only for a distinct plan or acceptance contract that remains useful
+to maintain; consolidate superseded rounds instead of adding another current entry.
+Validation records retain the source revision, commands, results, and limitations.
+Link architecture details to their existing owner instead of copying them into each plan.
+
+Spec directories hold maintained Markdown documents. Keep reusable probes in the owning
+application's `scripts/`; write generated measurements, logs, test reports, and local
+investigation archives to an ignored application directory (Agent uses `.artifacts/`).
+Keep PR drafts and conversation/process transcripts out of specs. Cite reference sources
+with their revision or access date and record the adopted decisions rather than retaining
+full research copies. Git history preserves superseded documents.
+
 ## Skills
 
 `.agents/skills/` contains development-time references and workflows. Root `skills/`

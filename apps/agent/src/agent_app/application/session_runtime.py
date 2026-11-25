@@ -17,7 +17,7 @@ from icarus.core.identity import SessionIdentity
 from icarus.core.tools import ToolRegistry
 from icarus.core.tools.tool_execute import ToolExecuteTool
 from icarus.core.tools.tool_search import ToolSearchTool
-from icarus.core.tools.tool_surface import ToolSurfaceCatalog
+from icarus.core.tools.tool_surface import RESIDENT_TOOLS, ToolSurfaceCatalog
 from agent_app.config import ConfigModel
 from icarus.core.models.messages import Message
 from icarus.core.runtime_update import RuntimeUpdate
@@ -26,7 +26,7 @@ from icarus.core.runtime_update import RuntimeUpdate
 UpdatePublisher = Callable[[RuntimeUpdate], Awaitable[None]]
 
 
-from agent_app.contracts.prompt import PromptContributor, PromptError
+from agent_app.contracts.prompt import PromptContributor, PromptError, ToolGuidanceContributor
 from agent_app.plugins.prompt.base_prompt import DEFAULT_SYSTEM_PROMPT
 from agent_app.plugins.prompt.composer import prompt_context_block
 from icarus.core.tools.result_budget import conservative_token_count
@@ -204,13 +204,25 @@ class SessionRuntime(SessionHost):
         from agent_app.plugins.prompt.plugin import PromptPlugin
         if host.graph_snapshot is None:
             raise RuntimeError("Runtime graph snapshot is unavailable")
-        catalog = ToolSurfaceCatalog.build(
-            host.graph_snapshot.tools, self.tool_registry
-        )
+        prompt = next(r.plugin for r in host.graph.registrations.values() if isinstance(r.plugin, PromptPlugin))
+        deferred_scopes = {owner for name, owner in host.graph_snapshot.tools
+                           if name not in RESIDENT_TOOLS and self.tool_registry.get(name) is not None}
+        guidance = {}
+        for plugin_id, registration in host.graph.registrations.items():
+            if plugin_id in deferred_scopes and isinstance(registration.plugin, ToolGuidanceContributor):
+                text = registration.plugin.tool_scope_guidance()
+                limit = prompt.config.max_section_tokens
+                if not isinstance(text, str) or conservative_token_count(text) > limit:
+                    raise PromptError("prompt_invalid", "Tool scope guidance is invalid or exceeds its budget")
+                guidance[plugin_id] = text
+        catalog = ToolSurfaceCatalog.build(host.graph_snapshot.tools, self.tool_registry, guidance)
         self.tool_search.bind_catalog(catalog)
         self.tool_execute.bind_registry(self.tool_registry)
+        missing = [name for name in RESIDENT_TOOLS if self.tool_registry.get(name) is None]
+        if missing:
+            self.logger.warning("Session resident tools missing: names=%s; prompt guidance may describe unavailable capabilities",
+                                ",".join(missing))
         active = set(host.graph.registrations)
-        prompt = next(r.plugin for r in host.graph.registrations.values() if isinstance(r.plugin, PromptPlugin))
         boards = [r.plugin for r in host.graph.registrations.values() if isinstance(r.plugin, BlackboardPlugin)]
         if not boards:
             raise PromptError("prompt_source_failed", "Prompt context consumer is unavailable")

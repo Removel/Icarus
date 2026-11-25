@@ -139,9 +139,9 @@ def test_builtin_plugin_guidance_reaches_system_once_not_user_context(tmp_path):
         assert f"## session/" in system
         assert section in system
         assert section not in user
-    assert "你自己的长期记忆" in system
+    assert "memory_read" not in system and "memory_correct" not in system
+    assert "Maintain clear lasting preferences" in system
     assert "mcp_tool_search" in system
-    assert "当前未开放" in system
-    assert "e2e-guide" in system
+    assert "e2e-guide" not in system
     assert "BODY-NOT-AUTO-INJECTED" not in system
     assert not any(path.endswith("/mcp") for path, _ in ProviderHandler.requests)

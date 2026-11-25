@@ -2,6 +2,7 @@
 
 
 from agent_app.plugins.user_input.config import PluginConfig
+from agent_app.contracts.request_options import validate_search_request_options
 
 from icarus.core.capabilities.catalog import InputSubmitAccess
 from icarus.core.plugin import handles
@@ -115,6 +116,7 @@ class UserInputPlugin(BasePlugin):
         ):
             raise RuntimeError("UserInputPlugin is not running")
         options = dict(UserInputEvent(prompt=prompt, request_options=request_options or {}).request_options)
+        validate_search_request_options(options)
         async with self._submit_lock:
             task_id = task_id or uuid4().hex
             if self.task_channels.get(task_id) is not None:

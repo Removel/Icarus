@@ -23,9 +23,10 @@ class ToolSearchTool(BaseTool):
     def definition(self) -> ToolDefinition:
         description = (
             "Search for a tool scope by exact plugin_id. Returns complete tool "
-            "definitions; call returned tools with tool_execute(name, arguments). "
-            "Use optional name for an exact tool in that scope. Only complete returned "
-            "definitions are loaded. If truncated, search one name or request more budget; "
+            "definitions and scope guidance; follow that guidance and call returned tools with tool_execute(name, arguments). "
+            "Use optional name for an exact tool in that scope. Only complete definitions "
+            "with intact scope guidance are loaded for this Run, without granting permission for business actions. "
+            "If truncated, search one name or increase _execution.max_output_tokens; "
             "reading a saved result does not load tools. Use an empty query to list scopes. Available scopes:"
         )
         directory = self._catalog.directory()
@@ -75,13 +76,18 @@ class ToolSearchTool(BaseTool):
             definitions = tuple(item for item in definitions if item.name == name.strip())
         if not definitions:
             return ToolExecutionResult(True, self._directory_output())
-        return ToolExecutionResult(True, {
+        output = {
             "scope": query,
             "tools": [{"name": item.name, "description": item.description,
                        "input_schema": item.input_schema} for item in definitions],
             "usage": "Call complete definitions with tool_execute(name, arguments). "
-                     "If truncated, search an exact name or request more budget; saved files do not load tools.",
-        }, metadata={"tools_loaded": [item.name for item in definitions]})
+                     "If truncated, search an exact name or increase _execution.max_output_tokens; "
+                     "saved files do not load tools, and loading does not grant permission for business actions.",
+        }
+        guidance = self._catalog.guidance(query)
+        if guidance:
+            output["scope_guidance"] = guidance
+        return ToolExecutionResult(True, output, metadata={"tools_loaded": [item.name for item in definitions]})
 
     def finalize_loaded_tools(self, result: ToolExecutionResult) -> ToolExecutionResult:
         loaded: list[str] = []
@@ -90,6 +96,9 @@ class ToolSearchTool(BaseTool):
         if (result.success and isinstance(output, dict)
                 and isinstance(output.get("scope"), str)
                 and isinstance(output.get("tools"), list) and isinstance(candidates, list)):
+            guidance = self._catalog.guidance(output["scope"])
+            if guidance and output.get("scope_guidance") != guidance:
+                return replace(result, metadata={**result.metadata, "tools_loaded": []})
             definitions = {item.name: {
                 "name": item.name, "description": item.description,
                 "input_schema": item.input_schema,

@@ -7,7 +7,8 @@ from agent_app.application.session_runtime import SessionRuntime
 from agent_app.config import ConfigModel, LLMConfig, ModelSettings, ThinkMode
 from agent_app.plugins.memory.mem0_http_adapter import Mem0HttpAdapter
 from agent_app.plugins.memory.models import MemoryRecallResult
-from agent_app.plugins.persona.judge import EvolutionVerdict
+from agent_app.plugins.persona.store import EvolvedEntry
+from agent_app.contracts.persona import PersonaSnapshot
 from icarus.core.agents import AgentCompletedEvent, AgentMessageCompletedEvent, AgentResponse
 from icarus.core.identity import SessionIdentity
 from icarus.core.models.messages import Message, TextPart
@@ -52,7 +53,7 @@ def test_real_runtime_routes_persona_and_pins_snapshot_across_sessions(tmp_path,
         first.runtime_host.get_plugin("agent").agent_factory.get_agent = lambda role: CaptureAgent()
         persona = first.runtime_host.get_plugin("persona")
         assert "persona-01-identity" in original
-        assert "persona_evolve" in first.tool_registry.names()
+        assert "persona_evolve" not in first.tool_registry.names()
         try:
             for turn in range(1, 7):
                 finished.clear()
@@ -64,20 +65,27 @@ def test_real_runtime_routes_persona_and_pins_snapshot_across_sessions(tmp_path,
             assert "persona-reanchor" in captured[4][1]
             assert "persona-reanchor" not in captured[5][1]
             assert all(system == original for system, _ in captured)
-            result = await persona.build_tools()[0].ainvoke({"section": "voice", "note": "I greet with warmth.",
-                                                           "reason": "Repeated positive conversation."})
-            assert result.output["status"] == "accepted"
+            result = await persona.store.commit_consolidation(
+                PersonaSnapshot(first.identity, "default", 0, 12, ()),
+                (EvolvedEntry("e_test", "voice", "I greet with warmth.", "Repeated positive conversation.",
+                              "2026-11-08T00:00:00Z", "s1"),), expected_version=persona.store.version())
+            assert result.status == "applied"
             second = SessionRuntime(SessionIdentity.create(tmp_path, "s2"),
                 config=config(tmp_path / "data"), publish_update=publish)
             await second.start()
             try:
                 assert "I greet with warmth." in second.runtime_host.get_plugin("prompt")._system_prompt
+                finished.clear()
+                second.runtime_host.get_plugin("agent").agent_factory.get_agent = lambda role: CaptureAgent()
+                await second.submit("Hello again")
+                await asyncio.wait_for(finished.wait(), 3)
+                assert "persona-observations" not in captured[-1][1]
                 assert first.runtime_host.get_plugin("prompt")._system_prompt == original
             finally:
                 await second.stop("test")
         finally:
             await first.stop("test")
-        assert len([u for u in updates if u.type == "task.finished"]) == 6
+        assert len([u for u in updates if u.type == "task.finished"]) == 7
     asyncio.run(run())
 
 

@@ -21,6 +21,7 @@
         "required_contributors": ["persona"]
       },
       "persona": {
+        "evolution_enabled": false,
         "jev_enabled": false,
         "relationship_enabled": false
       },

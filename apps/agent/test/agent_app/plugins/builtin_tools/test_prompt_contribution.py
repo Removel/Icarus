@@ -7,7 +7,6 @@ def test_builtin_guidance_is_static_session():
     assert len(sections) == 1
     assert sections[0].layer == "session"
     content = sections[0].content
-    assert "read" in content and "分页" in content
-    assert "write" in content and "覆盖" in content
-    assert "insert" in content and "行前" in content
-    assert "bash" in content and "退出码" in content
+    assert "read" in content and "files" in content
+    assert "write/insert" in content
+    assert "bash" in content and "exit codes" in content
