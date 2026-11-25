@@ -1,5 +1,6 @@
 import json
 from playwright.sync_api import expect
+from test.navigation import open_process
 from test.packages.chat_app.test_chat import gateway
 from test.rela_service import fake_rela
 
@@ -9,7 +10,7 @@ def test_relationship_result_links_use_id_and_keep_chat_session(page):
     state, emit = gateway(page)
     first = rela['people'][0]
     emit('tool.completed', {'call_id': 'rela-find', 'tool_name': 'relationship_find', 'success': True, 'output_preview': json.dumps({'items': [first], 'ambiguous': False, 'truncated': False})})
-    page.locator('.chat-process > summary').click()
+    open_process(page)
     page.locator('.chat-tool').get_by_text('relationship_find', exact=True).click()
     page.get_by_role('link', name='查看人物档案：王明，p_000001_alpha', exact=True).click()
     dialog = page.get_by_role('dialog', name='人物档案', exact=True)

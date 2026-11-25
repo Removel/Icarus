@@ -8,8 +8,27 @@ from apps.tui.src.event_pipeline import (
     CompleteThinking,
     FinishTurn,
     UpdateToolCompleted,
+    UpdateWebSources,
 )
 from apps.tui.src.stores.conversation import ConversationProjection
+
+
+def test_sources_survive_late_metadata_and_snapshot_without_rewriting_text():
+    from apps.tui.src.stores.chat import ChatStore
+
+    store = ChatStore()
+    store.apply_actions((AppendUserMessage("a", "question"),
+        CompleteAssistantMessage("a", "结论[1]"), FinishTurn("a", "completed"),
+        UpdateWebSources("a", (1,)), AppendUserMessage("b", "next"),
+        AppendAssistantDelta("b", "普通[1]")))
+    first = store.capture_window(0, 1).units[-1]
+    assert first.text == "结论[1]" and first.citation_indices == (1,)
+    assert store.conversation.units[-1].citation_indices == ()
+    store.apply_actions((UpdateWebSources("a", (1, 2)),))
+    assert first.citation_indices == (1,)  # Captured window is independent.
+    store.reset_session(generation=1)
+    store.apply_actions((AppendAssistantDelta("a", "新会话[1]"),))
+    assert store.conversation.units[-1].citation_indices == ()
 
 
 def test_projection只索引顶层用户输入且保留卡片内容():

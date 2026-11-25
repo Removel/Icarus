@@ -15,6 +15,7 @@ import { localClock, searchPreference, type RequestOptions } from './webSearch';
 import { deleteHistory, readHistory, saveHistory } from './historyCache';
 import useImageInputs from './useImageInputs';
 import type { ImageResource } from './imageResources';
+import { touchSession } from './sessionActivity';
 
 type Submission = {
   id: string;
@@ -207,7 +208,11 @@ export default function useChatSession(hash: string) {
       )
         return;
       if (!ready) buffered.push(update);
-      else setTranscript((previous) => applyUpdate(previous, update, true));
+      else {
+        setTranscript((previous) => applyUpdate(previous, update, true));
+        if (update.occurred_at)
+          setSessions((items) => touchSession(items, sessionId, update.occurred_at!));
+      }
     };
     async function load() {
       const started = performance.now();
@@ -243,7 +248,11 @@ export default function useChatSession(hash: string) {
       createdStatus.current = undefined;
       state = { ...state, tasks: status.active_task_ids.filter((id) => !state.finished.has(id)) };
       for (const update of buffered)
-        if (update.workspace_key === key) state = applyUpdate(state, update);
+        if (update.workspace_key === key) {
+          state = applyUpdate(state, update);
+          if (update.occurred_at)
+            setSessions((items) => touchSession(items, sessionId, update.occurred_at!));
+        }
       ready = true;
       readySelection.current = workspace + '\u0000' + sessionId;
       setTranscript(state);
@@ -569,14 +578,17 @@ export default function useChatSession(hash: string) {
             : [...new Set([...previous.tasks, result.task_id])],
         }));
         setSessions((previous) =>
-          previous.map((item) =>
-            item.session_id === submission.session
-              ? {
-                  ...item,
-                  first_user_input: item.first_user_input || submission.text || '[Image]',
-                  updated_at: new Date().toISOString(),
-                }
-              : item,
+          touchSession(
+            previous.map((item) =>
+              item.session_id === submission.session
+                ? {
+                    ...item,
+                    first_user_input: item.first_user_input || submission.text || '[Image]',
+                  }
+                : item,
+            ),
+            submission.session,
+            new Date().toISOString(),
           ),
         );
         if (!sessions.find((item) => item.session_id === submission.session)?.title)

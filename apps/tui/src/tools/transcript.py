@@ -16,6 +16,7 @@ from apps.tui.src.event_pipeline import (
     ShowNotification,
     UiAction,
     UpdateToolCompleted,
+    UpdateWebSources,
 )
 from apps.tui.src.event_pipeline.dispatcher import (
     ProjectorRegistry,
@@ -34,6 +35,10 @@ class TranscriptRecorder:
         self._completed_thinking: set[tuple[str, int]] = set()
 
     def record(self, action: UiAction) -> None:
+        if isinstance(action, UpdateWebSources):
+            # This developer replay is an event transcript, preserving raw text.
+            # Source metadata affects terminal rendering, not semantic ordering.
+            return
         if isinstance(action, AppendUserMessage):
             self._flush_assistant()
             self._lines.append("[user]")

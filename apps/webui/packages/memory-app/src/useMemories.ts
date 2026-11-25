@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MemoryEntry } from './types';
 import * as api from './mem0';
 import { transitionLayout } from '@icarus/ui';
@@ -8,6 +8,13 @@ export default function useMemories(active: boolean, selectedId: string | null, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [version, setVersion] = useState(0);
+  const [listVersion, setListVersion] = useState(0);
+  const listing = useRef(false);
+  const refreshList = useCallback(() => {
+    if (listing.current) return;
+    listing.current = true;
+    setListVersion((value) => value + 1);
+  }, []);
   const [detail, setDetail] = useState<MemoryEntry>();
   const [detailError, setDetailError] = useState('');
   const [detailLoading, setDetailLoading] = useState(false);
@@ -26,6 +33,7 @@ export default function useMemories(active: boolean, selectedId: string | null, 
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
+    listing.current = true;
     setLoading(true);
     setError('');
     api
@@ -51,9 +59,33 @@ export default function useMemories(active: boolean, selectedId: string | null, 
           setError(api.message(error));
           setLoading(false);
         }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) listing.current = false;
       });
-    return () => controller.abort();
-  }, [active, version, query]);
+    return () => {
+      controller.abort();
+      listing.current = false;
+    };
+  }, [active, version, listVersion, query]);
+  useEffect(() => {
+    if (!active) return;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const resume = () => {
+      clearInterval(timer);
+      if (document.visibilityState !== 'visible') return;
+      refreshList();
+      timer = setInterval(refreshList, 15000);
+    };
+    if (document.visibilityState === 'visible') timer = setInterval(refreshList, 15000);
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', resume);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', resume);
+      document.removeEventListener('visibilitychange', resume);
+    };
+  }, [active, refreshList]);
   useEffect(() => {
     setDetail(undefined);
     setDetailError('');
@@ -90,6 +122,7 @@ export default function useMemories(active: boolean, selectedId: string | null, 
     detailError,
     detailLoading,
     missingId,
+    refreshList,
     selected: detail?.id === selectedId ? detail : memories.find((item) => item.id === selectedId),
     refresh: () => {
       // Consumers must wait for the refreshed list before restoring focus.

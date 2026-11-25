@@ -44,12 +44,20 @@ export default function ChatTranscript({
   const pendingJump = useRef<string | undefined>(undefined);
   const [away, setAway] = useState(false);
   const [position, setPosition] = useState<string | null>(null);
+  const [disclosures, setDisclosures] = useState<Record<string, boolean>>({});
   const { rows, outline, waiting } = useMemo(() => {
     const rows: Row[] = [];
     const processes = new Map<string, Row>();
     const sources = new Map<string | undefined, WebSource[]>();
-    for (const item of transcript.items)
+    const toolSteps = new Set<string>();
+    const latestSteps = new Map<string | undefined, number>();
+    for (const item of transcript.items) {
       if (item.search) sources.set(item.taskId, item.search.sources);
+      if (item.step !== undefined) {
+        latestSteps.set(item.taskId, Math.max(latestSteps.get(item.taskId) ?? 0, item.step));
+        if (item.kind === 'tool') toolSteps.add(`${item.taskId}:${item.step}`);
+      }
+    }
     let prompt: ChatItem | undefined;
     let lastUser = -1;
     const responding = new Set<string | undefined>();
@@ -58,12 +66,22 @@ export default function ChatTranscript({
         prompt = item;
         lastUser = index;
       } else responding.add(item.taskId);
-      if (item.kind === 'thinking' || item.kind === 'tool' || item.kind === 'search') {
+      // Text deltas have no tool-call decision yet. Keep them in the process
+      // until the complete response confirms whether they are an answer.
+      const progress =
+        item.kind === 'assistant' &&
+        ((!item.final && !transcript.finished.has(item.taskId ?? '')) ||
+          item.hasToolCalls === true ||
+          (item.step !== undefined && toolSteps.has(`${item.taskId}:${item.step}`)) ||
+          (item.hasToolCalls === false &&
+            item.step !== undefined &&
+            item.step < (latestSteps.get(item.taskId) ?? 0)));
+      if (progress || item.kind === 'thinking' || item.kind === 'tool' || item.kind === 'search') {
         const key = item.taskId ?? item.id;
         const row = processes.get(key);
         if (row) row.entries!.push(item);
         else {
-          const row = { id: key, item, entries: [item] };
+          const row = { id: key, item, entries: [item], sources: sources.get(item.taskId) };
           processes.set(key, row);
           rows.push(row);
         }
@@ -80,7 +98,7 @@ export default function ChatTranscript({
           ? !transcript.items.slice(lastUser + 1).some((item) => item.kind !== 'user')
           : transcript.tasks.some((task) => !responding.has(task))),
     };
-  }, [transcript.items, transcript.tasks, loading, submitting]);
+  }, [transcript.items, transcript.tasks, transcript.finished, loading, submitting]);
   // Small conversations keep native full-document selection and browser find.
   const virtual = rows.length >= 80;
   const virtualizer = useVirtualizer({
@@ -191,7 +209,15 @@ export default function ChatTranscript({
   function renderRow(row: Row) {
     return row.entries ? (
       <ChatProcess
+        disclosureKey={`${workspace}\u0000${sessionId}\u0000${row.id}`}
+        disclosures={disclosures}
+        onDisclosure={(key, expanded) =>
+          setDisclosures((previous) =>
+            previous[key] === expanded ? previous : { ...previous, [key]: expanded },
+          )
+        }
         entries={row.entries}
+        sources={row.sources}
         running={transcript.tasks.includes(row.id)}
         active={active}
         loading={loading}

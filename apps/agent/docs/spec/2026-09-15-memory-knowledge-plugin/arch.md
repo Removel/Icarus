@@ -450,6 +450,8 @@ MemoryPlugin 注册固定 Tool：
 
 #### 4.3.6 写入与维护语义
 
+`memory_remember` 保留 `memories` 引用列表，并返回 `status`（`stored` / `no_change`）与实际 `count`。正常空结果仍表示调用完成，但不能据此宣称新增记忆或猜测无变化的原因。HTTP Adapter 验证响应的 results 列表及非空字符串 ID；结构损坏属于失败。Mem0 的同步与异步写入在逐条回退仍无法持久化时抛出异常，不再为该失败路径返回 ADD 成功或生成 ADD 历史。批量回退可能已有部分写入，失败并不代表整个操作自动回滚。
+
 `memory_remember` 向 Mem0 提交一条有依据的自然语言用户消息，并固定使用 `infer=true`：
 
 ```json

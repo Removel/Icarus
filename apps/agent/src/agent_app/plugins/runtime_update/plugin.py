@@ -143,7 +143,11 @@ class RuntimeUpdatePlugin(BasePlugin):
             if not text:
                 return None
             update_type = "assistant.message"
-            payload = {"step": event.step, "text": text}
+            payload = {
+                "step": event.step,
+                "text": text,
+                "has_tool_calls": bool(event.message.tool_calls),
+            }
         elif isinstance(event, AgentToolStartedEvent):
             update_type = "tool.started"
             payload = {

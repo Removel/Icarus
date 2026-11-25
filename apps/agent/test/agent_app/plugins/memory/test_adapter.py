@@ -130,6 +130,22 @@ def test_remember可关闭输入语言保持():
     assert payload["preserve_input_language"] is False
 
 
+@pytest.mark.parametrize("response", [None, [], {}, {"results": None},
+    {"results": {}}, {"results": [None]}, {"results": [{"memory": "fact"}]},
+    {"results": [{"id": 1}]}, {"results": [{"id": " "}]}])
+def test_remember_rejects_malformed_success_response(response):
+    adapter = make_adapter(lambda request: httpx.Response(
+        200, content=__import__("json").dumps(response), headers={"Content-Type": "application/json"},
+    ))
+    with pytest.raises(MemoryBackendError, match="invalid.*results"):
+        adapter.remember("fact", workspace_key="wk", scope="global", metadata={})
+
+
+def test_remember_empty_results_are_valid_no_change():
+    adapter = make_adapter(lambda request: httpx.Response(200, json={"results": []}))
+    assert adapter.remember("fact", workspace_key="wk", scope="global", metadata={}) == ()
+
+
 def test_correct_stop_restore_delete使用精确id():
     requests = []
     current = memory_json()

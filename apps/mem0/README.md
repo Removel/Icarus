@@ -38,9 +38,10 @@ make test-mem0-full
 The private `apps/mem0/.venv` is for development and tests only. The installer checks
 that it is an app-owned virtual environment, rejects redirected environment paths,
 and isolates pip's destination/configuration overrides to prevent shared-environment
-installation. Default checks are
-an offline core-memory contract gate; full checks retain the upstream SDK/server
-suite. Optional provider/server imports may require extra dependencies; an incomplete
+installation. Default checks cover offline core-memory and administrative HTTP
+contracts. The development manifest includes the API/auth dependencies needed to
+import the server with model and database IO mocked. Full checks retain the upstream
+SDK/server suite; optional provider imports may require extra dependencies. An incomplete
 collection is not a passing suite. For full environment preparation from this directory:
 
 ```bash

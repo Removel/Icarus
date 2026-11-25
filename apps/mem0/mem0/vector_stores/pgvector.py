@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from datetime import date
 from contextlib import contextmanager
 from typing import Any, List, Optional
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
@@ -545,6 +546,80 @@ class PGVector(VectorStoreBase):
             )
             results = cur.fetchall()
         return [[OutputData(id=str(r[0]), score=None, payload=r[1]) for r in results]]
+
+    def browse_memories(
+        self, *, page=1, page_size=12, query="", category=None, user_id=None,
+        run_id=None, state="all", descending=True, today=None,
+    ) -> dict:
+        """Administrative browser over the complete collection (PostgreSQL 16+).
+
+        A single statement gives counts, facets and page rows the same MVCC
+        snapshot, without loading every memory body into the application.
+        SDK list/search retain their existing limits and filter contracts.
+        """
+        if page < 1 or not 1 <= page_size <= 100 or state not in {"all", "active", "expired"}:
+            raise ValueError("Invalid memory browser pagination or state")
+        self._ensure_collection()
+        conditions, params = [], [today or date.today().isoformat()]
+        for column, value in (("category", category), ("user_id", user_id), ("run_id", run_id)):
+            if value:
+                conditions.append(f"{column} = %s")
+                params.append(value)
+        if state != "all":
+            conditions.append("expired" if state == "expired" else "NOT expired")
+        if query.strip():
+            conditions.append("position(lower(%s) in lower(search_text)) > 0")
+            params.append(query.strip())
+        clause = sql.SQL(" AND ".join(conditions) or "TRUE")
+        direction = sql.SQL("DESC" if descending else "ASC")
+        statement = sql.SQL("""
+            WITH base AS MATERIALIZED (
+                SELECT id, payload,
+                    COALESCE(NULLIF(payload->>'category', ''), '未分类') AS category,
+                    COALESCE(payload->>'user_id', '') AS user_id,
+                    COALESCE(payload->>'run_id', '') AS run_id,
+                    COALESCE(NULLIF(payload->>'expiration_date', '') < %s, false) AS expired,
+                    concat_ws(' ', payload->>'data',
+                        COALESCE(NULLIF(payload->>'category', ''), '未分类'), payload->>'user_id') AS search_text,
+                    COALESCE(NULLIF(payload->>'updated_at', ''), payload->>'created_at', '') AS stamp
+                FROM {table}
+            ), filtered AS MATERIALIZED (
+                SELECT id, payload,
+                    CASE WHEN stamp ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}'
+                        AND pg_input_is_valid(stamp, 'timestamp with time zone')
+                        THEN extract(epoch FROM stamp::timestamptz) ELSE 0 END AS activity
+                FROM base WHERE {clause}
+            ), totals AS (
+                SELECT count(*) AS total FROM filtered
+            ), paging AS (
+                SELECT total, LEAST(%s, GREATEST(1, (total + %s - 1) / %s)) AS page FROM totals
+            ), selected AS (
+                SELECT id, payload, activity FROM filtered ORDER BY activity {direction}, id {direction}
+                LIMIT %s OFFSET (SELECT (page - 1) * %s FROM paging)
+            )
+            SELECT
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', id, 'payload', payload)
+                                          ORDER BY activity {direction}, id {direction})
+                          FROM selected), '[]'::jsonb),
+                paging.total, paging.page,
+                (SELECT count(*) FROM base), (SELECT count(*) FROM base WHERE NOT expired),
+                COALESCE((SELECT jsonb_agg(value ORDER BY value) FROM
+                    (SELECT DISTINCT category AS value FROM base) x), '[]'::jsonb),
+                COALESCE((SELECT jsonb_agg(value ORDER BY value) FROM
+                    (SELECT DISTINCT user_id AS value FROM base) x), '[]'::jsonb),
+                COALESCE((SELECT jsonb_agg(value ORDER BY value) FROM
+                    (SELECT DISTINCT run_id AS value FROM base) x), '[]'::jsonb)
+            FROM paging
+        """).format(table=self._col(), clause=clause, direction=direction)
+        with self._get_cursor() as cur:
+            cur.execute(statement, (*params, page, page_size, page_size, page_size, page_size))
+            rows, total, current_page, all_count, active, categories, users, scopes = cur.fetchone()
+        return {
+            "results": [OutputData(id=row["id"], score=None, payload=row["payload"]) for row in rows],
+            "page": current_page, "page_size": page_size, "total": total,
+            "counts": {"all": all_count, "active": active, "expired": all_count - active},
+            "categories": categories, "users": users, "scopes": scopes, "truncated": False,
+        }
 
     def __del__(self) -> None:
         """

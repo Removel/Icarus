@@ -2,3 +2,13 @@
 # Focused local PostgreSQL connection regression tests; no other providers needed.
 psycopg[binary]>=3.2.8,<4.0.0
 psycopg-pool>=3.2.6,<4.0.0
+# Administrative HTTP contracts import the server without running model providers.
+# Keep these API/auth dependencies aligned with server/requirements.txt.
+fastapi==0.115.8
+pydantic[email]==2.10.4
+python-dotenv==1.2.2
+passlib[bcrypt]>=1.7,<2.0
+bcrypt==4.0.1
+python-jose[cryptography]>=3.3,<4.0
+cryptography>46.0.4
+slowapi>=0.1.9,<1.0

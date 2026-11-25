@@ -102,4 +102,7 @@ def create_default_projector_registry(
     blackboard = BlackboardProjector()
     registry.register("context.compacted", blackboard)
     registry.register("session.lifecycle", blackboard)
+    from apps.tui.src.event_pipeline.projectors.web_search import WebSearchProjector
+
+    registry.register("web_search.updated", WebSearchProjector())
     return registry

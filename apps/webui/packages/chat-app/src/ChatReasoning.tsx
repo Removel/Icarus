@@ -1,15 +1,19 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import ChatContent from './ChatContent';
 import useChatText from './useChatText';
 import type { ChatItem } from './updates';
 
 export default function ChatReasoning({
+  expanded,
+  onDisclosure,
   entry,
   running,
   active,
   loading,
   onGrowth,
 }: {
+  expanded?: boolean;
+  onDisclosure: (expanded: boolean) => void;
   entry: ChatItem;
   running: boolean;
   active: boolean;
@@ -17,7 +21,6 @@ export default function ChatReasoning({
   onGrowth: () => void;
 }) {
   const node = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(Boolean(entry.live && running));
   // Keep presentation state outside the collapsible content so reopening
   // a thought does not replay text that has already arrived.
   const content = useChatText(entry.text, Boolean(entry.live && active && !loading), onGrowth);
@@ -30,10 +33,10 @@ export default function ChatReasoning({
   return (
     <div ref={node} className="chat-message chat-thinking">
       <details
-        open={expanded}
+        open={expanded ?? Boolean(!loading && (entry.live || running))}
         onToggle={(event) => {
           if (event.target !== event.currentTarget) return;
-          setExpanded(event.currentTarget.open);
+          onDisclosure(event.currentTarget.open);
           onGrowth();
         }}
       >

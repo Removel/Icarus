@@ -6,6 +6,8 @@ import { taskFailure } from '@icarus/ui';
 export type ChatItem = {
   id: string;
   taskId?: string;
+  step?: number;
+  hasToolCalls?: boolean;
   submissionId?: string;
   kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'search';
   search?: WebSearchState;
@@ -112,13 +114,22 @@ export function applyUpdate(previous: Transcript, update: RuntimeUpdate, live = 
     const existing = state.items.find((item) => item.id === id);
     const delta = update.type.endsWith('_delta');
     if (delta && existing?.final) return state;
-    item = { id, kind, text: delta ? (existing?.text ?? '') + text : text, final: !delta };
+    item = {
+      id,
+      kind,
+      step,
+      hasToolCalls:
+        typeof p.has_tool_calls === 'boolean' ? p.has_tool_calls : existing?.hasToolCalls,
+      text: delta ? (existing?.text ?? '') + text : text,
+      final: !delta,
+    };
   } else if (update.type === 'tool.started' || update.type === 'tool.completed') {
     const completed = update.type === 'tool.completed';
     const existing = state.items.find((item) => item.id === `tool:${task}:${p.call_id}`);
     item = {
       id: `tool:${task}:${p.call_id}`,
       kind: 'tool',
+      step,
       label: String(p.tool_name ?? '工具'),
       text: completed ? (p.success ? '已完成' : '执行失败') : '执行中',
       final: completed,

@@ -804,7 +804,7 @@ def test_agent_runtime持久化公共历史并在终态checkpoint(tmp_path, empt
     ]
     assert records[0].task_id == accepted.task_id
     assert records[0].payload["text"] == "visible prompt"
-    assert records[3].payload == {"step": 1, "text": "done"}
+    assert records[3].payload == {"step": 1, "text": "done", "has_tool_calls": False}
     assert [item.sequence for item in records] == list(range(1, 7))
     assert cursor == 6
     assert "model prompt" in blackboard

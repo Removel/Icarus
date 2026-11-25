@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Pause, Play, X, ChevronRight, Info } from 'lucide-react';
+import { Plus, Pause, Play, X, ChevronRight, Info, RefreshCw } from 'lucide-react';
 import {
   Button,
   Checkbox,
@@ -279,6 +279,12 @@ export default function MemoryApp({
               ]}
             />
             <div className="memory-header-actions">
+              <Button
+                icon={<RefreshCw size={16} />}
+                aria-label="刷新记忆"
+                disabled={busy || data.loading}
+                onClick={data.refreshList}
+              />
               <Button
                 theme="solid"
                 icon={<Plus size={16} />}

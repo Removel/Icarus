@@ -1,0 +1,8 @@
+{"schema_version":4,"workspace_key":"workspace","session_id":"replay-session","task_id":"citation-task","type":"task.accepted","payload":{"queue_position":0},"occurred_at":"2026-11-06T00:00:00Z"}
+{"schema_version":4,"workspace_key":"workspace","session_id":"replay-session","task_id":"citation-task","type":"task.started","payload":{},"occurred_at":"2026-11-06T00:00:01Z"}
+{"schema_version":4,"workspace_key":"workspace","session_id":"replay-session","task_id":"citation-task","type":"assistant.text_delta","payload":{"step":1,"text":"联网结论["},"occurred_at":"2026-11-06T00:00:02Z"}
+{"schema_version":4,"workspace_key":"workspace","session_id":"replay-session","task_id":"citation-task","type":"assistant.text_delta","payload":{"step":1,"text":"1"},"occurred_at":"2026-11-06T00:00:03Z"}
+{"schema_version":4,"workspace_key":"workspace","session_id":"replay-session","task_id":"citation-task","type":"assistant.text_delta","payload":{"step":1,"text":"]，代码 `data[1]` 保留。"},"occurred_at":"2026-11-06T00:00:04Z"}
+{"schema_version":4,"workspace_key":"workspace","session_id":"replay-session","task_id":"citation-task","type":"web_search.updated","payload":{"status":"complete","total":1,"sources":[{"citeIndex":1,"url":"https://example.com","title":"演示来源"}],"pages":[],"queries":["演示查询"]},"occurred_at":"2026-11-06T00:00:05Z"}
+{"schema_version":4,"workspace_key":"workspace","session_id":"replay-session","task_id":"citation-task","type":"assistant.message","payload":{"step":1,"text":"联网结论[1]，代码 `data[1]` 保留。普通编号[9]。"},"occurred_at":"2026-11-06T00:00:06Z"}
+{"schema_version":4,"workspace_key":"workspace","session_id":"replay-session","task_id":"citation-task","type":"task.finished","payload":{"status":"completed"},"occurred_at":"2026-11-06T00:00:07Z"}

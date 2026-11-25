@@ -305,7 +305,11 @@ class MemoryPlugin(BasePlugin):
                 "source_operation_id": uuid4().hex,
             },
         )
-        return {"memories": [record.item.as_dict() for record in records]}
+        return {
+            "status": "stored" if records else "no_change",
+            "count": len(records),
+            "memories": [record.item.as_dict() for record in records],
+        }
 
     def correct(self, ref: str, content: str) -> dict[str, Any]:
         self._owned(ref)

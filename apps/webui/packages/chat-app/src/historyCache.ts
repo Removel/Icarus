@@ -3,6 +3,7 @@ import type { Transcript } from './updates';
 const databaseName = 'icarus.webui.history';
 const maxEntries = 12;
 const maxAge = 7 * 24 * 60 * 60 * 1000;
+const formatVersion = 2;
 let failures = 0;
 
 // Optional cache operations never sit in the RPC/hydration critical path.
@@ -75,6 +76,7 @@ export async function readHistory(key: string): Promise<Transcript | undefined> 
   const state = cached?.transcript as Transcript | undefined;
   if (
     !state ||
+    cached.formatVersion !== formatVersion ||
     Date.now() - cached.updated > maxAge ||
     !(state.seen instanceof Set) ||
     !(state.finished instanceof Set) ||
@@ -102,7 +104,7 @@ export async function saveHistory(key: string, transcript: Transcript) {
       .map((item) => ({ ...item, live: false })),
   };
   await access('readwrite', (store) => {
-    const request = store.put({ key, updated: Date.now(), transcript: snapshot });
+    const request = store.put({ key, formatVersion, updated: Date.now(), transcript: snapshot });
     const count = store.count();
     count.onsuccess = () => {
       let excess = count.result - maxEntries;

@@ -9,6 +9,7 @@ from textual.widgets import Label, Markdown, Static
 from apps.tui.src.widgets.chat.links import LinkText, url_ranges
 from apps.tui.src.widgets.chat.local_scroll import LocalScroll
 from apps.tui.src.widgets.chat.markdown import StreamingMarkdown
+from apps.tui.src.widgets.chat.citations import citation_parser
 
 
 class UserMessage(Vertical):
@@ -31,6 +32,20 @@ class _StreamingMessage(Vertical):
         self._markdown_parts: list[str] = []
         self._segment_finished = False
         self._markdown_stream = None
+        self.citation_indices: tuple[int, ...] = ()
+        self.task_id = ""
+
+    def _citation_parser(self):
+        return citation_parser(set(self.citation_indices), streaming=not self._segment_finished)
+
+    async def set_citation_indices(self, indices: tuple[int, ...]) -> None:
+        if indices == self.citation_indices:
+            return
+        self.citation_indices = indices
+        stream, self._markdown_stream = self._markdown_stream, None
+        if stream is not None:
+            await stream.stop()
+        await self.query_one(StreamingMarkdown).update(self.markdown_text)
 
     @property
     def markdown_text(self) -> str:
@@ -62,6 +77,7 @@ class _StreamingMessage(Vertical):
         self._markdown_stream = None
         if stream is not None:
             await stream.stop()
+
         self._markdown_parts = [text]
         await self.query_one(StreamingMarkdown).update(text)
 
@@ -73,6 +89,9 @@ class _StreamingMessage(Vertical):
         self._markdown_stream = None
         if stream is not None:
             await stream.stop()
+        if self.citation_indices and self.is_mounted:
+            # Release any incomplete [n tail when generation stops.
+            await self.query_one(StreamingMarkdown).update(self.markdown_text)
 
     async def on_unmount(self) -> None:
         await self.finish()
@@ -84,7 +103,7 @@ class AssistantMessage(_StreamingMessage):
 
     def compose(self) -> ComposeResult:
         yield Label("✦ Icarus", classes="message-label")
-        yield StreamingMarkdown("", classes="assistant-markdown")
+        yield StreamingMarkdown("", classes="assistant-markdown", parser_factory=self._citation_parser)
 
 
 class AssistantProgressBlock(_StreamingMessage):
@@ -94,7 +113,7 @@ class AssistantProgressBlock(_StreamingMessage):
 
     def compose(self) -> ComposeResult:
         yield Label(f"Progress · step {self.step}", classes="message-label")
-        yield StreamingMarkdown("", classes="assistant-markdown")
+        yield StreamingMarkdown("", classes="assistant-markdown", parser_factory=self._citation_parser)
 
 
 class UserCorrectionBlock(Vertical):

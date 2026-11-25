@@ -100,6 +100,17 @@ def test_memory_remember省略scope时写入全局():
     result = tools["memory_remember"].invoke({"content": "raw"}, run_id="run")
     assert result.success is True
     assert backend.calls[-1][2]["scope"] == "global"
+    assert result.output["status"] == "stored"
+    assert result.output["count"] == 1
+    assert result.output["memories"][0]["ref"] == "memory:1"
+
+
+def test_memory_remember_reports_no_change_without_claiming_storage():
+    backend, _, tools = tools_with_backend()
+    backend.records.clear()
+    result = tools["memory_remember"].invoke({"content": "raw"})
+    assert result.success is True
+    assert result.output == {"status": "no_change", "count": 0, "memories": []}
 
 
 def test_memory_remember显式scope并传运行上下文():

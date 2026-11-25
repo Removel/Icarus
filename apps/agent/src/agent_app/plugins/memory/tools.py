@@ -200,7 +200,9 @@ class MemoryRememberTool(_MemoryTool):
                 "event worth keeping across conversations. Pass the user's original "
                 "wording; do not summarize or paraphrase. The service extracts facts. "
                 "Do not store guesses, transient chat, credentials or content the user asked not to remember. "
-                "Use memory_correct for a conflicting existing fact, rather than adding a duplicate."
+                "Use memory_correct for a conflicting existing fact, rather than adding a duplicate. "
+                "Check the returned status and count: no_change means the service reported no stored "
+                "memories; do not claim it saved a new memory or guess the reason."
             ),
             {
                 "type": "object",
